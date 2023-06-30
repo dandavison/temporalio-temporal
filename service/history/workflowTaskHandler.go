@@ -215,6 +215,7 @@ func (handler *workflowTaskHandlerImpl) handleCommand(
 	command *commandpb.Command,
 	msgs *collection.IndexedTakeList[string, *protocolpb.Message],
 ) (*handleCommandResponse, error) {
+	handler.logger.Info(fmt.Sprintf("[dan] handleCommand: %v", command.GetCommandType()))
 	switch command.GetCommandType() {
 	case enumspb.COMMAND_TYPE_SCHEDULE_ACTIVITY_TASK:
 		return handler.handleCommandScheduleActivity(ctx, command.GetScheduleActivityTaskCommandAttributes())

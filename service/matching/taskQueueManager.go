@@ -313,7 +313,7 @@ func (c *taskQueueManagerImpl) Start() {
 	c.taskWriter.Start()
 	c.taskReader.Start()
 	c.goroGroup.Go(c.fetchUserData)
-	c.logger.Info("", tag.LifeCycleStarted)
+	c.logger.Info("[dan]", tag.LifeCycleStarted)
 	c.taggedMetricsHandler.Counter(metrics.TaskQueueStartedCounter.GetMetricName()).Record(1)
 }
 
@@ -342,7 +342,7 @@ func (c *taskQueueManagerImpl) Stop() {
 	c.taskWriter.Stop()
 	c.taskReader.Stop()
 	c.goroGroup.Cancel()
-	c.logger.Info("", tag.LifeCycleStopped)
+	c.logger.Info("[dan]", tag.LifeCycleStopped)
 	c.taggedMetricsHandler.Counter(metrics.TaskQueueStoppedCounter.GetMetricName()).Record(1)
 	// This may call Stop again, but the status check above makes that a no-op.
 	c.unloadFromEngine()

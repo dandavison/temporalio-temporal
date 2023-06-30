@@ -212,6 +212,12 @@ func (w *taskWriter) appendTasks(
 			tag.WorkflowTaskQueueName(w.taskQueueID.FullName()),
 			tag.WorkflowTaskQueueType(w.taskQueueID.taskType))
 		return nil, err
+	} else {
+		w.logger.Info(fmt.Sprintf("[dan] appendTasks: %v", tasks),
+			tag.StoreOperationCreateTask,
+			tag.Error(err),
+			tag.WorkflowTaskQueueName(w.taskQueueID.FullName()),
+			tag.WorkflowTaskQueueType(w.taskQueueID.taskType))
 	}
 	return resp, nil
 }
