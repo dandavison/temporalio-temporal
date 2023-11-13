@@ -668,6 +668,11 @@ func (s *ContextImpl) UpdateWorkflowExecution(
 		s.updateCloseTaskIDs(request.NewWorkflowSnapshot.ExecutionInfo, request.NewWorkflowSnapshot.Tasks)
 	}
 
+	for _, we := range request.NewWorkflowEvents {
+		for _, ev := range we.Events {
+			common.LogToFile(fmt.Sprintf("UpdateWorkflowExecution: %s", ev.EventType.String()), "history", "red")
+		}
+	}
 	request.RangeID = s.getRangeIDLocked()
 	s.wUnlock()
 

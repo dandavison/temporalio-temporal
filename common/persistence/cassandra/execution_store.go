@@ -28,6 +28,7 @@ import (
 	"context"
 	"time"
 
+	"go.temporal.io/server/common"
 	"go.temporal.io/server/common/log"
 	p "go.temporal.io/server/common/persistence"
 	"go.temporal.io/server/common/persistence/nosql/nosqlplugin/cassandra/gocql"
@@ -143,6 +144,11 @@ func (d *ExecutionStore) UpdateWorkflowExecution(
 	ctx context.Context,
 	request *p.InternalUpdateWorkflowExecutionRequest,
 ) error {
+
+	for _, we := range request.NewWorkflowNewEvents {
+		common.LogToFile(we.Node.Events.String(), "persistence", "red")
+	}
+
 	for _, req := range request.UpdateWorkflowNewEvents {
 		if err := d.AppendHistoryNodes(ctx, req); err != nil {
 			return err

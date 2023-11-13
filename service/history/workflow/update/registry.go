@@ -38,6 +38,7 @@ import (
 	updatepb "go.temporal.io/api/update/v1"
 
 	updatespb "go.temporal.io/server/api/update/v1"
+	"go.temporal.io/server/common"
 	"go.temporal.io/server/common/future"
 	"go.temporal.io/server/common/log"
 	"go.temporal.io/server/common/metrics"
@@ -158,10 +159,11 @@ func NewRegistry(
 	for _, opt := range opts {
 		opt(r)
 	}
-
+	common.LogToFile("loading updates from MS", "NewRegistry", "green")
 	getStoreFn().VisitUpdates(func(updID string, updInfo *updatespb.UpdateInfo) {
 		// need to eager load here so that Len and admit are correct.
 		if req := updInfo.GetRequest(); req != nil {
+			common.LogToFile(fmt.Sprintf("GetRequest: updId=%s, updInfo=%v", updID, updInfo), "VisitUpdates", "green")
 			r.updates[updID] = newRequested(
 				updID,
 				// TODO (dan): how are we making use of the event batch ID?
@@ -172,6 +174,7 @@ func NewRegistry(
 			)
 		}
 		if acc := updInfo.GetAcceptance(); acc != nil {
+			common.LogToFile(fmt.Sprintf("GetAcceptance: updId=%s, updInfo=%v", updID, updInfo), "VisitUpdates", "green")
 			r.updates[updID] = newAccepted(
 				updID,
 				acc.EventId,
@@ -180,6 +183,7 @@ func NewRegistry(
 			)
 		}
 		if updInfo.GetCompletion() != nil {
+			common.LogToFile(fmt.Sprintf("GetCompletion: updId=%s, updInfo=%v", updID, updInfo), "VisitUpdates", "green")
 			r.completedCount++
 		}
 	})
@@ -270,6 +274,7 @@ func (r *registry) Send(
 	workflowTaskStartedEventID int64,
 	eventStore EventStore,
 ) []*protocolpb.Message {
+
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 
@@ -288,6 +293,11 @@ func (r *registry) Send(
 		if outgoingMessage != nil {
 			outgoingMessages = append(outgoingMessages, outgoingMessage)
 		}
+		status, err := upd.Status()
+		if err != nil {
+			panic(fmt.Sprintf("ReadOutgoingMessages update.Status() failed!: %s", err))
+		}
+		common.LogToFile(fmt.Sprintf("%v", status), "history:ReadOutgoingMessages", "green")
 	}
 	return outgoingMessages
 }

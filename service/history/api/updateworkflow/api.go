@@ -27,6 +27,7 @@ package updateworkflow
 import (
 	"context"
 	"errors"
+	"fmt"
 	"time"
 
 	commonpb "go.temporal.io/api/common/v1"
@@ -61,6 +62,10 @@ const (
 	failUpdateWorkflowTaskAttemptCount = 3
 )
 
+func logToFile(msg string) {
+	common.LogToFile(msg, "history", "green")
+}
+
 func Invoke(
 	ctx context.Context,
 	req *historyservice.UpdateWorkflowExecutionRequest,
@@ -68,6 +73,12 @@ func Invoke(
 	workflowConsistencyChecker api.WorkflowConsistencyChecker,
 	matchingClient matchingservice.MatchingServiceClient,
 ) (*historyservice.UpdateWorkflowExecutionResponse, error) {
+	logToFile(fmt.Sprintf("UpdateWorkflowExecution:\nnamespace=%s\nwfId=%s\nrunId=%s\nupdateId=%s\nidentity=%s\n\n",
+		req.NamespaceId,
+		req.Request.WorkflowExecution.WorkflowId,
+		req.Request.WorkflowExecution.RunId,
+		req.Request.Request.Meta.UpdateId,
+		req.Request.Request.Meta.Identity))
 
 	wfKey := definition.NewWorkflowKey(
 		req.NamespaceId,
@@ -319,6 +330,7 @@ func RequestUpdate(ctx context.Context, request *updatepb.Request, updateReg upd
 	if err != nil {
 		return nil, false, err
 	}
+	common.LogToFile(fmt.Sprintf("FindOrCreate: upd=%v alreadyExisted=%v", upd, alreadyExisted), "RequestUpdate", "blue")
 	if err = upd.Request(ctx, request, workflow.WithEffects(effect.Immediate(ctx), mutableState)); err != nil {
 		return nil, false, err
 	}

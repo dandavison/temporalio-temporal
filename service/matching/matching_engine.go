@@ -482,6 +482,9 @@ func (e *matchingEngineImpl) PollWorkflowTaskQueue(
 	taskQueueName := request.TaskQueue.GetName()
 	stickyInfo := stickyInfoFromTaskQueue(request.TaskQueue)
 	e.logger.Debug("Received PollWorkflowTaskQueue for taskQueue", tag.WorkflowTaskQueueName(taskQueueName))
+
+	// common.LogToFile("PollWorkflowTaskQueue", "Matching", "green")
+
 pollLoop:
 	for {
 		err := common.IsValidContext(ctx)
@@ -1387,6 +1390,9 @@ func (e *matchingEngineImpl) createPollWorkflowTaskQueueResponse(
 	if task.backlogCountHint != nil {
 		response.BacklogCountHint = task.backlogCountHint()
 	}
+
+	common.LogToFile(common.Pad("package WFT", 80), "matching", "black")
+
 	return response
 }
 

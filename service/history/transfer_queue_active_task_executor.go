@@ -222,10 +222,16 @@ func (t *transferQueueActiveTaskExecutor) processActivityTask(
 	return t.pushActivity(ctx, task, timeout, directive)
 }
 
+func logToFile(msg string) {
+	common.LogToFile(msg, "history:task-executor", "green")
+}
+
 func (t *transferQueueActiveTaskExecutor) processWorkflowTask(
 	ctx context.Context,
 	transferTask *tasks.WorkflowTask,
 ) (retError error) {
+	logToFile(fmt.Sprintf("processWorkflowTask: %s: %s", transferTask.GetCategory().Name(), transferTask.GetCategory().Type()))
+
 	ctx, cancel := context.WithTimeout(ctx, taskTimeout)
 	defer cancel()
 

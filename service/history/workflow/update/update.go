@@ -420,6 +420,7 @@ func (u *Update) onAcceptanceMsg(
 	acpt *updatepb.Acceptance,
 	eventStore EventStore,
 ) error {
+	common.LogToFile(fmt.Sprintf("Accept update: event_sequence_id=%d", acpt.GetAcceptedRequestSequencingEventId()), "history:update-machine", "green")
 	if err := u.checkState(acpt, stateSent); err != nil {
 		return err
 	}
@@ -471,6 +472,8 @@ func (u *Update) onRejectionMsg(
 	rej *updatepb.Rejection,
 	eventStore EventStore,
 ) error {
+	common.LogToFile("Reject update", "history:update-machine", "red")
+
 	if err := u.checkState(rej, stateSent); err != nil {
 		return err
 	}
@@ -512,6 +515,7 @@ func (u *Update) onResponseMsg(
 	res *updatepb.Response,
 	eventStore EventStore,
 ) error {
+	common.LogToFile("Complete update", "history:update-machine", "green")
 	if err := u.checkStateSet(res, stateSet(stateProvisionallyAccepted|stateAccepted)); err != nil {
 		return err
 	}

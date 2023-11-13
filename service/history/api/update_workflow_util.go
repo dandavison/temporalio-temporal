@@ -29,6 +29,7 @@ import (
 
 	clockspb "go.temporal.io/server/api/clock/v1"
 	enumsspb "go.temporal.io/server/api/enums/v1"
+	"go.temporal.io/server/common"
 	"go.temporal.io/server/common/definition"
 	"go.temporal.io/server/service/history/shard"
 	"go.temporal.io/server/service/history/workflow"
@@ -44,6 +45,8 @@ func GetAndUpdateWorkflowWithNew(
 	shard shard.Context,
 	workflowConsistencyChecker WorkflowConsistencyChecker,
 ) (retError error) {
+	common.LogToFile("GetAndUpdateWorkflowWithNew", "history", "green")
+
 	workflowContext, err := workflowConsistencyChecker.GetWorkflowContext(
 		ctx,
 		reqClock,

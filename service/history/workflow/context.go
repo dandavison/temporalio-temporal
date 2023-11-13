@@ -603,6 +603,12 @@ func (c *ContextImpl) UpdateWorkflowExecutionWithNew(
 		}
 	}
 
+	for _, we := range newWorkflowEventsSeq {
+		for _, ev := range we.Events {
+			common.LogToFile(fmt.Sprintf("UpdateWorkflowExecutionWithNew: %s", ev.EventType.String()), "history", "red")
+		}
+	}
+
 	if err := c.mergeContinueAsNewReplicationTasks(
 		updateMode,
 		updateWorkflow,

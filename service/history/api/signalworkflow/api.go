@@ -28,6 +28,7 @@ import (
 	"context"
 
 	"go.temporal.io/server/api/historyservice/v1"
+	"go.temporal.io/server/common"
 	"go.temporal.io/server/common/definition"
 	"go.temporal.io/server/common/namespace"
 	"go.temporal.io/server/service/history/api"
@@ -35,12 +36,17 @@ import (
 	"go.temporal.io/server/service/history/shard"
 )
 
+func logToFile(msg string) {
+	common.LogToFile(msg, "history:signal-handler", "green")
+}
+
 func Invoke(
 	ctx context.Context,
 	req *historyservice.SignalWorkflowExecutionRequest,
 	shard shard.Context,
 	workflowConsistencyChecker api.WorkflowConsistencyChecker,
 ) (resp *historyservice.SignalWorkflowExecutionResponse, retError error) {
+	logToFile("Signal: Invoke()\n")
 	namespaceEntry, err := api.GetActiveNamespace(shard, namespace.ID(req.GetNamespaceId()))
 	if err != nil {
 		return nil, err

@@ -25,6 +25,7 @@
 package historybuilder
 
 import (
+	"fmt"
 	"time"
 
 	commandpb "go.temporal.io/api/command/v1"
@@ -991,5 +992,6 @@ func (b *EventFactory) createHistoryEvent(
 	historyEvent.Version = b.version
 	historyEvent.TaskId = common.EmptyEventTaskID
 
+	common.LogToFile(fmt.Sprintf("%s\n", common.Pad(fmt.Sprintf("%d %s", historyEvent.EventId, historyEvent.EventType.String()), 80)), "", "black")
 	return historyEvent
 }

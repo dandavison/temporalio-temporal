@@ -26,6 +26,7 @@ package history
 
 import (
 	"context"
+	"fmt"
 	"sync/atomic"
 	"time"
 
@@ -504,7 +505,13 @@ func (e *historyEngineImpl) RespondWorkflowTaskCompleted(
 	ctx context.Context,
 	req *historyservice.RespondWorkflowTaskCompletedRequest,
 ) (*historyservice.RespondWorkflowTaskCompletedResponse, error) {
-	return e.workflowTaskHandler.handleWorkflowTaskCompleted(ctx, req)
+	resp, err := e.workflowTaskHandler.handleWorkflowTaskCompleted(ctx, req)
+	if err != nil {
+		common.LogToFile(fmt.Sprintf("handleWorkflowTaskCompleted: FAILED WFT: %v", err), "history", "red")
+	} else {
+		common.LogToFile("handleWorkflowTaskCompleted", "history", "green")
+	}
+	return resp, err
 }
 
 // RespondWorkflowTaskFailed fails a workflow task

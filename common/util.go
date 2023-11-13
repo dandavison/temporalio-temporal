@@ -29,11 +29,13 @@ import (
 	"errors"
 	"fmt"
 	"math/rand"
+	"os"
 	"strings"
 	"sync"
 	"time"
 
 	"github.com/dgryski/go-farm"
+	"github.com/fatih/color"
 	commonpb "go.temporal.io/api/common/v1"
 	enumspb "go.temporal.io/api/enums/v1"
 	"go.temporal.io/api/serviceerror"
@@ -804,4 +806,43 @@ func OverrideWorkflowTaskTimeout(
 // CloneProto is a generic typed version of proto.Clone from proto.
 func CloneProto[T proto.Message](v T) T {
 	return proto.Clone(v).(T)
+}
+
+func LogToFile(msg string, prefix string, colorName string) {
+	color.NoColor = false
+	var colorObj color.Attribute
+	switch colorName {
+	case "red":
+		colorObj = color.FgRed
+	case "green":
+		colorObj = color.FgGreen
+	case "blue":
+		colorObj = color.FgBlue
+	default:
+		colorObj = color.FgBlack
+	}
+	colorFn := color.New(colorObj).SprintfFunc()
+	file, err := os.OpenFile("/tmp/log", os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
+	if err != nil {
+		fmt.Println("Error opening file:", err)
+		return
+	}
+	defer file.Close()
+
+	if _, err := file.WriteString(colorFn("%s %s: %s\n", time.Now().Format("15:04:05.000"), prefix, msg)); err != nil {
+		fmt.Println("Error writing to file:", err)
+		return
+	}
+
+	if err := file.Sync(); err != nil {
+		fmt.Println("Error flushing file:", err)
+	}
+}
+
+func Pad(s string, w int) string {
+	b := len(s)
+	l := w/2 - 15
+	r := w - b - l
+	ss := fmt.Sprintf("%s%s%s", strings.Repeat("-", l), s, strings.Repeat("-", r))
+	return ss
 }

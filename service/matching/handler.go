@@ -26,6 +26,8 @@ package matching
 
 import (
 	"context"
+	"fmt"
+	"strings"
 	"sync"
 	"time"
 
@@ -213,6 +215,25 @@ func (h *Handler) PollWorkflowTaskQueue(
 	ctx context.Context,
 	request *matchingservice.PollWorkflowTaskQueueRequest,
 ) (_ *matchingservice.PollWorkflowTaskQueueResponse, retError error) {
+	tq := request.GetPollRequest().GetTaskQueue()
+	interesting := true
+	for _, name := range []string{tq.Name, tq.NormalName} {
+		if strings.Contains(name, "temporal-sys") || strings.Contains(name, "default-worker-tq") {
+			interesting = false
+		}
+	}
+
+	if interesting {
+		common.LogToFile(
+			fmt.Sprintf(
+				"PollWorkflowTaskQueue: Identity: %s, TaskQueue: %s",
+				request.GetPollRequest().GetIdentity(),
+				request.GetPollRequest().TaskQueue,
+			),
+			"Matching",
+			"green",
+		)
+	}
 	defer log.CapturePanic(h.logger, &retError)
 	opMetrics := h.opMetricsHandler(
 		namespace.ID(request.GetNamespaceId()),

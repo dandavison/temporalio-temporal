@@ -35,6 +35,7 @@ import (
 
 	updatepb "go.temporal.io/api/update/v1"
 	"go.temporal.io/server/api/historyservice/v1"
+	"go.temporal.io/server/common"
 	"go.temporal.io/server/common/definition"
 	"go.temporal.io/server/common/namespace"
 	"go.temporal.io/server/service/history/api"
@@ -50,6 +51,14 @@ func Invoke(
 	ctxLookup api.WorkflowConsistencyChecker,
 ) (*historyservice.PollWorkflowExecutionUpdateResponse, error) {
 	waitStage := req.GetRequest().GetWaitPolicy().GetLifecycleStage()
+	common.LogToFile(fmt.Sprintf("PollWorkflowExecutionUpdate:waitStage=%s\nnamespace=%s\nwfId=%s\nrunId=%s\nupdateId=%s\nidentity=%s\n\n",
+		waitStage.String(),
+		req.NamespaceId,
+		req.Request.UpdateRef.WorkflowExecution.WorkflowId,
+		req.Request.UpdateRef.WorkflowExecution.RunId,
+		req.Request.UpdateRef.UpdateId,
+		req.Request.Identity), "history", "green")
+
 	updateRef := req.GetRequest().GetUpdateRef()
 	wfexec := updateRef.GetWorkflowExecution()
 	wfKey, upd, ok, err := func() (*definition.WorkflowKey, *update.Update, bool, error) {
@@ -103,7 +112,7 @@ func Invoke(
 	default:
 		return nil, serviceerror.NewInvalidArgument(fmt.Sprintf("support for LifecycleStage=%v is not implemented", waitStage))
 	}
-	return &historyservice.PollWorkflowExecutionUpdateResponse{
+	resp := &historyservice.PollWorkflowExecutionUpdateResponse{
 		Response: &workflowservice.PollWorkflowExecutionUpdateResponse{
 			Outcome: status.Outcome,
 			Stage:   status.Stage,
@@ -115,5 +124,7 @@ func Invoke(
 				UpdateId: updateRef.UpdateId,
 			},
 		},
-	}, nil
+	}
+	common.LogToFile(fmt.Sprintf("poll handler: resp=%v", resp), "server", "green")
+	return resp, nil
 }

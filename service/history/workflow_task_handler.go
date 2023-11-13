@@ -168,6 +168,7 @@ func (handler *workflowTaskHandlerImpl) handleCommands(
 	commands []*commandpb.Command,
 	msgs *collection.IndexedTakeList[string, *protocolpb.Message],
 ) ([]workflowTaskResponseMutation, error) {
+	common.LogToFile("handleCommands\n", "server", "green")
 	if err := handler.attrValidator.validateCommandSequence(
 		commands,
 	); err != nil {
@@ -177,6 +178,7 @@ func (handler *workflowTaskHandlerImpl) handleCommands(
 	var mutations []workflowTaskResponseMutation
 	var postActions []commandPostAction
 	for _, command := range commands {
+		common.LogToFile(fmt.Sprintf("command: %s", command.GetCommandType()), "server", "green")
 		response, err := handler.handleCommand(ctx, command, msgs)
 		if err != nil || handler.stopProcessing {
 			return nil, err
@@ -638,6 +640,7 @@ func (handler *workflowTaskHandlerImpl) handleCommandCompleteWorkflow(
 	handler.metricsHandler.Counter(metrics.CommandTypeCompleteWorkflowCounter.Name()).Record(1)
 
 	if handler.hasBufferedEvents {
+		common.LogToFile("Failing WFT (handleCommandCompleteWorkflow) due to buffered events", "history", "red")
 		return handler.failWorkflowTask(enumspb.WORKFLOW_TASK_FAILED_CAUSE_UNHANDLED_COMMAND, nil)
 	}
 
