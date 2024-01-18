@@ -720,8 +720,24 @@ func (r *workflowResetterImpl) reapplyEvents(
 			); err != nil {
 				return err
 			}
+		case enumspb.EVENT_TYPE_WORKFLOW_EXECUTION_UPDATE_ACCEPTED:
+			attr := event.GetWorkflowExecutionUpdateAcceptedEventAttributes()
+			if _, err := mutableState.AddWorkflowExecutionUpdateRequestedEvent(
+				attr.GetAcceptedRequest(),
+				enumspb.UPDATE_REQUESTED_EVENT_ORIGIN_REAPPLY,
+			); err != nil {
+				return err
+			}
+		case enumspb.EVENT_TYPE_WORKFLOW_EXECUTION_UPDATE_REQUESTED:
+			attr := event.GetWorkflowExecutionUpdateRequestedEventAttributes()
+			if _, err := mutableState.AddWorkflowExecutionUpdateRequestedEvent(
+				attr.GetRequest(),
+				attr.Origin,
+			); err != nil {
+				return err
+			}
 		default:
-			// events other than signal will be ignored
+			// other event types are not reapplied
 		}
 	}
 	return nil
