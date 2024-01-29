@@ -48,6 +48,7 @@ import (
 	"go.temporal.io/server/common/persistence"
 	"go.temporal.io/server/common/primitives/timestamp"
 	"go.temporal.io/server/common/util"
+	"go.temporal.io/server/service/history/api/updateworkflow"
 	"go.temporal.io/server/service/history/consts"
 	"go.temporal.io/server/service/history/shard"
 	"go.temporal.io/server/service/history/workflow"
@@ -218,27 +219,51 @@ func (r *workflowResetterImpl) ResetWorkflow(
 	}
 	defer func() { resetWorkflow.GetReleaseFn()(retError) }()
 
-	_, err = reapplyEventsFn(ctx, resetWorkflow.GetMutableState())
-	if err != nil {
-		return err
-	}
+	reappliedEvents := []*historypb.HistoryEvent{}
 
-	_, err = r.reapplyEvents(resetWorkflow.GetMutableState(), additionalReapplyEvents, nil)
+	events, err := reapplyEventsFn(ctx, resetWorkflow.GetMutableState())
 	if err != nil {
 		return err
 	}
+	reappliedEvents = append(reappliedEvents, events...)
+
+	events, err = r.reapplyEvents(resetWorkflow.GetMutableState(), additionalReapplyEvents, nil)
+	if err != nil {
+		return err
+	}
+	reappliedEvents = append(reappliedEvents, events...)
 
 	if err := workflow.ScheduleWorkflowTask(resetWorkflow.GetMutableState()); err != nil {
 		return err
 	}
 
-	return r.persistToDB(
+	if err := r.persistToDB(
 		ctx,
 		currentWorkflow,
 		currentWorkflowMutation,
 		currentWorkflowEventsSeq,
 		resetWorkflow,
-	)
+	); err != nil {
+		return err
+	}
+	// Advance update state machine for reapplied update requests
+	for _, e := range reappliedEvents {
+		switch e.GetEventType() {
+		case enumspb.EVENT_TYPE_WORKFLOW_EXECUTION_UPDATE_REQUESTED:
+			attr := e.GetWorkflowExecutionUpdateRequestedEventAttributes()
+
+			// TODO (dan): WIP; I have no reason to believe this is the correct
+			// way to obtain the registry in this context.
+			updateReg := resetWorkflow.GetContext().UpdateRegistry(ctx)
+
+			_, _, err := updateworkflow.RequestUpdate(ctx, attr.GetRequest(), updateReg, resetWorkflow.GetMutableState())
+			if err != nil {
+				return err
+			}
+		}
+	}
+
+	return nil
 }
 
 func (r *workflowResetterImpl) prepareResetWorkflow(
