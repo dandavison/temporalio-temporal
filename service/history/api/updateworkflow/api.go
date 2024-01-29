@@ -117,16 +117,12 @@ func Invoke(
 				return nil, serviceerror.NewWorkflowNotReady("Unable to perform workflow execution update due to Workflow Task in failed state.")
 			}
 
-			updateID := req.GetRequest().GetRequest().GetMeta().GetUpdateId()
-			updateReg := weCtx.GetUpdateRegistry(ctx)
 			var (
 				alreadyExisted bool
 				err            error
 			)
-			if upd, alreadyExisted, err = updateReg.FindOrCreate(ctx, updateID); err != nil {
-				return nil, err
-			}
-			if err = upd.Request(ctx, req.GetRequest().GetRequest(), workflow.WithEffects(effect.Immediate(ctx), ms)); err != nil {
+			upd, alreadyExisted, err = RequestUpdate(ctx, req.GetRequest().GetRequest(), weCtx.GetUpdateRegistry(ctx), ms)
+			if err != nil {
 				return nil, err
 			}
 
@@ -315,4 +311,16 @@ func createResponse(
 			Stage:   stage,
 		},
 	}
+}
+
+func RequestUpdate(ctx context.Context, request *updatepb.Request, updateReg update.Registry, mutableState workflow.MutableState) (*update.Update, bool, error) {
+	updateID := request.GetMeta().GetUpdateId()
+	upd, alreadyExisted, err := updateReg.FindOrCreate(ctx, updateID)
+	if err != nil {
+		return nil, false, err
+	}
+	if err = upd.Request(ctx, request, workflow.WithEffects(effect.Immediate(ctx), mutableState)); err != nil {
+		return nil, false, err
+	}
+	return upd, alreadyExisted, nil
 }
