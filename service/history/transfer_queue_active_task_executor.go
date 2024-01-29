@@ -1406,7 +1406,8 @@ func (t *transferQueueActiveTaskExecutor) resetWorkflow(
 		),
 		reason,
 		nil,
-		nil,
+		// No coverage
+		[]enumspb.ResetReapplyExcludeType{enumspb.RESET_REAPPLY_EXCLUDE_TYPE_SIGNAL},
 	)
 
 	switch err.(type) {

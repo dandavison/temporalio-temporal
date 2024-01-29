@@ -31,6 +31,7 @@ import (
 
 	"github.com/pborman/uuid"
 	commonpb "go.temporal.io/api/common/v1"
+	// enumspb "go.temporal.io/api/enums/v1"
 	historypb "go.temporal.io/api/history/v1"
 	"go.temporal.io/api/serviceerror"
 
@@ -347,6 +348,8 @@ func (r *transactionMgrImpl) backfillWorkflowEventsReapply(
 			targetWorkflow,
 			EventsReapplicationResetWorkflowReason,
 			totalEvents,
+			// covered
+			// []enumspb.ResetReapplyExcludeType{enumspb.RESET_REAPPLY_EXCLUDE_TYPE_SIGNAL},
 			nil,
 		)
 		switch err.(type) {
