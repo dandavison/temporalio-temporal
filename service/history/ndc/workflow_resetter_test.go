@@ -596,7 +596,7 @@ func (s *workflowResetterSuite) TestReapplyContinueAsNewWorkflowEvents_WithOutCo
 
 	mutableState := workflow.NewMockMutableState(s.controller)
 
-	lastVisitedRunID, err := s.workflowResetter.reapplyContinueAsNewWorkflowEvents(
+	_, lastVisitedRunID, err := s.workflowResetter.reapplyContinueAsNewWorkflowEvents(
 		ctx,
 		mutableState,
 		s.namespaceID,
@@ -714,7 +714,7 @@ func (s *workflowResetterSuite) TestReapplyContinueAsNewWorkflowEvents_WithConti
 
 	mutableState := workflow.NewMockMutableState(s.controller)
 
-	lastVisitedRunID, err := s.workflowResetter.reapplyContinueAsNewWorkflowEvents(
+	_, lastVisitedRunID, err := s.workflowResetter.reapplyContinueAsNewWorkflowEvents(
 		ctx,
 		mutableState,
 		s.namespaceID,
@@ -778,7 +778,7 @@ func (s *workflowResetterSuite) TestReapplyWorkflowEvents() {
 
 	mutableState := workflow.NewMockMutableState(s.controller)
 
-	nextRunID, err := s.workflowResetter.reapplyWorkflowEvents(
+	_, nextRunID, err := s.workflowResetter.reapplyWorkflowEvents(
 		context.Background(),
 		mutableState,
 		firstEventID,
@@ -833,7 +833,7 @@ func (s *workflowResetterSuite) TestReapplyEvents() {
 		}
 	}
 
-	err := s.workflowResetter.reapplyEvents(mutableState, events, nil)
+	_, err := s.workflowResetter.reapplyEvents(mutableState, events, nil)
 	s.NoError(err)
 }
 
