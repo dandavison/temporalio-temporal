@@ -733,9 +733,13 @@ func (r *workflowResetterImpl) reapplyEvents(
 	resetReapplyExcludeTypes []enumspb.ResetReapplyExcludeType,
 ) ([]*historypb.HistoryEvent, error) {
 	excludeSignal := false
+	excludeUpdate := false
 	for _, e := range resetReapplyExcludeTypes {
-		if e == enumspb.RESET_REAPPLY_EXCLUDE_TYPE_SIGNAL {
+		switch e {
+		case enumspb.RESET_REAPPLY_EXCLUDE_TYPE_SIGNAL:
 			excludeSignal = true
+		case enumspb.RESET_REAPPLY_EXCLUDE_TYPE_UPDATE:
+			excludeUpdate = true
 		}
 	}
 	reappliedEvents := []*historypb.HistoryEvent{}
@@ -758,6 +762,9 @@ func (r *workflowResetterImpl) reapplyEvents(
 			}
 			reappliedEvents = append(reappliedEvents, e)
 		case enumspb.EVENT_TYPE_WORKFLOW_EXECUTION_UPDATE_ACCEPTED:
+			if excludeUpdate {
+				continue
+			}
 			attr := event.GetWorkflowExecutionUpdateAcceptedEventAttributes()
 			e, err := mutableState.AddWorkflowExecutionUpdateRequestedEvent(
 				attr.GetAcceptedRequest(),
@@ -768,6 +775,9 @@ func (r *workflowResetterImpl) reapplyEvents(
 			}
 			reappliedEvents = append(reappliedEvents, e)
 		case enumspb.EVENT_TYPE_WORKFLOW_EXECUTION_UPDATE_REQUESTED:
+			if excludeUpdate {
+				continue
+			}
 			attr := event.GetWorkflowExecutionUpdateRequestedEventAttributes()
 			e, err := mutableState.AddWorkflowExecutionUpdateRequestedEvent(
 				attr.GetRequest(),
