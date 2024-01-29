@@ -134,11 +134,27 @@ func withInstrumentation(i *instrumentation) updateOpt {
 	}
 }
 
-func newAccepted(id string, acceptedEventID int64, opts ...updateOpt) *Update {
+func newRequested(id string, eventID int64, opts ...updateOpt) *Update {
+	upd := &Update{
+		id:              id,
+		state:           stateRequested,
+		acceptedEventID: eventID,
+		onComplete:      func() {},
+		instrumentation: &noopInstrumentation,
+		accepted:        future.NewFuture[*failurepb.Failure](),
+		outcome:         future.NewFuture[*updatepb.Outcome](),
+	}
+	for _, opt := range opts {
+		opt(upd)
+	}
+	return upd
+}
+
+func newAccepted(id string, eventID int64, opts ...updateOpt) *Update {
 	upd := &Update{
 		id:              id,
 		state:           stateAccepted,
-		acceptedEventID: acceptedEventID,
+		acceptedEventID: eventID,
 		onComplete:      func() {},
 		instrumentation: &noopInstrumentation,
 		accepted:        future.NewReadyFuture[*failurepb.Failure](nil, nil),

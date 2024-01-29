@@ -161,6 +161,16 @@ func NewRegistry(
 
 	getStoreFn().VisitUpdates(func(updID string, updInfo *updatespb.UpdateInfo) {
 		// need to eager load here so that Len and admit are correct.
+		if req := updInfo.GetRequest(); req != nil {
+			r.updates[updID] = newRequested(
+				updID,
+				// TODO (dan): how are we making use of the event batch ID?
+				req.GetHistoryPointer().EventId,
+				// TODO (dan): check this is appropriate for Requested
+				r.remover(updID),
+				withInstrumentation(&r.instrumentation),
+			)
+		}
 		if acc := updInfo.GetAcceptance(); acc != nil {
 			r.updates[updID] = newAccepted(
 				updID,

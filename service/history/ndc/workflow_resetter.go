@@ -251,11 +251,7 @@ func (r *workflowResetterImpl) ResetWorkflow(
 		switch e.GetEventType() {
 		case enumspb.EVENT_TYPE_WORKFLOW_EXECUTION_UPDATE_REQUESTED:
 			attr := e.GetWorkflowExecutionUpdateRequestedEventAttributes()
-
-			// TODO (dan): WIP; I have no reason to believe this is the correct
-			// way to obtain the registry in this context.
 			updateReg := resetWorkflow.GetContext().UpdateRegistry(ctx)
-
 			_, _, err := updateworkflow.RequestUpdate(ctx, attr.GetRequest(), updateReg, resetWorkflow.GetMutableState())
 			if err != nil {
 				return err
