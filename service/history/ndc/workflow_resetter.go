@@ -716,17 +716,6 @@ func reapplyEvents(
 			); err != nil {
 				return err
 			}
-		case enumspb.EVENT_TYPE_WORKFLOW_EXECUTION_UPDATE_ACCEPTED:
-			if excludeUpdate {
-				continue
-			}
-			attr := event.GetWorkflowExecutionUpdateAcceptedEventAttributes()
-			if _, err := mutableState.AddWorkflowExecutionUpdateRequestedEvent(
-				attr.GetAcceptedRequest(),
-				enumspb.UPDATE_REQUESTED_EVENT_ORIGIN_REAPPLY,
-			); err != nil {
-				return err
-			}
 		case enumspb.EVENT_TYPE_WORKFLOW_EXECUTION_UPDATE_REQUESTED:
 			if excludeUpdate {
 				continue
@@ -735,6 +724,23 @@ func reapplyEvents(
 			if _, err := mutableState.AddWorkflowExecutionUpdateRequestedEvent(
 				attr.GetRequest(),
 				attr.Origin,
+			); err != nil {
+				return err
+			}
+		case enumspb.EVENT_TYPE_WORKFLOW_EXECUTION_UPDATE_ACCEPTED:
+			if excludeUpdate {
+				continue
+			}
+			attr := event.GetWorkflowExecutionUpdateAcceptedEventAttributes()
+			request := attr.GetAcceptedRequest()
+			if request == nil {
+				// An UpdateAccepted lacks a request payload if and only if it is preceded by an UpdateRequested event
+				// (these always have the payload). We do not reapply such UpdateAccepted events.
+				continue
+			}
+			if _, err := mutableState.AddWorkflowExecutionUpdateRequestedEvent(
+				request,
+				enumspb.UPDATE_REQUESTED_EVENT_ORIGIN_REAPPLY,
 			); err != nil {
 				return err
 			}
