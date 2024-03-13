@@ -436,22 +436,24 @@ func (u *Update) onAcceptanceMsg(
 	u.instrumentation.CountAcceptanceMsg()
 
 	// The accepted request payload is not sent back by the worker to the server. Instead, the server stores it in the
-	// update registry and it is written to the event here. There are at least two scenarios when getting it from the
-	// worker would make sense:
-
-	// 1. If the validation handler on the worker side mutates the original request and accepts it.
-	//    Then the server should store this mutated request but not the original one.
-	// 2. To support scenarios in the update in the registry has been lost but we still want to process an update
-	//    acceptance message.
+	// update registry and it is written to the event here. It could make sense to obtain it from the worker, in order
+	// to support scenarios in which the registry has been lost but we still want to process an update acceptance
+	// message. If we were to do that, the request must not have been altered by the validator, since we may use it to
+	// create reapplied updates, which will be submitted to the validator again.
+	//
+	// The following conditions are equivalent (imply each other):
+	//
+	// - The in-registry update lacks a request payload
+	// - The update request derives from a reapplied update (i.e. after reset or conflict resolution)
+	// - There is an UpdateRequested event in history (these events always contain the request payload)
+	//
+	// If the in-registry update lacks a request payload, then we write the UpdateAccepted event without a request
+	// payload. It is the responsibility of SDK workers to handle all possible sequences of events, i.e.
+	// UpdateRequested(w/ request)
+	// UpdateRequested(w/ request) ... UpdateAccepted(w/out request)
+	// UpdateAccepted(w/ request)
 	var acceptedRequest *updatepb.Request
 	if u.request != nil {
-		// If the in-registry update derived from a reapplied update, then it will not have a request payload, and we
-		// write the UpdateAccepted event with an empty payload. In that situation there will be an UpdateRequested
-		// event in history; events of that type always contain the request payload. It is the responsibility of SDK
-		// workers to handle all possible sequences of events, i.e.
-		// UpdateRequested(w/ request)
-		// UpdateRequested(w/ request) ... UpdateAccepted(w/out request)
-		// UpdateAccepted(w/ request)
 		acceptedRequest = &updatepb.Request{}
 		if err := u.request.UnmarshalTo(acceptedRequest); err != nil {
 			return internalErrorf("unable to unmarshal original request: %v", err)
