@@ -745,7 +745,7 @@ func reapplyEvents(
 				return err
 			}
 		default:
-			// other event types are not reapplied
+			// Other event types are not reapplied.
 		}
 	}
 	return nil
