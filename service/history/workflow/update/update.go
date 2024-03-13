@@ -443,7 +443,7 @@ func (u *Update) onAcceptanceMsg(
 	//    Then the server should store this mutated request but not the original one.
 	// 2. To support scenarios in the update in the registry has been lost but we still want to process an update
 	//    acceptance message.
-	acceptedRequest := &updatepb.Request{}
+	var acceptedRequest *updatepb.Request
 	if u.request != nil {
 		// If the in-registry update derived from a reapplied update, then it will not have a request payload, and we
 		// write the UpdateAccepted event with an empty payload. In that situation there will be an UpdateRequested
@@ -452,6 +452,7 @@ func (u *Update) onAcceptanceMsg(
 		// UpdateRequested(w/ request)
 		// UpdateRequested(w/ request) ... UpdateAccepted(w/out request)
 		// UpdateAccepted(w/ request)
+		acceptedRequest = &updatepb.Request{}
 		if err := u.request.UnmarshalTo(acceptedRequest); err != nil {
 			return internalErrorf("unable to unmarshal original request: %v", err)
 		}
