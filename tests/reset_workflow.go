@@ -400,14 +400,14 @@ func (s *FunctionalSuite) testResetWorkflowReapply(
 
 	resetReapplyExcludeTypes := resetworkflow.GetResetReapplyExcludeTypes(reapplyExcludeTypes, reapplyType)
 	if resetReapplyExcludeTypes[enumspb.RESET_REAPPLY_EXCLUDE_TYPE_SIGNAL] {
-		s.Equal(totalSignals, signalCount)
-	} else {
 		s.Equal(0, signalCount)
+	} else {
+		s.Equal(totalSignals, signalCount)
 	}
 	if resetReapplyExcludeTypes[enumspb.RESET_REAPPLY_EXCLUDE_TYPE_UPDATE] {
-		s.Equal(totalUpdates, updateCount)
-	} else {
 		s.Equal(0, updateCount)
+	} else {
+		s.Equal(totalUpdates, updateCount)
 	}
 }
 
