@@ -698,9 +698,30 @@ func reapplyEvents(
 	events []*historypb.HistoryEvent,
 	resetReapplyExcludeTypes map[enumspb.ResetReapplyExcludeType]bool,
 ) error {
+	_, err := reapplyEventsWithDeduplication(mutableState, events, resetReapplyExcludeTypes, "")
+	return err
+}
+
+func reapplyEventsWithDeduplication(
+	mutableState workflow.MutableState,
+	events []*historypb.HistoryEvent,
+	resetReapplyExcludeTypes map[enumspb.ResetReapplyExcludeType]bool,
+	runIdForDeduplication string,
+) ([]*historypb.HistoryEvent, error) {
+	isDuplicate := func(event *historypb.HistoryEvent) bool {
+		if runIdForDeduplication == "" {
+			return false
+		}
+		resource := definition.NewEventReappliedID(runIdForDeduplication, event.GetEventId(), event.GetVersion())
+		return mutableState.IsResourceDuplicated(resource)
+	}
 	excludeSignal := resetReapplyExcludeTypes[enumspb.RESET_REAPPLY_EXCLUDE_TYPE_SIGNAL]
 	excludeUpdate := resetReapplyExcludeTypes[enumspb.RESET_REAPPLY_EXCLUDE_TYPE_UPDATE]
+	reappliedEvents := []*historypb.HistoryEvent{}
 	for _, event := range events {
+		if isDuplicate(event) {
+			continue
+		}
 		switch event.GetEventType() {
 		case enumspb.EVENT_TYPE_WORKFLOW_EXECUTION_SIGNALED:
 			if excludeSignal {
@@ -714,8 +735,9 @@ func reapplyEvents(
 				attr.GetHeader(),
 				attr.GetSkipGenerateWorkflowTask(),
 			); err != nil {
-				return err
+				return reappliedEvents, err
 			}
+			reappliedEvents = append(reappliedEvents, event)
 		case enumspb.EVENT_TYPE_WORKFLOW_EXECUTION_UPDATE_REQUESTED:
 			if excludeUpdate {
 				continue
@@ -725,8 +747,9 @@ func reapplyEvents(
 				attr.GetRequest(),
 				attr.Origin,
 			); err != nil {
-				return err
+				return reappliedEvents, err
 			}
+			reappliedEvents = append(reappliedEvents, event)
 		case enumspb.EVENT_TYPE_WORKFLOW_EXECUTION_UPDATE_ACCEPTED:
 			if excludeUpdate {
 				continue
@@ -742,13 +765,18 @@ func reapplyEvents(
 				request,
 				enumspb.UPDATE_REQUESTED_EVENT_ORIGIN_REAPPLY,
 			); err != nil {
-				return err
+				return reappliedEvents, err
 			}
+			reappliedEvents = append(reappliedEvents, event)
 		default:
 			// Other event types are not reapplied.
 		}
+		if runIdForDeduplication != "" {
+			deDupResource := definition.NewEventReappliedID(runIdForDeduplication, event.GetEventId(), event.GetVersion())
+			mutableState.UpdateDuplicatedResource(deDupResource)
+		}
 	}
-	return nil
+	return reappliedEvents, nil
 }
 
 func (r *workflowResetterImpl) getPaginationFn(
