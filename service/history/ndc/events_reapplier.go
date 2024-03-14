@@ -91,6 +91,13 @@ func (r *EventsReapplierImpl) ReapplyEvents(
 			}
 			reappliedEvents = append(reappliedEvents, event)
 		case enumspb.EVENT_TYPE_WORKFLOW_EXECUTION_UPDATE_ACCEPTED:
+			attr := event.GetWorkflowExecutionUpdateAcceptedEventAttributes()
+			request := attr.GetAcceptedRequest()
+			if request == nil {
+				// An UpdateAccepted lacks a request payload if and only if it is preceded by an UpdateRequested event
+				// (these always have the payload). We do not reapply such UpdateAccepted events.
+				continue
+			}
 			// Test coverage: TestNDCEventReapplicationSuite/TestReapplyEvents_AppliedEvent_Update
 			dedupResource := definition.NewEventReappliedID(runID, event.GetEventId(), event.GetVersion())
 			if ms.IsResourceDuplicated(dedupResource) {
