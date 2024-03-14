@@ -172,7 +172,7 @@ func (r *workflowResetterImpl) ResetWorkflow(
 
 			if lastVisitedRunID == currentMutableState.GetExecutionState().RunId {
 				for _, event := range currentWorkflowEventsSeq {
-					if err := reapplyEvents(resetMutableState, event.Events, resetReapplyExcludeTypes); err != nil {
+					if _, err := reapplyEvents(resetMutableState, event.Events, resetReapplyExcludeTypes, ""); err != nil {
 						return err
 					}
 				}
@@ -218,7 +218,7 @@ func (r *workflowResetterImpl) ResetWorkflow(
 	if err := reapplyEventsFn(ctx, resetMS); err != nil {
 		return err
 	}
-	if err := reapplyEvents(resetMS, additionalReapplyEvents, nil); err != nil {
+	if _, err := reapplyEvents(resetMS, additionalReapplyEvents, nil, ""); err != nil {
 		return err
 	}
 
@@ -678,7 +678,7 @@ func (r *workflowResetterImpl) reapplyWorkflowEvents(
 			return "", err
 		}
 		lastEvents = batch.Events
-		if err := reapplyEvents(mutableState, lastEvents, resetReapplyExcludeTypes); err != nil {
+		if _, err := reapplyEvents(mutableState, lastEvents, resetReapplyExcludeTypes, ""); err != nil {
 			return "", err
 		}
 	}
@@ -692,22 +692,14 @@ func (r *workflowResetterImpl) reapplyWorkflowEvents(
 	return nextRunID, nil
 }
 
-// TODO (dan) this function is almost identical to EventsReapplierImpl.ReapplyEvents in events_reapplier.go: unify them.
 func reapplyEvents(
-	mutableState workflow.MutableState,
-	events []*historypb.HistoryEvent,
-	resetReapplyExcludeTypes map[enumspb.ResetReapplyExcludeType]bool,
-) error {
-	_, err := reapplyEventsWithDeduplication(mutableState, events, resetReapplyExcludeTypes, "")
-	return err
-}
-
-func reapplyEventsWithDeduplication(
 	mutableState workflow.MutableState,
 	events []*historypb.HistoryEvent,
 	resetReapplyExcludeTypes map[enumspb.ResetReapplyExcludeType]bool,
 	runIdForDeduplication string,
 ) ([]*historypb.HistoryEvent, error) {
+	// TODO (dan): This implementation is the result of unifying two previous implementations, one of which did
+	// deduplication. Can we always/never do this deduplication, or must it be decided by the caller?
 	isDuplicate := func(event *historypb.HistoryEvent) bool {
 		if runIdForDeduplication == "" {
 			return false

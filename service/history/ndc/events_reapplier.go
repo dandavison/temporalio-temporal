@@ -76,7 +76,7 @@ func (r *EventsReapplierImpl) ReapplyEvents(
 	if !ms.IsWorkflowExecutionRunning() {
 		return nil, serviceerror.NewInternal("unable to reapply events to closed workflow.")
 	}
-	reappliedEvents, err := reapplyEventsWithDeduplication(ms, historyEvents, nil, runID)
+	reappliedEvents, err := reapplyEvents(ms, historyEvents, nil, runID)
 	if err != nil {
 		return nil, err
 	}
