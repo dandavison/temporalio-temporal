@@ -300,22 +300,15 @@ func (s *FunctionalSuite) testResetWorkflowReapply(
 		wtHandlerInvocation++
 
 		// First invocation is first WFT; then come `totalUpdates` updates, followed by `totalSignals` signals, each in
-		// a separate WFT. We must send COMPLETE_WORKFLOW_EXECUTION in the final WFT.
-		// FIXME: It doesn't work if the updates come last; the UpdateAccepted event is not written due to the
-		// COMPLETE_WORKFLOW_EXECUTION.
+		// a separate WFT. We must send  in the final WFT.
+		// FIXME: It doesn't work if we send COMPLETE_WORKFLOW_EXECUTION and the updates come last; the UpdateAccepted
+		// event is not written due to the COMPLETE_WORKFLOW_EXECUTION.
 		if wtHandlerInvocation <= totalUpdates+totalSignals {
 			return []*commandpb.Command{}, nil
 		}
 
 		commandsCompleted = true
-		return []*commandpb.Command{{
-			CommandType: enumspb.COMMAND_TYPE_COMPLETE_WORKFLOW_EXECUTION,
-			Attributes: &commandpb.Command_CompleteWorkflowExecutionCommandAttributes{
-				CompleteWorkflowExecutionCommandAttributes: &commandpb.CompleteWorkflowExecutionCommandAttributes{
-					Result: payloads.EncodeString("Done"),
-				},
-			},
-		}}, nil
+		return []*commandpb.Command{}, nil
 	}
 
 	messageHandlerInvocation := 0
