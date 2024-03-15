@@ -292,18 +292,16 @@ func (s *FunctionalSuite) testResetWorkflowReapply(
 	s.Logger.Info("StartWorkflowExecution", tag.WorkflowRunID(we.RunId))
 
 	// workflow logic
-	wtHandlerInvocation := 0
+	invocation := 0
 	commandsCompleted := false
 	wtHandler := func(execution *commonpb.WorkflowExecution, wt *commonpb.WorkflowType,
 		previousStartedEventID, startedEventID int64, history *historypb.History) ([]*commandpb.Command, error) {
 
-		wtHandlerInvocation++
+		invocation++
 
-		// First invocation is first WFT; then come `totalUpdates` updates, followed by `totalSignals` signals, each in
+		// First invocation is first WFT; then come `totalSignals` signals, followed by `totalUpdates` updates, each in
 		// a separate WFT. We must send COMPLETE_WORKFLOW_EXECUTION in the final WFT.
-		// FIXME: It doesn't work if the updates come last; the UpdateAccepted event is not written due to the
-		// COMPLETE_WORKFLOW_EXECUTION.
-		if wtHandlerInvocation <= totalUpdates+totalSignals {
+		if invocation <= totalSignals {
 			return []*commandpb.Command{}, nil
 		}
 
@@ -329,8 +327,8 @@ func (s *FunctionalSuite) testResetWorkflowReapply(
 		if messageHandlerInvocation == totalUpdates+totalSignals+1 {
 			messagesCompleted = true
 		}
-		if messageHandlerInvocation > 1 && messageHandlerInvocation <= totalUpdates+1 {
-			updateId := tv.UpdateID(fmt.Sprint(messageHandlerInvocation - 1))
+		if messageHandlerInvocation > totalSignals+1 {
+			updateId := tv.UpdateID(fmt.Sprint(messageHandlerInvocation - totalSignals - 1))
 			return []*protocolpb.Message{
 				{
 					Id:                 tv.MessageID(fmt.Sprintf("%s/request/accepted", updateId)),
@@ -372,8 +370,8 @@ func (s *FunctionalSuite) testResetWorkflowReapply(
 	s.Logger.Info("PollAndProcessWorkflowTask", tag.Error(err))
 	s.NoError(err)
 
-	s.testResetWorkflowReapplySendUpdates(totalUpdates, workflowID, runID, identity, poller, tv)
 	s.testResetWorkflowReapplySendSignals(totalSignals, workflowID, runID, identity, poller)
+	s.testResetWorkflowReapplySendUpdates(totalUpdates, workflowID, runID, identity, poller, tv)
 
 	s.True(commandsCompleted)
 	s.True(messagesCompleted)
