@@ -211,6 +211,7 @@ func (s *FunctionalSuite) TestResetWorkflow_ExcludeNoneReapplyAll() {
 		"exclude-none-reapply-all",
 		[]enumspb.ResetReapplyExcludeType{},
 		enumspb.RESET_REAPPLY_TYPE_ALL_ELIGIBLE,
+		false,
 	)
 }
 
@@ -219,6 +220,7 @@ func (s *FunctionalSuite) TestResetWorkflow_ExcludeNoneReapplySignal() {
 		"exclude-none-reapply-signal",
 		[]enumspb.ResetReapplyExcludeType{},
 		enumspb.RESET_REAPPLY_TYPE_SIGNAL,
+		false,
 	)
 }
 
@@ -227,6 +229,7 @@ func (s *FunctionalSuite) TestResetWorkflow_ExcludeNoneReapplyNone() {
 		"exclude-none-reapply-none",
 		[]enumspb.ResetReapplyExcludeType{},
 		enumspb.RESET_REAPPLY_TYPE_NONE,
+		false,
 	)
 }
 
@@ -235,6 +238,7 @@ func (s *FunctionalSuite) TestResetWorkflow_ExcludeSignalReapplyAll() {
 		"exclude-signal-reapply-all",
 		[]enumspb.ResetReapplyExcludeType{enumspb.RESET_REAPPLY_EXCLUDE_TYPE_SIGNAL},
 		enumspb.RESET_REAPPLY_TYPE_ALL_ELIGIBLE,
+		false,
 	)
 }
 
@@ -243,6 +247,7 @@ func (s *FunctionalSuite) TestResetWorkflow_ExcludeSignalReapplySignal() {
 		"exclude-signal-reapply-signal",
 		[]enumspb.ResetReapplyExcludeType{enumspb.RESET_REAPPLY_EXCLUDE_TYPE_SIGNAL},
 		enumspb.RESET_REAPPLY_TYPE_SIGNAL,
+		false,
 	)
 }
 
@@ -251,6 +256,16 @@ func (s *FunctionalSuite) TestResetWorkflow_ExcludeSignalReapplyNone() {
 		"exclude-signal-reapply-none",
 		[]enumspb.ResetReapplyExcludeType{enumspb.RESET_REAPPLY_EXCLUDE_TYPE_SIGNAL},
 		enumspb.RESET_REAPPLY_TYPE_NONE,
+		false,
+	)
+}
+
+func (s *FunctionalSuite) TestResetWorkflow_OSS_878_bug() {
+	s.testResetWorkflowReapply(
+		"exclude-signal-reapply-signal",
+		[]enumspb.ResetReapplyExcludeType{},
+		enumspb.RESET_REAPPLY_TYPE_ALL_ELIGIBLE,
+		true,
 	)
 }
 
@@ -258,6 +273,7 @@ func (s *FunctionalSuite) testResetWorkflowReapply(
 	testName string,
 	reapplyExcludeTypes []enumspb.ResetReapplyExcludeType,
 	reapplyType enumspb.ResetReapplyType,
+	completeWorkflowExecution bool,
 ) {
 	totalSignals := 3
 	totalUpdates := 3
@@ -306,14 +322,18 @@ func (s *FunctionalSuite) testResetWorkflowReapply(
 		}
 
 		commandsCompleted = true
-		return []*commandpb.Command{{
-			CommandType: enumspb.COMMAND_TYPE_COMPLETE_WORKFLOW_EXECUTION,
-			Attributes: &commandpb.Command_CompleteWorkflowExecutionCommandAttributes{
-				CompleteWorkflowExecutionCommandAttributes: &commandpb.CompleteWorkflowExecutionCommandAttributes{
-					Result: payloads.EncodeString("Done"),
+		if completeWorkflowExecution {
+			return []*commandpb.Command{{
+				CommandType: enumspb.COMMAND_TYPE_COMPLETE_WORKFLOW_EXECUTION,
+				Attributes: &commandpb.Command_CompleteWorkflowExecutionCommandAttributes{
+					CompleteWorkflowExecutionCommandAttributes: &commandpb.CompleteWorkflowExecutionCommandAttributes{
+						Result: payloads.EncodeString("Done"),
+					},
 				},
-			},
-		}}, nil
+			}}, nil
+		} else {
+			return []*commandpb.Command{}, nil
+		}
 	}
 
 	messageHandlerInvocation := 0
