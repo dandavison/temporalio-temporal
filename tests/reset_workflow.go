@@ -261,7 +261,7 @@ func (s *FunctionalSuite) testResetWorkflowReapply(
 ) {
 	totalSignals := 3
 	totalUpdates := 3
-	resetToEventID := int64(totalSignals + totalUpdates + 1)
+	resetToEventID := int64(4) // First WorkflowTaskCompleted
 
 	tv := testvars.New(s.T().Name())
 	workflowID := fmt.Sprintf("functional-reset-workflow-test-%s", testName)
@@ -292,16 +292,18 @@ func (s *FunctionalSuite) testResetWorkflowReapply(
 	s.Logger.Info("StartWorkflowExecution", tag.WorkflowRunID(we.RunId))
 
 	// workflow logic
-	invocation := 0
+	wtHandlerInvocation := 0
 	commandsCompleted := false
 	wtHandler := func(execution *commonpb.WorkflowExecution, wt *commonpb.WorkflowType,
 		previousStartedEventID, startedEventID int64, history *historypb.History) ([]*commandpb.Command, error) {
 
-		invocation++
+		wtHandlerInvocation++
 
-		// First invocation is first workflow task; then come `totalSignals` signals, followed by `totalUpdates`
-		// updates.
-		if invocation <= totalSignals+totalUpdates+1 {
+		// First invocation is first WFT; then come `totalUpdates` updates, followed by `totalSignals` signals, each in
+		// a separate WFT. We must send COMPLETE_WORKFLOW_EXECUTION in the final WFT.
+		// FIXME: It doesn't work if the updates come last; the UpdateAccepted event is not written due to the
+		// COMPLETE_WORKFLOW_EXECUTION.
+		if wtHandlerInvocation <= totalUpdates+totalSignals {
 			return []*commandpb.Command{}, nil
 		}
 
@@ -316,32 +318,42 @@ func (s *FunctionalSuite) testResetWorkflowReapply(
 		}}, nil
 	}
 
-	messagesCompleted := false
 	messageHandlerInvocation := 0
+	messagesCompleted := false
 	messageHandler := func(task *workflowservice.PollWorkflowTaskQueueResponse) ([]*protocolpb.Message, error) {
-		// First invocation is first workflow task; then come `totalSignals` signals, followed by `totalUpdates`
-		// updates.
+
 		messageHandlerInvocation++
 
-		if messageHandlerInvocation <= totalSignals+1 {
-			return []*protocolpb.Message{}, nil
-		} else if messageHandlerInvocation <= totalSignals+totalUpdates+1 {
-
+		// First invocation is first WFT; then come `totalUpdates` updates, followed by `totalSignals` signals, each in
+		// a separate WFT. We must accept the updates, but otherwise respond with empty messages.
+		if messageHandlerInvocation == totalUpdates+totalSignals+1 {
+			messagesCompleted = true
+		}
+		if messageHandlerInvocation > 1 && messageHandlerInvocation <= totalUpdates+1 {
+			updateId := tv.UpdateID(fmt.Sprint(messageHandlerInvocation - 1))
 			return []*protocolpb.Message{
 				{
-					Id:                 tv.MessageID("update-accepted"),
-					ProtocolInstanceId: tv.UpdateID(fmt.Sprintf("%d", messageHandlerInvocation-totalSignals-1)),
-					SequencingId:       nil,
+					Id:                 tv.MessageID(fmt.Sprintf("%s/request/accepted", updateId)),
+					ProtocolInstanceId: updateId,
 					Body: protoutils.MarshalAny(s.T(), &updatepb.Acceptance{
 						AcceptedRequestMessageId:         fmt.Sprintf("accept-message-%d", messageHandlerInvocation),
 						AcceptedRequestSequencingEventId: int64(messageHandlerInvocation),
-						AcceptedRequest:                  nil,
+					}),
+				},
+				{
+					Id:                 tv.MessageID(fmt.Sprintf("%s/request/completed", updateId)),
+					ProtocolInstanceId: updateId,
+					Body: protoutils.MarshalAny(s.T(), &updatepb.Response{
+						Meta: &updatepb.Meta{UpdateId: updateId},
+						Outcome: &updatepb.Outcome{
+							Value: &updatepb.Outcome_Success{
+								Success: payloads.EncodeString("success-result-of-" + updateId),
+							},
+						},
 					}),
 				},
 			}, nil
 		}
-
-		messagesCompleted = true
 		return []*protocolpb.Message{}, nil
 	}
 
@@ -360,12 +372,11 @@ func (s *FunctionalSuite) testResetWorkflowReapply(
 	s.Logger.Info("PollAndProcessWorkflowTask", tag.Error(err))
 	s.NoError(err)
 
-	s.testResetWorkflowReapplySendSignals(totalSignals, workflowID, runID, identity, poller)
 	s.testResetWorkflowReapplySendUpdates(totalUpdates, workflowID, runID, identity, poller, tv)
+	s.testResetWorkflowReapplySendSignals(totalSignals, workflowID, runID, identity, poller)
 
-	// TODO (dan) these should both be s.True(...)
-	fmt.Println(commandsCompleted)
-	fmt.Println(messagesCompleted)
+	s.True(commandsCompleted)
+	s.True(messagesCompleted)
 
 	// reset
 	resp, err := s.engine.ResetWorkflowExecution(NewContext(), &workflowservice.ResetWorkflowExecutionRequest{
@@ -454,22 +465,31 @@ func (s *FunctionalSuite) testResetWorkflowReapplySendUpdates(
 				RunId:      runId,
 			},
 			Request: &updatepb.Request{
-				Meta: &updatepb.Meta{UpdateId: tv.UpdateID(updateId)},
+				Meta: &updatepb.Meta{UpdateId: updateId, Identity: identity},
 				Input: &updatepb.Input{
 					Name: tv.HandlerName(),
-					Args: payloads.EncodeString("args-value-of-" + tv.UpdateID(updateId)),
+					Args: payloads.EncodeString("args-value-of-" + updateId),
 				},
 			},
 		}
 	}
 
 	for i := 0; i < totalUpdates; i++ {
-		_, err := s.engine.UpdateWorkflowExecution(NewContext(), newUpdateRequest(fmt.Sprintf("%d", i+1)))
-		s.NoError(err)
-
-		_, err = poller.PollAndProcessWorkflowTask(WithDumpHistory)
-		s.Logger.Info("PollAndProcessWorkflowTask", tag.Error(err))
-		s.NoError(err)
+		updateId := tv.UpdateID(fmt.Sprint(i + 1))
+		updateResponse := make(chan error)
+		pollResponse := make(chan error)
+		go func() {
+			_, err := s.engine.UpdateWorkflowExecution(NewContext(), newUpdateRequest(updateId))
+			updateResponse <- err
+		}()
+		go func() {
+			// Blocks until the update request causes a WFT to be dispatched; then sends the update complete message
+			// required for the update request to return.
+			_, err := poller.PollAndProcessWorkflowTask(WithDumpHistory)
+			pollResponse <- err
+		}()
+		s.NoError(<-updateResponse)
+		s.NoError(<-pollResponse)
 	}
 }
 
