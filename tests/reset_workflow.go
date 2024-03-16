@@ -407,11 +407,11 @@ func (t *ResetTest) run() {
   4 WorkflowTaskCompleted
 `, t.getHistory(t.namespace, t.tv.WorkflowExecution()))
 
-	for i := 0; i < t.totalSignals; i++ {
+	for i := 1; i <= t.totalSignals; i++ {
 		t.sendSignalAndProcessWFT(poller)
 	}
-	for i := 0; i < t.totalUpdates; i++ {
-		t.sendUpdateAndProcessWFT(fmt.Sprint(1), poller)
+	for i := 1; i <= t.totalUpdates; i++ {
+		t.sendUpdateAndProcessWFT(fmt.Sprint(i), poller)
 	}
 	t.True(t.commandsCompleted)
 	t.True(t.messagesCompleted)
