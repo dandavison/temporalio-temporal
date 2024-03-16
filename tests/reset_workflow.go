@@ -359,7 +359,7 @@ func (t *ResetTest) wftHandler(_ *commonpb.WorkflowExecution, _ *commonpb.Workfl
 			CommandType: enumspb.COMMAND_TYPE_COMPLETE_WORKFLOW_EXECUTION,
 			Attributes: &commandpb.Command_CompleteWorkflowExecutionCommandAttributes{
 				CompleteWorkflowExecutionCommandAttributes: &commandpb.CompleteWorkflowExecutionCommandAttributes{
-					Result: payloads.EncodeString("Done"),
+					Result: t.tv.Any().Payloads(),
 				},
 			},
 		})
