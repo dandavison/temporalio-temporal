@@ -207,57 +207,63 @@ func (s *FunctionalSuite) TestResetWorkflow() {
 }
 
 func (s *FunctionalSuite) TestResetWorkflow_ExcludeNoneReapplyAll() {
-	ResetTest{
+	t := ResetTest{
 		FunctionalSuite:     s,
 		tv:                  testvars.New(s.T().Name()),
 		reapplyExcludeTypes: []enumspb.ResetReapplyExcludeType{},
 		reapplyType:         enumspb.RESET_REAPPLY_TYPE_ALL_ELIGIBLE,
-	}.run()
+	}
+	t.run()
 }
 
 func (s *FunctionalSuite) TestResetWorkflow_ExcludeNoneReapplySignal() {
-	ResetTest{
+	t := ResetTest{
 		FunctionalSuite:     s,
 		tv:                  testvars.New(s.T().Name()),
 		reapplyExcludeTypes: []enumspb.ResetReapplyExcludeType{},
 		reapplyType:         enumspb.RESET_REAPPLY_TYPE_SIGNAL,
-	}.run()
+	}
+	t.run()
 }
 
 func (s *FunctionalSuite) TestResetWorkflow_ExcludeNoneReapplyNone() {
-	ResetTest{
+	t := ResetTest{
 		FunctionalSuite:     s,
 		tv:                  testvars.New(s.T().Name()),
 		reapplyExcludeTypes: []enumspb.ResetReapplyExcludeType{},
 		reapplyType:         enumspb.RESET_REAPPLY_TYPE_NONE,
-	}.run()
+	}
+	t.run()
 }
 
 func (s *FunctionalSuite) TestResetWorkflow_ExcludeSignalReapplyAll() {
-	ResetTest{
+	t := ResetTest{
 		FunctionalSuite:     s,
 		tv:                  testvars.New(s.T().Name()),
 		reapplyExcludeTypes: []enumspb.ResetReapplyExcludeType{enumspb.RESET_REAPPLY_EXCLUDE_TYPE_SIGNAL},
 		reapplyType:         enumspb.RESET_REAPPLY_TYPE_ALL_ELIGIBLE,
-	}.run()
+	}
+	t.run()
 }
 
 func (s *FunctionalSuite) TestResetWorkflow_ExcludeSignalReapplySignal() {
-	ResetTest{
+	t := ResetTest{
 		FunctionalSuite:     s,
 		tv:                  testvars.New(s.T().Name()),
 		reapplyExcludeTypes: []enumspb.ResetReapplyExcludeType{enumspb.RESET_REAPPLY_EXCLUDE_TYPE_SIGNAL},
 		reapplyType:         enumspb.RESET_REAPPLY_TYPE_SIGNAL,
-	}.run()
+	}
+	t.run()
 }
 
 func (s *FunctionalSuite) TestResetWorkflow_ExcludeSignalReapplyNone() {
-	ResetTest{
+	t := ResetTest{
 		FunctionalSuite:     s,
 		tv:                  testvars.New(s.T().Name()),
 		reapplyExcludeTypes: []enumspb.ResetReapplyExcludeType{enumspb.RESET_REAPPLY_EXCLUDE_TYPE_SIGNAL},
 		reapplyType:         enumspb.RESET_REAPPLY_TYPE_NONE,
-	}.run()
+	}
+	t.run()
 }
 
 type ResetTest struct {
@@ -375,7 +381,7 @@ func (t ResetTest) reset(eventId int64) string {
 	return resp.RunId
 }
 
-func (t ResetTest) run() {
+func (t *ResetTest) run() {
 	t.totalSignals = 1
 	t.totalUpdates = 1
 	t.tv = t.FunctionalSuite.startWorkflow(t.tv)
