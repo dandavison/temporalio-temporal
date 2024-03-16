@@ -473,8 +473,8 @@ func (t *ResetTest) run() {
   2 WorkflowTaskScheduled
   3 WorkflowTaskStarted
   4 WorkflowTaskFailed
-  5 WorkflowExecutionUpdateRequested
-  6 WorkflowExecutionSignaled
+  5 WorkflowExecutionSignaled
+  6 WorkflowExecutionUpdateRequested
   7 WorkflowTaskScheduled
 `, events)
 	}
