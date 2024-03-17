@@ -38,6 +38,7 @@ import (
 	persistencespb "go.temporal.io/server/api/persistence/v1"
 	"go.temporal.io/server/common/archiver"
 	"go.temporal.io/server/common/backoff"
+	"go.temporal.io/server/common/log"
 	"go.temporal.io/server/common/namespace"
 	"go.temporal.io/server/common/persistence/versionhistory"
 	"go.temporal.io/server/common/primitives/timestamp"
@@ -110,6 +111,7 @@ type (
 		mutableState      MutableState
 		config            *configs.Config
 		archivalMetadata  archiver.ArchivalMetadata
+		logger            log.Logger
 	}
 )
 
@@ -122,12 +124,14 @@ func NewTaskGenerator(
 	mutableState MutableState,
 	config *configs.Config,
 	archivalMetadata archiver.ArchivalMetadata,
+	logger log.Logger,
 ) *TaskGeneratorImpl {
 	return &TaskGeneratorImpl{
 		namespaceRegistry: namespaceRegistry,
 		mutableState:      mutableState,
 		config:            config,
 		archivalMetadata:  archivalMetadata,
+		logger:            logger,
 	}
 }
 
@@ -678,6 +682,34 @@ func (r *TaskGeneratorImpl) GenerateHistoryReplicationTasks(
 
 	firstEvent := events[0]
 	lastEvent := events[len(events)-1]
+
+	if maxEventIdToReplicate := r.config.ReplicationMaxEventId(); maxEventIdToReplicate > 0 && lastEvent.EventId > int64(maxEventIdToReplicate) {
+		if firstEvent.EventId > int64(maxEventIdToReplicate) {
+			r.logger.Warn(
+				fmt.Sprintf("Honoring ReplicationMaxEventId=%d [%d %s, %d %s] => []",
+					maxEventIdToReplicate,
+					events[0].EventId,
+					events[0].EventType.String(),
+					events[len(events)-1].EventId,
+					events[len(events)-1].EventType.String(),
+				))
+			return nil
+		}
+		lastEvent = events[int64(maxEventIdToReplicate)-firstEvent.EventId]
+		r.logger.Warn(
+			fmt.Sprintf("Honoring ReplicationMaxEventId=%d [%d %s, %d %s] => [%d %s, %d %s]",
+				maxEventIdToReplicate,
+				events[0].EventId,
+				events[0].EventType.String(),
+				events[len(events)-1].EventId,
+				events[len(events)-1].EventType.String(),
+				firstEvent.EventId,
+				firstEvent.EventType.String(),
+				lastEvent.EventId,
+				lastEvent.EventType.String(),
+			))
+	}
+
 	if firstEvent.GetVersion() != lastEvent.GetVersion() {
 		return serviceerror.NewInternal("TaskGeneratorImpl encountered contradicting versions")
 	}
