@@ -882,6 +882,9 @@ const (
 	ReplicationTaskProcessorShardQPS = "history.ReplicationTaskProcessorShardQPS"
 	// ReplicationEnableDLQMetrics is the flag to emit DLQ metrics
 	ReplicationEnableDLQMetrics = "history.ReplicationEnableDLQMetrics"
+	// ReplicationMaxEventId is for simulating conflict resolution during testing. No events with ID greater than the
+	// specified value will be replicated.
+	ReplicationMaxEventId = "history.ReplicationMaxEventId"
 	// HistoryTaskDLQEnabled enables the history task DLQ. This applies to internal tasks like transfer and timer tasks.
 	// Do not turn this on if you aren't using Cassandra as the history task DLQ is not implemented for other databases.
 	HistoryTaskDLQEnabled = "history.TaskDLQEnabled"

@@ -269,7 +269,7 @@ func TestTaskGeneratorImpl_GenerateWorkflowCloseTasks(t *testing.T) {
 				return cfg
 			}).AnyTimes()
 
-			taskGenerator := NewTaskGenerator(namespaceRegistry, mutableState, cfg, archivalMetadata)
+			taskGenerator := NewTaskGenerator(namespaceRegistry, mutableState, cfg, archivalMetadata, p.Logger)
 			err := taskGenerator.GenerateWorkflowCloseTasks(p.CloseEventTime, p.DeleteAfterClose)
 			require.NoError(t, err)
 
@@ -385,7 +385,7 @@ func TestTaskGenerator_GenerateDirtySubStateMachineTasks(t *testing.T) {
 		genTasks = append(genTasks, ts...)
 	}).AnyTimes()
 
-	taskGenerator := NewTaskGenerator(namespaceRegistry, mutableState, cfg, archivalMetadata)
+	taskGenerator := NewTaskGenerator(namespaceRegistry, mutableState, cfg, archivalMetadata, log.NewMockLogger(ctrl))
 	err = taskGenerator.GenerateDirtySubStateMachineTasks(reg)
 	require.NoError(t, err)
 

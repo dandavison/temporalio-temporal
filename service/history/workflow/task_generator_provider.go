@@ -57,5 +57,6 @@ func (p *taskGeneratorProviderImpl) NewTaskGenerator(
 		mutableState,
 		shard.GetConfig(),
 		shard.GetArchivalMetadata(),
+		shard.GetLogger(),
 	)
 }
