@@ -37,6 +37,7 @@ import (
 	"github.com/dgryski/go-farm"
 	commonpb "go.temporal.io/api/common/v1"
 	enumspb "go.temporal.io/api/enums/v1"
+	historypb "go.temporal.io/api/history/v1"
 	"go.temporal.io/api/serviceerror"
 	"go.temporal.io/api/workflowservice/v1"
 	"google.golang.org/protobuf/encoding/prototext"
@@ -825,4 +826,20 @@ func ValidateUTF8String(fieldName string, strValue string) error {
 		return serviceerror.NewInvalidArgument(fmt.Sprintf("%s %v is not a valid UTF-8 string", fieldName, strValue))
 	}
 	return nil
+}
+
+func FormatHistoryEvents(events []*historypb.HistoryEvent) string {
+	s := ""
+	for i, e := range events {
+		s += fmt.Sprintf("\n(%d, %d) %s", i, e.GetVersion(), e.EventType.String())
+	}
+	return s
+}
+
+func FormatHistoryEventBatches(batches [][]*historypb.HistoryEvent) string {
+	s := ""
+	for b, events := range batches {
+		s += fmt.Sprintf("\n%d %s", b, FormatHistoryEvents(events))
+	}
+	return s
 }

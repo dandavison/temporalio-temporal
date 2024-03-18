@@ -28,12 +28,14 @@ package ndc
 
 import (
 	"context"
+	"fmt"
 
 	enumspb "go.temporal.io/api/enums/v1"
 	historypb "go.temporal.io/api/history/v1"
 	"go.temporal.io/api/serviceerror"
 
 	enumsspb "go.temporal.io/server/api/enums/v1"
+	"go.temporal.io/server/common"
 	"go.temporal.io/server/common/definition"
 	"go.temporal.io/server/common/log"
 	"go.temporal.io/server/common/metrics"
@@ -73,6 +75,8 @@ func (r *EventsReapplierImpl) ReapplyEvents(
 	historyEvents []*historypb.HistoryEvent,
 	runID string,
 ) ([]*historypb.HistoryEvent, error) {
+
+	r.logger.Warn(fmt.Sprintf("ReapplyEvents: %s", common.FormatHistoryEvents(historyEvents)))
 
 	var reappliedEvents []*historypb.HistoryEvent
 	for _, event := range historyEvents {

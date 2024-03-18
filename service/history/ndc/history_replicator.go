@@ -26,6 +26,7 @@ package ndc
 
 import (
 	"context"
+	"fmt"
 	"time"
 
 	commonpb "go.temporal.io/api/common/v1"
@@ -253,6 +254,10 @@ func (r *HistoryReplicatorImpl) doApplyEvents(
 	task replicationTask,
 ) (retError error) {
 
+	r.logger.Warn(fmt.Sprintf("doApplyEvents\ngetEvents()%s\n\ngetNewEvents()%s\n",
+		common.FormatHistoryEventBatches(task.getEvents()),
+		common.FormatHistoryEvents(task.getNewEvents())))
+
 	wfContext, releaseFn, err := r.workflowCache.GetOrCreateWorkflowExecution(
 		ctx,
 		r.shardContext,
@@ -276,6 +281,7 @@ func (r *HistoryReplicatorImpl) doApplyEvents(
 
 	switch task.getFirstEvent().GetEventType() {
 	case enumspb.EVENT_TYPE_WORKFLOW_EXECUTION_STARTED:
+		r.logger.Warn("applyStartEvents")
 		return r.applyStartEvents(ctx, wfContext, releaseFn, task)
 
 	default:
@@ -312,8 +318,11 @@ func (r *HistoryReplicatorImpl) doApplyEvents(
 				return err
 			}
 			if mutableState.GetExecutionInfo().GetVersionHistories().GetCurrentVersionHistoryIndex() == prepareHistoryBranchOut.BranchIndex {
+				r.logger.Warn("applyNonStartEventsToCurrentBranch")
 				return r.applyNonStartEventsToCurrentBranch(ctx, wfContext, mutableState, isRebuilt, releaseFn, task)
 			}
+			//
+			r.logger.Warn("*** applyNonStartEventsToNonCurrentBranch")
 			return r.applyNonStartEventsToNonCurrentBranch(ctx, wfContext, mutableState, prepareHistoryBranchOut.BranchIndex, releaseFn, task)
 
 		case *serviceerror.NotFound:
