@@ -1002,4 +1002,8 @@ const (
 	// WorkerDeleteNamespaceActivityLimitsConfig is a map that contains a copy of relevant sdkworker.Options
 	// settings for controlling remote activity concurrency for delete namespace workflows.
 	WorkerDeleteNamespaceActivityLimitsConfig = "worker.deleteNamespaceActivityLimitsConfig"
+	// EnableNamespaceReplication controls whether namespace replication is enabled. This can be used to simulate
+	// "split-brain" replication scenarios in tests by setting multiple clusters as active, with namespace replication
+	// disabled.
+	EnableNamespaceReplication = "worker.enableNamespaceReplication"
 )

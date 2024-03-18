@@ -69,6 +69,7 @@ func newNamespaceReplicationMessageProcessor(
 	namespaceReplicationQueue persistence.NamespaceReplicationQueue,
 	matchingClient matchingservice.MatchingServiceClient,
 	namespaceRegistry namespace.Registry,
+	config *Config,
 ) *namespaceReplicationMessageProcessor {
 	retryPolicy := backoff.NewExponentialRetryPolicy(taskProcessorErrorRetryWait).
 		WithBackoffCoefficient(taskProcessorErrorRetryBackoffCoefficient).
@@ -91,6 +92,7 @@ func newNamespaceReplicationMessageProcessor(
 		namespaceReplicationQueue: namespaceReplicationQueue,
 		matchingClient:            matchingClient,
 		namespaceRegistry:         namespaceRegistry,
+		config:                    config,
 	}
 }
 
@@ -112,6 +114,7 @@ type (
 		namespaceReplicationQueue persistence.NamespaceReplicationQueue
 		matchingClient            matchingservice.MatchingServiceClient
 		namespaceRegistry         namespace.Registry
+		config                    *Config
 	}
 )
 
@@ -129,8 +132,10 @@ func (p *namespaceReplicationMessageProcessor) processorLoop() {
 	for {
 		select {
 		case <-timer.C:
-			p.getAndHandleNamespaceReplicationTasks()
-			timer.Reset(getWaitDuration())
+			if p.config.EnableNamespaceReplication() {
+				p.getAndHandleNamespaceReplicationTasks()
+				timer.Reset(getWaitDuration())
+			}
 		case <-p.done:
 			timer.Stop()
 			return

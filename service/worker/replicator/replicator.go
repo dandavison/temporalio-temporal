@@ -33,6 +33,7 @@ import (
 	"go.temporal.io/server/client"
 	"go.temporal.io/server/common"
 	"go.temporal.io/server/common/cluster"
+	"go.temporal.io/server/common/dynamicconfig"
 	"go.temporal.io/server/common/log"
 	"go.temporal.io/server/common/log/tag"
 	"go.temporal.io/server/common/membership"
@@ -58,10 +59,12 @@ type (
 		namespaceProcessors     map[string]*namespaceReplicationMessageProcessor
 		matchingClient          matchingservice.MatchingServiceClient
 		namespaceRegistry       namespace.Registry
+		config                  *Config
 	}
 
 	// Config contains all the replication config for worker
 	Config struct {
+		EnableNamespaceReplication dynamicconfig.BoolPropertyFn
 	}
 )
 
@@ -77,6 +80,7 @@ func NewReplicator(
 	namespaceReplicationTaskExecutor namespace.ReplicationTaskExecutor,
 	matchingClient matchingservice.MatchingServiceClient,
 	namespaceRegistry namespace.Registry,
+	enableNamespaceReplication dynamicconfig.BoolPropertyFn,
 ) *Replicator {
 	return &Replicator{
 		status:                           common.DaemonStatusInitialized,
@@ -91,6 +95,9 @@ func NewReplicator(
 		namespaceReplicationQueue:        namespaceReplicationQueue,
 		matchingClient:                   matchingClient,
 		namespaceRegistry:                namespaceRegistry,
+		config: &Config{
+			EnableNamespaceReplication: enableNamespaceReplication,
+		},
 	}
 }
 
@@ -164,6 +171,7 @@ func (r *Replicator) listenToClusterMetadataChange() {
 						r.namespaceReplicationQueue,
 						r.matchingClient,
 						r.namespaceRegistry,
+						r.config,
 					)
 					processor.Start()
 					r.namespaceProcessors[clusterName] = processor

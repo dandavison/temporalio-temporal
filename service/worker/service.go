@@ -111,6 +111,7 @@ type (
 		PerNamespaceWorkerCount               dynamicconfig.IntPropertyFnWithNamespaceFilter
 		PerNamespaceWorkerOptions             dynamicconfig.MapPropertyFnWithNamespaceFilter
 		PerNamespaceWorkerStartRate           dynamicconfig.FloatPropertyFn
+		EnableNamespaceReplication            dynamicconfig.BoolPropertyFn
 
 		VisibilityPersistenceMaxReadQPS   dynamicconfig.IntPropertyFn
 		VisibilityPersistenceMaxWriteQPS  dynamicconfig.IntPropertyFn
@@ -337,6 +338,7 @@ func NewConfig(
 		EnableReadFromSecondaryVisibility: visibility.GetEnableReadFromSecondaryVisibilityConfig(dc),
 		VisibilityDisableOrderByClause:    dc.GetBoolPropertyFnWithNamespaceFilter(dynamicconfig.VisibilityDisableOrderByClause, true),
 		VisibilityEnableManualPagination:  dc.GetBoolPropertyFnWithNamespaceFilter(dynamicconfig.VisibilityEnableManualPagination, true),
+		EnableNamespaceReplication:        dc.GetBoolProperty(dynamicconfig.EnableNamespaceReplication, true),
 	}
 	return config
 }
@@ -477,6 +479,7 @@ func (s *Service) startReplicator() {
 		s.namespaceReplicationTaskExecutor,
 		s.matchingClient,
 		s.namespaceRegistry,
+		s.config.EnableNamespaceReplication,
 	)
 	msgReplicator.Start()
 }
