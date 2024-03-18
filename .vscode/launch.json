@@ -21,7 +21,7 @@
 			"cwd": "${workspaceFolder}",
 			"args": [
 				"--env",
-				"development-active",
+				"development-cluster-a",
 				"start",
 			]
 		},
