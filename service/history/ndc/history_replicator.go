@@ -26,6 +26,7 @@ package ndc
 
 import (
 	"context"
+	"fmt"
 	"time"
 
 	commonpb "go.temporal.io/api/common/v1"
@@ -252,6 +253,20 @@ func (r *HistoryReplicatorImpl) doApplyEvents(
 	ctx context.Context,
 	task replicationTask,
 ) (retError error) {
+
+	eventTypes := ""
+	for i, ee := range task.getEvents() {
+		for j, e := range ee {
+			eventTypes += fmt.Sprintf("\n%d %d %s", i, j, e.EventType.String())
+		}
+	}
+
+	newEventTypes := ""
+	for j, e := range task.getNewEvents() {
+		newEventTypes += fmt.Sprintf("\n%d %s", j, e.EventType.String())
+	}
+
+	r.logger.Warn(fmt.Sprintf("doApplyEvents\n%s\n\n%s\n", eventTypes, newEventTypes))
 
 	wfContext, releaseFn, err := r.workflowCache.GetOrCreateWorkflowExecution(
 		ctx,
