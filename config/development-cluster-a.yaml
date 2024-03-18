@@ -118,4 +118,4 @@ namespaceDefaults:
 
 dynamicConfigClient:
   filepath: "config/dynamicconfig/development-cass.yaml"
-  pollInterval: "10s"
+  pollInterval: "5s"
