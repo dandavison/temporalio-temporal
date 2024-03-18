@@ -91,7 +91,7 @@ clusterMetadata:
 #      rpcAddress: "localhost:9233"
 
 dcRedirectionPolicy:
-  policy: "all-apis-forwarding"
+  policy: "selected-apis-forwarding"
 
 archival:
   history:
