@@ -259,6 +259,23 @@ func (s *historyReplicationConflictTestSuite) TestConflictResolutionReappliesUpd
 	6 WorkflowExecutionUpdateRequested {"Request": {"Input": {"Args": {"Payloads": [{"Data": "\"cluster1-update-input\""}]}}}}
 	7 WorkflowTaskScheduled
 	`, s.getHistory(ctx, s.cluster2, runId), []int{1, 1, 2, 2, 2, 2, 2})
+
+	s.processWFT(s.cluster2)
+
+	// The worker in cluster2 receives the reapplied update and accepts it. An UpdateAccepted event generated in this
+	// situation has no request payload.
+	s.HistoryRequire.EqualHistoryEventsAndVersions(`
+	1 WorkflowExecutionStarted
+	2 WorkflowTaskScheduled
+	3 WorkflowTaskStarted
+	4 WorkflowTaskCompleted
+	5 WorkflowExecutionUpdateAccepted {"AcceptedRequest": {"Input": {"Args": {"Payloads": [{"Data": "\"cluster2-update-input\""}]}}}}
+	6 WorkflowExecutionUpdateRequested {"Request": {"Input": {"Args": {"Payloads": [{"Data": "\"cluster1-update-input\""}]}}}}
+	7 WorkflowTaskScheduled
+	8 WorkflowTaskStarted
+	9 WorkflowTaskCompleted
+   10 WorkflowExecutionUpdateAccepted {"AcceptedRequest": {"Input": {"Args": {"Payloads": [{"Data": nil}]}}}}
+	`, s.getHistory(ctx, s.cluster2, runId), []int{1, 1, 2, 2, 2, 2, 2, 2, 2, 2})
 }
 
 func (s *historyReplicationConflictTestSuite) startWorkflowAndEnterSplitBrainState(ctx context.Context, sdkClient1 sdkclient.Client) string {
@@ -417,13 +434,49 @@ func (s *historyReplicationConflictTestSuite) sendUpdateAndProcessWFT(ctx contex
 	s.NoError(<-pollResponse)
 }
 
+func (s *historyReplicationConflictTestSuite) processWFT(cluster *tests.TestCluster) {
+	poller := &tests.TaskPoller{
+		Engine:              cluster.GetFrontendClient(),
+		Namespace:           s.tv.NamespaceName().String(),
+		TaskQueue:           s.tv.TaskQueue(),
+		Identity:            s.tv.WorkerIdentity(),
+		WorkflowTaskHandler: s.wftHandler,
+		MessageHandler:      s.messageHandler,
+		Logger:              s.logger,
+		T:                   s.T(),
+	}
+
+	// Blocks until the update request causes a WFT to be dispatched; then sends the update acceptance message
+	// required for the update request to return.
+	_, err := poller.PollAndProcessWorkflowTask(tests.WithDumpHistory)
+	s.NoError(err)
+}
+
 func (s *historyReplicationConflictTestSuite) messageHandler(resp *workflowservice.PollWorkflowTaskQueueResponse) ([]*protocolpb.Message, error) {
-	s.Equal(1, len(resp.Messages))
-	msg := resp.Messages[0]
+	// The WFT contains the update request as a protocol message xor an UpdateRequestedEvent: obtain the updateId from
+	// one or the other.
+	var updateRequestedEvent *historypb.HistoryEvent
+	for _, e := range resp.History.Events {
+		if e.EventType == enumspb.EVENT_TYPE_WORKFLOW_EXECUTION_UPDATE_REQUESTED {
+			s.Nil(updateRequestedEvent)
+			updateRequestedEvent = e
+		}
+	}
+	updateId := ""
+	if updateRequestedEvent != nil {
+		s.Empty(resp.Messages)
+		attrs := updateRequestedEvent.GetWorkflowExecutionUpdateRequestedEventAttributes()
+		updateId = attrs.Request.Meta.UpdateId
+	} else {
+		s.Equal(1, len(resp.Messages))
+		msg := resp.Messages[0]
+		updateId = msg.ProtocolInstanceId
+	}
+
 	return []*protocolpb.Message{
 		{
 			Id:                 "accept-msg-id",
-			ProtocolInstanceId: msg.ProtocolInstanceId,
+			ProtocolInstanceId: updateId,
 			Body: protoutils.MarshalAny(s.T(), &updatepb.Acceptance{
 				AcceptedRequestMessageId:         "request-msg-id",
 				AcceptedRequestSequencingEventId: int64(-1),
