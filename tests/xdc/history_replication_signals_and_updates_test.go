@@ -35,10 +35,13 @@ import (
 	"time"
 
 	"github.com/stretchr/testify/suite"
+	commandpb "go.temporal.io/api/command/v1"
 	commonpb "go.temporal.io/api/common/v1"
 	enumspb "go.temporal.io/api/enums/v1"
 	historypb "go.temporal.io/api/history/v1"
+	protocolpb "go.temporal.io/api/protocol/v1"
 	replicationpb "go.temporal.io/api/replication/v1"
+	updatepb "go.temporal.io/api/update/v1"
 	"go.temporal.io/api/workflowservice/v1"
 	sdkclient "go.temporal.io/sdk/client"
 	"go.temporal.io/sdk/workflow"
@@ -50,6 +53,7 @@ import (
 	"go.temporal.io/server/common/payloads"
 	"go.temporal.io/server/common/persistence/serialization"
 	"go.temporal.io/server/common/primitives"
+	"go.temporal.io/server/common/testing/protoutils"
 	"go.temporal.io/server/common/testing/testvars"
 	"go.temporal.io/server/service/history/replication"
 	"go.temporal.io/server/tests"
@@ -98,7 +102,8 @@ func TestHistoryReplicationConflictTestSuite(t *testing.T) {
 
 func (s *historyReplicationConflictTestSuite) SetupSuite() {
 	s.dynamicConfigOverrides = map[dynamicconfig.Key]interface{}{
-		dynamicconfig.EnableReplicationStream: true,
+		dynamicconfig.EnableReplicationStream:                            true,
+		dynamicconfig.FrontendEnableUpdateWorkflowExecutionAsyncAccepted: true,
 	}
 	s.logger = log.NewNoopLogger()
 	s.setupSuite(
@@ -138,6 +143,54 @@ func (s *historyReplicationConflictTestSuite) SetupTest() {
 
 func (s *historyReplicationConflictTestSuite) TearDownSuite() {
 	s.tearDownSuite()
+}
+
+func (s *historyReplicationConflictTestSuite) TestAcceptedUpdateCanBeCompletedAfterFailover() {
+	s.tv = testvars.New(s.T().Name())
+	ctx := context.Background()
+	ctx, cancel := context.WithTimeout(ctx, testTimeout)
+	defer cancel()
+
+	sdkClient1, sdkClient2 := s.createSdkClients()
+	s.registerMultiRegionNamespace(ctx)
+	runId := s.startWorkflow(ctx, sdkClient1)
+
+	updateId := "cluster1-update"
+	s.sendUpdateAndWaitUntilAccepted(ctx, runId, updateId, "cluster1-update-input", sdkClient1, s.cluster1)
+	s.executeHistoryReplicationTasksFromClusterUntil("cluster1", enumspb.EVENT_TYPE_WORKFLOW_EXECUTION_UPDATE_ACCEPTED)
+
+	for _, cluster := range []*tests.TestCluster{s.cluster1, s.cluster2} {
+		s.HistoryRequire.EqualHistoryEvents(`
+		1 WorkflowExecutionStarted
+		2 WorkflowTaskScheduled
+		3 WorkflowTaskStarted
+		4 WorkflowTaskCompleted
+		5 WorkflowExecutionUpdateAccepted {"AcceptedRequest": {"Input": {"Args": {"Payloads": [{"Data": "\"cluster1-update-input\""}]}}}}
+		`, s.getHistory(ctx, cluster, runId))
+	}
+
+	s.failover1To2(ctx)
+
+	// This test does not explicitly model the update handler, but since the update has been accepted yet not completed,
+	// the handler must have scheduled something (e.g. a timer, an activity, a child workflow), and we need to do
+	// something to create another WorkflowTaskScheduled event, so that the worker can send the update completion
+	// message. We use a signal for that purpose.
+	s.NoError(sdkClient2.SignalWorkflow(ctx, s.tv.WorkflowID(), runId, "my-signal", "cluster2-signal"))
+
+	s.completeUpdate(updateId, s.cluster2)
+
+	s.HistoryRequire.EqualHistoryEvents(`
+	1 WorkflowExecutionStarted
+	2 WorkflowTaskScheduled
+	3 WorkflowTaskStarted
+	4 WorkflowTaskCompleted
+	5 WorkflowExecutionUpdateAccepted {"AcceptedRequest": {"Input": {"Args": {"Payloads": [{"Data": "\"cluster1-update-input\""}]}}}}
+	6 WorkflowExecutionSignaled
+	7 WorkflowTaskScheduled
+	8 WorkflowTaskStarted
+	9 WorkflowTaskCompleted
+   10 WorkflowExecutionUpdateCompleted
+	`, s.getHistory(ctx, s.cluster2, runId))
 }
 
 // TestConflictResolutionReappliesSignals creates a split-brain scenario in which both clusters believe they are active.
@@ -202,6 +255,106 @@ func (s *historyReplicationConflictTestSuite) TestConflictResolutionReappliesSig
 		s.getHistory(ctx, s.cluster1, runId),
 		s.getHistory(ctx, s.cluster2, runId),
 	)
+}
+
+// TestConflictResolutionReappliesUpdates creates a split-brain scenario in which both clusters believe they are active.
+// Both clusters then accept an update and write it to their own history, and the test confirms that the update is
+// reapplied during the resulting conflict resolution process.
+func (s *historyReplicationConflictTestSuite) TestConflictResolutionReappliesUpdates() {
+	s.tv = testvars.New(s.T().Name())
+	ctx := context.Background()
+	ctx, cancel := context.WithTimeout(ctx, testTimeout)
+	defer cancel()
+	sdkClient1, sdkClient2 := s.createSdkClients()
+
+	s.registerMultiRegionNamespace(ctx)
+	runId := s.startWorkflow(ctx, sdkClient1)
+	s.enterSplitBrainState(ctx)
+
+	// Both clusters now believe they are active and hence both will accept an update.
+
+	// Send updates
+	s.sendUpdateAndWaitUntilAccepted(ctx, runId, "cluster1-update", "cluster1-update-input", sdkClient1, s.cluster1)
+	s.sendUpdateAndWaitUntilAccepted(ctx, runId, "cluster2-update", "cluster2-update-input", sdkClient2, s.cluster2)
+
+	// cluster1 has accepted an update
+	s.HistoryRequire.EqualHistoryEventsAndVersions(`
+	1 WorkflowExecutionStarted
+	2 WorkflowTaskScheduled
+	3 WorkflowTaskStarted
+	4 WorkflowTaskCompleted
+	5 WorkflowExecutionUpdateAccepted {"AcceptedRequest": {"Input": {"Args": {"Payloads": [{"Data": "\"cluster1-update-input\""}]}}}}
+	`, []int{1, 1, 1, 1, 1}, s.getHistory(ctx, s.cluster1, runId))
+
+	// cluster2 has also accepted an update (events have failover version 2 since they are endogenous to cluster 2)
+	s.HistoryRequire.EqualHistoryEventsAndVersions(`
+	1 WorkflowExecutionStarted
+	2 WorkflowTaskScheduled
+	3 WorkflowTaskStarted
+	4 WorkflowTaskCompleted
+	5 WorkflowExecutionUpdateAccepted {"AcceptedRequest": {"Input": {"Args": {"Payloads": [{"Data": "\"cluster2-update-input\""}]}}}}
+	`, []int{1, 1, 2, 2, 2}, s.getHistory(ctx, s.cluster2, runId))
+
+	// Execute pending history replication tasks. Both clusters believe they are active, therefore each cluster sends
+	// its update to the other, triggering conflict resolution.
+	s.executeHistoryReplicationTasksFromClusterUntil("cluster1", enumspb.EVENT_TYPE_WORKFLOW_EXECUTION_UPDATE_ACCEPTED)
+	s.executeHistoryReplicationTasksFromClusterUntil("cluster2", enumspb.EVENT_TYPE_WORKFLOW_EXECUTION_UPDATE_ACCEPTED)
+
+	// cluster1 has received a update with failover version 2 which superseded its own update.
+	s.HistoryRequire.EqualHistoryEventsAndVersions(`
+	1 WorkflowExecutionStarted
+	2 WorkflowTaskScheduled
+	3 WorkflowTaskStarted
+	4 WorkflowTaskCompleted
+	5 WorkflowExecutionUpdateAccepted {"AcceptedRequest": {"Input": {"Args": {"Payloads": [{"Data": "\"cluster2-update-input\""}]}}}}
+	`, []int{1, 1, 2, 2, 2}, s.getHistory(ctx, s.cluster1, runId))
+
+	// cluster2 has reapplied the accepted update from cluster 1 on top of its own update, changing it from state
+	// Accepted to state Admitted, since it must be submitted to the validator on the new branch.
+	s.HistoryRequire.EqualHistoryEventsAndVersions(`
+	1 WorkflowExecutionStarted
+	2 WorkflowTaskScheduled
+	3 WorkflowTaskStarted
+	4 WorkflowTaskCompleted
+	5 WorkflowExecutionUpdateAccepted {"AcceptedRequest": {"Input": {"Args": {"Payloads": [{"Data": "\"cluster2-update-input\""}]}}}}
+	6 WorkflowExecutionUpdateAdmitted {"Request": {"Input": {"Args": {"Payloads": [{"Data": "\"cluster1-update-input\""}]}}}}
+	7 WorkflowTaskScheduled
+	`, []int{1, 1, 2, 2, 2, 2, 2}, s.getHistory(ctx, s.cluster2, runId))
+
+	// Cluster2 sends the reapplied update to cluster1, bringing the cluster histories into agreement.
+	s.executeHistoryReplicationTasksFromClusterUntil("cluster2", enumspb.EVENT_TYPE_WORKFLOW_EXECUTION_UPDATE_ADMITTED)
+	s.EqualValues(
+		s.getHistory(ctx, s.cluster1, runId),
+		s.getHistory(ctx, s.cluster2, runId),
+	)
+
+	s.completeUpdate("cluster2-update", s.cluster2)
+	s.HistoryRequire.EqualHistoryEventsAndVersions(`
+	1 WorkflowExecutionStarted
+	2 WorkflowTaskScheduled
+	3 WorkflowTaskStarted
+	4 WorkflowTaskCompleted
+	5 WorkflowExecutionUpdateAccepted {"AcceptedRequest": {"Input": {"Args": {"Payloads": [{"Data": "\"cluster2-update-input\""}]}}}}
+	6 WorkflowExecutionUpdateAdmitted {"Request": {"Input": {"Args": {"Payloads": [{"Data": "\"cluster1-update-input\""}]}}}}
+	7 WorkflowTaskScheduled
+	8 WorkflowTaskStarted
+	9 WorkflowTaskCompleted
+   10 WorkflowExecutionUpdateCompleted
+	`, []int{1, 1, 2, 2, 2, 2, 2, 2, 2, 2}, s.getHistory(ctx, s.cluster2, runId))
+}
+
+func (s *historyReplicationConflictTestSuite) failover1To2(ctx context.Context) {
+	s.Equal([]string{"cluster1", "cluster1"}, s.getActiveClusters(ctx))
+	s.setActive(ctx, s.cluster1, "cluster2")
+	s.Equal([]string{"cluster2", "cluster1"}, s.getActiveClusters(ctx))
+
+	time.Sleep(tests.NamespaceCacheRefreshInterval)
+
+	s.executeNamespaceReplicationTasksUntil(ctx, enumsspb.NAMESPACE_OPERATION_UPDATE, 2)
+	// Wait for active cluster to be changed in namespace registry entry.
+	// TODO (dan) It would be nice to find a better approach.
+	time.Sleep(tests.NamespaceCacheRefreshInterval)
+	s.Equal([]string{"cluster2", "cluster2"}, s.getActiveClusters(ctx))
 }
 
 func (s *historyReplicationConflictTestSuite) enterSplitBrainState(ctx context.Context) {
@@ -294,6 +447,135 @@ func (t *hrcTestExecutableTaskConverter) Convert(
 func (t *hrcTestExecutableTask) Execute() error {
 	t.s.historyReplicationTasks[t.taskClusterName] <- t
 	return <-t.result
+}
+
+// Update test utilities
+func (s *historyReplicationConflictTestSuite) sendUpdateAndWaitUntilAccepted(ctx context.Context, runId string, updateId string, arg string, sdkClient sdkclient.Client, cluster *tests.TestCluster) {
+	poller := &tests.TaskPoller{
+		Engine:              cluster.GetFrontendClient(),
+		Namespace:           s.tv.NamespaceName().String(),
+		TaskQueue:           s.tv.TaskQueue(),
+		Identity:            s.tv.WorkerIdentity(),
+		WorkflowTaskHandler: s.createUpdateAcceptanceCommand,
+		MessageHandler:      s.createUpdateAcceptanceMessage,
+		Logger:              s.logger,
+		T:                   s.T(),
+	}
+
+	updateResponse := make(chan error)
+	pollResponse := make(chan error)
+	go func() {
+		_, err := sdkClient.UpdateWorkflowWithOptions(ctx, &sdkclient.UpdateWorkflowWithOptionsRequest{
+			UpdateID:   updateId,
+			WorkflowID: s.tv.WorkflowID(),
+			RunID:      runId,
+			UpdateName: "the-test-doesn't-use-this",
+			Args:       []interface{}{arg},
+			WaitPolicy: &updatepb.WaitPolicy{
+				LifecycleStage: enumspb.UPDATE_WORKFLOW_EXECUTION_LIFECYCLE_STAGE_ACCEPTED,
+			},
+		})
+		s.NoError(err)
+		updateResponse <- err
+	}()
+	go func() {
+		// Blocks until the update request causes a WFT to be dispatched; then sends the update acceptance message
+		// required for the update request to return.
+		_, err := poller.PollAndProcessWorkflowTask(tests.WithDumpHistory)
+		pollResponse <- err
+	}()
+	s.NoError(<-updateResponse)
+	s.NoError(<-pollResponse)
+}
+
+func (s *historyReplicationConflictTestSuite) completeUpdate(updateId string, cluster *tests.TestCluster) {
+	poller := &tests.TaskPoller{
+		Engine:              cluster.GetFrontendClient(),
+		Namespace:           s.tv.NamespaceName().String(),
+		TaskQueue:           s.tv.TaskQueue(),
+		Identity:            s.tv.WorkerIdentity(),
+		WorkflowTaskHandler: s.createUpdateCompletionCommand,
+		MessageHandler:      s.makeCreateUpdateCompletionMessage(updateId),
+		Logger:              s.logger,
+		T:                   s.T(),
+	}
+	_, err := poller.PollAndProcessWorkflowTask(tests.WithDumpHistory)
+	s.NoError(err)
+}
+
+func (s *historyReplicationConflictTestSuite) createUpdateAcceptanceMessage(resp *workflowservice.PollWorkflowTaskQueueResponse) ([]*protocolpb.Message, error) {
+	// The WFT contains the update request as a protocol message xor an UpdateAdmittedEvent: obtain the updateId from
+	// one or the other.
+	var updateAdmittedEvent *historypb.HistoryEvent
+	for _, e := range resp.History.Events {
+		if e.EventType == enumspb.EVENT_TYPE_WORKFLOW_EXECUTION_UPDATE_ADMITTED {
+			s.Nil(updateAdmittedEvent)
+			updateAdmittedEvent = e
+		}
+	}
+	updateId := ""
+	if updateAdmittedEvent != nil {
+		s.Empty(resp.Messages)
+		attrs := updateAdmittedEvent.GetWorkflowExecutionUpdateAdmittedEventAttributes()
+		updateId = attrs.Request.Meta.UpdateId
+	} else {
+		s.Equal(1, len(resp.Messages))
+		msg := resp.Messages[0]
+		updateId = msg.ProtocolInstanceId
+	}
+
+	return []*protocolpb.Message{
+		{
+			Id:                 "accept-msg-id",
+			ProtocolInstanceId: updateId,
+			Body: protoutils.MarshalAny(s.T(), &updatepb.Acceptance{
+				AcceptedRequestMessageId:         "request-msg-id",
+				AcceptedRequestSequencingEventId: int64(-1),
+			}),
+		},
+	}, nil
+}
+
+func (s *historyReplicationConflictTestSuite) createUpdateAcceptanceCommand(_ *commonpb.WorkflowExecution, _ *commonpb.WorkflowType, _ int64, _ int64, _ *historypb.History) ([]*commandpb.Command, error) {
+	return []*commandpb.Command{{
+		CommandType: enumspb.COMMAND_TYPE_PROTOCOL_MESSAGE,
+		Attributes: &commandpb.Command_ProtocolMessageCommandAttributes{ProtocolMessageCommandAttributes: &commandpb.ProtocolMessageCommandAttributes{
+			MessageId: "accept-msg-id",
+		}},
+	}}, nil
+}
+
+func (s *historyReplicationConflictTestSuite) makeCreateUpdateCompletionMessage(updateId string) func(resp *workflowservice.PollWorkflowTaskQueueResponse) ([]*protocolpb.Message, error) {
+	return func(resp *workflowservice.PollWorkflowTaskQueueResponse) ([]*protocolpb.Message, error) {
+		return []*protocolpb.Message{
+			{
+				Id:                 "completion-msg-id",
+				ProtocolInstanceId: updateId,
+				SequencingId:       nil,
+				Body: protoutils.MarshalAny(s.T(), &updatepb.Response{
+					Meta: &updatepb.Meta{
+						UpdateId: updateId,
+						Identity: s.tv.WorkerIdentity(),
+					},
+					Outcome: &updatepb.Outcome{
+						Value: &updatepb.Outcome_Success{
+							Success: s.tv.Any().Payloads(),
+						},
+					},
+				}),
+			},
+		}, nil
+
+	}
+}
+
+func (s *historyReplicationConflictTestSuite) createUpdateCompletionCommand(_ *commonpb.WorkflowExecution, _ *commonpb.WorkflowType, _ int64, _ int64, _ *historypb.History) ([]*commandpb.Command, error) {
+	return []*commandpb.Command{{
+		CommandType: enumspb.COMMAND_TYPE_PROTOCOL_MESSAGE,
+		Attributes: &commandpb.Command_ProtocolMessageCommandAttributes{ProtocolMessageCommandAttributes: &commandpb.ProtocolMessageCommandAttributes{
+			MessageId: "completion-msg-id",
+		}},
+	}}, nil
 }
 
 // gRPC utilities
