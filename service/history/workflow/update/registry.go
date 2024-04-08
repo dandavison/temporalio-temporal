@@ -81,6 +81,8 @@ type (
 		//   - updates in stateCompleted are ignored.
 		CancelIncomplete(ctx context.Context, reason CancelReason, eventStore EventStore) error
 
+		Print()
+
 		// Len observes the number of incomplete updates in this Registry.
 		Len() int
 
@@ -192,6 +194,13 @@ func NewRegistry(
 		}
 	})
 	return r
+}
+
+func (r *registry) Print() {
+	fmt.Printf("--------- registry contents\n")
+	for _, u := range r.updates {
+		fmt.Printf("update: %v\n", u)
+	}
 }
 
 func (r *registry) FindOrCreate(ctx context.Context, id string) (*Update, bool, error) {

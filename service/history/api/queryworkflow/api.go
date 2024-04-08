@@ -101,6 +101,8 @@ func Invoke(
 	}
 	defer func() { workflowLease.GetReleaseFn()(retError) }()
 
+	workflowLease.GetContext().UpdateRegistry(ctx).Print()
+
 	req := request.GetRequest()
 	_, mutableStateStatus := workflowLease.GetMutableState().GetWorkflowStateStatus()
 	if mutableStateStatus != enumspb.WORKFLOW_EXECUTION_STATUS_RUNNING && req.QueryRejectCondition != enumspb.QUERY_REJECT_CONDITION_NONE {

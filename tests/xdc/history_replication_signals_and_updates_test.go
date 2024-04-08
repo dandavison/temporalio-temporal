@@ -31,6 +31,7 @@ package xdc
 import (
 	"context"
 	"flag"
+	"fmt"
 	"testing"
 	"time"
 
@@ -157,7 +158,15 @@ func (s *historyReplicationConflictTestSuite) TestAcceptedUpdateCanBeCompletedAf
 
 	updateId := "cluster1-update"
 	s.sendUpdateAndWaitUntilAccepted(ctx, runId, updateId, "cluster1-update-input", sdkClient1, s.cluster1)
+	fmt.Printf("-------- sent update to cluster 1\n")
+	fmt.Printf("-------- cluster 1 registry\n")
+	sdkClient1.QueryWorkflow(ctx, s.tv.WorkflowID(), runId, "my-query")
+	fmt.Printf("-------- cluster 2 registry\n")
+	sdkClient2.QueryWorkflow(ctx, s.tv.WorkflowID(), runId, "my-query")
 	s.executeHistoryReplicationTasksFromClusterUntil("cluster1", enumspb.EVENT_TYPE_WORKFLOW_EXECUTION_UPDATE_ACCEPTED)
+	fmt.Printf("-------- executed replication tasks 1 -> 2\n")
+	fmt.Printf("-------- cluster 2 registry\n")
+	sdkClient2.QueryWorkflow(ctx, s.tv.WorkflowID(), runId, "my-query")
 
 	for _, cluster := range []*tests.TestCluster{s.cluster1, s.cluster2} {
 		s.HistoryRequire.EqualHistoryEvents(`
