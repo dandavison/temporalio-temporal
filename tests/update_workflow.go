@@ -5171,7 +5171,7 @@ func (s *FunctionalSuite) TestUpdateWorkflow_UpdateMessageInLastWFT() {
 					},
 				},
 			}
-			return append(s.UpdateAcceptCommands(tv, messageId), completeWorkflowCommand), nil
+			return []*commandpb.Command{completeWorkflowCommand}, nil
 		},
 		MessageHandler: func(task *workflowservice.PollWorkflowTaskQueueResponse) ([]*protocolpb.Message, error) {
 			return s.UpdateAcceptMessages(tv, task.Messages[0], messageId), nil
@@ -5200,7 +5200,6 @@ func (s *FunctionalSuite) TestUpdateWorkflow_UpdateMessageInLastWFT() {
 	2 WorkflowTaskScheduled
 	3 WorkflowTaskStarted
 	4 WorkflowTaskCompleted
-	5 WorkflowExecutionUpdateAccepted
-	6 WorkflowExecutionCompleted
+	5 WorkflowExecutionCompleted
 	`, s.getHistory(s.namespace, tv.WorkflowExecution()))
 }
