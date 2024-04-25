@@ -1334,6 +1334,11 @@ func (s *ClientFunctionalSuite) Test_AdmittedUpdateCausesUnhandledCommandAndSche
 
 	workflowFn := func(ctx workflow.Context) error {
 		workflow.SetUpdateHandler(ctx, tv.HandlerName(), func(arg string) (string, error) {
+			// TODO (dan): why do these result in
+			// Error trying to block on coroutine which is already blocked, most likely a wrong Context is used to do blocking call (like Future.Get() or Channel.Receive()
+			// ?
+			// workflow.Sleep(ctx, 0xFFFF*time.Hour)
+			// workflow.Await(ctx, func() bool { return false })
 			return "my-update-result", nil
 		})
 
