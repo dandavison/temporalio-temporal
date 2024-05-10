@@ -135,6 +135,54 @@ func (s *ClientFunctionalSuite) TestUpdateWorkflow_TerminateWorkflowAfterUpdateA
 	s.ErrorAs(wfRun.Get(ctx, nil), &wee)
 }
 
+func (s *ClientFunctionalSuite) TestUpdateWorkflow_WorkflowCompletesAfterUpdateAccepted() {
+	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+	defer cancel()
+	tv := testvars.New(s.T().Name()).WithTaskQueue(s.taskQueue).WithNamespaceName(namespace.Name(s.namespace))
+
+	activityDone := make(chan struct{})
+	activityFn := func(ctx context.Context) error {
+		activityDone <- struct{}{}
+		return nil
+	}
+
+	workflowFn := func(ctx workflow.Context) error {
+		s.NoError(workflow.SetUpdateHandler(ctx, tv.HandlerName(), func(ctx workflow.Context, arg string) error {
+			ctx = workflow.WithActivityOptions(ctx, workflow.ActivityOptions{
+				StartToCloseTimeout: 10 * time.Second,
+			})
+			for {
+				s.NoError(workflow.ExecuteActivity(ctx, activityFn).Get(ctx, nil))
+				if false {
+					// appease compiler
+					break
+				}
+			}
+			return nil
+		}))
+		workflow.Sleep(ctx, 5*time.Second)
+		return nil
+	}
+
+	s.worker.RegisterWorkflow(workflowFn)
+	s.worker.RegisterActivity(activityFn)
+	tv, wfRun := s.startWorkflow(ctx, tv, workflowFn)
+
+	updateHandle, err := s.updateWorkflowWaitAccepted(ctx, tv, "my-update-arg")
+	s.NoError(err)
+
+	select {
+	case <-activityDone:
+	case <-ctx.Done():
+		s.FailNow("timed out waiting for activity to be called by update handler")
+	}
+
+	var notFound *serviceerror.NotFound
+	s.ErrorAs(updateHandle.Get(ctx, nil), &notFound)
+
+	s.NoError(wfRun.Get(ctx, nil))
+}
+
 func (s *ClientFunctionalSuite) startWorkflow(ctx context.Context, tv *testvars.TestVars, workflowFn interface{}) (*testvars.TestVars, sdkclient.WorkflowRun) {
 	run, err := s.sdkClient.ExecuteWorkflow(ctx, sdkclient.StartWorkflowOptions{
 		ID:        tv.WorkflowID(),
