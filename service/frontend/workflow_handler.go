@@ -1923,7 +1923,7 @@ func (wh *WorkflowHandler) RespondActivityTaskCanceledById(ctx context.Context, 
 	return &workflowservice.RespondActivityTaskCanceledByIdResponse{}, nil
 }
 
-// RequestCancelWorkflowExecution is called by application worker when it wants to request cancellation of a workflow instance.
+// RequestCancelWorkflowExecution is called by client code when it wants to request cancellation of a workflow instance.
 // It will result in a new 'WorkflowExecutionCancelRequested' event being written to the workflow history and a new WorkflowTask
 // created for the workflow instance so new commands could be made. It returns success if requested workflow already closed.
 // It fails with 'NotFound' if the requested workflow doesn't exist.
@@ -1936,8 +1936,7 @@ func (wh *WorkflowHandler) RequestCancelWorkflowExecution(ctx context.Context, r
 
 	span := trace.SpanFromContext(ctx)
 	span.SetAttributes(
-		telemetry.ClientIdentityKey(request.Identity),
-		telemetry.WorkerKey(),
+		telemetry.WorkflowIDKey(request.WorkflowExecution.WorkflowId),
 	)
 
 	if err := validateExecution(request.WorkflowExecution); err != nil {
