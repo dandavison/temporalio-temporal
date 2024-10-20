@@ -92,7 +92,10 @@ func debugHandler(origHandler grpc.UnaryHandler) grpc.UnaryHandler {
 				msgType = string(proto.MessageName(respMsg).Name())
 				span.SetAttributes(attribute.Key("rpc.response.payload").String(string(payload)))
 				span.SetAttributes(attribute.Key("rpc.response.type").String(msgType))
+			} else {
+				span.SetAttributes(attribute.Key("rpc.response.error").String(err.Error()))
 			}
+
 		}
 		return
 	}
