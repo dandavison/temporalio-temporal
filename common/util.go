@@ -327,9 +327,12 @@ func IsServiceClientTransientError(err error) bool {
 		return true
 	}
 
+	fmt.Printf("server 🔵 IsServiceClientTransientError err: %T %v\n", err, err)
 	switch err := err.(type) {
 	case *serviceerror.ResourceExhausted:
-		return err.Scope != enumspb.RESOURCE_EXHAUSTED_SCOPE_NAMESPACE
+		returning := err.Scope != enumspb.RESOURCE_EXHAUSTED_SCOPE_NAMESPACE
+		fmt.Printf("server 🔵 IsServiceClientTransientError ResourceExhausted: %v\n", returning)
+		return returning
 	case *serviceerrors.ShardOwnershipLost:
 		return true
 	default:

@@ -3849,6 +3849,7 @@ func (wh *WorkflowHandler) UpdateWorkflowExecution(
 	ctx context.Context,
 	request *workflowservice.UpdateWorkflowExecutionRequest,
 ) (_ *workflowservice.UpdateWorkflowExecutionResponse, retError error) {
+	fmt.Println("server 🔵 received UpdateWorkflowExecution request: ", request)
 	defer log.CapturePanic(wh.logger, &retError)
 
 	if err := wh.prepareUpdateWorkflowRequest(request); err != nil {
@@ -3874,6 +3875,7 @@ func (wh *WorkflowHandler) UpdateWorkflowExecution(
 	if err != nil {
 		return nil, err
 	}
+	fmt.Println("server 🔵 UpdateWorkflowExecution response: ", histResp.GetResponse())
 	return histResp.GetResponse(), nil
 }
 

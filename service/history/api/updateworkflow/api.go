@@ -26,6 +26,7 @@ package updateworkflow
 
 import (
 	"context"
+	"fmt"
 	"time"
 
 	commonpb "go.temporal.io/api/common/v1"
@@ -96,6 +97,8 @@ func NewUpdater(
 func (u *Updater) Invoke(
 	ctx context.Context,
 ) (*historyservice.UpdateWorkflowExecutionResponse, error) {
+	fmt.Printf("History 🔵 Invoke: %v\n", u.req)
+
 	wfKey := definition.NewWorkflowKey(
 		u.req.NamespaceId,
 		u.req.Request.WorkflowExecution.WorkflowId,
