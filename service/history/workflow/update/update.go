@@ -389,6 +389,7 @@ func (u *Update) Admit(
 //
 // If you modify the state machine, please update the diagram in /docs/architecture/workflow-update.md.
 func (u *Update) OnProtocolMessage(
+	ctx context.Context,
 	protocolMsg *protocolpb.Message,
 	eventStore EventStore,
 ) error {

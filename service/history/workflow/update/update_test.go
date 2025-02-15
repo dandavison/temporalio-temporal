@@ -429,7 +429,7 @@ func TestUpdateState(t *testing.T) {
 				apply: func() {
 					var invalidArg *serviceerror.InvalidArgument
 
-					err := upd.OnProtocolMessage(&protocolpb.Message{
+					err := upd.OnProtocolMessage(context.Background(), &protocolpb.Message{
 						Body: MarshalAny(t, &updatepb.Acceptance{
 							AcceptedRequestSequencingEventId: testSequencingEventID,
 						}),
@@ -437,7 +437,7 @@ func TestUpdateState(t *testing.T) {
 					require.ErrorAs(t, err, &invalidArg)
 					require.ErrorContains(t, err, "accepted_request_message_id is not set")
 
-					err = upd.OnProtocolMessage(&protocolpb.Message{
+					err = upd.OnProtocolMessage(context.Background(), &protocolpb.Message{
 						Body: MarshalAny(t, &updatepb.Acceptance{
 							AcceptedRequestMessageId: tv.MessageID(),
 						}),
@@ -775,13 +775,13 @@ func TestUpdateState(t *testing.T) {
 				apply: func() {
 					var invalidArg *serviceerror.InvalidArgument
 
-					err := upd.OnProtocolMessage(&protocolpb.Message{
+					err := upd.OnProtocolMessage(context.Background(), &protocolpb.Message{
 						Body: MarshalAny(t, &updatepb.Response{}),
 					}, store)
 					require.ErrorAs(t, err, &invalidArg)
 					require.ErrorContains(t, err, "meta is not set")
 
-					err = upd.OnProtocolMessage(&protocolpb.Message{
+					err = upd.OnProtocolMessage(context.Background(), &protocolpb.Message{
 						Body: MarshalAny(t, &updatepb.Response{
 							Outcome: failureOutcome,
 						}),
@@ -789,7 +789,7 @@ func TestUpdateState(t *testing.T) {
 					require.ErrorAs(t, err, &invalidArg)
 					require.ErrorContains(t, err, "meta is not set")
 
-					err = upd.OnProtocolMessage(&protocolpb.Message{
+					err = upd.OnProtocolMessage(context.Background(), &protocolpb.Message{
 						Body: MarshalAny(t, &updatepb.Response{
 							Meta: &updatepb.Meta{},
 						}),
@@ -797,7 +797,7 @@ func TestUpdateState(t *testing.T) {
 					require.ErrorAs(t, err, &invalidArg)
 					require.ErrorContains(t, err, "update_id is not set")
 
-					err = upd.OnProtocolMessage(&protocolpb.Message{
+					err = upd.OnProtocolMessage(context.Background(), &protocolpb.Message{
 						Body: MarshalAny(t, &updatepb.Response{
 							Meta: &updatepb.Meta{UpdateId: upd.ID()},
 						}),
@@ -1000,7 +1000,7 @@ func TestOnProtocolMessage(t *testing.T) {
 
 	t.Run("junk message", func(t *testing.T) {
 		upd := update.New(tv.UpdateID())
-		err := upd.OnProtocolMessage(&protocolpb.Message{
+		err := upd.OnProtocolMessage(context.Background(), &protocolpb.Message{
 			Body: &anypb.Any{
 				TypeUrl: "nonsense",
 				Value:   []byte("even more nonsense"),
@@ -1011,7 +1011,7 @@ func TestOnProtocolMessage(t *testing.T) {
 
 	t.Run("nil message", func(t *testing.T) {
 		upd := update.New(tv.UpdateID())
-		err := upd.OnProtocolMessage(nil, mockEventStore{})
+		err := upd.OnProtocolMessage(context.Background(), nil, mockEventStore{})
 
 		var invalidArg *serviceerror.InvalidArgument
 		require.ErrorAs(t, err, &invalidArg)
@@ -1021,7 +1021,7 @@ func TestOnProtocolMessage(t *testing.T) {
 	t.Run("nil message body", func(t *testing.T) {
 		upd := update.New(tv.UpdateID())
 		emptyMsg := &protocolpb.Message{}
-		err := upd.OnProtocolMessage(emptyMsg, mockEventStore{})
+		err := upd.OnProtocolMessage(context.Background(), emptyMsg, mockEventStore{})
 
 		var invalidArg *serviceerror.InvalidArgument
 		require.ErrorAs(t, err, &invalidArg)
@@ -1032,7 +1032,7 @@ func TestOnProtocolMessage(t *testing.T) {
 		upd := update.New(tv.UpdateID())
 		msg := protocolpb.Message{}
 		msg.Body = MarshalAny(t, &historypb.HistoryEvent{})
-		err := upd.OnProtocolMessage(&msg, mockEventStore{})
+		err := upd.OnProtocolMessage(context.Background(), &msg, mockEventStore{})
 
 		var invalidArg *serviceerror.InvalidArgument
 		require.ErrorAs(t, err, &invalidArg)
@@ -1075,7 +1075,7 @@ func send(t *testing.T, upd *update.Update, includeAlreadySent bool) *protocolpb
 
 func reject(t *testing.T, store mockEventStore, upd *update.Update) error {
 	t.Helper()
-	return upd.OnProtocolMessage(&protocolpb.Message{
+	return upd.OnProtocolMessage(context.Background(), &protocolpb.Message{
 		Body: MarshalAny(t, &updatepb.Rejection{
 			RejectedRequestMessageId: "update1/request",
 			RejectedRequest: &updatepb.Request{
@@ -1094,7 +1094,7 @@ func mustAccept(t *testing.T, store mockEventStore, upd *update.Update) {
 
 func accept(t *testing.T, store mockEventStore, upd *update.Update) error {
 	tv := testvars.New(t)
-	return upd.OnProtocolMessage(&protocolpb.Message{
+	return upd.OnProtocolMessage(context.Background(), &protocolpb.Message{
 		Body: MarshalAny(t, &updatepb.Acceptance{
 			AcceptedRequestMessageId:         tv.MessageID(),
 			AcceptedRequestSequencingEventId: testSequencingEventID,
@@ -1136,7 +1136,7 @@ func assertNotAcceptedYet(t *testing.T, upd *update.Update) {
 
 func respondSuccess(t *testing.T, store mockEventStore, upd *update.Update) error {
 	t.Helper()
-	return upd.OnProtocolMessage(&protocolpb.Message{
+	return upd.OnProtocolMessage(context.Background(), &protocolpb.Message{
 		Body: MarshalAny(t, &updatepb.Response{
 			Meta:    &updatepb.Meta{UpdateId: upd.ID()},
 			Outcome: successOutcome,
@@ -1145,7 +1145,7 @@ func respondSuccess(t *testing.T, store mockEventStore, upd *update.Update) erro
 
 func respondFailure(t *testing.T, store mockEventStore, upd *update.Update) error {
 	t.Helper()
-	return upd.OnProtocolMessage(&protocolpb.Message{
+	return upd.OnProtocolMessage(context.Background(), &protocolpb.Message{
 		Body: MarshalAny(t, &updatepb.Response{
 			Meta:    &updatepb.Meta{UpdateId: upd.ID()},
 			Outcome: failureOutcome,
