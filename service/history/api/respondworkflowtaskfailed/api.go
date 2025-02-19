@@ -26,6 +26,7 @@ package respondworkflowtaskfailed
 
 import (
 	"context"
+	"fmt"
 
 	"go.temporal.io/api/serviceerror"
 	"go.temporal.io/server/api/historyservice/v1"
@@ -45,6 +46,9 @@ func Invoke(
 	tokenSerializer *tasktoken.Serializer,
 	workflowConsistencyChecker api.WorkflowConsistencyChecker,
 ) (retError error) {
+
+	fmt.Println("🌈 RespondWorkflowTaskFailedRequest", req)
+
 	_, err := api.GetActiveNamespace(shardContext, namespace.ID(req.GetNamespaceId()))
 	if err != nil {
 		return err

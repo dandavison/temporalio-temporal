@@ -27,8 +27,11 @@ package update
 import (
 	"context"
 	"errors"
+	"fmt"
 	"time"
 
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/trace"
 	enumspb "go.temporal.io/api/enums/v1"
 	failurepb "go.temporal.io/api/failure/v1"
 	protocolpb "go.temporal.io/api/protocol/v1"
@@ -416,12 +419,16 @@ func (u *Update) OnProtocolMessage(
 		return nil
 	}
 
+	span := trace.SpanFromContext(ctx)
 	switch updMsg := body.(type) {
 	case *updatepb.Acceptance:
+		span.AddEvent("Acceptance", trace.WithAttributes(attribute.String("state", fmt.Sprintf("%v", u.state))))
 		return u.onAcceptanceMsg(updMsg, eventStore)
 	case *updatepb.Rejection:
+		span.AddEvent("Rejection", trace.WithAttributes(attribute.String("state", fmt.Sprintf("%v", u.state))))
 		return u.onRejectionMsg(updMsg, eventStore)
 	case *updatepb.Response:
+		span.AddEvent("Response", trace.WithAttributes(attribute.String("state", fmt.Sprintf("%v", u.state))))
 		return u.onResponseMsg(updMsg, eventStore)
 	default:
 		return invalidArgf("Message type %T not supported", body)

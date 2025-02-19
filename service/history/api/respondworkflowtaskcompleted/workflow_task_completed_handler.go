@@ -31,6 +31,8 @@ import (
 	"time"
 
 	"github.com/pborman/uuid"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/trace"
 	commandpb "go.temporal.io/api/command/v1"
 	commonpb "go.temporal.io/api/common/v1"
 	enumspb "go.temporal.io/api/enums/v1"
@@ -174,6 +176,7 @@ func (handler *workflowTaskCompletedHandler) handleCommands(
 	commands []*commandpb.Command,
 	msgs *collection.IndexedTakeList[string, *protocolpb.Message],
 ) ([]workflowTaskResponseMutation, error) {
+
 	if err := handler.attrValidator.ValidateCommandSequence(
 		commands,
 	); err != nil {
@@ -183,6 +186,9 @@ func (handler *workflowTaskCompletedHandler) handleCommands(
 	var mutations []workflowTaskResponseMutation
 	var postActions []commandPostAction
 	for _, command := range commands {
+		span := trace.SpanFromContext(ctx)
+		span.AddEvent("handleCommands", trace.WithAttributes(attribute.String("command", fmt.Sprintf("%v", command))))
+
 		response, err := handler.handleCommand(ctx, command, msgs)
 		if err != nil || handler.stopProcessing {
 			return nil, err
@@ -362,6 +368,10 @@ func (handler *workflowTaskCompletedHandler) handleMessage(
 	ctx context.Context,
 	message *protocolpb.Message,
 ) error {
+
+	span := trace.SpanFromContext(ctx)
+	span.AddEvent("handleMessage", trace.WithAttributes(attribute.String("message", message.String())))
+
 	protocolType, msgType, err := protocol.Identify(message)
 	if err != nil {
 		return serviceerror.NewInvalidArgument(err.Error())
