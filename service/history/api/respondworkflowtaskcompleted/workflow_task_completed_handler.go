@@ -176,6 +176,8 @@ func (handler *workflowTaskCompletedHandler) handleCommands(
 	commands []*commandpb.Command,
 	msgs *collection.IndexedTakeList[string, *protocolpb.Message],
 ) ([]workflowTaskResponseMutation, error) {
+	span := trace.SpanFromContext(ctx)
+	span.AddEvent("handleCommands", trace.WithAttributes(attribute.String("commands", fmt.Sprintf("%v", commands))))
 
 	if err := handler.attrValidator.ValidateCommandSequence(
 		commands,
@@ -187,7 +189,7 @@ func (handler *workflowTaskCompletedHandler) handleCommands(
 	var postActions []commandPostAction
 	for _, command := range commands {
 		span := trace.SpanFromContext(ctx)
-		span.AddEvent("handleCommands", trace.WithAttributes(attribute.String("command", fmt.Sprintf("%v", command))))
+		span.AddEvent("handleCommand", trace.WithAttributes(attribute.String("command", fmt.Sprintf("%v", command))))
 
 		response, err := handler.handleCommand(ctx, command, msgs)
 		if err != nil || handler.stopProcessing {

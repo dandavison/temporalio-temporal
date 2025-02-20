@@ -28,6 +28,8 @@ import (
 	"context"
 	"fmt"
 
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/trace"
 	commonpb "go.temporal.io/api/common/v1"
 	enumspb "go.temporal.io/api/enums/v1"
 	historypb "go.temporal.io/api/history/v1"
@@ -123,6 +125,9 @@ func (handler *WorkflowTaskCompletedHandler) Invoke(
 	ctx context.Context,
 	req *historyservice.RespondWorkflowTaskCompletedRequest,
 ) (_ *historyservice.RespondWorkflowTaskCompletedResponse, retError error) {
+	span := trace.SpanFromContext(ctx)
+	span.AddEvent("WorkflowTaskCompletedHandler.Invoke", trace.WithAttributes(attribute.String("request", fmt.Sprintf("%v", req))))
+
 	// By default, retError is passed to workflow lease release method in deferred function.
 	// If error is passed, then workflow context and mutable state are cleared.
 	// If no changes to mutable state are made or changes already persisted (in memory version corresponds to the database),
