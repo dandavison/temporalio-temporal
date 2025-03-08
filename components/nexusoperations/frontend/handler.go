@@ -40,6 +40,11 @@ import (
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
+import (
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/trace"
+)
+
 var apiName = configs.CompleteNexusOperation
 
 const (
@@ -134,9 +139,24 @@ func (h *completionHandler) CompleteOperation(ctx context.Context, r *nexus.Comp
 		return nexus.HandlerErrorf(nexus.HandlerErrorTypeBadRequest, "operation token length exceeds allowed limit (%d/%d)", len(r.OperationToken), tokenLimit)
 	}
 
+	h.Logger.Info("Decoding callback token",
+		tag.NewStringTag("CallbackToken", r.HTTPRequest.Header.Get(commonnexus.CallbackTokenHeader)),
+		tag.WorkflowNamespace(ns.Name().String()),
+	)
+
+	span := trace.SpanFromContext(ctx)
+	span.AddEvent("Decoding callback token",
+		trace.WithAttributes(
+			attribute.String("CallbackToken", r.HTTPRequest.Header.Get(commonnexus.CallbackTokenHeader)),
+		),
+	)
 	token, err := commonnexus.DecodeCallbackToken(r.HTTPRequest.Header.Get(commonnexus.CallbackTokenHeader))
 	if err != nil {
-		h.Logger.Error("failed to decode callback token", tag.WorkflowNamespace(ns.Name().String()), tag.Error(err))
+		h.Logger.Error("failed to decode callback token",
+			tag.WorkflowNamespace(ns.Name().String()),
+			tag.Error(err),
+			tag.NewStringTag("CallbackToken", r.HTTPRequest.Header.Get(commonnexus.CallbackTokenHeader)),
+		)
 		return nexus.HandlerErrorf(nexus.HandlerErrorTypeBadRequest, "invalid callback token")
 	}
 

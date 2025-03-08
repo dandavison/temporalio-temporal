@@ -13,6 +13,8 @@ import (
 	"time"
 
 	"github.com/nexus-rpc/sdk-go/nexus"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/trace"
 	persistencespb "go.temporal.io/server/api/persistence/v1"
 	"go.temporal.io/server/common/log"
 	"go.temporal.io/server/common/log/tag"
@@ -75,6 +77,18 @@ func (n nexusInvocation) Invoke(ctx context.Context, ns *namespace.Namespace, e 
 		}
 	}
 
+	span := trace.SpanFromContext(ctx)
+	span.AddEvent("Sending Nexus completion callback",
+		trace.WithAttributes(
+			attribute.String("URL", n.nexus.Url),
+			attribute.String("WorkflowID", n.workflowID),
+			attribute.String("RunID", n.runID),
+			attribute.Int("Attempt", int(n.attempt)),
+			attribute.String("Destination", task.Destination()),
+			attribute.String("Namespace", ns.Name().String()),
+			attribute.String("Completion", fmt.Sprintf("%v", n.completion)),
+		),
+	)
 	request, err := nexus.NewCompletionHTTPRequest(ctx, n.nexus.Url, n.completion)
 	if err != nil {
 		return invocationResultFail{queues.NewUnprocessableTaskError(

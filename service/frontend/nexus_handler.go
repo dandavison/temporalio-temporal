@@ -15,6 +15,8 @@ import (
 	"time"
 
 	"github.com/nexus-rpc/sdk-go/nexus"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/trace"
 	enumspb "go.temporal.io/api/enums/v1"
 	nexuspb "go.temporal.io/api/nexus/v1"
 	"go.temporal.io/api/serviceerror"
@@ -363,6 +365,18 @@ func (h *nexusHandler) StartOperation(
 	input *nexus.LazyValue,
 	options nexus.StartOperationOptions,
 ) (result nexus.HandlerStartOperationResult[any], retErr error) {
+	span := trace.SpanFromContext(ctx)
+	span.AddEvent("nexus handler: start Nexus operation",
+		trace.WithAttributes(
+			attribute.String("Service", service),
+			attribute.String("Operation", operation),
+		),
+	)
+	h.logger.Info("nexus handler: start Nexus operation",
+		tag.NewStringTag("Service", service),
+		tag.NewStringTag("Operation", operation),
+	)
+
 	oc, err := h.getOperationContext(ctx, "StartNexusOperation")
 	if err != nil {
 		return nil, err
@@ -438,6 +452,17 @@ func (h *nexusHandler) StartOperation(
 		switch t := t.Response.GetStartOperation().GetVariant().(type) {
 		case *nexuspb.StartOperationResponse_SyncSuccess:
 			oc.metricsHandler = oc.metricsHandler.WithTags(metrics.OutcomeTag("sync_success"))
+
+			span.AddEvent("nexus handler: responding as sync success",
+				trace.WithAttributes(
+					attribute.String("Result", fmt.Sprintf("%v", t.SyncSuccess.GetPayload())),
+				),
+			)
+
+			h.logger.Info("nexus handler: responding as sync success",
+				tag.NewStringTag("Result", fmt.Sprintf("%v", t.SyncSuccess.GetPayload())),
+			)
+
 			return &nexus.HandlerStartOperationResultSync[any]{
 				Value: t.SyncSuccess.GetPayload(),
 				Links: parseLinks(t.SyncSuccess.GetLinks(), oc.logger),
@@ -450,6 +475,16 @@ func (h *nexusHandler) StartOperation(
 			if token == "" {
 				token = t.AsyncSuccess.GetOperationId()
 			}
+
+			span.AddEvent("nexus handler: responding as async success",
+				trace.WithAttributes(
+					attribute.String("OperationToken", token),
+				),
+			)
+
+			h.logger.Info("nexus handler: responding as async success",
+				tag.NewStringTag("OperationToken", token),
+			)
 			return &nexus.HandlerStartOperationResultAsync{
 				OperationToken: token,
 				Links:          parseLinks(t.AsyncSuccess.GetLinks(), oc.logger),
