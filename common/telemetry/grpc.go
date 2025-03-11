@@ -2,6 +2,8 @@ package telemetry
 
 import (
 	"context"
+	"fmt"
+	"strings"
 	"time"
 
 	"go.opentelemetry.io/contrib/instrumentation/google.golang.org/grpc/otelgrpc"
@@ -98,6 +100,12 @@ func (c *customServerStatsHandler) HandleRPC(ctx context.Context, stat stats.RPC
 		// annotate with gRPC error payload
 		if c.isDebug {
 			span := trace.SpanFromContext(ctx)
+
+			methodName, ok := ctx.Value(methodNameKey{}).(string)
+			if ok && strings.Contains(methodName, "PollNexusTask") {
+				fmt.Println("🌈 nexus handler: setting workflow id", tag.NewStringTag("Method", methodName))
+				span.SetAttributes(attribute.Key(WorkflowIDKey).String("default-workflow-id"))
+			}
 
 			//revive:disable-next-line:unchecked-type-assertion
 			statusErr, ok := status.FromError(s.Error)
