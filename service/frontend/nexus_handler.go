@@ -430,6 +430,27 @@ func (h *nexusHandler) StartOperation(
 	// Dispatch the request to be sync matched with a worker polling on the nexusContext taskQueue.
 	// matchingClient sets a context timeout of 60 seconds for this request, this should be enough for any Nexus
 	// RPC.
+	span.AddEvent("Dispatching Nexus task",
+		trace.WithAttributes(
+			attribute.String("temporalWorkflowID", "default-workflow-id"),
+			attribute.String("Service", service),
+			attribute.String("Operation", operation),
+			attribute.String("RequestID", options.RequestID),
+			attribute.String("CallbackURL", options.CallbackURL),
+			attribute.String("Header", fmt.Sprintf("%+v", options.Header)),
+			attribute.String("Payload", fmt.Sprintf("%v", startOperationRequest.Payload)),
+		),
+	)
+	h.logger.Error("Dispatching Nexus task",
+		tag.Operation(operation),
+		tag.WorkflowNamespace(oc.namespaceName),
+		tag.RequestID(options.RequestID),
+		tag.NexusOperation(operation),
+		tag.Endpoint(oc.endpointName),
+		tag.WorkflowID("default-workflow-id"),
+		tag.AttemptStart(time.Now().UTC()),
+		tag.Attempt(1),
+	)
 	response, err := h.matchingClient.DispatchNexusTask(ctx, request)
 	if err != nil {
 		if common.IsContextDeadlineExceededErr(err) {
@@ -563,6 +584,29 @@ func (h *nexusHandler) forwardStartOperation(
 		}
 	}
 
+	span := trace.SpanFromContext(ctx)
+	span.AddEvent("Starting Nexus operation [2]",
+		trace.WithAttributes(
+			attribute.String("temporalWorkflowID", "my-caller-workflow-id"),
+			attribute.String("Service", service),
+			attribute.String("Operation", operation),
+			attribute.String("RequestID", options.RequestID),
+			attribute.String("Endpoint", oc.endpointName),
+			attribute.String("CallbackURL", options.CallbackURL),
+			attribute.String("Header", fmt.Sprintf("%+v", options.Header)),
+			attribute.String("Payload", fmt.Sprintf("%v", input.Reader)),
+		),
+	)
+	h.logger.Error("Starting Nexus operation [2]",
+		tag.Operation("StartOperation"),
+		tag.WorkflowNamespace(oc.namespaceName),
+		tag.RequestID(options.RequestID),
+		tag.NexusOperation(operation),
+		tag.Endpoint(oc.endpointName),
+		tag.WorkflowID("my-caller-workflow-id"),
+		tag.AttemptStart(time.Now().UTC()),
+		tag.Attempt(1),
+	)
 	resp, err := client.StartOperation(ctx, operation, input.Reader, options)
 	if err != nil {
 		oc.logger.Error("received error from remote cluster for forwarded Nexus start operation request.", tag.Error(err))

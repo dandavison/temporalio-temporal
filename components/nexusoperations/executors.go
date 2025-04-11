@@ -11,6 +11,8 @@ import (
 	"time"
 
 	"github.com/nexus-rpc/sdk-go/nexus"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/trace"
 	commonpb "go.temporal.io/api/common/v1"
 	enumspb "go.temporal.io/api/enums/v1"
 	failurepb "go.temporal.io/api/failure/v1"
@@ -207,6 +209,30 @@ func (e taskExecutor) executeInvocationTask(ctx context.Context, env hsm.Environ
 	if callTimeout < e.Config.MinOperationTimeout(ns.Name().String()) {
 		callErr = ErrOperationTimeoutBelowMin
 	} else {
+		span := trace.SpanFromContext(callCtx)
+		span.AddEvent("Starting Nexus operation [1]",
+			trace.WithAttributes(
+				attribute.String("temporalWorkflowID", ref.WorkflowKey.WorkflowID),
+				attribute.String("Service", args.service),
+				attribute.String("Operation", args.operation),
+				attribute.String("RequestID", args.requestID),
+				attribute.String("Endpoint", args.endpointName),
+				attribute.String("CallbackURL", callbackURL),
+				attribute.String("Header", fmt.Sprintf("%+v", header)),
+				attribute.String("Payload", fmt.Sprintf("%v", args.payload)),
+			),
+		)
+		e.Logger.Warn("Starting Nexus operation [1]",
+			tag.Operation("StartOperation"),
+			tag.WorkflowNamespace(ns.Name().String()),
+			tag.RequestID(args.requestID),
+			tag.NexusOperation(args.operation),
+			tag.Endpoint(args.endpointName),
+			tag.WorkflowID(ref.WorkflowKey.WorkflowID),
+			tag.WorkflowRunID(ref.WorkflowKey.RunID),
+			tag.AttemptStart(time.Now().UTC()),
+			tag.Attempt(task.Attempt),
+		)
 		rawResult, callErr = client.StartOperation(callCtx, args.operation, args.payload, nexus.StartOperationOptions{
 			Header:      header,
 			CallbackURL: callbackURL,

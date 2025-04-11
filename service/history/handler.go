@@ -9,6 +9,7 @@ import (
 
 	"github.com/nexus-rpc/sdk-go/nexus"
 	"github.com/pborman/uuid"
+	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/trace"
 	commonpb "go.temporal.io/api/common/v1"
 	enumspb "go.temporal.io/api/enums/v1"
@@ -2388,6 +2389,20 @@ func (h *Handler) CompleteNexusOperation(ctx context.Context, request *historyse
 	if err != nil {
 		return nil, h.convertError(err)
 	}
+
+	span := trace.SpanFromContext(ctx)
+	span.AddEvent("Handling Nexus completion",
+		trace.WithAttributes(
+			attribute.String("NamespaceID", request.Completion.NamespaceId),
+			attribute.String("WorkflowID", request.Completion.WorkflowId),
+			attribute.String("RunID", request.Completion.RunId),
+			attribute.String("State", request.State),
+			attribute.String("RequestID", request.Completion.RequestId),
+			attribute.String("OperationToken", request.OperationToken),
+			attribute.String("Success", fmt.Sprintf("%v", request.GetSuccess())),
+			attribute.String("Failure", fmt.Sprintf("%v", request.GetFailure())),
+		),
+	)
 	return &historyservice.CompleteNexusOperationResponse{}, nil
 }
 

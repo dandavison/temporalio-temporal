@@ -102,7 +102,7 @@ func (c *customServerStatsHandler) HandleRPC(ctx context.Context, stat stats.RPC
 			span := trace.SpanFromContext(ctx)
 
 			methodName, ok := ctx.Value(methodNameKey{}).(string)
-			if ok && strings.Contains(methodName, "PollNexusTask") {
+			if ok && (strings.Contains(methodName, "PollNexusTask") || strings.Contains(methodName, "RespondNexusTask")) {
 				fmt.Println("🌈 nexus handler: setting workflow id", tag.NewStringTag("Method", methodName))
 				span.SetAttributes(attribute.Key(WorkflowIDKey).String("default-workflow-id"))
 			}
