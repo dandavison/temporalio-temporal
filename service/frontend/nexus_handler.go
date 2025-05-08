@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/nexus-rpc/sdk-go/nexus"
+	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/trace"
 	enumspb "go.temporal.io/api/enums/v1"
@@ -430,18 +431,20 @@ func (h *nexusHandler) StartOperation(
 	// Dispatch the request to be sync matched with a worker polling on the nexusContext taskQueue.
 	// matchingClient sets a context timeout of 60 seconds for this request, this should be enough for any Nexus
 	// RPC.
-	span.AddEvent("Dispatching Nexus task",
-		trace.WithAttributes(
-			attribute.String("temporalWorkflowID", "default-workflow-id"),
-			attribute.String("Service", service),
-			attribute.String("Operation", operation),
-			attribute.String("RequestID", options.RequestID),
-			attribute.String("CallbackURL", options.CallbackURL),
-			attribute.String("Header", fmt.Sprintf("%+v", options.Header)),
-			attribute.String("Payload", fmt.Sprintf("%v", startOperationRequest.Payload)),
-		),
+	tracer := otel.Tracer("go.temporal.io/server/service/frontend")
+	childCtx, childSpan := tracer.Start(ctx, "Dispatching Nexus task")
+	childSpan.SetAttributes(
+		attribute.String("temporalWorkflowID", "default-workflow-id"),
+		attribute.String("Service", service),
+		attribute.String("Operation", operation),
+		attribute.String("RequestID", options.RequestID),
+		attribute.String("CallbackURL", options.CallbackURL),
+		attribute.String("Header", fmt.Sprintf("%+v", options.Header)),
+		attribute.String("Payload", fmt.Sprintf("%v", startOperationRequest.Payload)),
 	)
-	h.logger.Error("Dispatching Nexus task",
+	defer childSpan.End()
+
+	h.logger.Warn("Dispatching Nexus task",
 		tag.Operation(operation),
 		tag.WorkflowNamespace(oc.namespaceName),
 		tag.RequestID(options.RequestID),
@@ -451,7 +454,21 @@ func (h *nexusHandler) StartOperation(
 		tag.AttemptStart(time.Now().UTC()),
 		tag.Attempt(1),
 	)
-	response, err := h.matchingClient.DispatchNexusTask(ctx, request)
+	response, err := h.matchingClient.DispatchNexusTask(childCtx, request)
+
+	// Add span event for the response
+	childSpan.AddEvent("Received Nexus task dispatch response",
+		trace.WithAttributes(
+			attribute.String("Service", service),
+			attribute.String("Operation", operation),
+			attribute.String("RequestID", options.RequestID),
+			attribute.String("Success", fmt.Sprintf("%v", err == nil)),
+			attribute.String("Error", fmt.Sprintf("%v", err)),
+			attribute.String("ResponseType", fmt.Sprintf("%T", response)),
+			attribute.String("ResponseDetails", fmt.Sprintf("%+v", response)),
+		),
+	)
+
 	if err != nil {
 		if common.IsContextDeadlineExceededErr(err) {
 			oc.metricsHandler = oc.metricsHandler.WithTags(metrics.OutcomeTag("handler_timeout"))
@@ -459,6 +476,7 @@ func (h *nexusHandler) StartOperation(
 		}
 		return nil, commonnexus.ConvertGRPCError(err, false)
 	}
+
 	// Convert to standard Nexus SDK response.
 	switch t := response.GetOutcome().(type) {
 	case *matchingservice.DispatchNexusTaskResponse_HandlerError:
@@ -474,7 +492,7 @@ func (h *nexusHandler) StartOperation(
 		case *nexuspb.StartOperationResponse_SyncSuccess:
 			oc.metricsHandler = oc.metricsHandler.WithTags(metrics.OutcomeTag("sync_success"))
 
-			span.AddEvent("nexus handler: responding as sync success",
+			childSpan.AddEvent("nexus handler: responding as sync success",
 				trace.WithAttributes(
 					attribute.String("Result", fmt.Sprintf("%v", t.SyncSuccess.GetPayload())),
 				),
@@ -497,7 +515,7 @@ func (h *nexusHandler) StartOperation(
 				token = t.AsyncSuccess.GetOperationId()
 			}
 
-			span.AddEvent("nexus handler: responding as async success",
+			childSpan.AddEvent("nexus handler: responding as async success",
 				trace.WithAttributes(
 					attribute.String("OperationToken", token),
 				),

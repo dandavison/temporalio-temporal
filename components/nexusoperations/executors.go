@@ -242,6 +242,31 @@ func (e taskExecutor) executeInvocationTask(ctx context.Context, env hsm.Environ
 			},
 			Links: []nexus.Link{args.nexusLink},
 		})
+
+		// Add span event for the response
+		span.AddEvent("Received Nexus operation response",
+			trace.WithAttributes(
+				attribute.String("temporalWorkflowID", ref.WorkflowKey.WorkflowID),
+				attribute.String("Service", args.service),
+				attribute.String("Operation", args.operation),
+				attribute.String("RequestID", args.requestID),
+				attribute.String("Success", fmt.Sprintf("%v", callErr == nil)),
+				attribute.String("Error", fmt.Sprintf("%v", callErr)),
+				attribute.String("ResponseType", fmt.Sprintf("%T", rawResult)),
+				attribute.String("ResponseDetails", fmt.Sprintf("%+v", rawResult)),
+			),
+		)
+		e.Logger.Warn("Received Nexus operation response",
+			tag.Operation("StartOperation"),
+			tag.WorkflowNamespace(ns.Name().String()),
+			tag.RequestID(args.requestID),
+			tag.NexusOperation(args.operation),
+			tag.Endpoint(args.endpointName),
+			tag.WorkflowID(ref.WorkflowKey.WorkflowID),
+			tag.WorkflowRunID(ref.WorkflowKey.RunID),
+			tag.AttemptStart(time.Now().UTC()),
+			tag.Attempt(task.Attempt),
+		)
 	}
 
 	methodTag := metrics.NexusMethodTag("StartOperation")
