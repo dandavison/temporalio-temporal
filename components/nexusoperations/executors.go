@@ -222,7 +222,7 @@ func (e taskExecutor) executeInvocationTask(ctx context.Context, env hsm.Environ
 				attribute.String("Payload", fmt.Sprintf("%v", args.payload)),
 			),
 		)
-		e.Logger.Warn("Starting Nexus operation [1]",
+		e.Logger.Warn("🌈 Starting Nexus operation [1]",
 			tag.Operation("StartOperation"),
 			tag.WorkflowNamespace(ns.Name().String()),
 			tag.RequestID(args.requestID),
@@ -233,6 +233,9 @@ func (e taskExecutor) executeInvocationTask(ctx context.Context, env hsm.Environ
 			tag.AttemptStart(time.Now().UTC()),
 			tag.Attempt(task.Attempt),
 		)
+
+		e.Logger.Warn("\n\n🌈 calling StartOperation 2\n\n")
+
 		rawResult, callErr = client.StartOperation(callCtx, args.operation, args.payload, nexus.StartOperationOptions{
 			Header:      header,
 			CallbackURL: callbackURL,
@@ -256,7 +259,7 @@ func (e taskExecutor) executeInvocationTask(ctx context.Context, env hsm.Environ
 				attribute.String("ResponseDetails", fmt.Sprintf("%+v", rawResult)),
 			),
 		)
-		e.Logger.Warn("Received Nexus operation response",
+		e.Logger.Warn("🌈 Received Nexus operation response",
 			tag.Operation("StartOperation"),
 			tag.WorkflowNamespace(ns.Name().String()),
 			tag.RequestID(args.requestID),

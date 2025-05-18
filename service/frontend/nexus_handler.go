@@ -373,7 +373,7 @@ func (h *nexusHandler) StartOperation(
 			attribute.String("Operation", operation),
 		),
 	)
-	h.logger.Info("nexus handler: start Nexus operation",
+	h.logger.Warn("🌈 nexus handler: start Nexus operation",
 		tag.NewStringTag("Service", service),
 		tag.NewStringTag("Operation", operation),
 	)
@@ -444,7 +444,7 @@ func (h *nexusHandler) StartOperation(
 	)
 	defer childSpan.End()
 
-	h.logger.Warn("Dispatching Nexus task",
+	h.logger.Warn("🌈 Dispatching Nexus task",
 		tag.Operation(operation),
 		tag.WorkflowNamespace(oc.namespaceName),
 		tag.RequestID(options.RequestID),
@@ -498,7 +498,7 @@ func (h *nexusHandler) StartOperation(
 				),
 			)
 
-			h.logger.Info("nexus handler: responding as sync success",
+			h.logger.Warn("🌈 nexus handler: responding as sync success",
 				tag.NewStringTag("Result", fmt.Sprintf("%v", t.SyncSuccess.GetPayload())),
 			)
 
@@ -521,7 +521,7 @@ func (h *nexusHandler) StartOperation(
 				),
 			)
 
-			h.logger.Info("nexus handler: responding as async success",
+			h.logger.Warn("🌈 nexus handler: responding as async success",
 				tag.NewStringTag("OperationToken", token),
 			)
 			return &nexus.HandlerStartOperationResultAsync{
@@ -615,7 +615,7 @@ func (h *nexusHandler) forwardStartOperation(
 			attribute.String("Payload", fmt.Sprintf("%v", input.Reader)),
 		),
 	)
-	h.logger.Error("Starting Nexus operation [2]",
+	h.logger.Warn("🌈 Starting Nexus operation [2]",
 		tag.Operation("StartOperation"),
 		tag.WorkflowNamespace(oc.namespaceName),
 		tag.RequestID(options.RequestID),
@@ -625,6 +625,7 @@ func (h *nexusHandler) forwardStartOperation(
 		tag.AttemptStart(time.Now().UTC()),
 		tag.Attempt(1),
 	)
+	h.logger.Warn("🌈 calling StartOperation 3")
 	resp, err := client.StartOperation(ctx, operation, input.Reader, options)
 	if err != nil {
 		oc.logger.Error("received error from remote cluster for forwarded Nexus start operation request.", tag.Error(err))

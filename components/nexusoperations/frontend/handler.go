@@ -139,7 +139,7 @@ func (h *completionHandler) CompleteOperation(ctx context.Context, r *nexus.Comp
 		return nexus.HandlerErrorf(nexus.HandlerErrorTypeBadRequest, "operation token length exceeds allowed limit (%d/%d)", len(r.OperationToken), tokenLimit)
 	}
 
-	h.Logger.Info("Decoding callback token",
+	h.Logger.Warn("🌈 Decoding callback token",
 		tag.NewStringTag("CallbackToken", r.HTTPRequest.Header.Get(commonnexus.CallbackTokenHeader)),
 		tag.WorkflowNamespace(ns.Name().String()),
 	)
@@ -152,7 +152,7 @@ func (h *completionHandler) CompleteOperation(ctx context.Context, r *nexus.Comp
 	)
 	token, err := commonnexus.DecodeCallbackToken(r.HTTPRequest.Header.Get(commonnexus.CallbackTokenHeader))
 	if err != nil {
-		h.Logger.Error("failed to decode callback token",
+		h.Logger.Error("🌈 failed to decode callback token",
 			tag.WorkflowNamespace(ns.Name().String()),
 			tag.Error(err),
 			tag.NewStringTag("CallbackToken", r.HTTPRequest.Header.Get(commonnexus.CallbackTokenHeader)),
@@ -162,7 +162,7 @@ func (h *completionHandler) CompleteOperation(ctx context.Context, r *nexus.Comp
 
 	completion, err := h.CallbackTokenGenerator.DecodeCompletion(token)
 	if err != nil {
-		h.Logger.Error("failed to decode completion from token", tag.WorkflowNamespace(ns.Name().String()), tag.Error(err))
+		h.Logger.Error("🌈 failed to decode completion from token", tag.WorkflowNamespace(ns.Name().String()), tag.Error(err))
 		return nexus.HandlerErrorf(nexus.HandlerErrorTypeBadRequest, "invalid callback token")
 	}
 
