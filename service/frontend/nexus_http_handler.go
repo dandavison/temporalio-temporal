@@ -319,5 +319,8 @@ func (h *NexusHTTPHandler) serveResolvedURL(w http.ResponseWriter, r *http.Reque
 	}
 	prefix = path.Dir(prefix)
 	r.URL.RawPath = ""
+
+	h.logger.Warn("🌈 TEMPORAL FRONTEND: About to call Nexus SDK httpHandler.ServeHTTP", tag.NewStringTag("url_path", r.URL.Path), tag.NewStringTag("prefix_stripped", prefix))
 	http.StripPrefix(prefix, h.nexusHandler).ServeHTTP(w, r)
+	h.logger.Warn("🌈 TEMPORAL FRONTEND: Returned from Nexus SDK httpHandler.ServeHTTP", tag.NewStringTag("url_path", r.URL.Path))
 }
