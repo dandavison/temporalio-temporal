@@ -11,6 +11,7 @@ import (
 	"strconv"
 	"time"
 
+	"github.com/dandavison/hyperlinked/go/ps"
 	commonpb "go.temporal.io/api/common/v1"
 	enumspb "go.temporal.io/api/enums/v1"
 	"go.temporal.io/api/serviceerror"
@@ -2527,8 +2528,10 @@ func (n *Node) eachNodePureTask(
 		if !isComponentTaskExpired(referenceTime, task) {
 			// Pure tasks are stored in-order, so we can skip scanning the rest once we hit
 			// an unexpired task deadline.
+			ps.F("⚙️ eachNodePureTask: task not expired (scheduled=%s)\n", ps.RelativeMs(task.ScheduledTime.AsTime()))
 			return taskExecuted, nil
 		}
+		ps.F("⚙️ eachNodePureTask: task expired (scheduled=%s)\n", ps.RelativeMs(task.ScheduledTime.AsTime()))
 
 		taskInstance, err := n.deserializeComponentTask(task)
 		if err != nil {

@@ -11,6 +11,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/dandavison/hyperlinked/go/ps"
 	"github.com/google/uuid"
 	"github.com/temporalio/sqlparser"
 	batchpb "go.temporal.io/api/batch/v1"
@@ -1299,6 +1300,9 @@ func (wh *WorkflowHandler) RecordActivityTaskHeartbeatById(ctx context.Context, 
 		return nil, errRequestNotSet
 	}
 
+	ps.F("🫀 [HeartbeatById] namespace=%s workflowID=%q runID=%q activityID=%s",
+		request.GetNamespace(), request.GetWorkflowId(), request.GetRunId(), request.GetActivityId())
+
 	wh.logger.Debug("Received RecordActivityTaskHeartbeatById")
 	namespaceID, err := wh.namespaceRegistry.GetNamespaceID(namespace.Name(request.GetNamespace()))
 	if err != nil {
@@ -1320,6 +1324,8 @@ func (wh *WorkflowHandler) RecordActivityTaskHeartbeatById(ctx context.Context, 
 			return nil, errWorkflowIDNotSet
 		}
 
+		ps.F("🫀 [HeartbeatById] standalone activity detected, creating componentRef")
+
 		ref := chasm.NewComponentRef[*activity.Activity](chasm.ExecutionKey{
 			NamespaceID: namespaceID.String(),
 			BusinessID:  activityID,
@@ -1330,6 +1336,7 @@ func (wh *WorkflowHandler) RecordActivityTaskHeartbeatById(ctx context.Context, 
 		if err != nil {
 			return nil, err
 		}
+		ps.F("🫀 [HeartbeatById] componentRef created, len=%d", len(componentRef))
 	}
 
 	taskToken := tasktoken.NewActivityTaskToken(
@@ -1396,8 +1403,10 @@ func (wh *WorkflowHandler) RecordActivityTaskHeartbeatById(ctx context.Context, 
 		HeartbeatRequest: req,
 	})
 	if err != nil {
+		ps.F("🫀 [HeartbeatById] error from history: %v", err)
 		return nil, err
 	}
+	ps.F("🫀 [HeartbeatById] success! cancelRequested=%v", resp.GetCancelRequested())
 	return &workflowservice.RecordActivityTaskHeartbeatByIdResponse{
 		CancelRequested: resp.GetCancelRequested(),
 		ActivityPaused:  resp.GetActivityPaused(),
@@ -1894,6 +1903,7 @@ func (wh *WorkflowHandler) RespondActivityTaskCanceled(ctx context.Context, requ
 // Namespace, WorkflowID and ActivityID instead of 'taskToken' for completion. It fails with 'EntityNotExistsError'
 // if the these IDs are not valid anymore due to activity timeout.
 func (wh *WorkflowHandler) RespondActivityTaskCanceledById(ctx context.Context, request *workflowservice.RespondActivityTaskCanceledByIdRequest) (_ *workflowservice.RespondActivityTaskCanceledByIdResponse, retError error) {
+	ps.F("🚀 [RespondActivityTaskCanceledById] namespace=%s workflowID=%s runID=%s activityID=%s\n", request.GetNamespace(), request.GetWorkflowId(), request.GetRunId(), request.GetActivityId())
 	defer log.CapturePanic(wh.logger, &retError)
 
 	if request == nil {

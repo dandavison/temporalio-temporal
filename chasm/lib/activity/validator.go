@@ -1,6 +1,7 @@
 package activity
 
 import (
+	"github.com/dandavison/hyperlinked/go/ps"
 	"github.com/google/uuid"
 	activitypb "go.temporal.io/api/activity/v1"
 	commonpb "go.temporal.io/api/common/v1"
@@ -161,6 +162,8 @@ func normalizeAndValidateTimeouts(
 	}
 
 	options.HeartbeatTimeout = timestamp.MinDurationPtr(options.HeartbeatTimeout, options.StartToCloseTimeout)
+
+	ps.F("🟡 normalizeAndValidateTimeouts: scheduleToCloseTimeout: %v, scheduleToStartTimeout: %v, startToCloseTimeout: %v, heartbeatTimeout: %v\n", options.ScheduleToCloseTimeout, options.ScheduleToStartTimeout, options.StartToCloseTimeout, options.HeartbeatTimeout)
 
 	return nil
 }

@@ -3,6 +3,7 @@ package activity
 import (
 	"context"
 
+	"github.com/dandavison/hyperlinked/go/ps"
 	enumspb "go.temporal.io/api/enums/v1"
 	"go.temporal.io/server/chasm"
 	"go.temporal.io/server/chasm/lib/activity/gen/activitypb/v1"
@@ -44,8 +45,9 @@ func (e *activityDispatchTaskExecutor) Execute(
 	ctx context.Context,
 	activityRef chasm.ComponentRef,
 	_ chasm.TaskAttributes,
-	_ *activitypb.ActivityDispatchTask,
+	task *activitypb.ActivityDispatchTask,
 ) error {
+	ps.F("⤴ [Dispatch] activityId=%s\n", activityRef.BusinessID)
 	request, err := chasm.ReadComponent(
 		ctx,
 		activityRef,

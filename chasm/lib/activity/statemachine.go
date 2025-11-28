@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/dandavison/hyperlinked/go/ps"
 	commonpb "go.temporal.io/api/common/v1"
 	deploymentpb "go.temporal.io/api/deployment/v1"
 	enumspb "go.temporal.io/api/enums/v1"
@@ -45,6 +46,7 @@ var TransitionScheduled = chasm.NewTransition(
 		attempt.Count += 1
 
 		if timeout := a.GetScheduleToStartTimeout().AsDuration(); timeout > 0 {
+			ps.F("🟡 TransitionScheduled: ScheduleToStartTimeoutTask(timeout=%v)\n", timeout)
 			ctx.AddTask(
 				a,
 				chasm.TaskAttributes{
@@ -56,6 +58,7 @@ var TransitionScheduled = chasm.NewTransition(
 		}
 
 		if timeout := a.GetScheduleToCloseTimeout().AsDuration(); timeout > 0 {
+			ps.F("🟡 TransitionScheduled: ScheduleToCloseTimeoutTask(timeout=%v)\n", timeout)
 			ctx.AddTask(
 				a,
 				chasm.TaskAttributes{
@@ -99,6 +102,7 @@ var TransitionRescheduled = chasm.NewTransition(
 		}
 
 		if timeout := a.GetScheduleToStartTimeout().AsDuration(); timeout > 0 {
+			ps.F("🟡 TransitionRescheduled: ScheduleToStartTimeoutTask(timeout=%v, retryInterval=%v)\n", timeout, event.retryInterval)
 			ctx.AddTask(
 				a,
 				chasm.TaskAttributes{

@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 
+	"github.com/dandavison/hyperlinked/go/ps"
 	enumspb "go.temporal.io/api/enums/v1"
 	errordetailspb "go.temporal.io/api/errordetails/v1"
 	"go.temporal.io/api/serviceerror"
@@ -155,6 +156,8 @@ func (h *handler) DescribeActivityExecution(
 		h.config.LongPollTimeout(ns),
 		h.config.LongPollBuffer(ns),
 	)
+	childDeadline, _ := ctx.Deadline()
+	ps.F("🟡           -> childDeadline=%v\n", ps.RelativeMs(childDeadline))
 	defer cancel()
 
 	token := req.GetFrontendRequest().GetLongPollToken()

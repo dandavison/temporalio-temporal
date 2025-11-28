@@ -5,6 +5,7 @@ import (
 	"slices"
 	"time"
 
+	"github.com/dandavison/hyperlinked/go/ps"
 	apiactivitypb "go.temporal.io/api/activity/v1" //nolint:importas
 	commonpb "go.temporal.io/api/common/v1"
 	enumspb "go.temporal.io/api/enums/v1"
@@ -200,6 +201,7 @@ func (a *Activity) createAddActivityTaskRequest(ctx chasm.Context, namespaceID s
 func (a *Activity) HandleStarted(ctx chasm.MutableContext, request *historyservice.RecordActivityTaskStartedRequest) (
 	*historyservice.RecordActivityTaskStartedResponse, error,
 ) {
+	ps.F("🚀 [Started] activityId=%s\n", ctx.ExecutionKey().BusinessID)
 	if err := TransitionStarted.Apply(a, ctx, request); err != nil {
 		return nil, err
 	}
@@ -281,6 +283,7 @@ func (a *Activity) HandleFailed(
 	if err := a.validateActivityTaskToken(ctx, event.Token); err != nil {
 		return nil, err
 	}
+	ps.F("❌ [Failed] activityId=%s attempt=%d msg=%q\n", ctx.ExecutionKey().BusinessID, a.LastAttempt.Get(ctx).GetCount(), event.Request.GetFailedRequest().GetFailure().GetMessage())
 
 	metricsHandler := enrichMetricsHandler(
 		a,
@@ -493,6 +496,7 @@ func (a *Activity) tryReschedule(
 	if !shouldRetry {
 		return false, nil
 	}
+	ps.F("🔄 [Retry] activityId=%s attempt=%d→%d retryIn=%v\n", ctx.ExecutionKey().BusinessID, a.LastAttempt.Get(ctx).GetCount(), a.LastAttempt.Get(ctx).GetCount()+1, retryInterval)
 	return true, TransitionRescheduled.Apply(a, ctx, rescheduleEvent{
 		retryInterval: retryInterval,
 		failure:       failure,
@@ -784,13 +788,18 @@ func (a *Activity) validateActivityTaskToken(
 	ctx chasm.Context,
 	token *tokenspb.Task,
 ) error {
+	ps.F("🫀 [validateToken] status=%v, tokenAttempt=%d, lastAttempt=%d",
+		a.Status, token.Attempt, a.LastAttempt.Get(ctx).GetCount())
 	if a.Status != activitypb.ACTIVITY_EXECUTION_STATUS_STARTED &&
 		a.Status != activitypb.ACTIVITY_EXECUTION_STATUS_CANCEL_REQUESTED {
+		ps.F("🫀 [validateToken] FAILED: status not STARTED or CANCEL_REQUESTED")
 		return serviceerror.NewNotFound("activity task not found")
 	}
 	if token.Attempt != a.LastAttempt.Get(ctx).GetCount() {
+		ps.F("🫀 [validateToken] FAILED: attempt mismatch (token=%d, actual=%d)", token.Attempt, a.LastAttempt.Get(ctx).GetCount())
 		return serviceerror.NewNotFound("activity task not found")
 	}
+	ps.F("🫀 [validateToken] OK")
 	return nil
 }
 

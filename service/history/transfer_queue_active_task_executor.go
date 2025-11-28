@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 
+	"github.com/dandavison/hyperlinked/go/ps"
 	"github.com/google/uuid"
 	commonpb "go.temporal.io/api/common/v1"
 	deploymentpb "go.temporal.io/api/deployment/v1"
@@ -157,6 +158,7 @@ func (t *transferQueueActiveTaskExecutor) executeChasmSideEffectTransferTask(
 	ctx context.Context,
 	task *tasks.ChasmTask,
 ) error {
+	ps.F("🚀 [Transfer] executeChasmSideEffectTransferTask:\n")
 	ctx, cancel := context.WithTimeout(ctx, taskTimeout)
 	defer cancel()
 
