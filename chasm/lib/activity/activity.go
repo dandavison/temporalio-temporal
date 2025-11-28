@@ -5,6 +5,7 @@ import (
 	"slices"
 	"time"
 
+	"github.com/dandavison/hyperlinked/go/ps"
 	apiactivitypb "go.temporal.io/api/activity/v1" //nolint:importas
 	commonpb "go.temporal.io/api/common/v1"
 	enumspb "go.temporal.io/api/enums/v1"
@@ -200,6 +201,7 @@ func (a *Activity) createAddActivityTaskRequest(ctx chasm.Context, namespaceID s
 func (a *Activity) HandleStarted(ctx chasm.MutableContext, request *historyservice.RecordActivityTaskStartedRequest) (
 	*historyservice.RecordActivityTaskStartedResponse, error,
 ) {
+	ps.F("🚀 [Started] activityId=%s\n", ctx.ExecutionKey().BusinessID)
 	if err := TransitionStarted.Apply(a, ctx, request); err != nil {
 		return nil, err
 	}
@@ -254,6 +256,7 @@ func (a *Activity) HandleCompleted(
 	if err := a.validateActivityTaskToken(ctx, event.Token, event.Request.GetNamespaceId()); err != nil {
 		return nil, err
 	}
+	ps.F("✅ [Completed] activityId=%s attempt=%d\n", ctx.ExecutionKey().BusinessID, a.LastAttempt.Get(ctx).GetCount())
 
 	metricsHandler := enrichMetricsHandler(
 		a,
@@ -281,6 +284,7 @@ func (a *Activity) HandleFailed(
 	if err := a.validateActivityTaskToken(ctx, event.Token, event.Request.GetNamespaceId()); err != nil {
 		return nil, err
 	}
+	ps.F("❌ [Failed] activityId=%s attempt=%d msg=%q\n", ctx.ExecutionKey().BusinessID, a.LastAttempt.Get(ctx).GetCount(), event.Request.GetFailedRequest().GetFailure().GetMessage())
 
 	metricsHandler := enrichMetricsHandler(
 		a,
@@ -326,6 +330,7 @@ func (a *Activity) HandleCanceled(
 	if err := a.validateActivityTaskToken(ctx, event.Token, event.Request.GetNamespaceId()); err != nil {
 		return nil, err
 	}
+	ps.F("⚙️ [Canceled] activityId=%s\n", ctx.ExecutionKey().BusinessID)
 
 	metricsHandler := enrichMetricsHandler(
 		a,
@@ -348,6 +353,7 @@ func (a *Activity) HandleCanceled(
 func (a *Activity) handleTerminated(ctx chasm.MutableContext, req terminateEvent) (
 	*activitypb.TerminateActivityExecutionResponse, error,
 ) {
+	ps.F("❌ [Terminated] activityId=%s reason=%q\n", ctx.ExecutionKey().BusinessID, req.request.GetFrontendRequest().GetReason())
 	frontendReq := req.request.GetFrontendRequest()
 
 	// If already in terminated state, fail if request ID is different, else no-op
@@ -384,6 +390,7 @@ func (a *Activity) getOrCreateLastHeartbeat(ctx chasm.MutableContext) *activityp
 func (a *Activity) handleCancellationRequested(ctx chasm.MutableContext, event requestCancelEvent) (
 	*activitypb.RequestCancelActivityExecutionResponse, error,
 ) {
+	ps.F("⚙️ [CancelRequested] activityId=%s reason=%q\n", ctx.ExecutionKey().BusinessID, event.request.GetFrontendRequest().GetReason())
 	req := event.request.GetFrontendRequest()
 	newReqID := req.GetRequestId()
 	existingReqID := a.GetCancelState().GetRequestId()
@@ -492,6 +499,7 @@ func (a *Activity) tryReschedule(
 	if !shouldRetry {
 		return false, nil
 	}
+	ps.F("🔄 [Retry] activityId=%s attempt=%d→%d retryIn=%v\n", ctx.ExecutionKey().BusinessID, a.LastAttempt.Get(ctx).GetCount(), a.LastAttempt.Get(ctx).GetCount()+1, retryInterval)
 	return true, TransitionRescheduled.Apply(a, ctx, rescheduleEvent{
 		retryInterval: retryInterval,
 		failure:       failure,
@@ -561,6 +569,7 @@ func (a *Activity) RecordHeartbeat(
 	if err != nil {
 		return nil, err
 	}
+	ps.F("🫀 [Heartbeat] activityId=%s attempt=%d\n", ctx.ExecutionKey().BusinessID, a.LastAttempt.Get(ctx).GetCount())
 	a.LastHeartbeat = chasm.NewDataField(ctx, &activitypb.ActivityHeartbeatState{
 		RecordedTime: timestamppb.New(ctx.Now(a)),
 		Details:      input.Request.GetHeartbeatRequest().GetDetails(),

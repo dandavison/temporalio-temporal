@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/dandavison/hyperlinked/go/ps"
 	commonpb "go.temporal.io/api/common/v1"
 	deploymentpb "go.temporal.io/api/deployment/v1"
 	enumspb "go.temporal.io/api/enums/v1"
@@ -40,11 +41,13 @@ var TransitionScheduled = chasm.NewTransition(
 	},
 	activitypb.ACTIVITY_EXECUTION_STATUS_SCHEDULED,
 	func(a *Activity, ctx chasm.MutableContext, _ any) error {
+		ps.F("⚙️ [Scheduled] activityId=%s type=%s\n", ctx.ExecutionKey().BusinessID, a.GetActivityType().GetName())
 		attempt := a.LastAttempt.Get(ctx)
 		currentTime := ctx.Now(a)
 		attempt.Count += 1
 
 		if timeout := a.GetScheduleToStartTimeout().AsDuration(); timeout > 0 {
+			ps.F("🕐 scheduleToStart=%v\n", timeout)
 			ctx.AddTask(
 				a,
 				chasm.TaskAttributes{
@@ -56,6 +59,7 @@ var TransitionScheduled = chasm.NewTransition(
 		}
 
 		if timeout := a.GetScheduleToCloseTimeout().AsDuration(); timeout > 0 {
+			ps.F("🕐 scheduleToClose=%v\n", timeout)
 			ctx.AddTask(
 				a,
 				chasm.TaskAttributes{
@@ -99,6 +103,7 @@ var TransitionRescheduled = chasm.NewTransition(
 		}
 
 		if timeout := a.GetScheduleToStartTimeout().AsDuration(); timeout > 0 {
+			ps.F("🕐 scheduleToStart=%v retryInterval=%v\n", timeout, event.retryInterval)
 			ctx.AddTask(
 				a,
 				chasm.TaskAttributes{

@@ -3,6 +3,7 @@ package activity
 import (
 	"context"
 
+	"github.com/dandavison/hyperlinked/go/ps"
 	enumspb "go.temporal.io/api/enums/v1"
 	"go.temporal.io/server/chasm"
 	"go.temporal.io/server/chasm/lib/activity/gen/activitypb/v1"
@@ -44,8 +45,9 @@ func (e *activityDispatchTaskExecutor) Execute(
 	ctx context.Context,
 	activityRef chasm.ComponentRef,
 	_ chasm.TaskAttributes,
-	_ *activitypb.ActivityDispatchTask,
+	task *activitypb.ActivityDispatchTask,
 ) error {
+	ps.F("⤴ [Dispatch] activityId=%s\n", activityRef.BusinessID)
 	request, err := chasm.ReadComponent(
 		ctx,
 		activityRef,
@@ -95,6 +97,7 @@ func (e *scheduleToStartTimeoutTaskExecutor) Execute(
 	_ chasm.TaskAttributes,
 	_ *activitypb.ScheduleToStartTimeoutTask,
 ) error {
+	ps.F("❌ [Timeout] activityId=%s type=SCHEDULE_TO_START\n", ctx.ExecutionKey().BusinessID)
 	nsID := namespace.ID(ctx.ExecutionKey().NamespaceID)
 	namespaceName, err := e.opts.NamespaceRegistry.GetNamespaceName(nsID)
 	if err != nil {
@@ -142,6 +145,7 @@ func (e *scheduleToCloseTimeoutTaskExecutor) Execute(
 	_ chasm.TaskAttributes,
 	_ *activitypb.ScheduleToCloseTimeoutTask,
 ) error {
+	ps.F("❌ [Timeout] activityId=%s type=SCHEDULE_TO_CLOSE\n", ctx.ExecutionKey().BusinessID)
 	nsID := namespace.ID(ctx.ExecutionKey().NamespaceID)
 	namespaceName, err := e.opts.NamespaceRegistry.GetNamespaceName(nsID)
 	if err != nil {
@@ -193,6 +197,7 @@ func (e *startToCloseTimeoutTaskExecutor) Execute(
 	_ chasm.TaskAttributes,
 	_ *activitypb.StartToCloseTimeoutTask,
 ) error {
+	ps.F("❌ [Timeout] activityId=%s type=START_TO_CLOSE attempt=%d\n", ctx.ExecutionKey().BusinessID, activity.LastAttempt.Get(ctx).GetCount())
 	rescheduled, err := activity.tryReschedule(ctx, 0, createStartToCloseTimeoutFailure())
 	if err != nil {
 		return err
@@ -284,6 +289,7 @@ func (e *heartbeatTimeoutTaskExecutor) Execute(
 	_ chasm.TaskAttributes,
 	_ *activitypb.HeartbeatTimeoutTask,
 ) error {
+	ps.F("❌ [Timeout] activityId=%s type=HEARTBEAT attempt=%d\n", ctx.ExecutionKey().BusinessID, activity.LastAttempt.Get(ctx).GetCount())
 	rescheduled, err := activity.tryReschedule(ctx, 0, createHeartbeatTimeoutFailure())
 	if err != nil {
 		return err

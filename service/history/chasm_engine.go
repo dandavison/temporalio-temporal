@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 
+	"github.com/dandavison/hyperlinked/go/ps"
 	enumspb "go.temporal.io/api/enums/v1"
 	"go.temporal.io/api/serviceerror"
 	enumsspb "go.temporal.io/server/api/enums/v1"
@@ -342,6 +343,7 @@ func (e *ChasmEngine) PollComponent(
 				return ref, err
 			}
 		case <-ctx.Done():
+			ps.F("❌ [ChasmEngine] PollComponent: ctx.Done() triggered, ctx.Err()=%v\n", ctx.Err())
 			return nil, ctx.Err()
 		}
 	}

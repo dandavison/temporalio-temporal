@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 
+	"github.com/dandavison/hyperlinked/go/ps"
 	enumspb "go.temporal.io/api/enums/v1"
 	errordetailspb "go.temporal.io/api/errordetails/v1"
 	"go.temporal.io/api/serviceerror"
@@ -54,6 +55,8 @@ func newHandler(config *Config, metricsHandler metrics.Handler, logger log.Logge
 // this as "start", the start transition in fact happens later, in response to the activity task in
 // matching being delivered to a worker poll request.
 func (h *handler) StartActivityExecution(ctx context.Context, req *activitypb.StartActivityExecutionRequest) (*activitypb.StartActivityExecutionResponse, error) {
+	ps.StartTimer()
+	ps.F("⬅ [StartActivityExecution] activityId=%s type=%s\n", req.GetFrontendRequest().GetActivityId(), req.GetFrontendRequest().GetActivityType().GetName())
 	frontendReq := req.GetFrontendRequest()
 
 	reusePolicy, ok := businessIDReusePolicyMap[frontendReq.GetIdReusePolicy()]
@@ -133,6 +136,12 @@ func (h *handler) DescribeActivityExecution(
 	ctx context.Context,
 	req *activitypb.DescribeActivityExecutionRequest,
 ) (response *activitypb.DescribeActivityExecutionResponse, err error) {
+	longPoll := len(req.GetFrontendRequest().GetLongPollToken()) > 0
+	if longPoll {
+		ps.F("📡 [DescribeActivityExecution] activityId=%s (long-poll)\n", req.GetFrontendRequest().GetActivityId())
+	} else {
+		ps.F("⬅ [DescribeActivityExecution] activityId=%s\n", req.GetFrontendRequest().GetActivityId())
+	}
 	ref := chasm.NewComponentRef[*Activity](chasm.ExecutionKey{
 		NamespaceID: req.GetNamespaceId(),
 		BusinessID:  req.GetFrontendRequest().GetActivityId(),
@@ -201,6 +210,7 @@ func (h *handler) PollActivityExecution(
 	ctx context.Context,
 	req *activitypb.PollActivityExecutionRequest,
 ) (response *activitypb.PollActivityExecutionResponse, err error) {
+	ps.F("📡 [PollActivityExecution] activityId=%s\n", req.GetFrontendRequest().GetActivityId())
 	ref := chasm.NewComponentRef[*Activity](chasm.ExecutionKey{
 		NamespaceID: req.GetNamespaceId(),
 		BusinessID:  req.GetFrontendRequest().GetActivityId(),
@@ -251,6 +261,7 @@ func (h *handler) TerminateActivityExecution(
 	ctx context.Context,
 	req *activitypb.TerminateActivityExecutionRequest,
 ) (response *activitypb.TerminateActivityExecutionResponse, err error) {
+	ps.F("⬅ [TerminateActivityExecution] activityId=%s\n", req.GetFrontendRequest().GetActivityId())
 	frontendReq := req.GetFrontendRequest()
 
 	ref := chasm.NewComponentRef[*Activity](chasm.ExecutionKey{
@@ -290,6 +301,7 @@ func (h *handler) RequestCancelActivityExecution(
 	ctx context.Context,
 	req *activitypb.RequestCancelActivityExecutionRequest,
 ) (response *activitypb.RequestCancelActivityExecutionResponse, err error) {
+	ps.F("⬅ [RequestCancelActivityExecution] activityId=%s\n", req.GetFrontendRequest().GetActivityId())
 	frontendReq := req.GetFrontendRequest()
 
 	ref := chasm.NewComponentRef[*Activity](chasm.ExecutionKey{

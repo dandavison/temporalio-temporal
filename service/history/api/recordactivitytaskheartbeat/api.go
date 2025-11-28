@@ -3,6 +3,7 @@ package recordactivitytaskheartbeat
 import (
 	"context"
 
+	"github.com/dandavison/hyperlinked/go/ps"
 	"go.temporal.io/server/api/historyservice/v1"
 	"go.temporal.io/server/chasm"
 	"go.temporal.io/server/chasm/lib/activity"
@@ -31,6 +32,7 @@ func Invoke(
 
 	// Handle as standalone activity if token has component ref.
 	if componentRef := token.GetComponentRef(); len(componentRef) > 0 {
+		ps.F("🫀 [History] standalone heartbeat: componentRef len=%d, activityId=%s", len(componentRef), token.GetActivityId())
 		response, _, err := chasm.UpdateComponent(
 			ctx,
 			componentRef,
@@ -40,8 +42,14 @@ func Invoke(
 				Request: req,
 			},
 		)
+		if err != nil {
+			ps.F("🫀 [History] standalone heartbeat error: %v", err)
+		} else {
+			ps.F("🫀 [History] standalone heartbeat success!")
+		}
 		return response, err
 	}
+	ps.F("🫀 [History] workflow-based heartbeat (no componentRef)")
 
 	_, err := api.GetActiveNamespace(shard, namespace.ID(req.GetNamespaceId()), token.WorkflowId)
 	if err != nil {

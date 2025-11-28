@@ -18,6 +18,7 @@ func WithDeadlineBuffer(
 	timeout time.Duration,
 	buffer time.Duration,
 ) (context.Context, context.CancelFunc) {
+
 	if parent.Err() != nil {
 		return parent, noop
 	}
