@@ -168,8 +168,7 @@ func (e *heartbeatTimeoutTaskExecutor) Validate(
 		return false, nil
 	}
 	// High-water-mark: reject tasks that have already been executed.
-	heartbeat, _ := activity.LastHeartbeat.TryGet(ctx)
-	hwm := heartbeat.GetLastHeartbeatTaskScheduledTime().AsTime()
+	hwm := activity.GetLastHeartbeatTaskScheduledTime().AsTime()
 	return taskAttrs.ScheduledTime.After(hwm), nil
 }
 
@@ -196,12 +195,12 @@ func (e *heartbeatTimeoutTaskExecutor) Execute(
 	// attempt for which this heartbeat timer was originally set.
 
 	// Update high-water-mark so this task is invalidated during transaction close.
-	heartbeat := activity.getOrCreateLastHeartbeat(ctx)
-	heartbeat.LastHeartbeatTaskScheduledTime = timestamppb.New(taskAttrs.ScheduledTime)
+	activity.LastHeartbeatTaskScheduledTime = timestamppb.New(taskAttrs.ScheduledTime)
 
 	attempt := activity.LastAttempt.Get(ctx)
 	hbTimeout := activity.GetHeartbeatTimeout().AsDuration()
 	attemptStartTime := attempt.GetStartedTime().AsTime()
+	heartbeat, _ := activity.LastHeartbeat.TryGet(ctx)
 	lastHbTime := heartbeat.GetRecordedTime().AsTime() // could be from a previous attempt or could be zero
 	// No heartbeats in the attempt so far is equivalent to a heartbeat having been sent at attempt
 	// start time.
