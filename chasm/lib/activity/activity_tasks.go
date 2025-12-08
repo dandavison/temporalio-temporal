@@ -9,6 +9,7 @@ import (
 	"go.temporal.io/server/common/resource"
 	"go.temporal.io/server/common/util"
 	"go.uber.org/fx"
+	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
 type activityDispatchTaskExecutorOptions struct {
@@ -159,19 +160,25 @@ func newHeartbeatTimeoutTaskExecutor() *heartbeatTimeoutTaskExecutor {
 func (e *heartbeatTimeoutTaskExecutor) Validate(
 	ctx chasm.Context,
 	activity *Activity,
-	_ chasm.TaskAttributes,
+	taskAttrs chasm.TaskAttributes,
 	task *activitypb.HeartbeatTimeoutTask,
 ) (bool, error) {
 	validStatus := activity.Status == activitypb.ACTIVITY_EXECUTION_STATUS_STARTED ||
 		activity.Status == activitypb.ACTIVITY_EXECUTION_STATUS_CANCEL_REQUESTED
-	return validStatus && activity.LastAttempt.Get(ctx).GetCount() == task.Attempt, nil
+	if !validStatus || activity.LastAttempt.Get(ctx).GetCount() != task.Attempt {
+		return false, nil
+	}
+	// High-water-mark: reject tasks that have already been executed.
+	heartbeat, _ := activity.LastHeartbeat.TryGet(ctx)
+	hwm := heartbeat.GetLastHeartbeatTaskScheduledTime().AsTime()
+	return taskAttrs.ScheduledTime.After(hwm), nil
 }
 
 // Execute executes a HeartbeatTimeoutTask.
 func (e *heartbeatTimeoutTaskExecutor) Execute(
 	ctx chasm.MutableContext,
 	activity *Activity,
-	_ chasm.TaskAttributes,
+	taskAttrs chasm.TaskAttributes,
 	_ *activitypb.HeartbeatTimeoutTask,
 ) error {
 	// Let T = user-configured heartbeat timeout and let hb_i be the time of the ith user-submitted
@@ -189,11 +196,14 @@ func (e *heartbeatTimeoutTaskExecutor) Execute(
 	// Task validation has established that an attempt is currently in progress and that it is the
 	// attempt for which this heartbeat timer was originally set.
 
+	// Update high-water-mark so this task is invalidated during transaction close.
+	heartbeat := activity.getOrCreateLastHeartbeat(ctx)
+	heartbeat.LastHeartbeatTaskScheduledTime = timestamppb.New(taskAttrs.ScheduledTime)
+
 	attempt := activity.LastAttempt.Get(ctx)
-	lastHb, _ := activity.LastHeartbeat.TryGet(ctx)
 	hbTimeout := activity.GetHeartbeatTimeout().AsDuration()
 	attemptStartTime := attempt.GetStartedTime().AsTime()
-	lastHbTime := lastHb.GetRecordedTime().AsTime() // could be from a previous attempt or could be zero
+	lastHbTime := heartbeat.GetRecordedTime().AsTime() // could be from a previous attempt or could be zero
 	// No heartbeats in the attempt so far is equivalent to a heartbeat having been sent at attempt
 	// start time.
 	hbDeadline := util.MaxTime(lastHbTime, attemptStartTime).Add(hbTimeout)
