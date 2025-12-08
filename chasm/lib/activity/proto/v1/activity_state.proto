@@ -150,6 +150,9 @@ message ActivityHeartbeatState {
     temporal.api.common.v1.Payloads details = 1;
     // Time the last heartbeat was recorded.
     google.protobuf.Timestamp recorded_time = 2;
+    // High-water-mark for heartbeat timeout task validation. Updated when a heartbeat
+    // timeout task executes. Tasks with ScheduledTime <= this value are stale.
+    google.protobuf.Timestamp last_heartbeat_task_scheduled_time = 3;
 }
 
 message ActivityRequestData {
