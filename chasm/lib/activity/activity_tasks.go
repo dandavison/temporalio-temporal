@@ -179,22 +179,16 @@ func (e *heartbeatTimeoutTaskExecutor) Execute(
 	taskAttrs chasm.TaskAttributes,
 	_ *activitypb.HeartbeatTimeoutTask,
 ) error {
-	// Let T = user-configured heartbeat timeout and let hb_i be the time of the ith user-submitted
-	// heartbeat request. (hb_0 = 0 since we always start a timer task when an attempt starts).
-
 	// There are two concurrent processes:
-	// 1. A worker is sending heartbeats at times hb_i.
+	// 1. A worker is sending heartbeats.
 	// 2. This task is being executed at (shortly after) certain scheduled times.
 
 	// Each time we execute this function, our task is to look back into the past and determine
-	// whether more than T has elapsed since the last heartbeat. If it has, we fail the attempt (and
-	// decide between retrying or failing the activity). If it has not, then we schedule a new timer
-	// task to execute this function at the new deadline, i.e. lastHeartbeatTime+HeartbeatTimeout.
-	//
-	// Task validation has established that an attempt is currently in progress and that it is the
-	// attempt for which this heartbeat timer was originally set.
+	// whether more than (user-configured heartbeat timeout) has elapsed since the last heartbeat.
+	// If it has, we fail the attempt (and decide between retrying or failing the activity). If it
+	// has not, then we schedule a new timer task to execute this function at the new deadline.
 
-	// Update high-water-mark so this task is invalidated during transaction close.
+	// Update high-water-mark so this task is invalidated after execution.
 	activity.LastHeartbeatTaskScheduledTime = timestamppb.New(taskAttrs.ScheduledTime)
 
 	attempt := activity.LastAttempt.Get(ctx)
