@@ -598,31 +598,34 @@ func (a *Activity) buildGetActivityExecutionOutcomeResponse(
 // outcome retrieves the activity outcome (result or failure) if the activity has completed.
 // Returns nil if the activity has not completed.
 func (a *Activity) outcome(ctx chasm.Context) *activity.ActivityExecutionOutcome {
+	if a.LifecycleState(ctx) == chasm.LifecycleStateRunning {
+		return nil
+	}
+
 	activityOutcome := a.Outcome.Get(ctx)
+
 	// Check for successful outcome
 	if successful := activityOutcome.GetSuccessful(); successful != nil {
 		return &activity.ActivityExecutionOutcome{
 			Value: &activity.ActivityExecutionOutcome_Result{Result: successful.GetOutput()},
 		}
 	}
-	// Check for failure in outcome
+
+	// Check for failure in outcome (used by TERMINATED, CANCELED, and schedule-level TIMED_OUT)
 	if failure := activityOutcome.GetFailed().GetFailure(); failure != nil {
 		return &activity.ActivityExecutionOutcome{
 			Value: &activity.ActivityExecutionOutcome_Failure{Failure: failure},
 		}
 	}
-	// Check for failure in last attempt details
-	shouldHaveFailure := (a.GetStatus() == activitypb.ACTIVITY_EXECUTION_STATUS_FAILED ||
-		a.GetStatus() == activitypb.ACTIVITY_EXECUTION_STATUS_TIMED_OUT ||
-		a.GetStatus() == activitypb.ACTIVITY_EXECUTION_STATUS_CANCELED ||
-		a.GetStatus() == activitypb.ACTIVITY_EXECUTION_STATUS_TERMINATED)
-	if shouldHaveFailure {
-		if details := a.LastAttempt.Get(ctx).GetLastFailureDetails(); details != nil {
-			return &activity.ActivityExecutionOutcome{
-				Value: &activity.ActivityExecutionOutcome_Failure{Failure: details.GetFailure()},
-			}
+
+	// Check for failure in last attempt details (used by FAILED and attempt-level TIMED_OUT like
+	// start-to-close and heartbeat timeouts)
+	if details := a.LastAttempt.Get(ctx).GetLastFailureDetails(); details != nil {
+		return &activity.ActivityExecutionOutcome{
+			Value: &activity.ActivityExecutionOutcome_Failure{Failure: details.GetFailure()},
 		}
 	}
+
 	return nil
 }
 

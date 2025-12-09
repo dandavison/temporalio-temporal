@@ -754,6 +754,96 @@ func (s *standaloneActivityTestSuite) TestCompletedActivity_CannotTerminate() {
 	require.Error(t, err)
 }
 
+// TestActivityTerminated_AfterFailedAttempt verifies that when an activity is terminated after
+// a prior failed attempt, the outcome returns the termination failure (not the stale attempt failure).
+func (s *standaloneActivityTestSuite) TestActivityTerminated_AfterFailedAttempt() {
+	t := s.T()
+	ctx, cancel := context.WithTimeout(t.Context(), 30*time.Second)
+	defer cancel()
+
+	activityID := testcore.RandomizeStr(t.Name())
+	taskQueue := testcore.RandomizeStr(t.Name())
+
+	// Start activity with retries
+	startResp, err := s.FrontendClient().StartActivityExecution(ctx, &workflowservice.StartActivityExecutionRequest{
+		Namespace:           s.Namespace().String(),
+		ActivityId:          activityID,
+		ActivityType:        &commonpb.ActivityType{Name: "test-activity-type"},
+		TaskQueue:           &taskqueuepb.TaskQueue{Name: taskQueue},
+		StartToCloseTimeout: durationpb.New(1 * time.Minute),
+		RetryPolicy: &commonpb.RetryPolicy{
+			InitialInterval: durationpb.New(1 * time.Millisecond),
+			MaximumAttempts: 3,
+		},
+	})
+	require.NoError(t, err)
+	runID := startResp.RunId
+
+	// Attempt 1: worker polls and fails with retryable error
+	pollResp1, err := s.FrontendClient().PollActivityTaskQueue(ctx, &workflowservice.PollActivityTaskQueueRequest{
+		Namespace: s.Namespace().String(),
+		TaskQueue: &taskqueuepb.TaskQueue{Name: taskQueue, Kind: enumspb.TASK_QUEUE_KIND_NORMAL},
+	})
+	require.NoError(t, err)
+	require.EqualValues(t, 1, pollResp1.Attempt)
+
+	attempt1Failure := &failurepb.Failure{
+		Message: "attempt 1 failure - should NOT appear in outcome",
+		FailureInfo: &failurepb.Failure_ApplicationFailureInfo{
+			ApplicationFailureInfo: &failurepb.ApplicationFailureInfo{NonRetryable: false},
+		},
+	}
+	_, err = s.FrontendClient().RespondActivityTaskFailed(ctx, &workflowservice.RespondActivityTaskFailedRequest{
+		Namespace: s.Namespace().String(),
+		TaskToken: pollResp1.TaskToken,
+		Failure:   attempt1Failure,
+	})
+	require.NoError(t, err)
+
+	// Attempt 2: worker polls (activity is now started on attempt 2)
+	pollResp2, err := s.FrontendClient().PollActivityTaskQueue(ctx, &workflowservice.PollActivityTaskQueueRequest{
+		Namespace: s.Namespace().String(),
+		TaskQueue: &taskqueuepb.TaskQueue{Name: taskQueue, Kind: enumspb.TASK_QUEUE_KIND_NORMAL},
+	})
+	require.NoError(t, err)
+	require.EqualValues(t, 2, pollResp2.Attempt)
+
+	// Terminate while attempt 2 is in progress
+	_, err = s.FrontendClient().TerminateActivityExecution(ctx, &workflowservice.TerminateActivityExecutionRequest{
+		Namespace:  s.Namespace().String(),
+		ActivityId: activityID,
+		RunId:      runID,
+		Reason:     "Test Termination",
+		Identity:   "terminator",
+	})
+	require.NoError(t, err)
+
+	// Verify outcome is the termination failure, NOT the attempt 1 failure
+	describeResp, err := s.FrontendClient().DescribeActivityExecution(ctx, &workflowservice.DescribeActivityExecutionRequest{
+		Namespace:      s.Namespace().String(),
+		ActivityId:     activityID,
+		RunId:          runID,
+		IncludeOutcome: true,
+	})
+	require.NoError(t, err)
+
+	info := describeResp.GetInfo()
+	require.Equal(t, enumspb.ACTIVITY_EXECUTION_STATUS_TERMINATED, info.GetStatus(),
+		"expected Terminated but is %s", info.GetStatus())
+
+	// The outcome should be the termination failure
+	outcomeFailure := describeResp.GetOutcome().GetFailure()
+	require.NotNil(t, outcomeFailure, "outcome failure should not be nil")
+	require.NotNil(t, outcomeFailure.GetTerminatedFailureInfo(),
+		"expected TerminatedFailureInfo but got %T", outcomeFailure.GetFailureInfo())
+	require.Equal(t, "Test Termination", outcomeFailure.GetMessage())
+
+	// LastFailure should still have the attempt 1 failure (this is correct behavior)
+	lastFailure := info.GetLastFailure()
+	require.NotNil(t, lastFailure, "last failure should not be nil")
+	require.Equal(t, "attempt 1 failure - should NOT appear in outcome", lastFailure.GetMessage())
+}
+
 func (s *standaloneActivityTestSuite) TestRetryWithoutScheduleToCloseTimeout() {
 	t := s.T()
 	ctx, cancel := context.WithTimeout(t.Context(), 30*time.Second)
