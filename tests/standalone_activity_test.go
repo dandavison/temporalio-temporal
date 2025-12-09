@@ -2,6 +2,7 @@ package tests
 
 import (
 	"context"
+	"fmt"
 	"testing"
 	"time"
 
@@ -1281,6 +1282,66 @@ func (s *standaloneActivityTestSuite) TestGetActivityExecutionOutcome_InvalidArg
 }
 
 // TODO(dan): add tests that DescribeActivityExecution can wait for deletion, termination, cancellation etc
+
+func (s *standaloneActivityTestSuite) TestListActivityExecutions() {
+	t := s.T()
+	ctx, cancel := context.WithTimeout(t.Context(), 30*time.Second)
+	defer cancel()
+
+	activityID := s.tv.ActivityID()
+	activityType := s.tv.ActivityType().GetName()
+	taskQueue := s.tv.TaskQueue().GetName()
+	startResp := s.startAndValidateActivity(ctx, t, activityID, taskQueue)
+	runID := startResp.RunId
+
+	verifyListQuery := func(t *testing.T, query string) {
+		t.Helper()
+		var exec *activitypb.ActivityExecutionListInfo
+		s.Eventually(
+			func() bool {
+				resp, err := s.FrontendClient().ListActivityExecutions(ctx, &workflowservice.ListActivityExecutionsRequest{
+					Namespace: s.Namespace().String(),
+					PageSize:  10,
+					Query:     query,
+				})
+				if err != nil || len(resp.GetExecutions()) != 1 {
+					return false
+				}
+				exec = resp.GetExecutions()[0]
+				return true
+			},
+			testcore.WaitForESToSettle,
+			100*time.Millisecond,
+		)
+		require.NotNil(t, exec)
+		s.Equal(activityID, exec.GetActivityId())
+		s.Equal(runID, exec.GetRunId())
+		s.Equal(activityType, exec.GetActivityType().GetName())
+		s.Equal(taskQueue, exec.GetTaskQueue())
+		s.Equal(enumspb.ACTIVITY_EXECUTION_STATUS_RUNNING, exec.GetStatus())
+		s.NotNil(exec.GetScheduleTime())
+	}
+
+	t.Run("QueryByActivityId", func(t *testing.T) {
+		verifyListQuery(t, fmt.Sprintf("ActivityId = '%s'", activityID))
+	})
+
+	t.Run("QueryByActivityType", func(t *testing.T) {
+		verifyListQuery(t, fmt.Sprintf("ActivityType = '%s'", activityType))
+	})
+
+	t.Run("QueryByTaskQueue", func(t *testing.T) {
+		queryAndVerify(t, fmt.Sprintf("TaskQueue = '%s'", taskQueue))
+	})
+
+	t.Run("QueryByActivityStatus", func(t *testing.T) {
+		verifyListQuery(t, "ActivityStatus = 'Scheduled'")
+	})
+
+	t.Run("QueryByMultipleFields", func(t *testing.T) {
+		verifyListQuery(t, fmt.Sprintf("ActivityId = '%s' AND ActivityType = '%s'", activityID, activityType))
+	})
+}
 
 func (s *standaloneActivityTestSuite) TestDescribeActivityExecution_DeadlineExceeded() {
 	t := s.T()
