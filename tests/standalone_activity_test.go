@@ -2,6 +2,7 @@ package tests
 
 import (
 	"context"
+	"fmt"
 	"testing"
 	"time"
 
@@ -1281,6 +1282,46 @@ func (s *standaloneActivityTestSuite) TestGetActivityExecutionOutcome_InvalidArg
 }
 
 // TODO(dan): add tests that DescribeActivityExecution can wait for deletion, termination, cancellation etc
+
+func (s *standaloneActivityTestSuite) TestListActivityExecutions() {
+	t := s.T()
+	ctx, cancel := context.WithTimeout(t.Context(), 30*time.Second)
+	defer cancel()
+
+	activityID := s.tv.ActivityID()
+	taskQueue := s.tv.TaskQueue().String()
+	startResp := s.startAndValidateActivity(ctx, t, activityID, taskQueue)
+	runID := startResp.RunId
+
+	// Wait for visibility to be updated and verify the list response
+	s.Eventually(
+		func() bool {
+			resp, err := s.FrontendClient().ListActivityExecutions(ctx, &workflowservice.ListActivityExecutionsRequest{
+				Namespace: s.Namespace().String(),
+				PageSize:  10,
+				Query:     fmt.Sprintf("ActivityId = '%s'", activityID),
+			})
+			if err != nil {
+				t.Logf("ListActivityExecutions error: %v", err)
+				return false
+			}
+			if len(resp.GetExecutions()) != 1 {
+				t.Logf("Expected 1 execution, got %d", len(resp.GetExecutions()))
+				return false
+			}
+
+			exec := resp.GetExecutions()[0]
+			s.Equal(activityID, exec.GetActivityId())
+			s.Equal(runID, exec.GetRunId())
+			s.Equal(s.tv.ActivityType().GetName(), exec.GetActivityType().GetName())
+			s.Equal(enumspb.ACTIVITY_EXECUTION_STATUS_RUNNING, exec.GetStatus())
+			s.NotNil(exec.GetScheduleTime())
+			return true
+		},
+		testcore.WaitForESToSettle,
+		100*time.Millisecond,
+	)
+}
 
 func (s *standaloneActivityTestSuite) TestDescribeActivityExecution_DeadlineExceeded() {
 	t := s.T()
