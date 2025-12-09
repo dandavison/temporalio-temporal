@@ -15,9 +15,7 @@ import (
 	"go.temporal.io/api/serviceerror"
 	taskqueuepb "go.temporal.io/api/taskqueue/v1"
 	"go.temporal.io/api/workflowservice/v1"
-	"go.temporal.io/server/chasm"
 	"go.temporal.io/server/chasm/lib/activity"
-	activitypbinternal "go.temporal.io/server/chasm/lib/activity/gen/activitypb/v1"
 	"go.temporal.io/server/common/dynamicconfig"
 	"go.temporal.io/server/common/payload"
 	"go.temporal.io/server/common/payloads"
@@ -1294,53 +1292,35 @@ func (s *standaloneActivityTestSuite) TestListActivityExecutions() {
 	taskQueue := s.tv.TaskQueue().String()
 	startResp := s.startAndValidateActivity(ctx, t, activityID, taskQueue)
 	runID := startResp.RunId
-	chasmEngine, err := s.GetTestCluster().Host().ChasmEngine()
-	s.NoError(err)
-	chasmCtx := chasm.NewVisibilityManagerContext(
-		chasm.NewEngineContext(ctx, chasmEngine),
-		s.GetTestCluster().Host().ChasmVisibilityManager(),
-	)
-	archetypeID, ok := s.GetTestCluster().Host().GetCHASMRegistry().ComponentIDFor(&activity.Activity{})
-	s.True(ok)
 
-	// Query for the activity by its workflow ID (which maps to activity ID for standalone activities)
-	visQuery := fmt.Sprintf("TemporalNamespaceDivision = '%d' AND WorkflowId = '%s'", archetypeID, activityID)
-
-	// Wait for visibility to be updated
-	var visRecord *chasm.ExecutionInfo[*activitypbinternal.ActivityState]
+	// Wait for visibility to be updated and verify the list response
 	s.Eventually(
 		func() bool {
-			// Note: Using ActivityState as the memo type since Activity doesn't implement
-			// VisibilityMemoProvider yet. This will need to be updated when memo support is added.
-			resp, err := chasm.ListExecutions[*activity.Activity, *activitypbinternal.ActivityState](
-				chasmCtx,
-				&chasm.ListExecutionsRequest{
-					NamespaceID:   string(s.NamespaceID()),
-					NamespaceName: string(s.Namespace()),
-					PageSize:      10,
-					Query:         visQuery,
-				},
-			)
+			resp, err := s.FrontendClient().ListActivityExecutions(ctx, &workflowservice.ListActivityExecutionsRequest{
+				Namespace: s.Namespace().String(),
+				PageSize:  10,
+				Query:     fmt.Sprintf("ActivityId = '%s'", activityID),
+			})
 			if err != nil {
-				t.Logf("ListExecutions error: %v", err)
+				t.Logf("ListActivityExecutions error: %v", err)
 				return false
 			}
-			if len(resp.Executions) != 1 {
-				t.Logf("Expected 1 execution, got %d", len(resp.Executions))
+			if len(resp.GetExecutions()) != 1 {
+				t.Logf("Expected 1 execution, got %d", len(resp.GetExecutions()))
 				return false
 			}
 
-			visRecord = resp.Executions[0]
+			exec := resp.GetExecutions()[0]
+			s.Equal(activityID, exec.GetActivityId())
+			s.Equal(runID, exec.GetRunId())
+			s.Equal(s.tv.ActivityType().GetName(), exec.GetActivityType().GetName())
+			s.Equal(enumspb.ACTIVITY_EXECUTION_STATUS_RUNNING, exec.GetStatus())
+			s.NotNil(exec.GetScheduleTime())
 			return true
 		},
 		testcore.WaitForESToSettle,
 		100*time.Millisecond,
 	)
-
-	// Verify the visibility record matches what we started
-	s.Equal(activityID, visRecord.BusinessID)
-	s.Equal(runID, visRecord.RunID)
-	s.NotEmpty(visRecord.StartTime)
 }
 
 func (s *standaloneActivityTestSuite) TestDescribeActivityExecution_DeadlineExceeded() {
