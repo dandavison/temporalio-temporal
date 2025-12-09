@@ -6,8 +6,10 @@ import (
 	"github.com/google/uuid"
 	apiactivitypb "go.temporal.io/api/activity/v1" //nolint:importas
 	commonpb "go.temporal.io/api/common/v1"
+	enumspb "go.temporal.io/api/enums/v1"
 	"go.temporal.io/api/serviceerror"
 	"go.temporal.io/api/workflowservice/v1"
+	"go.temporal.io/server/chasm"
 	"go.temporal.io/server/chasm/lib/activity/gen/activitypb/v1"
 	"go.temporal.io/server/common"
 	"go.temporal.io/server/common/dynamicconfig"
@@ -16,6 +18,7 @@ import (
 	"go.temporal.io/server/common/namespace"
 	"go.temporal.io/server/common/searchattribute"
 	"google.golang.org/protobuf/types/known/durationpb"
+	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
 type FrontendHandler interface {
@@ -38,6 +41,7 @@ type frontendHandler struct {
 	namespaceRegistry namespace.Registry
 	saMapperProvider  searchattribute.MapperProvider
 	saValidator       *searchattribute.Validator
+	visibilityManager chasm.VisibilityManager
 }
 
 // NewFrontendHandler creates a new FrontendHandler instance for processing activity frontend requests.
@@ -49,6 +53,7 @@ func NewFrontendHandler(
 	namespaceRegistry namespace.Registry,
 	saMapperProvider searchattribute.MapperProvider,
 	saValidator *searchattribute.Validator,
+	visibilityManager chasm.VisibilityManager,
 ) FrontendHandler {
 	return &frontendHandler{
 		client:            client,
@@ -58,6 +63,7 @@ func NewFrontendHandler(
 		namespaceRegistry: namespaceRegistry,
 		saMapperProvider:  saMapperProvider,
 		saValidator:       saValidator,
+		visibilityManager: visibilityManager,
 	}
 }
 
@@ -136,6 +142,81 @@ func (h *frontendHandler) GetActivityExecutionOutcome(
 		FrontendRequest: req,
 	})
 	return resp.GetFrontendResponse(), err
+}
+
+// ListActivityExecutions lists activity executions matching the given query.
+func (h *frontendHandler) ListActivityExecutions(
+	ctx context.Context,
+	req *workflowservice.ListActivityExecutionsRequest,
+) (*workflowservice.ListActivityExecutionsResponse, error) {
+	namespaceID, err := h.namespaceRegistry.GetNamespaceID(namespace.Name(req.GetNamespace()))
+	if err != nil {
+		return nil, err
+	}
+	ctx = chasm.NewVisibilityManagerContext(ctx, h.visibilityManager)
+
+	// TODO(dan): validate page size against config
+	resp, err := chasm.ListExecutions[*Activity, *activitypb.ActivityListMemo](ctx, &chasm.ListExecutionsRequest{
+		NamespaceID:   namespaceID.String(),
+		NamespaceName: req.GetNamespace(),
+		PageSize:      int(req.GetPageSize()),
+		NextPageToken: req.GetNextPageToken(),
+		Query:         req.GetQuery(),
+	})
+	if err != nil {
+		return nil, err
+	}
+
+	executions := make([]*apiactivitypb.ActivityExecutionListInfo, 0, len(resp.Executions))
+	for _, exec := range resp.Executions {
+		info := &apiactivitypb.ActivityExecutionListInfo{
+			// From visibility system fields:
+			ActivityId:           exec.BusinessID,
+			RunId:                exec.RunID,
+			ScheduleTime:         timestamppb.New(exec.StartTime),
+			CloseTime:            timestamppb.New(exec.CloseTime),
+			StateTransitionCount: exec.StateTransitionCount,
+			StateSizeBytes:       exec.HistorySizeBytes,
+			// TODO: SearchAttributes from exec.CustomSearchAttributes
+
+			// From memo (fields not in visibility system):
+			ActivityType: &commonpb.ActivityType{Name: exec.ChasmMemo.GetActivityType()},
+			TaskQueue:    exec.ChasmMemo.GetTaskQueue(),
+			Status:       activityStatusFromInternal(exec.ChasmMemo.GetStatus()),
+		}
+		if !exec.CloseTime.IsZero() && !exec.StartTime.IsZero() {
+			info.ExecutionDuration = durationpb.New(exec.CloseTime.Sub(exec.StartTime))
+		}
+
+		executions = append(executions, info)
+	}
+
+	return &workflowservice.ListActivityExecutionsResponse{
+		Executions:    executions,
+		NextPageToken: resp.NextPageToken,
+	}, nil
+}
+
+// activityStatusFromInternal converts internal activity status to API status.
+func activityStatusFromInternal(status activitypb.ActivityExecutionStatus) enumspb.ActivityExecutionStatus {
+	switch status {
+	case activitypb.ACTIVITY_EXECUTION_STATUS_SCHEDULED,
+		activitypb.ACTIVITY_EXECUTION_STATUS_STARTED,
+		activitypb.ACTIVITY_EXECUTION_STATUS_CANCEL_REQUESTED:
+		return enumspb.ACTIVITY_EXECUTION_STATUS_RUNNING
+	case activitypb.ACTIVITY_EXECUTION_STATUS_COMPLETED:
+		return enumspb.ACTIVITY_EXECUTION_STATUS_COMPLETED
+	case activitypb.ACTIVITY_EXECUTION_STATUS_FAILED:
+		return enumspb.ACTIVITY_EXECUTION_STATUS_FAILED
+	case activitypb.ACTIVITY_EXECUTION_STATUS_CANCELED:
+		return enumspb.ACTIVITY_EXECUTION_STATUS_CANCELED
+	case activitypb.ACTIVITY_EXECUTION_STATUS_TERMINATED:
+		return enumspb.ACTIVITY_EXECUTION_STATUS_TERMINATED
+	case activitypb.ACTIVITY_EXECUTION_STATUS_TIMED_OUT:
+		return enumspb.ACTIVITY_EXECUTION_STATUS_TIMED_OUT
+	default:
+		return enumspb.ACTIVITY_EXECUTION_STATUS_UNSPECIFIED
+	}
 }
 
 // TerminateActivityExecution terminates a standalone activity execution
