@@ -8,6 +8,12 @@ A step-by-step guide to implementing `ListActivityExecutions` and `CountActivity
 
 Create search attribute definitions for the Activity component.
 
+**Key design decision:** Use `SearchAttributeFieldLowCardinalityKeyword01` for `ActivityStatus` because:
+- Status has low cardinality (few possible values: Running, Completed, Failed, etc.)
+- Enables `COUNT GROUP BY ActivityStatus` queries for dashboard summaries
+
+See `chasm/lib/tests/payload.go` for the reference pattern using `PayloadExecutionStatusSearchAttribute`.
+
 [chasm/lib/activity/activity.go](https://github.com/temporalio/temporal/blob/main/chasm/lib/activity/activity.go#L26) - Add after imports, before the `ActivityStore` interface:
 
 ```go
@@ -19,8 +25,9 @@ const (
 
 // Activity search attributes mapped to CHASM fields
 var (
-	ActivityStatusSearchAttribute = chasm.NewSearchAttributeKeyword(ActivityStatusSAAlias, chasm.SearchAttributeFieldKeyword01)
-	ActivityTypeSearchAttribute   = chasm.NewSearchAttributeKeyword(ActivityTypeSAAlias, chasm.SearchAttributeFieldKeyword02)
+	// Use LowCardinalityKeyword for status to support GROUP BY aggregations
+	ActivityStatusSearchAttribute = chasm.NewSearchAttributeKeyword(ActivityStatusSAAlias, chasm.SearchAttributeFieldLowCardinalityKeyword01)
+	ActivityTypeSearchAttribute   = chasm.NewSearchAttributeKeyword(ActivityTypeSAAlias, chasm.SearchAttributeFieldKeyword01)
 
 	// Compile-time interface checks
 	_ chasm.VisibilitySearchAttributesProvider = (*Activity)(nil)
@@ -229,12 +236,13 @@ func activityStatusFromInternal(status activitypb.ActivityExecutionStatus) enums
 
 ## Step 7: Implement CountActivityExecutions in Frontend Handler
 
-Add the `CountActivityExecutions` method to the frontend handler.
+Add the `CountActivityExecutions` method to the frontend handler. This now supports GROUP BY queries.
 
 [chasm/lib/activity/frontend.go](https://github.com/temporalio/temporal/blob/main/chasm/lib/activity/frontend.go#L278) - Add after `ListActivityExecutions`:
 
 ```go
 // CountActivityExecutions counts activity executions matching the given query.
+// Supports GROUP BY queries on low-cardinality fields like ActivityStatus.
 func (h *frontendHandler) CountActivityExecutions(
 	ctx context.Context,
 	req *workflowservice.CountActivityExecutionsRequest,
@@ -262,8 +270,18 @@ func (h *frontendHandler) CountActivityExecutions(
 		return nil, err
 	}
 
+	// Convert groups if present (for GROUP BY queries)
+	var groups []*workflowservice.CountActivityExecutionsResponse_AggregationGroup
+	for _, g := range resp.Groups {
+		groups = append(groups, &workflowservice.CountActivityExecutionsResponse_AggregationGroup{
+			GroupValues: g.Values,
+			Count:       g.Count,
+		})
+	}
+
 	return &workflowservice.CountActivityExecutionsResponse{
-		Count: resp.Count,
+		Count:  resp.Count,
+		Groups: groups,
 	}, nil
 }
 ```
@@ -443,4 +461,12 @@ ActivityId = 'my-activity-id'
 
 -- Combined query
 ActivityStatus = 'ACTIVITY_EXECUTION_STATUS_STARTED' AND ActivityType = 'process-order'
+
+-- Count with GROUP BY status (requires LowCardinalityKeyword field)
+GROUP BY `ActivityStatus`
+
+-- Count with filter and GROUP BY
+ActivityType = 'process-order' GROUP BY `ActivityStatus`
 ```
+
+**Note:** GROUP BY only works on low-cardinality keyword fields (like `ActivityStatus`). Attempting GROUP BY on regular fields will return an error.
