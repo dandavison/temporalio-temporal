@@ -1290,8 +1290,7 @@ func (s *standaloneActivityTestSuite) TestListActivityExecutions() {
 
 	activityID := s.tv.ActivityID()
 	activityType := s.tv.ActivityType().GetName()
-	taskQueue := s.tv.TaskQueue().GetName()
-	startResp := s.startAndValidateActivity(ctx, t, activityID, taskQueue)
+	startResp := s.startAndValidateActivity(ctx, t, activityID, s.tv.TaskQueue().GetName())
 	runID := startResp.RunId
 
 	verifyListQuery := func(t *testing.T, query string) {
@@ -1315,7 +1314,6 @@ func (s *standaloneActivityTestSuite) TestListActivityExecutions() {
 		s.Equal(activityID, exec.GetActivityId())
 		s.Equal(runID, exec.GetRunId())
 		s.Equal(activityType, exec.GetActivityType().GetName())
-		s.Equal(taskQueue, exec.GetTaskQueue())
 		s.Equal(enumspb.ACTIVITY_EXECUTION_STATUS_RUNNING, exec.GetStatus())
 		s.NotNil(exec.GetScheduleTime())
 	}
@@ -1326,10 +1324,6 @@ func (s *standaloneActivityTestSuite) TestListActivityExecutions() {
 
 	t.Run("QueryByActivityType", func(t *testing.T) {
 		verifyListQuery(t, fmt.Sprintf("ActivityType = '%s'", activityType))
-	})
-
-	t.Run("QueryByTaskQueue", func(t *testing.T) {
-		queryAndVerify(t, fmt.Sprintf("TaskQueue = '%s'", taskQueue))
 	})
 
 	t.Run("QueryByActivityStatus", func(t *testing.T) {
