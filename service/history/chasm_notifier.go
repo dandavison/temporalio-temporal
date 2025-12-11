@@ -4,6 +4,7 @@ import (
 	"sync"
 
 	"go.temporal.io/server/chasm"
+	"go.temporal.io/server/common/collection"
 )
 
 type subscriptionTracker struct {
@@ -13,16 +14,21 @@ type subscriptionTracker struct {
 
 // ChasmNotifier allows subscribers to receive notifications relating to a CHASM execution.
 type ChasmNotifier struct {
-	// TODO(dan): use ShardedConcurrentTxMap
-	executions map[chasm.ExecutionKey]*subscriptionTracker
-	// TODO(dan): consider RWMutex
-	lock sync.Mutex
+	executions collection.ConcurrentTxMap
 }
 
 // NewChasmNotifier creates a new instance of ChasmNotifier.
 func NewChasmNotifier() *ChasmNotifier {
+	hashFn := func(key interface{}) uint32 {
+		k := key.(chasm.ExecutionKey)
+		var h uint32
+		for _, c := range k.NamespaceID + k.BusinessID + k.RunID {
+			h = h*31 + uint32(c)
+		}
+		return h
+	}
 	return &ChasmNotifier{
-		executions: make(map[chasm.ExecutionKey]*subscriptionTracker),
+		executions: collection.NewShardedConcurrentTxMap(1024, hashFn),
 	}
 }
 
@@ -33,32 +39,32 @@ func NewChasmNotifier() *ChasmNotifier {
 // arrange for the unsubscribe function to be called when they have finished monitoring the channel
 // for notifications. It is safe to call the unsubscribe function multiple times and concurrently.
 func (n *ChasmNotifier) Subscribe(key chasm.ExecutionKey) (<-chan struct{}, func()) {
-	n.lock.Lock()
-	defer n.lock.Unlock()
-	s, ok := n.executions[key]
-	if !ok {
-		s = &subscriptionTracker{ch: make(chan struct{})}
-		n.executions[key] = s
+	newTracker := &subscriptionTracker{ch: make(chan struct{}), numSubscribers: 1}
+	result, existed, _ := n.executions.PutOrDo(key, newTracker, func(_, v interface{}) error {
+		v.(*subscriptionTracker).numSubscribers++
+		return nil
+	})
+	s := result.(*subscriptionTracker)
+	if existed {
+		// newTracker wasn't used; close its channel to avoid leaking
+		close(newTracker.ch)
 	}
-	s.numSubscribers++
 	return s.ch, sync.OnceFunc(func() {
-		n.lock.Lock()
-		defer n.lock.Unlock()
-		if n.executions[key] == s {
-			s.numSubscribers--
-			if s.numSubscribers == 0 {
-				delete(n.executions, key)
+		n.executions.RemoveIf(key, func(_, v interface{}) bool {
+			tracker := v.(*subscriptionTracker)
+			if tracker != s {
+				return false
 			}
-		}
+			tracker.numSubscribers--
+			return tracker.numSubscribers == 0
+		})
 	})
 }
 
 // Notify notifies all subscribers subscribed to key by closing the channel.
 func (n *ChasmNotifier) Notify(key chasm.ExecutionKey) {
-	n.lock.Lock()
-	defer n.lock.Unlock()
-	if s, ok := n.executions[key]; ok {
-		close(s.ch)
-		delete(n.executions, key)
-	}
+	n.executions.RemoveIf(key, func(_, v interface{}) bool {
+		close(v.(*subscriptionTracker).ch)
+		return true
+	})
 }

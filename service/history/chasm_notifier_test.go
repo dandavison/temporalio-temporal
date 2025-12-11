@@ -78,14 +78,14 @@ func TestChasmNotifier_ConstantMemory(t *testing.T) {
 		RunID:       "run",
 	}
 	notifier := NewChasmNotifier()
-	require.Empty(t, notifier.executions)
+	require.Equal(t, 0, notifier.executions.Len())
 	notifier.Subscribe(key)
-	require.Len(t, notifier.executions, 1)
+	require.Equal(t, 1, notifier.executions.Len())
 	notifier.Notify(key)
-	require.Empty(t, notifier.executions)
+	require.Equal(t, 0, notifier.executions.Len())
 	// Ignored: no subscribers
 	notifier.Notify(key)
-	require.Empty(t, notifier.executions)
+	require.Equal(t, 0, notifier.executions.Len())
 }
 
 func TestChasmNotifier_Unsubscribe(t *testing.T) {
