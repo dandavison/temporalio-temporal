@@ -1380,6 +1380,56 @@ func (s *standaloneActivityTestSuite) TestCountActivityExecutions() {
 	})
 }
 
+func (s *standaloneActivityTestSuite) TestCountActivityExecutions_GroupBy() {
+	t := s.T()
+	ctx, cancel := context.WithTimeout(t.Context(), 30*time.Second)
+	defer cancel()
+
+	activityType := &commonpb.ActivityType{Name: "count-groupby-test-type"}
+	taskQueue := s.tv.TaskQueue().GetName()
+
+	for i := range 3 {
+		activityID := fmt.Sprintf("%s-%d", activityType.Name, i)
+		resp, err := s.startActivityWithType(ctx, activityID, taskQueue, activityType)
+		require.NoError(t, err)
+		require.NotEmpty(t, resp.GetRunId())
+	}
+
+	var groups []*workflowservice.CountActivityExecutionsResponse_AggregationGroup
+	s.Eventually(
+		func() bool {
+			resp, err := s.FrontendClient().CountActivityExecutions(ctx, &workflowservice.CountActivityExecutionsRequest{
+				Namespace: s.Namespace().String(),
+				Query:     fmt.Sprintf("ActivityType = '%s' GROUP BY ActivityStatus", activityType.Name),
+			})
+			if err != nil || len(resp.GetGroups()) != 1 || resp.GetGroups()[0].GetCount() != 3 {
+				return false
+			}
+			groups = resp.GetGroups()
+			return true
+		},
+		testcore.WaitForESToSettle,
+		100*time.Millisecond,
+	)
+
+	require.Len(t, groups, 1)
+	var groupValue string
+	require.NoError(t, payload.Decode(groups[0].GetGroupValues()[0], &groupValue))
+	s.Equal("Scheduled", groupValue)
+}
+
+func (s *standaloneActivityTestSuite) TestCountActivityExecutions_GroupByUnsupportedField() {
+	ctx := testcore.NewContext()
+	_, err := s.FrontendClient().CountActivityExecutions(ctx, &workflowservice.CountActivityExecutionsRequest{
+		Namespace: s.Namespace().String(),
+		Query:     "GROUP BY ActivityType",
+	})
+	s.Error(err)
+	_, ok := err.(*serviceerror.InvalidArgument)
+	s.True(ok, "expected InvalidArgument error, got %T", err)
+	s.Contains(err.Error(), "'GROUP BY' clause is only supported for ExecutionStatus")
+}
+
 func (s *standaloneActivityTestSuite) TestDescribeActivityExecution_DeadlineExceeded() {
 	t := s.T()
 	ctx := testcore.NewContext()
@@ -1884,10 +1934,14 @@ func (s *standaloneActivityTestSuite) validateBaseActivityResponse(
 }
 
 func (s *standaloneActivityTestSuite) startActivity(ctx context.Context, activityID string, taskQueue string) (*workflowservice.StartActivityExecutionResponse, error) {
+	return s.startActivityWithType(ctx, activityID, taskQueue, s.tv.ActivityType())
+}
+
+func (s *standaloneActivityTestSuite) startActivityWithType(ctx context.Context, activityID string, taskQueue string, activityType *commonpb.ActivityType) (*workflowservice.StartActivityExecutionResponse, error) {
 	return s.FrontendClient().StartActivityExecution(ctx, &workflowservice.StartActivityExecutionRequest{
 		Namespace:    s.Namespace().String(),
 		ActivityId:   activityID,
-		ActivityType: s.tv.ActivityType(),
+		ActivityType: activityType,
 		Identity:     s.tv.WorkerIdentity(),
 		Input:        defaultInput,
 		TaskQueue: &taskqueuepb.TaskQueue{
