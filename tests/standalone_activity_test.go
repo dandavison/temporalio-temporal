@@ -1295,24 +1295,22 @@ func (s *standaloneActivityTestSuite) TestListActivityExecutions() {
 
 	verifyListQuery := func(t *testing.T, query string) {
 		t.Helper()
-		var exec *activitypb.ActivityExecutionListInfo
+		var resp *workflowservice.ListActivityExecutionsResponse
 		s.Eventually(
 			func() bool {
-				resp, err := s.FrontendClient().ListActivityExecutions(ctx, &workflowservice.ListActivityExecutionsRequest{
+				var err error
+				resp, err = s.FrontendClient().ListActivityExecutions(ctx, &workflowservice.ListActivityExecutionsRequest{
 					Namespace: s.Namespace().String(),
 					PageSize:  10,
 					Query:     query,
 				})
-				if err != nil || len(resp.GetExecutions()) != 1 {
-					return false
-				}
-				exec = resp.GetExecutions()[0]
-				return true
+				return err == nil && len(resp.GetExecutions()) >= 1
 			},
 			testcore.WaitForESToSettle,
 			100*time.Millisecond,
 		)
-		require.NotNil(t, exec)
+		require.Len(t, resp.GetExecutions(), 1, "expected exactly 1 result for query: %s", query)
+		exec := resp.GetExecutions()[0]
 		s.Equal(activityID, exec.GetActivityId())
 		s.Equal(runID, exec.GetRunId())
 		s.Equal(activityType, exec.GetActivityType().GetName())
@@ -1329,11 +1327,44 @@ func (s *standaloneActivityTestSuite) TestListActivityExecutions() {
 	})
 
 	t.Run("QueryByActivityStatus", func(t *testing.T) {
-		verifyListQuery(t, "ActivityStatus = 'Scheduled'")
+		verifyListQuery(t, fmt.Sprintf("ActivityStatus = 'Scheduled' AND ActivityType = '%s'", activityType))
 	})
 
 	t.Run("QueryByMultipleFields", func(t *testing.T) {
 		verifyListQuery(t, fmt.Sprintf("ActivityId = '%s' AND ActivityType = '%s'", activityID, activityType))
+	})
+
+	t.Run("InvalidQuery", func(t *testing.T) {
+		_, err := s.FrontendClient().ListActivityExecutions(ctx, &workflowservice.ListActivityExecutionsRequest{
+			Namespace: s.Namespace().String(),
+			PageSize:  10,
+			Query:     "invalid query syntax !!!",
+		})
+		s.Error(err)
+		_, ok := err.(*serviceerror.InvalidArgument)
+		s.True(ok, "expected InvalidArgument error, got %T", err)
+	})
+
+	t.Run("InvalidSearchAttribute", func(t *testing.T) {
+		_, err := s.FrontendClient().ListActivityExecutions(ctx, &workflowservice.ListActivityExecutionsRequest{
+			Namespace: s.Namespace().String(),
+			PageSize:  10,
+			Query:     "NonExistentField = 'value'",
+		})
+		s.Error(err)
+		_, ok := err.(*serviceerror.InvalidArgument)
+		s.True(ok, "expected InvalidArgument error, got %T", err)
+	})
+
+	t.Run("NamespaceNotFound", func(t *testing.T) {
+		_, err := s.FrontendClient().ListActivityExecutions(ctx, &workflowservice.ListActivityExecutionsRequest{
+			Namespace: "non-existent-namespace",
+			PageSize:  10,
+			Query:     "",
+		})
+		s.Error(err)
+		_, ok := err.(*serviceerror.NamespaceNotFound)
+		s.True(ok, "expected NamespaceNotFound error, got %T", err)
 	})
 }
 
@@ -1390,26 +1421,25 @@ func (s *standaloneActivityTestSuite) TestCountActivityExecutions() {
 			require.NotEmpty(t, resp.GetRunId())
 		}
 
-		var groups []*workflowservice.CountActivityExecutionsResponse_AggregationGroup
+		query := fmt.Sprintf("ActivityType = '%s' GROUP BY ActivityStatus", groupByType.Name)
+		var resp *workflowservice.CountActivityExecutionsResponse
 		s.Eventually(
 			func() bool {
-				resp, err := s.FrontendClient().CountActivityExecutions(ctx, &workflowservice.CountActivityExecutionsRequest{
+				var err error
+				resp, err = s.FrontendClient().CountActivityExecutions(ctx, &workflowservice.CountActivityExecutionsRequest{
 					Namespace: s.Namespace().String(),
-					Query:     fmt.Sprintf("ActivityType = '%s' GROUP BY ActivityStatus", groupByType.Name),
+					Query:     query,
 				})
-				if err != nil || len(resp.GetGroups()) != 1 || resp.GetGroups()[0].GetCount() != 3 {
-					return false
-				}
-				groups = resp.GetGroups()
-				return true
+				return err == nil && resp.GetCount() == 3
 			},
 			testcore.WaitForESToSettle,
 			100*time.Millisecond,
 		)
 
-		require.Len(t, groups, 1)
+		require.Len(t, resp.GetGroups(), 1)
+		s.Equal(int64(3), resp.GetGroups()[0].GetCount())
 		var groupValue string
-		require.NoError(t, payload.Decode(groups[0].GetGroupValues()[0], &groupValue))
+		require.NoError(t, payload.Decode(resp.GetGroups()[0].GetGroupValues()[0], &groupValue))
 		s.Equal("Scheduled", groupValue)
 	})
 
@@ -1422,6 +1452,36 @@ func (s *standaloneActivityTestSuite) TestCountActivityExecutions() {
 		_, ok := err.(*serviceerror.InvalidArgument)
 		s.True(ok, "expected InvalidArgument error, got %T", err)
 		s.Contains(err.Error(), "'GROUP BY' clause is only supported for ExecutionStatus")
+	})
+
+	t.Run("InvalidQuery", func(t *testing.T) {
+		_, err := s.FrontendClient().CountActivityExecutions(ctx, &workflowservice.CountActivityExecutionsRequest{
+			Namespace: s.Namespace().String(),
+			Query:     "invalid query syntax !!!",
+		})
+		s.Error(err)
+		_, ok := err.(*serviceerror.InvalidArgument)
+		s.True(ok, "expected InvalidArgument error, got %T", err)
+	})
+
+	t.Run("InvalidSearchAttribute", func(t *testing.T) {
+		_, err := s.FrontendClient().CountActivityExecutions(ctx, &workflowservice.CountActivityExecutionsRequest{
+			Namespace: s.Namespace().String(),
+			Query:     "NonExistentField = 'value'",
+		})
+		s.Error(err)
+		_, ok := err.(*serviceerror.InvalidArgument)
+		s.True(ok, "expected InvalidArgument error, got %T", err)
+	})
+
+	t.Run("NamespaceNotFound", func(t *testing.T) {
+		_, err := s.FrontendClient().CountActivityExecutions(ctx, &workflowservice.CountActivityExecutionsRequest{
+			Namespace: "non-existent-namespace",
+			Query:     "",
+		})
+		s.Error(err)
+		_, ok := err.(*serviceerror.NamespaceNotFound)
+		s.True(ok, "expected NamespaceNotFound error, got %T", err)
 	})
 }
 
