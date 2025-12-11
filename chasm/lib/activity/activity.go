@@ -232,10 +232,11 @@ func (a *Activity) HandleFailed(
 	}
 
 	if shouldRetry {
-		if err := TransitionRescheduled.Apply(a, ctx, rescheduleEvent{
+		err := TransitionRescheduled.Apply(a, ctx, rescheduleEvent{
 			retryInterval: retryInterval,
 			failure:       failure,
-		}); err != nil {
+		})
+		if err != nil {
 			return nil, err
 		}
 
