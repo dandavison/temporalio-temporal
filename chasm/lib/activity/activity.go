@@ -226,12 +226,22 @@ func (a *Activity) HandleFailed(
 
 	failure := input.Request.GetFailedRequest().GetFailure()
 
-	shouldRetry, retryInterval, err := a.shouldRetryOnFailure(ctx, failure)
+	var isRetryable bool
+	var overridingRetryInterval time.Duration
+	if appFailure := failure.GetApplicationFailureInfo(); appFailure != nil {
+		isRetryable = !appFailure.GetNonRetryable() && !slices.Contains(
+			a.GetRetryPolicy().GetNonRetryableErrorTypes(),
+			appFailure.GetType(),
+		)
+		overridingRetryInterval = appFailure.GetNextRetryDelay().AsDuration()
+	}
+
+	shouldRetry, retryInterval, err := a.shouldRetry(ctx, overridingRetryInterval)
 	if err != nil {
 		return nil, err
 	}
 
-	if shouldRetry {
+	if isRetryable && shouldRetry {
 		err := TransitionRescheduled.Apply(a, ctx, rescheduleEvent{
 			retryInterval: retryInterval,
 			failure:       failure,
@@ -326,26 +336,6 @@ func (a *Activity) handleCancellationRequested(ctx chasm.MutableContext, req *ac
 	}
 
 	return &activitypb.RequestCancelActivityExecutionResponse{}, nil
-}
-
-func (a *Activity) shouldRetryOnFailure(ctx chasm.Context, failure *failurepb.Failure) (bool, time.Duration, error) {
-	var isRetryable bool
-
-	if failure.GetApplicationFailureInfo() != nil {
-		appFailure := failure.GetApplicationFailureInfo()
-		isRetryable = !appFailure.GetNonRetryable() && !slices.Contains(
-			a.GetRetryPolicy().GetNonRetryableErrorTypes(),
-			appFailure.GetType(),
-		)
-	}
-
-	if !isRetryable {
-		return false, 0, nil
-	}
-
-	overridingRetryInterval := failure.GetApplicationFailureInfo().GetNextRetryDelay().AsDuration()
-
-	return a.shouldRetry(ctx, overridingRetryInterval)
 }
 
 // recordScheduleToStartOrCloseTimeoutFailure records schedule-to-start or schedule-to-close timeouts. Such timeouts are not retried so we
