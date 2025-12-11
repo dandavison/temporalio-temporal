@@ -12,6 +12,7 @@ import (
 	commonpb "go.temporal.io/api/common/v1"
 	enumspb "go.temporal.io/api/enums/v1"
 	failurepb "go.temporal.io/api/failure/v1"
+	"go.temporal.io/api/operatorservice/v1"
 	"go.temporal.io/api/serviceerror"
 	taskqueuepb "go.temporal.io/api/taskqueue/v1"
 	"go.temporal.io/api/workflowservice/v1"
@@ -1330,8 +1331,71 @@ func (s *standaloneActivityTestSuite) TestListActivityExecutions() {
 		verifyListQuery(t, fmt.Sprintf("ActivityStatus = 'Scheduled' AND ActivityType = '%s'", activityType))
 	})
 
+	t.Run("QueryByTaskQueue", func(t *testing.T) {
+		verifyListQuery(t, fmt.Sprintf("ActivityTaskQueue = '%s' AND ActivityType = '%s'", s.tv.TaskQueue().GetName(), activityType))
+	})
+
 	t.Run("QueryByMultipleFields", func(t *testing.T) {
 		verifyListQuery(t, fmt.Sprintf("ActivityId = '%s' AND ActivityType = '%s'", activityID, activityType))
+	})
+
+	t.Run("QueryByCustomSearchAttribute", func(t *testing.T) {
+		customSAName := "ActivityCustomKeyword"
+		customSAValue := "custom-sa-test-value"
+
+		_, err := s.OperatorClient().AddSearchAttributes(ctx, &operatorservice.AddSearchAttributesRequest{
+			Namespace: s.Namespace().String(),
+			SearchAttributes: map[string]enumspb.IndexedValueType{
+				customSAName: enumspb.INDEXED_VALUE_TYPE_KEYWORD,
+			},
+		})
+		require.NoError(t, err)
+
+		s.Eventually(func() bool {
+			descResp, err := s.OperatorClient().ListSearchAttributes(ctx, &operatorservice.ListSearchAttributesRequest{
+				Namespace: s.Namespace().String(),
+			})
+			if err != nil {
+				return false
+			}
+			_, exists := descResp.CustomAttributes[customSAName]
+			return exists
+		}, 10*time.Second, 100*time.Millisecond)
+
+		customSAActivityID := "custom-sa-activity-id"
+		_, err = s.FrontendClient().StartActivityExecution(ctx, &workflowservice.StartActivityExecutionRequest{
+			Namespace:           s.Namespace().String(),
+			ActivityId:          customSAActivityID,
+			ActivityType:        &commonpb.ActivityType{Name: "custom-sa-activity-type"},
+			Identity:            s.tv.WorkerIdentity(),
+			Input:               defaultInput,
+			TaskQueue:           &taskqueuepb.TaskQueue{Name: s.tv.TaskQueue().GetName()},
+			StartToCloseTimeout: durationpb.New(1 * time.Minute),
+			RequestId:           s.tv.RequestID(),
+			SearchAttributes: &commonpb.SearchAttributes{
+				IndexedFields: map[string]*commonpb.Payload{
+					customSAName: payload.EncodeString(customSAValue),
+				},
+			},
+		})
+		require.NoError(t, err)
+
+		var resp *workflowservice.ListActivityExecutionsResponse
+		s.Eventually(
+			func() bool {
+				var err error
+				resp, err = s.FrontendClient().ListActivityExecutions(ctx, &workflowservice.ListActivityExecutionsRequest{
+					Namespace: s.Namespace().String(),
+					PageSize:  10,
+					Query:     fmt.Sprintf("%s = '%s'", customSAName, customSAValue),
+				})
+				return err == nil && len(resp.GetExecutions()) >= 1
+			},
+			testcore.WaitForESToSettle,
+			100*time.Millisecond,
+		)
+		require.Len(t, resp.GetExecutions(), 1)
+		s.Equal(customSAActivityID, resp.GetExecutions()[0].GetActivityId())
 	})
 
 	t.Run("InvalidQuery", func(t *testing.T) {
@@ -1410,6 +1474,10 @@ func (s *standaloneActivityTestSuite) TestCountActivityExecutions() {
 		verifyCountQuery(t, fmt.Sprintf("ActivityStatus = 'Scheduled' AND ActivityType = '%s'", activityType), 1)
 	})
 
+	t.Run("CountByTaskQueue", func(t *testing.T) {
+		verifyCountQuery(t, fmt.Sprintf("ActivityTaskQueue = '%s' AND ActivityType = '%s'", s.tv.TaskQueue().GetName(), activityType), 1)
+	})
+
 	t.Run("GroupByActivityStatus", func(t *testing.T) {
 		groupByType := &commonpb.ActivityType{Name: "count-groupby-test-type"}
 		taskQueue := s.tv.TaskQueue().GetName()
@@ -1441,6 +1509,67 @@ func (s *standaloneActivityTestSuite) TestCountActivityExecutions() {
 		var groupValue string
 		require.NoError(t, payload.Decode(resp.GetGroups()[0].GetGroupValues()[0], &groupValue))
 		s.Equal("Scheduled", groupValue)
+	})
+
+	t.Run("CountByCustomSearchAttribute", func(t *testing.T) {
+		customSAName := "ActivityCountCustomKeyword"
+		customSAValue := "count-custom-sa-value"
+
+		_, err := s.OperatorClient().AddSearchAttributes(ctx, &operatorservice.AddSearchAttributesRequest{
+			Namespace: s.Namespace().String(),
+			SearchAttributes: map[string]enumspb.IndexedValueType{
+				customSAName: enumspb.INDEXED_VALUE_TYPE_KEYWORD,
+			},
+		})
+		require.NoError(t, err)
+
+		s.Eventually(func() bool {
+			descResp, err := s.OperatorClient().ListSearchAttributes(ctx, &operatorservice.ListSearchAttributesRequest{
+				Namespace: s.Namespace().String(),
+			})
+			if err != nil {
+				return false
+			}
+			_, exists := descResp.CustomAttributes[customSAName]
+			return exists
+		}, 10*time.Second, 100*time.Millisecond)
+
+		for i := range 2 {
+			_, err := s.FrontendClient().StartActivityExecution(ctx, &workflowservice.StartActivityExecutionRequest{
+				Namespace:           s.Namespace().String(),
+				ActivityId:          fmt.Sprintf("count-custom-sa-%d", i),
+				ActivityType:        &commonpb.ActivityType{Name: "count-custom-sa-type"},
+				Identity:            s.tv.WorkerIdentity(),
+				Input:               defaultInput,
+				TaskQueue:           &taskqueuepb.TaskQueue{Name: s.tv.TaskQueue().GetName()},
+				StartToCloseTimeout: durationpb.New(1 * time.Minute),
+				RequestId:           s.tv.RequestID(),
+				SearchAttributes: &commonpb.SearchAttributes{
+					IndexedFields: map[string]*commonpb.Payload{
+						customSAName: payload.EncodeString(customSAValue),
+					},
+				},
+			})
+			require.NoError(t, err)
+		}
+
+		var count int64
+		s.Eventually(
+			func() bool {
+				resp, err := s.FrontendClient().CountActivityExecutions(ctx, &workflowservice.CountActivityExecutionsRequest{
+					Namespace: s.Namespace().String(),
+					Query:     fmt.Sprintf("%s = '%s'", customSAName, customSAValue),
+				})
+				if err != nil || resp.GetCount() != 2 {
+					return false
+				}
+				count = resp.GetCount()
+				return true
+			},
+			testcore.WaitForESToSettle,
+			100*time.Millisecond,
+		)
+		s.Equal(int64(2), count)
 	})
 
 	t.Run("GroupByUnsupportedField", func(t *testing.T) {
