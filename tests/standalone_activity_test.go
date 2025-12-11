@@ -1337,6 +1337,49 @@ func (s *standaloneActivityTestSuite) TestListActivityExecutions() {
 	})
 }
 
+func (s *standaloneActivityTestSuite) TestCountActivityExecutions() {
+	t := s.T()
+	ctx, cancel := context.WithTimeout(t.Context(), 30*time.Second)
+	defer cancel()
+
+	activityID := s.tv.ActivityID()
+	activityType := s.tv.ActivityType().GetName()
+	s.startAndValidateActivity(ctx, t, activityID, s.tv.TaskQueue().GetName())
+
+	verifyCountQuery := func(t *testing.T, query string, expectedCount int) {
+		t.Helper()
+		var count int64
+		s.Eventually(
+			func() bool {
+				resp, err := s.FrontendClient().CountActivityExecutions(ctx, &workflowservice.CountActivityExecutionsRequest{
+					Namespace: s.Namespace().String(),
+					Query:     query,
+				})
+				if err != nil || resp.GetCount() < 1 {
+					return false
+				}
+				count = resp.GetCount()
+				return true
+			},
+			testcore.WaitForESToSettle,
+			100*time.Millisecond,
+		)
+		s.GreaterOrEqual(count, int64(expectedCount))
+	}
+
+	t.Run("CountByActivityId", func(t *testing.T) {
+		verifyCountQuery(t, fmt.Sprintf("ActivityId = '%s'", activityID), 1)
+	})
+
+	t.Run("CountByActivityType", func(t *testing.T) {
+		verifyCountQuery(t, fmt.Sprintf("ActivityType = '%s'", activityType), 1)
+	})
+
+	t.Run("CountByActivityStatus", func(t *testing.T) {
+		verifyCountQuery(t, fmt.Sprintf("ActivityStatus = 'Scheduled' AND ActivityType = '%s'", activityType), 1)
+	})
+}
+
 func (s *standaloneActivityTestSuite) TestDescribeActivityExecution_DeadlineExceeded() {
 	t := s.T()
 	ctx := testcore.NewContext()
