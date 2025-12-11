@@ -236,24 +236,16 @@ func (a *Activity) HandleFailed(
 		overridingRetryInterval = appFailure.GetNextRetryDelay().AsDuration()
 	}
 
-	shouldRetry, retryInterval, err := a.shouldRetry(ctx, overridingRetryInterval)
-	if err != nil {
-		return nil, err
-	}
-
-	if isRetryable && shouldRetry {
-		err := TransitionRescheduled.Apply(a, ctx, rescheduleEvent{
-			retryInterval: retryInterval,
-			failure:       failure,
-		})
+	if isRetryable {
+		rescheduled, err := a.tryReschedule(ctx, overridingRetryInterval, failure)
 		if err != nil {
 			return nil, err
 		}
-
-		return &historyservice.RespondActivityTaskFailedResponse{}, nil
+		if rescheduled {
+			return &historyservice.RespondActivityTaskFailedResponse{}, nil
+		}
 	}
 
-	// No more retries, transition to failed state
 	if err := TransitionFailed.Apply(a, ctx, input.Request); err != nil {
 		return nil, err
 	}
@@ -402,6 +394,26 @@ func (a *Activity) shouldRetry(ctx chasm.Context, overridingRetryInterval time.D
 		return false, 0, err
 	}
 	return enoughAttempts && enoughTime, retryInterval, nil
+}
+
+// tryReschedule attempts to reschedule the activity for retry. Returns true if rescheduled, false if
+// retry is not possible (caller should handle the non-retry case).
+func (a *Activity) tryReschedule(
+	ctx chasm.MutableContext,
+	overridingRetryInterval time.Duration,
+	failure *failurepb.Failure,
+) (bool, error) {
+	shouldRetry, retryInterval, err := a.shouldRetry(ctx, overridingRetryInterval)
+	if err != nil {
+		return false, err
+	}
+	if !shouldRetry {
+		return false, nil
+	}
+	return true, TransitionRescheduled.Apply(a, ctx, rescheduleEvent{
+		retryInterval: retryInterval,
+		failure:       failure,
+	})
 }
 
 // hasEnoughTimeForRetry checks if there is enough time left in the schedule-to-close timeout. If sufficient time
