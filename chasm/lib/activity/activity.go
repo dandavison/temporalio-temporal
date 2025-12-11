@@ -26,15 +26,16 @@ import (
 )
 
 const (
-	ActivityTypeSAAlias      = "ActivityType"
-	ActivityStatusSAAlias    = "ActivityStatus"
-	ActivityTaskQueueSAAlias = "ActivityTaskQueue"
+	TypeSAAlias   = "ActivityType"
+	StatusSAAlias = "ExecutionStatus"
+	// TODO(awln): this should be "TaskQueue"
+	TaskQueueSAAlias = "ActivityTaskQueue"
 )
 
 var (
-	ActivityTypeSearchAttribute      = chasm.NewSearchAttributeKeyword(ActivityTypeSAAlias, chasm.SearchAttributeFieldKeyword01)
-	ActivityStatusSearchAttribute    = chasm.NewSearchAttributeKeyword(ActivityStatusSAAlias, chasm.SearchAttributeFieldLowCardinalityKeyword01)
-	ActivityTaskQueueSearchAttribute = chasm.NewSearchAttributeKeyword(ActivityTaskQueueSAAlias, chasm.SearchAttributeFieldKeyword02)
+	TypeSearchAttribute      = chasm.NewSearchAttributeKeyword(TypeSAAlias, chasm.SearchAttributeFieldKeyword01)
+	StatusSearchAttribute    = chasm.NewSearchAttributeKeyword(StatusSAAlias, chasm.SearchAttributeFieldLowCardinalityKeyword01)
+	TaskQueueSearchAttribute = chasm.NewSearchAttributeKeyword(TaskQueueSAAlias, chasm.SearchAttributeFieldKeyword02)
 )
 
 var _ chasm.VisibilitySearchAttributesProvider = (*Activity)(nil)
@@ -663,9 +664,9 @@ func (a *Activity) validateActivityTaskToken(
 // Returns the current search attribute values for this activity execution.
 func (a *Activity) SearchAttributes(_ chasm.Context) []chasm.SearchAttributeKeyValue {
 	return []chasm.SearchAttributeKeyValue{
-		ActivityTypeSearchAttribute.Value(a.GetActivityType().GetName()),
-		ActivityStatusSearchAttribute.Value(a.GetStatus().String()),
-		ActivityTaskQueueSearchAttribute.Value(a.GetTaskQueue().GetName()),
+		TypeSearchAttribute.Value(a.GetActivityType().GetName()),
+		StatusSearchAttribute.Value(a.GetStatus().String()),
+		TaskQueueSearchAttribute.Value(a.GetTaskQueue().GetName()),
 	}
 }
 
