@@ -34,9 +34,13 @@ func setStateStatus(
 			}
 
 		case enumsspb.WORKFLOW_EXECUTION_STATE_COMPLETED:
+			// CHASM standalone activities can be immediately canceled/failed without
+			// transitioning through Running state, so allow Failed and Canceled here.
 			if status != enumspb.WORKFLOW_EXECUTION_STATUS_TERMINATED &&
 				status != enumspb.WORKFLOW_EXECUTION_STATUS_TIMED_OUT &&
-				status != enumspb.WORKFLOW_EXECUTION_STATUS_CONTINUED_AS_NEW {
+				status != enumspb.WORKFLOW_EXECUTION_STATUS_CONTINUED_AS_NEW &&
+				status != enumspb.WORKFLOW_EXECUTION_STATUS_FAILED &&
+				status != enumspb.WORKFLOW_EXECUTION_STATUS_CANCELED {
 				return invalidStateTransitionErr(e.GetState(), state, status)
 			}
 
