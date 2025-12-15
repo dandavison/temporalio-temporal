@@ -174,6 +174,7 @@ func validateAndNormalizeStartActivityExecutionRequest(
 	blobSizeLimitWarn dynamicconfig.IntPropertyFnWithNamespaceFilter,
 	logger log.Logger,
 	maxIDLengthLimit int,
+	saMapperProvider searchattribute.MapperProvider,
 	saValidator *searchattribute.Validator,
 ) error {
 	if req.GetRequestId() == "" {
@@ -202,6 +203,7 @@ func validateAndNormalizeStartActivityExecutionRequest(
 	if req.GetSearchAttributes() != nil {
 		if err := validateAndNormalizeSearchAttributes(
 			req,
+			saMapperProvider,
 			saValidator); err != nil {
 			return err
 		}
@@ -251,15 +253,27 @@ func validateInputSize(
 
 func validateAndNormalizeSearchAttributes(
 	req *workflowservice.StartActivityExecutionRequest,
+	saMapperProvider searchattribute.MapperProvider,
 	saValidator *searchattribute.Validator,
 ) error {
 	namespaceName := req.GetNamespace()
 
-	if err := saValidator.Validate(req.SearchAttributes, namespaceName); err != nil {
+	// Unalias search attributes for validation. The validator expects unaliased format,
+	// but we don't modify the request since CHASM visibility expects the aliased format.
+	saToValidate := req.SearchAttributes
+	if saMapperProvider != nil && saToValidate != nil {
+		var err error
+		saToValidate, err = searchattribute.UnaliasFields(saMapperProvider, saToValidate, namespaceName)
+		if err != nil {
+			return err
+		}
+	}
+
+	if err := saValidator.Validate(saToValidate, namespaceName); err != nil {
 		return err
 	}
 
-	return saValidator.ValidateSize(req.SearchAttributes, namespaceName)
+	return saValidator.ValidateSize(saToValidate, namespaceName)
 }
 
 // ValidateDescribeActivityExecutionRequest validates DescribeActivityExecutionRequest.
