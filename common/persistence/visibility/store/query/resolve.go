@@ -38,7 +38,9 @@ func ResolveSearchAttributeAlias(
 			return sadefs.WorkflowID, saType, nil
 		}
 
-		// Handle ActivityId → WorkflowID transformation for standalone activities
+		// Handle ActivityId → WorkflowID transformation for standalone activities.
+		// TODO: Remove this hardcoded transformation. The visibility team will provide a better
+		// solution for CHASM component-defined search attribute aliases.
 		if name == sadefs.ActivityId {
 			saType, _ := saTypeMap.GetType(sadefs.WorkflowID)
 			return sadefs.WorkflowID, saType, nil

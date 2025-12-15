@@ -1299,6 +1299,8 @@ func (s *standaloneActivityTestSuite) TestListActivityExecutions() {
 	startResp := s.startAndValidateActivity(ctx, t, activityID, s.tv.TaskQueue().GetName())
 	runID := startResp.RunId
 
+	taskQueue := s.tv.TaskQueue().GetName()
+
 	verifyListQuery := func(t *testing.T, query string) {
 		t.Helper()
 		var resp *workflowservice.ListActivityExecutionsResponse
@@ -1317,11 +1319,17 @@ func (s *standaloneActivityTestSuite) TestListActivityExecutions() {
 		)
 		require.Len(t, resp.GetExecutions(), 1, "expected exactly 1 result for query: %s", query)
 		exec := resp.GetExecutions()[0]
+		// Verify all ActivityExecutionListInfo fields
 		s.Equal(activityID, exec.GetActivityId())
 		s.Equal(runID, exec.GetRunId())
 		s.Equal(activityType, exec.GetActivityType().GetName())
+		s.Equal(taskQueue, exec.GetTaskQueue())
 		s.Equal(enumspb.ACTIVITY_EXECUTION_STATUS_RUNNING, exec.GetStatus())
 		s.NotNil(exec.GetScheduleTime())
+		s.Nil(exec.GetCloseTime())         // Running activity has no close time
+		s.Nil(exec.GetExecutionDuration()) // Running activity has no execution duration
+		s.GreaterOrEqual(exec.GetStateSizeBytes(), int64(0))
+		s.GreaterOrEqual(exec.GetStateTransitionCount(), int64(0))
 	}
 
 	t.Run("QueryByActivityId", func(t *testing.T) {
@@ -1333,11 +1341,11 @@ func (s *standaloneActivityTestSuite) TestListActivityExecutions() {
 	})
 
 	t.Run("QueryByActivityStatus", func(t *testing.T) {
-		verifyListQuery(t, fmt.Sprintf("ActivityStatus = 'Scheduled' AND ActivityType = '%s'", activityType))
+		verifyListQuery(t, fmt.Sprintf("ActivityStatus = 'Running' AND ActivityType = '%s'", activityType))
 	})
 
 	t.Run("QueryByTaskQueue", func(t *testing.T) {
-		verifyListQuery(t, fmt.Sprintf("ActivityTaskQueue = '%s' AND ActivityType = '%s'", s.tv.TaskQueue().GetName(), activityType))
+		verifyListQuery(t, fmt.Sprintf("ActivityTaskQueue = '%s' AND ActivityType = '%s'", taskQueue, activityType))
 	})
 
 	t.Run("QueryByMultipleFields", func(t *testing.T) {
@@ -1464,7 +1472,7 @@ func (s *standaloneActivityTestSuite) TestCountActivityExecutions() {
 	})
 
 	t.Run("CountByActivityStatus", func(t *testing.T) {
-		verifyCountQuery(t, fmt.Sprintf("ActivityStatus = 'Scheduled' AND ActivityType = '%s'", activityType), 1)
+		verifyCountQuery(t, fmt.Sprintf("ActivityStatus = 'Running' AND ActivityType = '%s'", activityType), 1)
 	})
 
 	t.Run("CountByTaskQueue", func(t *testing.T) {
@@ -1501,7 +1509,7 @@ func (s *standaloneActivityTestSuite) TestCountActivityExecutions() {
 		s.Equal(int64(3), resp.GetGroups()[0].GetCount())
 		var groupValue string
 		require.NoError(t, payload.Decode(resp.GetGroups()[0].GetGroupValues()[0], &groupValue))
-		s.Equal("Scheduled", groupValue)
+		s.Equal("Running", groupValue)
 	})
 
 	t.Run("CountByCustomSearchAttribute", func(t *testing.T) {

@@ -59,6 +59,8 @@ const (
 	// any other custom search attribute.
 	ScheduleID = "ScheduleId"
 
+	// TODO: Remove this hardcoded constant. The visibility team will provide a better solution for
+	// CHASM component-defined search attribute aliases.
 	ActivityId = "ActivityId"
 
 	// TemporalPauseInfo is a search attribute that stores the information about paused entities in the workflow.
