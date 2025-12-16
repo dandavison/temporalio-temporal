@@ -336,6 +336,14 @@ func (n *Node) SetRootComponent(
 	root := n.root()
 	root.value = rootComponent
 	root.setValueState(valueStateNeedSyncStructure)
+
+	// Update the archetype ID based on the component type.
+	// This must be done here (before closeTransactionHandleRootLifecycleChange)
+	// because IsWorkflow() checks the archetype ID to determine if workflow state
+	// should be updated by CHASM or managed directly by mutable state.
+	if componentID, ok := n.registry.ComponentIDFor(rootComponent); ok {
+		root.serializedNode.GetMetadata().GetComponentAttributes().TypeId = componentID
+	}
 }
 
 func (n *Node) setValueState(state valueState) {
