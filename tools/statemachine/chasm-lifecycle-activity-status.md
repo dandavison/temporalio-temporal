@@ -4,7 +4,7 @@ This guide explains the relationship between CHASM component lifecycle states, a
 
 ## Conceptual Layers
 
-There are four conceptual layers of state tracking for standalone activities:
+There are five conceptual layers of state tracking for standalone activities:
 
 ```
 ┌─────────────────────────────────────────────────────────────────────┐
@@ -18,8 +18,9 @@ There are four conceptual layers of state tracking for standalone activities:
 │  CHASM Component Lifecycle (chasm/component.go)                     │
 │  └── LifecycleState (3 values: Running, Completed, Failed)          │
 ├─────────────────────────────────────────────────────────────────────┤
-│  Workflow Execution State/Status (mutable_state)                    │
-│  └── WorkflowExecutionState + WorkflowExecutionStatus               │
+│  Persistence Layer (mutable_state)                                  │
+│  ├── WorkflowExecutionState (lifecycle phase: CREATED→RUNNING→...)  │
+│  └── WorkflowExecutionStatus (outcome: COMPLETED, FAILED, ...)      │
 └─────────────────────────────────────────────────────────────────────┘
 ```
 
@@ -105,7 +106,90 @@ func (a *Activity) LifecycleState(_ chasm.Context) chasm.LifecycleState {
 
 **Note:** Only `COMPLETED` maps to `LifecycleStateCompleted`. All other terminal statuses map to `LifecycleStateFailed`.
 
-## 4. How Lifecycle State Maps to Workflow State/Status
+## 4. WorkflowExecutionState vs. WorkflowExecutionStatus
+
+At the persistence layer, execution state is tracked using **two separate enums**:
+
+### WorkflowExecutionState (internal persistence enum)
+
+This represents the lifecycle phase of the execution:
+
+```go
+// From api/enums/v1/workflow.go (internal server enum)
+const (
+    WORKFLOW_EXECUTION_STATE_VOID      // Placeholder/uninitialized
+    WORKFLOW_EXECUTION_STATE_CREATED   // Initial state when execution is first created
+    WORKFLOW_EXECUTION_STATE_RUNNING   // Execution is actively running
+    WORKFLOW_EXECUTION_STATE_COMPLETED // Execution has reached a terminal state
+    WORKFLOW_EXECUTION_STATE_ZOMBIE    // Special state for certain edge cases
+)
+```
+
+### WorkflowExecutionStatus (public API enum)
+
+This represents the outcome/reason for completion:
+
+```go
+// From go.temporal.io/api/enums/v1
+const (
+    WORKFLOW_EXECUTION_STATUS_RUNNING
+    WORKFLOW_EXECUTION_STATUS_COMPLETED
+    WORKFLOW_EXECUTION_STATUS_FAILED
+    WORKFLOW_EXECUTION_STATUS_CANCELED
+    WORKFLOW_EXECUTION_STATUS_TERMINATED
+    WORKFLOW_EXECUTION_STATUS_CONTINUED_AS_NEW
+    WORKFLOW_EXECUTION_STATUS_TIMED_OUT
+)
+```
+
+### Initial State
+
+When a new standalone activity is created, the mutable state initializes with:
+
+```go
+// From service/history/workflow/mutable_state_impl.go:377-384
+s.executionState = &persistencespb.WorkflowExecutionState{
+    State:  enumsspb.WORKFLOW_EXECUTION_STATE_CREATED,
+    Status: enumspb.WORKFLOW_EXECUTION_STATUS_RUNNING,
+    // ...
+}
+```
+
+### State Transition Validation
+
+Not all state transitions are valid. The validation rules are defined in:
+
+[service/history/workflow/mutable_state_state_status.go](https://github.com/temporalio/temporal/blob/main/service/history/workflow/mutable_state_state_status.go)
+
+**From `CREATED` state, valid transitions are:**
+
+| Target State | Valid Statuses |
+|--------------|----------------|
+| `CREATED` | `RUNNING` only |
+| `RUNNING` | `RUNNING`, `PAUSED` |
+| `COMPLETED` | `TERMINATED`, `TIMED_OUT`, `CONTINUED_AS_NEW` |
+| `ZOMBIE` | `RUNNING`, `PAUSED` |
+
+**From `RUNNING` state, valid transitions are:**
+
+| Target State | Valid Statuses |
+|--------------|----------------|
+| `RUNNING` | `RUNNING`, `PAUSED` |
+| `COMPLETED` | Any except `RUNNING`, `PAUSED` |
+| `ZOMBIE` | `RUNNING`, `PAUSED` |
+
+**Key insight:** `CREATED → COMPLETED` with `FAILED` or `CANCELED` status is **not allowed**. The execution must first transition to `RUNNING` before it can complete with those statuses.
+
+### State Progression
+
+Normal execution lifecycle:
+```
+CREATED → RUNNING → COMPLETED
+```
+
+The `CREATED` state is transient - it should transition to `RUNNING` during the first transaction that creates the execution.
+
+## 5. How Lifecycle State Maps to Workflow State/Status
 
 For standalone activities (non-workflow root components), the CHASM tree translates the root component's lifecycle state into workflow execution state/status at transaction close time:
 
@@ -157,7 +241,7 @@ if n.terminated {
 }
 ```
 
-## 5. Public API Status Mapping
+## 6. Public API Status Mapping
 
 The public API exposes a simplified view of the activity status through two enums:
 - `ActivityExecutionStatus` - terminal vs. running
@@ -206,7 +290,7 @@ func internalStatusToRunState(status activitypb.ActivityExecutionStatus) enumspb
 }
 ```
 
-## 6. State Transition Mechanics
+## 7. State Transition Mechanics
 
 Activity status changes are governed by explicit state machine transitions defined in:
 
@@ -278,7 +362,7 @@ var TransitionStarted = chasm.NewTransition(
 | `TransitionTerminated` | `SCHEDULED`, `STARTED`, `CANCEL_REQUESTED` | `TERMINATED` |
 | `TransitionTimedOut` | `SCHEDULED`, `STARTED`, `CANCEL_REQUESTED` | `TIMED_OUT` |
 
-## 7. When Status Updates Occur
+## 8. When Status Updates Occur
 
 ### CHASM Transaction Model
 
@@ -331,7 +415,7 @@ For standalone activities, the mutable state implementation (`MutableStateImpl`)
 
 [service/history/workflow/mutable_state_impl.go (`UpdateWorkflowStateStatus`)](https://github.com/temporalio/temporal/blob/main/service/history/workflow/mutable_state_impl.go#L6559-L6572)
 
-## 8. Complete Mapping Table
+## 9. Complete Mapping Table
 
 | Internal Status | Public API Status | PendingActivityState | Lifecycle State | WF State | WF Status |
 |----------------|-------------------|----------------------|-----------------|----------|-----------|
@@ -346,7 +430,7 @@ For standalone activities, the mutable state implementation (`MutableStateImpl`)
 
 \* `TERMINATED` status at workflow level is set directly when `n.terminated` is true, bypassing the lifecycle-to-status mapping.
 
-## 9. Key Invariants
+## 10. Key Invariants
 
 1. **Internal status is authoritative** - All other statuses are derived from it.
 2. **Lifecycle state determines openness** - `IsClosed()` governs whether the component accepts further mutations.
