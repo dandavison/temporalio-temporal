@@ -217,6 +217,101 @@ func (s *nodeSuite) TestSerializeNode_ClearSubDataField() {
 	s.Nil(sd1Node)
 }
 
+func (s *nodeSuite) TestSetRootComponent_SetsArchetypeID() {
+	// Create an empty tree (which defaults to WorkflowArchetypeID)
+	rootNode := NewEmptyTree(s.registry, s.timeSource, s.nodeBackend, s.nodePathEncoder, s.logger)
+
+	// Verify initial archetype ID is WorkflowArchetypeID
+	s.Equal(WorkflowArchetypeID, rootNode.ArchetypeID(), "new empty tree should have WorkflowArchetypeID")
+
+	// Set a non-workflow root component
+	ctx := NewMutableContext(context.Background(), rootNode)
+	rootComponent := &TestComponent{
+		MSPointer: NewMSPointer(s.nodeBackend),
+	}
+	rootNode.SetRootComponent(rootComponent)
+
+	// Verify archetype ID is now the test component's type ID
+	s.Equal(testComponentTypeID, rootNode.ArchetypeID(),
+		"SetRootComponent should update archetype ID to match the component type")
+	s.NotEqual(WorkflowArchetypeID, rootNode.ArchetypeID(),
+		"archetype ID should no longer be WorkflowArchetypeID after SetRootComponent with non-workflow component")
+
+	// Verify that after CloseTransaction, the archetype ID is still correct
+	s.nodeBackend.HandleNextTransitionCount = func() int64 { return 1 }
+	s.nodeBackend.HandleGetCurrentVersion = func() int64 { return 1 }
+	s.nodeBackend.HandleUpdateWorkflowStateStatus = func(state enumsspb.WorkflowExecutionState, status enumspb.WorkflowExecutionStatus) (bool, error) {
+		return true, nil
+	}
+	testComponent := rootComponent
+	testComponent.Visibility = NewComponentField(ctx, NewVisibility(ctx))
+
+	_, err := rootNode.CloseTransaction()
+	s.NoError(err)
+
+	s.Equal(testComponentTypeID, rootNode.ArchetypeID(),
+		"archetype ID should remain correct after CloseTransaction")
+}
+
+func (s *nodeSuite) TestCloseTransaction_UpdatesWorkflowStateForNonWorkflowComponents() {
+	// Create tree with a non-workflow root component
+	rootNode := NewEmptyTree(s.registry, s.timeSource, s.nodeBackend, s.nodePathEncoder, s.logger)
+
+	ctx := NewMutableContext(context.Background(), rootNode)
+	rootComponent := &TestComponent{
+		MSPointer:     NewMSPointer(s.nodeBackend),
+		Visibility:    NewComponentField(ctx, NewVisibility(ctx)),
+		ComponentData: &protoMessageType{Status: enumspb.WORKFLOW_EXECUTION_STATUS_RUNNING},
+	}
+	rootNode.SetRootComponent(rootComponent)
+
+	s.nodeBackend.HandleNextTransitionCount = func() int64 { return 1 }
+	s.nodeBackend.HandleGetCurrentVersion = func() int64 { return 1 }
+
+	// Track what state/status was passed to UpdateWorkflowStateStatus
+	var capturedState enumsspb.WorkflowExecutionState
+	var capturedStatus enumspb.WorkflowExecutionStatus
+	updateCalled := false
+
+	s.nodeBackend.HandleUpdateWorkflowStateStatus = func(state enumsspb.WorkflowExecutionState, status enumspb.WorkflowExecutionStatus) (bool, error) {
+		updateCalled = true
+		capturedState = state
+		capturedStatus = status
+		return true, nil
+	}
+
+	// Close transaction - component is in Running state
+	_, err := rootNode.CloseTransaction()
+	s.NoError(err)
+
+	// Verify UpdateWorkflowStateStatus was called with RUNNING/RUNNING
+	s.True(updateCalled, "UpdateWorkflowStateStatus should be called for non-workflow components")
+	s.Equal(enumsspb.WORKFLOW_EXECUTION_STATE_RUNNING, capturedState,
+		"workflow state should be RUNNING when component lifecycle is Running")
+	s.Equal(enumspb.WORKFLOW_EXECUTION_STATUS_RUNNING, capturedStatus,
+		"workflow status should be RUNNING when component lifecycle is Running")
+
+	// Now complete the component and verify state changes
+	updateCalled = false
+	s.nodeBackend.HandleNextTransitionCount = func() int64 { return 2 }
+
+	chasmCtx := NewMutableContext(context.Background(), rootNode)
+	component, err := rootNode.Component(chasmCtx, ComponentRef{})
+	s.NoError(err)
+	testComp := component.(*TestComponent)
+	testComp.Complete(chasmCtx) // Transitions to Completed lifecycle state
+
+	_, err = rootNode.CloseTransaction()
+	s.NoError(err)
+
+	// Verify UpdateWorkflowStateStatus was called with COMPLETED/COMPLETED
+	s.True(updateCalled, "UpdateWorkflowStateStatus should be called when component lifecycle changes")
+	s.Equal(enumsspb.WORKFLOW_EXECUTION_STATE_COMPLETED, capturedState,
+		"workflow state should be COMPLETED when component lifecycle is Completed")
+	s.Equal(enumspb.WORKFLOW_EXECUTION_STATUS_COMPLETED, capturedStatus,
+		"workflow status should be COMPLETED when component lifecycle is Completed")
+}
+
 func (s *nodeSuite) TestInitSerializedNode_TypeData() {
 	node := newNode(s.nodeBase(), nil, "")
 	node.initSerializedNode(fieldTypeData)
