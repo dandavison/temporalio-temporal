@@ -23,9 +23,7 @@ Both standalone activities and workflow activities follow the same fundamental r
 
 For standalone activities, heartbeat validation is performed in `validateActivityTaskToken`:
 
-https://github.com/temporalio/temporal/blob/main/chasm/lib/activity/activity.go
-
-[chasm/lib/activity/activity.go (`Activity.validateActivityTaskToken`)](https://github.com/temporalio/temporal/blob/main/chasm/lib/activity/activity.go#L739-L752)
+[chasm/lib/activity/activity.go (`Activity.validateActivityTaskToken`)](https://github.com/temporalio/temporal/blob/main/chasm/lib/activity/activity.go#L738-L752)
 ```go
 func (a *Activity) validateActivityTaskToken(
 	ctx chasm.Context,
@@ -44,7 +42,7 @@ func (a *Activity) validateActivityTaskToken(
 
 The `cancel_requested` flag is returned based on the activity status:
 
-[chasm/lib/activity/activity.go (`Activity.RecordHeartbeat`)](https://github.com/temporalio/temporal/blob/main/chasm/lib/activity/activity.go#L544-L570)
+[chasm/lib/activity/activity.go (`Activity.RecordHeartbeat`)](https://github.com/temporalio/temporal/blob/main/chasm/lib/activity/activity.go#L543-L570)
 ```go
 func (a *Activity) RecordHeartbeat(
 	ctx chasm.MutableContext,
@@ -58,8 +56,6 @@ func (a *Activity) RecordHeartbeat(
 ```
 
 **Test coverage:**
-
-https://github.com/temporalio/temporal/blob/main/tests/standalone_activity_test.go
 
 [tests/standalone_activity_test.go (`TestHeartbeat/HeartbeatWhileInState`)](https://github.com/temporalio/temporal/blob/main/tests/standalone_activity_test.go#L2286-L2456)
 ```go
@@ -90,8 +86,6 @@ For non-CHASM workflow activities, heartbeat validation has two stages:
 
 ### Stage 1: Workflow Must Be Running
 
-https://github.com/temporalio/temporal/blob/main/service/history/api/recordactivitytaskheartbeat/api.go
-
 [service/history/api/recordactivitytaskheartbeat/api.go (`Invoke`)](https://github.com/temporalio/temporal/blob/main/service/history/api/recordactivitytaskheartbeat/api.go#L65-L69)
 ```go
 func(workflowLease api.WorkflowLease) (*api.UpdateWorkflowAction, error) {
@@ -103,7 +97,7 @@ func(workflowLease api.WorkflowLease) (*api.UpdateWorkflowAction, error) {
 
 ### Stage 2: Activity Must Be Pending and Match Token
 
-[service/history/api/recordactivitytaskheartbeat/api.go (`Invoke`)](https://github.com/temporalio/temporal/blob/main/service/history/api/recordactivitytaskheartbeat/api.go#L78-L91)
+[service/history/api/recordactivitytaskheartbeat/api.go (`Invoke` - activity lookup)](https://github.com/temporalio/temporal/blob/main/service/history/api/recordactivitytaskheartbeat/api.go#L78-L91)
 ```go
 ai, isRunning := mutableState.GetActivityInfo(scheduledEventID)
 
@@ -122,9 +116,7 @@ if !isRunning || api.IsActivityTaskNotFoundForToken(token, ai, nil) {
 
 `GetActivityInfo` returns the activity from `pendingActivityInfoIDs`. Once an activity is completed, failed, canceled, or timed out, it is removed from this map:
 
-https://github.com/temporalio/temporal/blob/main/service/history/workflow/mutable_state_impl.go
-
-[service/history/workflow/mutable_state_impl.go (`MutableStateImpl.GetActivityInfo`)](https://github.com/temporalio/temporal/blob/main/service/history/workflow/mutable_state_impl.go#L1455-L1461)
+[service/history/workflow/mutable_state_impl.go (`MutableStateImpl.GetActivityInfo`)](https://github.com/temporalio/temporal/blob/main/service/history/workflow/mutable_state_impl.go#L1456-L1462)
 ```go
 func (ms *MutableStateImpl) GetActivityInfo(
 	scheduledEventID int64,
@@ -138,7 +130,7 @@ func (ms *MutableStateImpl) GetActivityInfo(
 
 When an activity completes, fails, times out, or is canceled, `DeleteActivity` removes it from `pendingActivityInfoIDs`:
 
-[service/history/workflow/mutable_state_impl.go (`MutableStateImpl.DeleteActivity`)](https://github.com/temporalio/temporal/blob/main/service/history/workflow/mutable_state_impl.go#L2033-L2049)
+[service/history/workflow/mutable_state_impl.go (`MutableStateImpl.DeleteActivity`)](https://github.com/temporalio/temporal/blob/main/service/history/workflow/mutable_state_impl.go#L2034-L2050)
 ```go
 func (ms *MutableStateImpl) DeleteActivity(
 	scheduledEventID int64,
@@ -159,8 +151,6 @@ This is called from:
 - `ReplicateActivityTaskCanceledEvent` (line 4284)
 
 ### Token Validation
-
-https://github.com/temporalio/temporal/blob/main/service/history/api/activity_util.go
 
 [service/history/api/activity_util.go (`IsActivityTaskNotFoundForToken`)](https://github.com/temporalio/temporal/blob/main/service/history/api/activity_util.go#L58-L77)
 ```go
@@ -185,7 +175,7 @@ func IsActivityTaskNotFoundForToken(
 
 When `RequestCancelActivityExecution` is called, the `CancelRequested` flag is set on the activity info:
 
-[service/history/workflow/mutable_state_impl.go (`MutableStateImpl.ReplicateActivityTaskCancelRequestedEvent`)](https://github.com/temporalio/temporal/blob/main/service/history/workflow/mutable_state_impl.go#L4202-L4225)
+[service/history/workflow/mutable_state_impl.go (`MutableStateImpl.ApplyActivityTaskCancelRequestedEvent`)](https://github.com/temporalio/temporal/blob/main/service/history/workflow/mutable_state_impl.go#L4199-L4227)
 ```go
 func (ms *MutableStateImpl) ReplicateActivityTaskCancelRequestedEvent(
 	event *historypb.HistoryEvent,
@@ -199,7 +189,7 @@ func (ms *MutableStateImpl) ReplicateActivityTaskCancelRequestedEvent(
 
 The heartbeat response returns this flag:
 
-[service/history/api/recordactivitytaskheartbeat/api.go (`Invoke`)](https://github.com/temporalio/temporal/blob/main/service/history/api/recordactivitytaskheartbeat/api.go#L98-L100)
+[service/history/api/recordactivitytaskheartbeat/api.go (`Invoke` - cancel_requested)](https://github.com/temporalio/temporal/blob/main/service/history/api/recordactivitytaskheartbeat/api.go#L98-L100)
 ```go
 cancelRequested = ai.CancelRequested
 // ...
@@ -208,9 +198,7 @@ return &historyservice.RecordActivityTaskHeartbeatResponse{CancelRequested: canc
 
 ### Error Definitions
 
-https://github.com/temporalio/temporal/blob/main/service/history/consts/const.go
-
-[service/history/consts/const.go](https://github.com/temporalio/temporal/blob/main/service/history/consts/const.go#L44-L46)
+[service/history/consts/const.go (`ErrActivityTaskNotFound`)](https://github.com/temporalio/temporal/blob/main/service/history/consts/const.go#L44-L46)
 ```go
 // ErrActivityTaskNotFound is the error to indicate activity task could be duplicate
 // and activity already completed
@@ -219,8 +207,6 @@ ErrActivityTaskNotFound = serviceerror.NewNotFound(
 ```
 
 **Test coverage:**
-
-https://github.com/temporalio/temporal/blob/main/tests/activity_test.go
 
 [tests/activity_test.go (`TestActivityHeartBeatWorkflow_Timeout`)](https://github.com/temporalio/temporal/blob/main/tests/activity_test.go#L782-L882)
 ```go

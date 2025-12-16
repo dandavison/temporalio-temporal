@@ -27,7 +27,7 @@ There are four conceptual layers of state tracking for standalone activities:
 
 The internal activity status is the primary source of truth for an activity's state. It is defined in the server's internal protobuf:
 
-[chasm/lib/activity/proto/v1/activity_state.proto](https://github.com/temporalio/temporal/blob/main/chasm/lib/activity/proto/v1/activity_state.proto) (`ActivityExecutionStatus`)
+[chasm/lib/activity/proto/v1/activity_state.proto (`ActivityExecutionStatus`)](https://github.com/temporalio/temporal/blob/main/chasm/lib/activity/proto/v1/activity_state.proto#L15-L44)
 
 ```protobuf
 enum ActivityExecutionStatus {
@@ -43,14 +43,14 @@ enum ActivityExecutionStatus {
 }
 ```
 
-**Non-terminal statuses:** `SCHEDULED`, `STARTED`, `CANCEL_REQUESTED`  
+**Non-terminal statuses:** `SCHEDULED`, `STARTED`, `CANCEL_REQUESTED`
 **Terminal statuses:** `COMPLETED`, `FAILED`, `CANCELED`, `TERMINATED`, `TIMED_OUT`
 
 ## 2. CHASM Component Lifecycle
 
 The CHASM framework defines a generic `LifecycleState` interface that all components must implement. This is a coarse-grained abstraction over component-specific statuses:
 
-[chasm/component.go](https://github.com/temporalio/temporal/blob/main/chasm/component.go) (`LifecycleState`)
+[chasm/component.go (`LifecycleState`)](https://github.com/temporalio/temporal/blob/main/chasm/component.go#L42-L62)
 
 ```go
 type LifecycleState int
@@ -72,7 +72,7 @@ func (s LifecycleState) IsClosed() bool {
 
 The `Activity` component implements the `LifecycleState()` method to derive CHASM lifecycle state from internal activity status:
 
-[chasm/lib/activity/activity.go](https://github.com/temporalio/temporal/blob/main/chasm/lib/activity/activity.go) (`Activity.LifecycleState`)
+[chasm/lib/activity/activity.go (`Activity.LifecycleState`)](https://github.com/temporalio/temporal/blob/main/chasm/lib/activity/activity.go#L124-L136)
 
 ```go
 func (a *Activity) LifecycleState(_ chasm.Context) chasm.LifecycleState {
@@ -109,7 +109,7 @@ func (a *Activity) LifecycleState(_ chasm.Context) chasm.LifecycleState {
 
 For standalone activities (non-workflow root components), the CHASM tree translates the root component's lifecycle state into workflow execution state/status at transaction close time:
 
-[chasm/tree.go](https://github.com/temporalio/temporal/blob/main/chasm/tree.go) (`closeTransactionHandleRootLifecycleChange`)
+[chasm/tree.go (`closeTransactionHandleRootLifecycleChange`)](https://github.com/temporalio/temporal/blob/main/chasm/tree.go#L1438-L1481)
 
 ```go
 func (n *Node) closeTransactionHandleRootLifecycleChange() (bool, error) {
@@ -118,7 +118,7 @@ func (n *Node) closeTransactionHandleRootLifecycleChange() (bool, error) {
         return false, nil
     }
     // ... (for standalone activities)
-    
+
     lifecycleState := rootComponent.LifecycleState(chasmContext)
 
     var newState enumsspb.WorkflowExecutionState
@@ -163,7 +163,7 @@ The public API exposes a simplified view of the activity status through two enum
 - `ActivityExecutionStatus` - terminal vs. running
 - `PendingActivityState` - substates while running
 
-[chasm/lib/activity/activity.go](https://github.com/temporalio/temporal/blob/main/chasm/lib/activity/activity.go) (`InternalStatusToAPIStatus`)
+[chasm/lib/activity/activity.go (`InternalStatusToAPIStatus`)](https://github.com/temporalio/temporal/blob/main/chasm/lib/activity/activity.go#L571-L592)
 
 ```go
 func InternalStatusToAPIStatus(status activitypb.ActivityExecutionStatus) enumspb.ActivityExecutionStatus {
@@ -187,7 +187,7 @@ func InternalStatusToAPIStatus(status activitypb.ActivityExecutionStatus) enumsp
 }
 ```
 
-[chasm/lib/activity/activity.go](https://github.com/temporalio/temporal/blob/main/chasm/lib/activity/activity.go) (`internalStatusToRunState`)
+[chasm/lib/activity/activity.go (`internalStatusToRunState`)](https://github.com/temporalio/temporal/blob/main/chasm/lib/activity/activity.go#L594-L613)
 
 ```go
 func internalStatusToRunState(status activitypb.ActivityExecutionStatus) enumspb.PendingActivityState {
@@ -210,7 +210,7 @@ func internalStatusToRunState(status activitypb.ActivityExecutionStatus) enumspb
 
 Activity status changes are governed by explicit state machine transitions defined in:
 
-[chasm/lib/activity/statemachine.go](https://github.com/temporalio/temporal/blob/main/chasm/lib/activity/statemachine.go)
+[chasm/lib/activity/statemachine.go](https://github.com/temporalio/temporal/blob/main/chasm/lib/activity/statemachine.go#L1-L368)
 
 ### Transition Definitions
 
@@ -294,7 +294,7 @@ Status changes happen within CHASM transactions. The general flow:
    - Visibility updates
    - Task generation
 
-[chasm/tree.go](https://github.com/temporalio/temporal/blob/main/chasm/tree.go) (`CloseTransaction`)
+[chasm/tree.go (`CloseTransaction`)](https://github.com/temporalio/temporal/blob/main/chasm/tree.go#L1330-L1376)
 
 ```go
 func (n *Node) CloseTransaction() (NodesMutation, error) {
@@ -302,10 +302,10 @@ func (n *Node) CloseTransaction() (NodesMutation, error) {
 
     if err := n.executeImmediatePureTasks(); err != nil { /* ... */ }
     if err := n.syncSubComponents(); err != nil { /* ... */ }
-    
+
     rootLifecycleChanged, err := n.closeTransactionHandleRootLifecycleChange()
     // ... updates workflow state/status based on root component's lifecycle
-    
+
     if n.isActiveStateDirty {
         if err := n.closeTransactionForceUpdateVisibility(rootLifecycleChanged); err != nil { /* ... */ }
     }
@@ -329,7 +329,7 @@ type NodeBackend interface {
 
 For standalone activities, the mutable state implementation (`MutableStateImpl`) validates and persists the state/status change:
 
-[service/history/workflow/mutable_state_impl.go](https://github.com/temporalio/temporal/blob/main/service/history/workflow/mutable_state_impl.go) (`UpdateWorkflowStateStatus`)
+[service/history/workflow/mutable_state_impl.go (`UpdateWorkflowStateStatus`)](https://github.com/temporalio/temporal/blob/main/service/history/workflow/mutable_state_impl.go#L6559-L6572)
 
 ## 8. Complete Mapping Table
 
