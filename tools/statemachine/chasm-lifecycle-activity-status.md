@@ -438,3 +438,91 @@ For standalone activities, the mutable state implementation (`MutableStateImpl`)
 4. **Status changes are atomic** - They occur within a single CHASM transaction.
 5. **Root lifecycle drives WF state** - For non-workflow root components, the root's lifecycle state determines workflow execution state/status.
 
+---
+
+## Addendum: The Archetype ID Bug
+
+### The Problem
+
+When creating a standalone activity, the following error was observed:
+
+```
+unable to change workflow state from Created to Completed, status Failed
+```
+
+This error occurred when attempting to cancel a `SCHEDULED` activity immediately (before a worker picked it up).
+
+### Root Cause
+
+The bug was in `SetRootComponent` in `chasm/tree.go`. When a new standalone activity was created:
+
+1. `NewEmptyTree` initializes the tree with `TypeId = WorkflowArchetypeID` (the default)
+2. `SetRootComponent` was called with the activity component
+3. **Bug:** `SetRootComponent` did NOT update the archetype ID to match the actual component type
+4. During `CloseTransaction`, `closeTransactionHandleRootLifecycleChange` checks `n.backend.IsWorkflow()`
+5. `IsWorkflow()` compares `chasmTree.ArchetypeID()` against `WorkflowArchetypeID`
+6. Since the archetype ID was never updated, `IsWorkflow()` returned `true`
+7. This caused `closeTransactionHandleRootLifecycleChange` to return early **without updating workflow state**
+
+The result: the workflow execution remained in `State=CREATED` instead of transitioning to `State=RUNNING`.
+
+### Why It Matters
+
+Looking at the state transition validation rules in Section 4:
+
+| From State | To State | Valid Statuses |
+|------------|----------|----------------|
+| `CREATED` | `COMPLETED` | `TERMINATED`, `TIMED_OUT`, `CONTINUED_AS_NEW` only |
+| `RUNNING` | `COMPLETED` | Any terminal status |
+
+When canceling a `SCHEDULED` activity:
+- The activity lifecycle transitions to `Failed` (via `LifecycleStateFailed`)
+- This maps to `WorkflowExecutionStatus=FAILED`
+- But `CREATED → COMPLETED` with `FAILED` status is **not allowed**
+
+The state transition validation correctly rejected this invalid transition, exposing the underlying bug.
+
+### The Fix
+
+[chasm/tree.go (`SetRootComponent`)](https://github.com/temporalio/temporal/blob/main/chasm/tree.go#L333-L347)
+
+```go
+func (n *Node) SetRootComponent(
+    rootComponent Component,
+) {
+    root := n.root()
+    root.value = rootComponent
+    root.setValueState(valueStateNeedSyncStructure)
+
+    // Update the archetype ID based on the component type.
+    // This must be done here (before closeTransactionHandleRootLifecycleChange)
+    // because IsWorkflow() checks the archetype ID to determine if workflow state
+    // should be updated by CHASM or managed directly by mutable state.
+    if componentID, ok := n.registry.ComponentIDFor(rootComponent); ok {
+        root.serializedNode.GetMetadata().GetComponentAttributes().TypeId = componentID
+    }
+}
+```
+
+The fix updates the archetype ID in `SetRootComponent` using the registry's `ComponentIDFor` method. This ensures that when `closeTransactionHandleRootLifecycleChange` checks `IsWorkflow()`, it correctly identifies standalone activities as non-workflow components and updates the workflow execution state appropriately.
+
+### Correct Flow After Fix
+
+1. `NewEmptyTree` creates tree with `TypeId = WorkflowArchetypeID`
+2. `SetRootComponent` updates `TypeId` to the activity's component ID
+3. First `CloseTransaction`:
+   - `IsWorkflow()` returns `false` (archetype ID ≠ `WorkflowArchetypeID`)
+   - `closeTransactionHandleRootLifecycleChange` updates state to `RUNNING/RUNNING`
+4. On cancellation, `CloseTransaction`:
+   - Activity lifecycle is `Failed` → maps to `COMPLETED/FAILED`
+   - `RUNNING → COMPLETED` with `FAILED` status is **valid**
+
+### Framework-Level Tests
+
+Two tests were added to `chasm/tree_test.go` to prevent regression:
+
+1. **`TestSetRootComponent_SetsArchetypeID`**: Verifies that `SetRootComponent` updates the archetype ID from `WorkflowArchetypeID` to the actual component type ID.
+
+2. **`TestCloseTransaction_UpdatesWorkflowStateForNonWorkflowComponents`**: Verifies that `CloseTransaction` correctly calls `UpdateWorkflowStateStatus` for non-workflow components based on their lifecycle state.
+
+These framework-level tests ensure the bug is caught at the CHASM layer rather than relying on downstream integration tests.
