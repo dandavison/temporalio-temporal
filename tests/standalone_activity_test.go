@@ -639,42 +639,38 @@ func (s *standaloneActivityTestSuite) TestRequestCancellation_FailsValidation() 
 	}
 }
 
-// TODO running into "unable to change workflow state from Created to Completed, status Failed from the chasm engine"
-// This should be re-enabled after its addressed from the chasm engine and we implement the search attributes interface.
 func (s *standaloneActivityTestSuite) TestActivityImmediatelyCancelled_WhenInScheduledState() {
-	s.T().Skip("Temporarily disabled")
+	t := s.T()
+	ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
+	defer cancel()
 
-	/*	t := s.T()
-		ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
-		defer cancel()
+	activityID := s.tv.ActivityID()
+	taskQueue := s.tv.TaskQueue().String()
 
-		activityID := s.tv.ActivityID()
-		taskQueue := s.tv.TaskQueue().String()
+	startResp := s.startAndValidateActivity(ctx, t, activityID, taskQueue)
+	runID := startResp.RunId
 
-		startResp := s.startAndValidateActivity(ctx, t, activityID, taskQueue)
-		runID := startResp.RunId
+	_, err := s.FrontendClient().RequestCancelActivityExecution(ctx, &workflowservice.RequestCancelActivityExecutionRequest{
+		Namespace:  s.Namespace().String(),
+		ActivityId: s.tv.ActivityID(),
+		RunId:      runID,
+		Identity:   "cancelling-worker",
+		RequestId:  s.tv.RequestID(),
+		Reason:     "Test Cancellation",
+	})
+	require.NoError(t, err)
 
-		_, err := s.FrontendClient().RequestCancelActivityExecution(ctx, &workflowservice.RequestCancelActivityExecutionRequest{
-			Namespace:  s.Namespace().String(),
-			ActivityId: s.tv.ActivityID(),
-			RunId:      runID,
-			Identity:   "cancelling-worker",
-			RequestId:  s.tv.RequestID(),
-			Reason:     "Test Cancellation",
-		})
-		require.NoError(t, err)
+	activityResp, err := s.FrontendClient().DescribeActivityExecution(ctx, &workflowservice.DescribeActivityExecutionRequest{
+		Namespace:      s.Namespace().String(),
+		ActivityId:     activityID,
+		RunId:          runID,
+		IncludeInput:   true,
+		IncludeOutcome: true,
+	})
+	require.NoError(t, err)
 
-		activityResp, err := s.FrontendClient().DescribeActivityExecution(ctx, &workflowservice.DescribeActivityExecutionRequest{
-			Namespace:      s.Namespace().String(),
-			ActivityId:     activityID,
-			RunId:          runID,
-			IncludeInput:   true,
-			IncludeOutcome: true,
-		})
-		require.NoError(t, err)
-
-		info := activityResp.GetInfo()
-		require.Equal(t, enumspb.ACTIVITY_EXECUTION_STATUS_CANCELED, info.GetStatus()) */
+	info := activityResp.GetInfo()
+	require.Equal(t, enumspb.ACTIVITY_EXECUTION_STATUS_CANCELED, info.GetStatus())
 }
 
 func (s *standaloneActivityTestSuite) TestActivityTerminated() {
