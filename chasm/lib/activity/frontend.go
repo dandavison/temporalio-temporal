@@ -373,8 +373,9 @@ func (h *frontendHandler) validateAndPopulateStartRequest(
 }
 
 // validateAndNormalizeStartActivityExecutionRequest validates and normalizes the standalone
-// activity specific attributes. Note that this method mutates the input params; the caller must
-// clone the request if necessary (e.g. if it may be retried).
+// activity specific attributes (CHASM search attributes and user-defined custom search attributes).
+// Note that this method mutates the input params; the caller must clone the request if necessary
+// (e.g. if it may be retried).
 func (h *frontendHandler) validateAndNormalizeStartActivityExecutionRequest(
 	req *workflowservice.StartActivityExecutionRequest,
 ) error {

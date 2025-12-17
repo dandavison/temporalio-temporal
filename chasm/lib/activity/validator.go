@@ -204,6 +204,7 @@ func validateInputSize(
 	return nil
 }
 
+// TODO: consider moving this logic to the chasm package to be shared by archetypes.
 func validateAndNormalizeSearchAttributes(
 	req *workflowservice.StartActivityExecutionRequest,
 	saMapperProvider searchattribute.MapperProvider,

@@ -40,6 +40,7 @@ func ResolveSearchAttributeAlias(
 
 		// Handle ActivityId → WorkflowID transformation for standalone activities.
 		// TODO: Remove this hardcoded transformation.
+		// See https://github.com/temporalio/temporal/pull/8803
 		if name == sadefs.ActivityID {
 			saType, _ := saTypeMap.GetType(sadefs.WorkflowID)
 			return sadefs.WorkflowID, saType, nil
