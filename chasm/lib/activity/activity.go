@@ -70,8 +70,8 @@ type Activity struct {
 	// Pointer to an implementation of the "store". For a workflow activity this would be a parent
 	// pointer back to the workflow. For a standalone activity this is nil (Activity itself
 	// implements the ActivityStore interface).
-	// TODO: revisit a standalone activity pointing to itself once we handle storing it more efficiently.
-	// TODO: figure out better naming.
+	// TODO(saa-preview): revisit a standalone activity pointing to itself once we handle storing it more efficiently.
+	// TODO(saa-preview): figure out better naming.
 	Store chasm.Field[ActivityStore]
 }
 
