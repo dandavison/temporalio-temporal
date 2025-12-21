@@ -146,6 +146,9 @@ var (
 		"RequestCancelActivityExecution": func() any { return &workflowservice.RequestCancelActivityExecutionResponse{} },
 		"TerminateActivityExecution":     func() any { return &workflowservice.TerminateActivityExecutionResponse{} },
 		"DeleteActivityExecution":        func() any { return &workflowservice.DeleteActivityExecutionResponse{} },
+
+		"PushStream": func() any { return &workflowservice.PushStreamResponse{} },
+		"PollStream": func() any { return &workflowservice.PollStreamResponse{} },
 	}
 )
 

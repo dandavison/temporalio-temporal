@@ -821,6 +821,21 @@ func (c *retryableClient) PollNexusTaskQueue(
 	return resp, err
 }
 
+func (c *retryableClient) PollStream(
+	ctx context.Context,
+	request *workflowservice.PollStreamRequest,
+	opts ...grpc.CallOption,
+) (*workflowservice.PollStreamResponse, error) {
+	var resp *workflowservice.PollStreamResponse
+	op := func(ctx context.Context) error {
+		var err error
+		resp, err = c.client.PollStream(ctx, request, opts...)
+		return err
+	}
+	err := backoff.ThrottleRetryContext(ctx, op, c.policy, c.isRetryable)
+	return resp, err
+}
+
 func (c *retryableClient) PollWorkflowExecutionUpdate(
 	ctx context.Context,
 	request *workflowservice.PollWorkflowExecutionUpdateRequest,
@@ -845,6 +860,21 @@ func (c *retryableClient) PollWorkflowTaskQueue(
 	op := func(ctx context.Context) error {
 		var err error
 		resp, err = c.client.PollWorkflowTaskQueue(ctx, request, opts...)
+		return err
+	}
+	err := backoff.ThrottleRetryContext(ctx, op, c.policy, c.isRetryable)
+	return resp, err
+}
+
+func (c *retryableClient) PushStream(
+	ctx context.Context,
+	request *workflowservice.PushStreamRequest,
+	opts ...grpc.CallOption,
+) (*workflowservice.PushStreamResponse, error) {
+	var resp *workflowservice.PushStreamResponse
+	op := func(ctx context.Context) error {
+		var err error
+		resp, err = c.client.PushStream(ctx, request, opts...)
 		return err
 	}
 	err := backoff.ThrottleRetryContext(ctx, op, c.policy, c.isRetryable)

@@ -765,6 +765,20 @@ func (c *metricClient) PollNexusTaskQueue(
 	return c.client.PollNexusTaskQueue(ctx, request, opts...)
 }
 
+func (c *metricClient) PollStream(
+	ctx context.Context,
+	request *workflowservice.PollStreamRequest,
+	opts ...grpc.CallOption,
+) (_ *workflowservice.PollStreamResponse, retError error) {
+
+	metricsHandler, startTime := c.startMetricsRecording(ctx, "FrontendClientPollStream")
+	defer func() {
+		c.finishMetricsRecording(metricsHandler, startTime, retError)
+	}()
+
+	return c.client.PollStream(ctx, request, opts...)
+}
+
 func (c *metricClient) PollWorkflowExecutionUpdate(
 	ctx context.Context,
 	request *workflowservice.PollWorkflowExecutionUpdateRequest,
@@ -791,6 +805,20 @@ func (c *metricClient) PollWorkflowTaskQueue(
 	}()
 
 	return c.client.PollWorkflowTaskQueue(ctx, request, opts...)
+}
+
+func (c *metricClient) PushStream(
+	ctx context.Context,
+	request *workflowservice.PushStreamRequest,
+	opts ...grpc.CallOption,
+) (_ *workflowservice.PushStreamResponse, retError error) {
+
+	metricsHandler, startTime := c.startMetricsRecording(ctx, "FrontendClientPushStream")
+	defer func() {
+		c.finishMetricsRecording(metricsHandler, startTime, retError)
+	}()
+
+	return c.client.PushStream(ctx, request, opts...)
 }
 
 func (c *metricClient) QueryWorkflow(

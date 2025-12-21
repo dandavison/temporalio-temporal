@@ -549,6 +549,16 @@ func (c *clientImpl) PollNexusTaskQueue(
 	return c.client.PollNexusTaskQueue(ctx, request, opts...)
 }
 
+func (c *clientImpl) PollStream(
+	ctx context.Context,
+	request *workflowservice.PollStreamRequest,
+	opts ...grpc.CallOption,
+) (*workflowservice.PollStreamResponse, error) {
+	ctx, cancel := c.createContext(ctx)
+	defer cancel()
+	return c.client.PollStream(ctx, request, opts...)
+}
+
 func (c *clientImpl) PollWorkflowExecutionUpdate(
 	ctx context.Context,
 	request *workflowservice.PollWorkflowExecutionUpdateRequest,
@@ -567,6 +577,16 @@ func (c *clientImpl) PollWorkflowTaskQueue(
 	ctx, cancel := c.createLongPollContext(ctx)
 	defer cancel()
 	return c.client.PollWorkflowTaskQueue(ctx, request, opts...)
+}
+
+func (c *clientImpl) PushStream(
+	ctx context.Context,
+	request *workflowservice.PushStreamRequest,
+	opts ...grpc.CallOption,
+) (*workflowservice.PushStreamResponse, error) {
+	ctx, cancel := c.createContext(ctx)
+	defer cancel()
+	return c.client.PushStream(ctx, request, opts...)
 }
 
 func (c *clientImpl) QueryWorkflow(

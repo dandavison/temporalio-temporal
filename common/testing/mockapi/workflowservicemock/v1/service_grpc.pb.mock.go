@@ -1122,6 +1122,26 @@ func (mr *MockWorkflowServiceClientMockRecorder) PollNexusTaskQueue(ctx, in any,
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "PollNexusTaskQueue", reflect.TypeOf((*MockWorkflowServiceClient)(nil).PollNexusTaskQueue), varargs...)
 }
 
+// PollStream mocks base method.
+func (m *MockWorkflowServiceClient) PollStream(ctx context.Context, in *workflowservice.PollStreamRequest, opts ...grpc.CallOption) (*workflowservice.PollStreamResponse, error) {
+	m.ctrl.T.Helper()
+	varargs := []any{ctx, in}
+	for _, a := range opts {
+		varargs = append(varargs, a)
+	}
+	ret := m.ctrl.Call(m, "PollStream", varargs...)
+	ret0, _ := ret[0].(*workflowservice.PollStreamResponse)
+	ret1, _ := ret[1].(error)
+	return ret0, ret1
+}
+
+// PollStream indicates an expected call of PollStream.
+func (mr *MockWorkflowServiceClientMockRecorder) PollStream(ctx, in any, opts ...any) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	varargs := append([]any{ctx, in}, opts...)
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "PollStream", reflect.TypeOf((*MockWorkflowServiceClient)(nil).PollStream), varargs...)
+}
+
 // PollWorkflowExecutionUpdate mocks base method.
 func (m *MockWorkflowServiceClient) PollWorkflowExecutionUpdate(ctx context.Context, in *workflowservice.PollWorkflowExecutionUpdateRequest, opts ...grpc.CallOption) (*workflowservice.PollWorkflowExecutionUpdateResponse, error) {
 	m.ctrl.T.Helper()
@@ -1160,6 +1180,26 @@ func (mr *MockWorkflowServiceClientMockRecorder) PollWorkflowTaskQueue(ctx, in a
 	mr.mock.ctrl.T.Helper()
 	varargs := append([]any{ctx, in}, opts...)
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "PollWorkflowTaskQueue", reflect.TypeOf((*MockWorkflowServiceClient)(nil).PollWorkflowTaskQueue), varargs...)
+}
+
+// PushStream mocks base method.
+func (m *MockWorkflowServiceClient) PushStream(ctx context.Context, in *workflowservice.PushStreamRequest, opts ...grpc.CallOption) (*workflowservice.PushStreamResponse, error) {
+	m.ctrl.T.Helper()
+	varargs := []any{ctx, in}
+	for _, a := range opts {
+		varargs = append(varargs, a)
+	}
+	ret := m.ctrl.Call(m, "PushStream", varargs...)
+	ret0, _ := ret[0].(*workflowservice.PushStreamResponse)
+	ret1, _ := ret[1].(error)
+	return ret0, ret1
+}
+
+// PushStream indicates an expected call of PushStream.
+func (mr *MockWorkflowServiceClientMockRecorder) PushStream(ctx, in any, opts ...any) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	varargs := append([]any{ctx, in}, opts...)
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "PushStream", reflect.TypeOf((*MockWorkflowServiceClient)(nil).PushStream), varargs...)
 }
 
 // QueryWorkflow mocks base method.

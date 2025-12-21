@@ -256,6 +256,12 @@ func (wt *WorkflowTags) extractFromWorkflowServiceServerMessage(message any) []t
 		return nil
 	case *workflowservice.PollNexusTaskQueueResponse:
 		return wt.fromTaskToken(r.GetTaskToken())
+	case *workflowservice.PollStreamRequest:
+		return []tag.Tag{
+			tag.WorkflowRunID(r.GetRunId()),
+		}
+	case *workflowservice.PollStreamResponse:
+		return nil
 	case *workflowservice.PollWorkflowExecutionUpdateRequest:
 		return []tag.Tag{
 			tag.WorkflowID(r.GetUpdateRef().GetWorkflowExecution().GetWorkflowId()),
@@ -273,6 +279,12 @@ func (wt *WorkflowTags) extractFromWorkflowServiceServerMessage(message any) []t
 			tag.WorkflowID(r.GetWorkflowExecution().GetWorkflowId()),
 			tag.WorkflowRunID(r.GetWorkflowExecution().GetRunId()),
 		}
+	case *workflowservice.PushStreamRequest:
+		return []tag.Tag{
+			tag.WorkflowRunID(r.GetRunId()),
+		}
+	case *workflowservice.PushStreamResponse:
+		return nil
 	case *workflowservice.QueryWorkflowRequest:
 		return []tag.Tag{
 			tag.WorkflowID(r.GetExecution().GetWorkflowId()),
