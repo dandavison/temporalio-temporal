@@ -60,8 +60,13 @@ func (s *streamSuite) TestHappyPath() {
 	})
 	s.NoError(err)
 
-	_, err = s.FrontendClient().PollStream(ctx, &workflowservice.PollStreamRequest{
+	resp, err := s.FrontendClient().PollStream(ctx, &workflowservice.PollStreamRequest{
 		Namespace: s.Namespace().String(),
+		StreamId:  "my-stream-id",
 	})
 	s.NoError(err)
+	s.Equal(2, len(resp.GetMessages()))
+	s.Equal([]byte("hello"), resp.GetMessages()[0].GetData())
+	s.Equal([]byte("world"), resp.GetMessages()[1].GetData())
+
 }

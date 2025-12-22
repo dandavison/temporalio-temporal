@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 
+	commonpb "go.temporal.io/api/common/v1"
 	"go.temporal.io/api/serviceerror"
 	"go.temporal.io/api/workflowservice/v1"
 	"go.temporal.io/server/chasm"
@@ -25,7 +26,7 @@ func (h *handler) PushStream(
 ) (*streampb.PushStreamResponse, error) {
 	request := req.GetFrontendRequest()
 	key := chasm.ExecutionKey{
-		NamespaceID: request.GetNamespace(),
+		NamespaceID: req.GetNamespaceId(),
 		BusinessID:  request.GetStreamId(),
 		RunID:       request.GetRunId(),
 	}
@@ -34,34 +35,28 @@ func (h *handler) PushStream(
 	// upsert API, so we are doing two transactions currently.
 	// TODO: do this in one transaction
 
-	createFn := func() (int64, chasm.ExecutionKey, []byte, error) {
-		return chasm.NewExecution(
+	_, _, err := chasm.UpdateComponent(
+		ctx,
+		chasm.NewComponentRef[*Stream](key),
+		(*Stream).AddMessages,
+		request.GetMessages(),
+	)
+	var notFound *serviceerror.NotFound
+	if errors.As(err, &notFound) {
+		// Stream doesn't exist, create it with the messages
+		_, _, _, err = chasm.NewExecution(
 			ctx,
 			key,
 			func(ctx chasm.MutableContext, req *workflowservice.PushStreamRequest) (*Stream, int64, error) {
-				return newStream(req), 0, nil
+				s := newStream(req)
+				_, err := s.AddMessages(ctx, req.GetMessages())
+				return s, 0, err
 			},
 			request,
 		)
 	}
-	updateFn := func() (int64, []byte, error) {
-		return chasm.UpdateComponent(
-			ctx,
-			chasm.NewComponentRef[*Stream](key),
-			(*Stream).AddMessages,
-			request.GetMessages(),
-		)
-	}
-
-	// TODO: ignored return values
-	_, _, err := updateFn()
-	var notFound *serviceerror.NotFound
-	if errors.As(err, &notFound) {
-		_, _, _, err := createFn()
-		if err != nil {
-			return nil, err
-		}
-		_, _, err = updateFn()
+	if err != nil {
+		return nil, err
 	}
 	return &streampb.PushStreamResponse{
 		FrontendResponse: &workflowservice.PushStreamResponse{},
@@ -73,7 +68,35 @@ func (h *handler) PollStream(
 	ctx context.Context,
 	req *streampb.PollStreamRequest,
 ) (*streampb.PollStreamResponse, error) {
+	request := req.GetFrontendRequest()
+	key := chasm.ExecutionKey{
+		NamespaceID: req.GetNamespaceId(),
+		BusinessID:  request.GetStreamId(),
+		RunID:       request.GetRunId(),
+	}
+
+	response, _, err := chasm.PollComponent(
+		ctx,
+		chasm.NewComponentRef[*Stream](key),
+		func(
+			s *Stream,
+			ctx chasm.Context,
+			req *workflowservice.PollStreamRequest,
+		) (*workflowservice.PollStreamResponse, bool, error) {
+			messages := make([]*commonpb.Payload, 0, len(s.Messages))
+			for _, field := range s.Messages {
+				messages = append(messages, field.Get(ctx))
+			}
+			return &workflowservice.PollStreamResponse{
+				Messages: messages,
+			}, true, nil
+		},
+		request,
+	)
+	if err != nil {
+		return nil, err
+	}
 	return &streampb.PollStreamResponse{
-		FrontendResponse: &workflowservice.PollStreamResponse{},
+		FrontendResponse: response,
 	}, nil
 }
