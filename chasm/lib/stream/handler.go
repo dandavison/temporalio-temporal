@@ -19,11 +19,11 @@ func newHandler() *handler {
 	return &handler{}
 }
 
-// PushStream pushes messages to the stream.
-func (h *handler) PushStream(
+// AddToStream appends messages to the stream.
+func (h *handler) AddToStream(
 	ctx context.Context,
-	req *streampb.PushStreamRequest,
-) (*streampb.PushStreamResponse, error) {
+	req *streampb.AddToStreamRequest,
+) (*streampb.AddToStreamResponse, error) {
 	request := req.GetFrontendRequest()
 	key := chasm.ExecutionKey{
 		NamespaceID: req.GetNamespaceId(),
@@ -47,7 +47,7 @@ func (h *handler) PushStream(
 		_, _, _, err = chasm.NewExecution(
 			ctx,
 			key,
-			func(ctx chasm.MutableContext, req *workflowservice.PushStreamRequest) (*Stream, int64, error) {
+			func(ctx chasm.MutableContext, req *workflowservice.AddToStreamRequest) (*Stream, int64, error) {
 				s := newStream(req)
 				_, err := s.AddMessages(ctx, req.GetMessages())
 				return s, 0, err
@@ -58,8 +58,8 @@ func (h *handler) PushStream(
 	if err != nil {
 		return nil, err
 	}
-	return &streampb.PushStreamResponse{
-		FrontendResponse: &workflowservice.PushStreamResponse{},
+	return &streampb.AddToStreamResponse{
+		FrontendResponse: &workflowservice.AddToStreamResponse{},
 	}, nil
 }
 

@@ -13,7 +13,7 @@ type Stream struct {
 	Messages chasm.Map[int64, *commonpb.Payload]
 }
 
-func newStream(_ *workflowservice.PushStreamRequest) *Stream {
+func newStream(_ *workflowservice.AddToStreamRequest) *Stream {
 	return &Stream{
 		StreamState: &streampb.StreamState{},
 		Messages:    make(chasm.Map[int64, *commonpb.Payload]),
