@@ -3,6 +3,7 @@ package stream
 import (
 	"time"
 
+	"github.com/dandavison/hyperlinked/go/ps"
 	commonpb "go.temporal.io/api/common/v1"
 	"go.temporal.io/api/workflowservice/v1"
 	"go.temporal.io/server/chasm"
@@ -30,6 +31,7 @@ func (s *Stream) AddMessages(ctx chasm.MutableContext, messages []*commonpb.Payl
 	var messageID int64
 	for _, message := range messages {
 		messageID = s.newMessageID()
+		ps.F("messageID: %s\n", messageID)
 		s.Messages[messageID] = chasm.NewDataField(ctx, message)
 	}
 	return messageID, nil
