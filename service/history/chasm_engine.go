@@ -211,6 +211,9 @@ func (e *ChasmEngine) UpdateComponent(
 
 	// TODO: Support WithSpeculative() TransitionOption.
 
+	archetypeID, _ := ref.ArchetypeID(e.registry)
+	rc, _ := e.registry.ComponentByID(archetypeID)
+
 	if err := executionLease.GetContext().UpdateWorkflowExecutionAsActive(
 		ctx,
 		shardContext,
