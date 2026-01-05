@@ -2320,6 +2320,14 @@ func (s *standaloneActivityTestSuite) TestDescribeActivityExecution_InvalidArgum
 		require.NoError(t, err)
 		require.NotEmpty(t, externalStartResp.GetRunId())
 
+		_, err = s.FrontendClient().DescribeActivityExecution(ctx, &workflowservice.DescribeActivityExecutionRequest{
+			Namespace:     existingNamespace,
+			ActivityId:    existingActivityID,
+			RunId:         existingRunID,
+			LongPollToken: validPollResp.LongPollToken,
+		})
+		require.NoError(t, err)
+
 		// Try to use main namespace's poll token with external namespace's activity
 		_, err = s.FrontendClient().DescribeActivityExecution(ctx, &workflowservice.DescribeActivityExecutionRequest{
 			Namespace:     externalNamespace,
