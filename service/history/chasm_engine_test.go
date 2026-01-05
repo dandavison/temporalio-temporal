@@ -896,6 +896,55 @@ func (s *chasmEngineSuite) TestPollComponent_StaleState() {
 	s.Equal("please retry", unavailable.Message)
 }
 
+// TestPollComponent_NamespaceMismatch tests that PollComponent returns a NamespaceNotFound error
+// when the namespace ID in the poll token doesn't exist (e.g. token was created for a different
+// namespace).
+func (s *chasmEngineSuite) TestPollComponent_NamespaceMismatch() {
+	tv := testvars.New(s.T())
+	tv = tv.WithRunID(tv.Any().RunID())
+
+	wrongNamespaceID := "non-existent-namespace-id"
+	executionKey := chasm.ExecutionKey{
+		NamespaceID: wrongNamespaceID,
+		BusinessID:  tv.WorkflowID(),
+		RunID:       tv.RunID(),
+	}
+
+	testComponentTypeID, ok := s.mockShard.ChasmRegistry().ComponentIDFor(&testComponent{})
+	s.True(ok)
+
+	// Mock namespace registry to return NotFound for the wrong namespace ID
+	s.mockNamespaceRegistry.EXPECT().GetNamespaceByID(namespace.ID(wrongNamespaceID)).
+		Return(nil, serviceerror.NewNamespaceNotFound(wrongNamespaceID)).AnyTimes()
+
+	pRef := &persistencespb.ChasmComponentRef{
+		NamespaceId: executionKey.NamespaceID,
+		BusinessId:  executionKey.BusinessID,
+		RunId:       executionKey.RunID,
+		ArchetypeId: uint32(testComponentTypeID),
+		ExecutionVersionedTransition: &persistencespb.VersionedTransition{
+			NamespaceFailoverVersion: s.namespaceEntry.FailoverVersion(),
+			TransitionCount:          testTransitionCount,
+		},
+	}
+	mismatchToken, err := pRef.Marshal()
+	s.NoError(err)
+	mismatchRef, err := chasm.DeserializeComponentRef(mismatchToken)
+	s.NoError(err)
+
+	_, err = s.engine.PollComponent(
+		context.Background(),
+		mismatchRef,
+		func(ctx chasm.Context, component chasm.Component) (bool, error) {
+			s.Fail("predicate should not be called with mismatched namespace")
+			return false, nil
+		},
+	)
+	s.Error(err)
+	var nsNotFound *serviceerror.NamespaceNotFound
+	s.ErrorAs(err, &nsNotFound)
+}
+
 func (s *chasmEngineSuite) TestCloseTime_ReturnsNonZeroWhenCompleted() {
 	tv := testvars.New(s.T())
 	tv = tv.WithRunID(tv.Any().RunID())
