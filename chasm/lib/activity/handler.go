@@ -171,9 +171,9 @@ func (h *handler) DescribeActivityExecution(
 			if errors.Is(err, chasm.ErrMalformedComponentRef) {
 				return nil, false, serviceerror.NewInvalidArgument("invalid long poll token")
 			}
-			if errors.Is(err, chasm.ErrInvalidComponentRef) {
-				return nil, false, serviceerror.NewInvalidArgument("long poll token does not match execution")
-			}
+			// if errors.Is(err, chasm.ErrInvalidComponentRef) {
+			// 	return nil, false, serviceerror.NewInvalidArgument("long poll token does not match execution")
+			// }
 			return nil, false, err
 		}
 		if changed {
