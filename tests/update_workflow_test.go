@@ -5076,7 +5076,7 @@ func TestWorkflowUpdateSuite(t *testing.T) {
 		}
 
 		t.Run("workflow is not running", func(t *testing.T) {
-			_ = testcore.NewEnv(t) // unused s
+			t.Parallel()
 
 			for _, p := range []enumspb.WorkflowIdConflictPolicy{
 				enumspb.WORKFLOW_ID_CONFLICT_POLICY_TERMINATE_EXISTING,
@@ -5084,7 +5084,7 @@ func TestWorkflowUpdateSuite(t *testing.T) {
 				enumspb.WORKFLOW_ID_CONFLICT_POLICY_FAIL,
 			} {
 				t.Run(fmt.Sprintf("start workflow and send update (with conflict policy %v)", p), func(t *testing.T) {
-					_ = testcore.NewEnv(t) // unused s
+					t.Parallel()
 
 					t.Run("and accept", func(t *testing.T) {
 						s := testcore.NewEnv(t)
@@ -5167,10 +5167,10 @@ func TestWorkflowUpdateSuite(t *testing.T) {
 		})
 
 		t.Run("workflow is running", func(t *testing.T) {
-			_ = testcore.NewEnv(t) // unused s
+			t.Parallel()
 
 			t.Run("workflow id conflict policy use-existing: only send update", func(t *testing.T) {
-				_ = testcore.NewEnv(t) // unused s
+				t.Parallel()
 
 				t.Run("and accept", func(t *testing.T) {
 					s := testcore.NewEnv(t)
@@ -5272,7 +5272,7 @@ func TestWorkflowUpdateSuite(t *testing.T) {
 			})
 
 			t.Run("workflow id conflict policy terminate-existing", func(t *testing.T) {
-				_ = testcore.NewEnv(t) // unused s
+				t.Parallel()
 
 				t.Run("terminate workflow first, then start and update", func(t *testing.T) {
 					s := testcore.NewEnv(t)
@@ -5393,7 +5393,7 @@ func TestWorkflowUpdateSuite(t *testing.T) {
 			})
 
 			t.Run("receive completed update result", func(t *testing.T) {
-				_ = testcore.NewEnv(t) // unused s
+				t.Parallel()
 				for _, p := range []enumspb.WorkflowIdConflictPolicy{
 					enumspb.WORKFLOW_ID_CONFLICT_POLICY_TERMINATE_EXISTING,
 					enumspb.WORKFLOW_ID_CONFLICT_POLICY_USE_EXISTING,
@@ -5436,7 +5436,7 @@ func TestWorkflowUpdateSuite(t *testing.T) {
 			})
 
 			t.Run("dedupes start", func(t *testing.T) {
-				_ = testcore.NewEnv(t) // unused s
+				t.Parallel()
 				for _, p := range []enumspb.WorkflowIdConflictPolicy{
 					enumspb.WORKFLOW_ID_CONFLICT_POLICY_TERMINATE_EXISTING,
 					enumspb.WORKFLOW_ID_CONFLICT_POLICY_USE_EXISTING,
@@ -5485,7 +5485,7 @@ func TestWorkflowUpdateSuite(t *testing.T) {
 		})
 
 		t.Run("workflow is closed", func(t *testing.T) {
-			_ = testcore.NewEnv(t) // unused s
+			t.Parallel()
 
 			t.Run("workflow id reuse policy allow-duplicate", func(t *testing.T) {
 				s := testcore.NewEnv(t)
@@ -5580,7 +5580,7 @@ func TestWorkflowUpdateSuite(t *testing.T) {
 			})
 
 			t.Run("receive completed update result", func(t *testing.T) {
-				_ = testcore.NewEnv(t) // unused s
+				t.Parallel()
 				for _, p := range []enumspb.WorkflowIdConflictPolicy{
 					enumspb.WORKFLOW_ID_CONFLICT_POLICY_TERMINATE_EXISTING,
 					enumspb.WORKFLOW_ID_CONFLICT_POLICY_USE_EXISTING,
@@ -5637,7 +5637,7 @@ func TestWorkflowUpdateSuite(t *testing.T) {
 		})
 
 		t.Run("workflow start conflict", func(t *testing.T) {
-			_ = testcore.NewEnv(t) // unused s
+			t.Parallel()
 
 			t.Run("workflow id conflict policy fail: use-existing", func(t *testing.T) {
 				// Uses InjectHook which requires a dedicated cluster to avoid conflicts with other tests.
@@ -5676,7 +5676,7 @@ func TestWorkflowUpdateSuite(t *testing.T) {
 		})
 
 		t.Run("update is aborted by closing workflow", func(t *testing.T) {
-			_ = testcore.NewEnv(t) // unused s
+			t.Parallel()
 
 			t.Run("retry request once when workflow was not started", func(t *testing.T) {
 				s := testcore.NewEnv(t)
