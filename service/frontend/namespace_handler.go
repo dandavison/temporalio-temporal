@@ -15,7 +15,6 @@ import (
 	"go.temporal.io/api/workflowservice/v1"
 	enumsspb "go.temporal.io/server/api/enums/v1"
 	persistencespb "go.temporal.io/server/api/persistence/v1"
-	"go.temporal.io/server/chasm/lib/activity"
 	"go.temporal.io/server/common"
 	"go.temporal.io/server/common/archiver"
 	"go.temporal.io/server/common/archiver/provider"
@@ -46,7 +45,6 @@ type (
 		archiverProvider       provider.ArchiverProvider
 		timeSource             clock.TimeSource
 		config                 *Config
-		activityConfig         *activity.Config
 	}
 )
 
@@ -74,7 +72,6 @@ func newNamespaceHandler(
 	archiverProvider provider.ArchiverProvider,
 	timeSource clock.TimeSource,
 	config *Config,
-	activityConfig *activity.Config,
 ) *namespaceHandler {
 	return &namespaceHandler{
 		logger:                 logger,
@@ -86,7 +83,6 @@ func newNamespaceHandler(
 		archiverProvider:       archiverProvider,
 		timeSource:             timeSource,
 		config:                 config,
-		activityConfig:         activityConfig,
 	}
 }
 
@@ -867,7 +863,7 @@ func (d *namespaceHandler) createResponse(
 			ReportedProblemsSearchAttribute: numConsecutiveWorkflowTaskProblemsToTriggerSearchAttribute > 0,
 			WorkerHeartbeats:                d.config.WorkerHeartbeatsEnabled(info.Name),
 			WorkflowPause:                   d.config.WorkflowPauseEnabled(info.Name),
-			StandaloneActivities:            d.activityConfig.Enabled(info.Name),
+			StandaloneActivities:            d.config.Activity.Enabled(info.Name),
 		},
 		Limits: &namespacepb.NamespaceInfo_Limits{
 			BlobSizeLimitError: int64(d.config.BlobSizeLimitError(info.Name)),
