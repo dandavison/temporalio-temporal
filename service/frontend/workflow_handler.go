@@ -175,6 +175,7 @@ func NewWorkflowHandler(
 	scheduleSpecBuilder *scheduler.SpecBuilder,
 	httpEnabled bool,
 	activityHandler activity.FrontendHandler,
+	activityConfig *activity.Config,
 	registry *chasm.Registry,
 ) *WorkflowHandler {
 	handler := &WorkflowHandler{
@@ -192,6 +193,7 @@ func NewWorkflowHandler(
 			archiverProvider,
 			timeSource,
 			config,
+			activityConfig,
 		),
 		getDefaultWorkflowRetrySettings: config.DefaultWorkflowRetryPolicy,
 		visibilityMgr:                   visibilityMgr,

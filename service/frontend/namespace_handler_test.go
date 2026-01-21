@@ -16,6 +16,7 @@ import (
 	"go.temporal.io/api/serviceerror"
 	"go.temporal.io/api/workflowservice/v1"
 	persistencespb "go.temporal.io/server/api/persistence/v1"
+	"go.temporal.io/server/chasm/lib/activity"
 	"go.temporal.io/server/common/archiver"
 	"go.temporal.io/server/common/archiver/provider"
 	"go.temporal.io/server/common/clock"
@@ -46,6 +47,7 @@ type (
 		mockArchiverProvider    *provider.MockArchiverProvider
 		fakeClock               *clock.EventTimeSource
 		config                  *Config
+		activityConfig          *activity.Config
 
 		handler *namespaceHandler
 	}
@@ -84,6 +86,7 @@ func (s *namespaceHandlerCommonSuite) SetupTest() {
 	s.mockArchiverProvider = provider.NewMockArchiverProvider(s.controller)
 	s.fakeClock = clock.NewEventTimeSource()
 	s.config = NewConfig(dc.NewNoopCollection(), 1024)
+	s.activityConfig = activity.ConfigProvider(dc.NewNoopCollection())
 	s.handler = newNamespaceHandler(
 		logger,
 		s.mockMetadataMgr,
@@ -93,6 +96,7 @@ func (s *namespaceHandlerCommonSuite) SetupTest() {
 		s.mockArchiverProvider,
 		s.fakeClock,
 		s.config,
+		s.activityConfig,
 	)
 }
 
@@ -396,7 +400,7 @@ func (s *namespaceHandlerCommonSuite) TestCapabilitiesAndLimits() {
 	s.config.NumConsecutiveWorkflowTaskProblemsToTriggerSearchAttribute = dc.GetIntPropertyFnFilteredByNamespace(5)
 	s.config.WorkerHeartbeatsEnabled = dc.GetBoolPropertyFnFilteredByNamespace(false)
 	s.config.WorkflowPauseEnabled = dc.GetBoolPropertyFnFilteredByNamespace(true)
-	s.config.Activity.Enabled = dc.GetBoolPropertyFnFilteredByNamespace(true)
+	s.activityConfig.Enabled = dc.GetBoolPropertyFnFilteredByNamespace(true)
 	s.config.BlobSizeLimitError = dc.GetIntPropertyFnFilteredByNamespace(1024)
 	s.config.MemoSizeLimitError = dc.GetIntPropertyFnFilteredByNamespace(512)
 
