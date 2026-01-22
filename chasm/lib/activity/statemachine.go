@@ -42,8 +42,7 @@ var TransitionScheduled = chasm.NewTransition(
 	func(a *Activity, ctx chasm.MutableContext, _ any) error {
 		attempt := a.LastAttempt.Get(ctx)
 		currentTime := ctx.Now(a)
-		attempt.Count++
-		attempt.Stamp++
+		attempt.Count += 1
 
 		if timeout := a.GetScheduleToStartTimeout().AsDuration(); timeout > 0 {
 			ctx.AddTask(
@@ -52,7 +51,7 @@ var TransitionScheduled = chasm.NewTransition(
 					ScheduledTime: currentTime.Add(timeout),
 				},
 				&activitypb.ScheduleToStartTimeoutTask{
-					Stamp: attempt.GetStamp(),
+					Attempt: attempt.GetCount(),
 				})
 		}
 
@@ -69,7 +68,7 @@ var TransitionScheduled = chasm.NewTransition(
 			a,
 			chasm.TaskAttributes{},
 			&activitypb.ActivityDispatchTask{
-				Stamp: attempt.GetStamp(),
+				Attempt: attempt.GetCount(),
 			})
 
 		return nil
@@ -92,8 +91,7 @@ var TransitionRescheduled = chasm.NewTransition(
 	func(a *Activity, ctx chasm.MutableContext, event rescheduleEvent) error {
 		attempt := a.LastAttempt.Get(ctx)
 		currentTime := ctx.Now(a)
-		attempt.Count++
-		attempt.Stamp++
+		attempt.Count += 1
 
 		err := a.recordFailedAttempt(ctx, event.retryInterval, event.failure, currentTime, false)
 		if err != nil {
@@ -107,7 +105,7 @@ var TransitionRescheduled = chasm.NewTransition(
 					ScheduledTime: currentTime.Add(timeout).Add(event.retryInterval),
 				},
 				&activitypb.ScheduleToStartTimeoutTask{
-					Stamp: attempt.GetStamp(),
+					Attempt: attempt.GetCount(),
 				})
 		}
 
@@ -117,7 +115,7 @@ var TransitionRescheduled = chasm.NewTransition(
 				ScheduledTime: currentTime.Add(event.retryInterval),
 			},
 			&activitypb.ActivityDispatchTask{
-				Stamp: attempt.GetStamp(),
+				Attempt: attempt.GetCount(),
 			})
 
 		return nil
@@ -147,7 +145,7 @@ var TransitionStarted = chasm.NewTransition(
 				ScheduledTime: startTime.Add(a.GetStartToCloseTimeout().AsDuration()),
 			},
 			&activitypb.StartToCloseTimeoutTask{
-				Stamp: a.LastAttempt.Get(ctx).GetStamp(),
+				Attempt: a.LastAttempt.Get(ctx).GetCount(),
 			})
 
 		if heartbeatTimeout := a.GetHeartbeatTimeout().AsDuration(); heartbeatTimeout > 0 {
@@ -157,7 +155,7 @@ var TransitionStarted = chasm.NewTransition(
 					ScheduledTime: startTime.Add(heartbeatTimeout),
 				},
 				&activitypb.HeartbeatTimeoutTask{
-					Stamp: attempt.GetStamp(),
+					Attempt: attempt.GetCount(),
 				})
 		}
 
