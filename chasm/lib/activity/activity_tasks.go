@@ -37,7 +37,7 @@ func (e *activityDispatchTaskExecutor) Validate(
 ) (bool, error) {
 	// TODO(saa-preview): make sure we handle resets when we support them, as they will reset the attempt count
 	return (TransitionStarted.Possible(activity) &&
-		task.Stamp == activity.LastAttempt.Get(ctx).GetStamp()), nil
+		task.Attempt == activity.LastAttempt.Get(ctx).GetCount()), nil
 }
 
 func (e *activityDispatchTaskExecutor) Execute(
@@ -86,7 +86,7 @@ func (e *scheduleToStartTimeoutTaskExecutor) Validate(
 	task *activitypb.ScheduleToStartTimeoutTask,
 ) (bool, error) {
 	return (activity.Status == activitypb.ACTIVITY_EXECUTION_STATUS_SCHEDULED &&
-		task.Stamp == activity.LastAttempt.Get(ctx).GetStamp()), nil
+		task.Attempt == activity.LastAttempt.Get(ctx).GetCount()), nil
 }
 
 func (e *scheduleToStartTimeoutTaskExecutor) Execute(
@@ -181,7 +181,7 @@ func (e *startToCloseTimeoutTaskExecutor) Validate(
 	task *activitypb.StartToCloseTimeoutTask,
 ) (bool, error) {
 	valid := (activity.Status == activitypb.ACTIVITY_EXECUTION_STATUS_STARTED &&
-		task.Stamp == activity.LastAttempt.Get(ctx).GetStamp())
+		task.Attempt == activity.LastAttempt.Get(ctx).GetCount())
 	return valid, nil
 }
 
@@ -258,7 +258,7 @@ func (e *heartbeatTimeoutTaskExecutor) Validate(
 	}
 	// Task attempt must still match current attempt.
 	attempt := activity.LastAttempt.Get(ctx)
-	if attempt.GetStamp() != task.Stamp {
+	if attempt.GetCount() != task.Attempt {
 		return false, nil
 	}
 
