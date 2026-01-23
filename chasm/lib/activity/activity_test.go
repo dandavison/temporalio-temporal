@@ -154,3 +154,75 @@ func TestHandleStarted(t *testing.T) {
 		})
 	}
 }
+
+func TestHandleStarted_IdempotentRetry_ProductionFlow(t *testing.T) {
+	// This test simulates the actual production flow where TransitionStarted
+	// should set StartRequestId. Unlike the table-driven tests above which
+	// manually pre-set StartRequestId, this tests the real behavior.
+	//
+	// The scenario: matching calls RecordActivityTaskStarted, history processes it,
+	// but matching doesn't receive the response (network issue). Matching retries
+	// with the same request ID. The second call should succeed (idempotent).
+	testTime := time.Date(2000, 1, 1, 0, 0, 0, 0, time.UTC)
+	testRequestID := "test-request-id"
+
+	ctx := &chasm.MockMutableContext{
+		MockContext: chasm.MockContext{
+			HandleNow: func(chasm.Component) time.Time { return testTime },
+			HandleExecutionKey: func() chasm.ExecutionKey {
+				return chasm.ExecutionKey{
+					BusinessID: "test-activity-id",
+					RunID:      "test-run-id",
+				}
+			},
+		},
+	}
+
+	// Setup activity in SCHEDULED state - as it would be after TransitionScheduled.
+	// Critically, StartRequestId is NOT set (empty string) - this is the production state.
+	attemptState := &activitypb.ActivityAttemptState{
+		Count: 1,
+		Stamp: 1,
+		// StartRequestId intentionally not set - simulating production state
+	}
+
+	activity := &Activity{
+		ActivityState: &activitypb.ActivityState{
+			ActivityType:           &commonpb.ActivityType{Name: "test-activity-type"},
+			Status:                 activitypb.ACTIVITY_EXECUTION_STATUS_SCHEDULED,
+			TaskQueue:              &taskqueuepb.TaskQueue{Name: "test-task-queue"},
+			ScheduleToCloseTimeout: durationpb.New(10 * time.Minute),
+			ScheduleToStartTimeout: durationpb.New(2 * time.Minute),
+			StartToCloseTimeout:    durationpb.New(3 * time.Minute),
+			HeartbeatTimeout:       durationpb.New(1 * time.Minute),
+			ScheduleTime:           timestamppb.New(testTime.Add(-30 * time.Second)),
+		},
+		LastAttempt: chasm.NewDataField(ctx, attemptState),
+		RequestData: chasm.NewDataField(ctx, &activitypb.ActivityRequestData{
+			Input: &commonpb.Payloads{
+				Payloads: []*commonpb.Payload{{Data: []byte("test-input")}},
+			},
+		}),
+		Outcome: chasm.NewDataField(ctx, &activitypb.ActivityOutcome{}),
+	}
+
+	request := &historyservice.RecordActivityTaskStartedRequest{
+		Stamp:     1,
+		RequestId: testRequestID,
+	}
+
+	// First call: should succeed and transition to STARTED
+	response1, err := activity.HandleStarted(ctx, request)
+	require.NoError(t, err)
+	require.NotNil(t, response1)
+	require.Equal(t, activitypb.ACTIVITY_EXECUTION_STATUS_STARTED, activity.Status)
+
+	// Verify StartRequestId was set by TransitionStarted
+	require.Equal(t, testRequestID, attemptState.GetStartRequestId(),
+		"TransitionStarted should set StartRequestId for idempotency")
+
+	// Second call with same request ID: should succeed (idempotent retry)
+	response2, err := activity.HandleStarted(ctx, request)
+	require.NoError(t, err, "Idempotent retry with same request ID should succeed")
+	require.NotNil(t, response2)
+}
