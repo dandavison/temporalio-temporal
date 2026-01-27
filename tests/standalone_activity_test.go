@@ -1374,6 +1374,137 @@ func (s *standaloneActivityTestSuite) TestCancellation() {
 		})
 	})
 
+	t.Run("WorkflowActivityRetry", func(t *testing.T) {
+		runTest := func(t *testing.T, requestCancellation bool) {
+			ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
+			defer cancel()
+
+			workflowID := testcore.RandomizeStr(t.Name())
+			taskQueue := testcore.RandomizeStr(t.Name())
+
+			retryableFailure := &failurepb.Failure{
+				Message: "retryable failure",
+				FailureInfo: &failurepb.Failure_ApplicationFailureInfo{
+					ApplicationFailureInfo: &failurepb.ApplicationFailureInfo{NonRetryable: false},
+				},
+			}
+
+			_, err := s.FrontendClient().StartWorkflowExecution(ctx, &workflowservice.StartWorkflowExecutionRequest{
+				Namespace:           s.Namespace().String(),
+				WorkflowId:          workflowID,
+				WorkflowType:        &commonpb.WorkflowType{Name: "test-workflow"},
+				TaskQueue:           &taskqueuepb.TaskQueue{Name: taskQueue},
+				WorkflowRunTimeout:  durationpb.New(1 * time.Minute),
+				WorkflowTaskTimeout: durationpb.New(10 * time.Second),
+				RequestId:           uuid.NewString(),
+			})
+			require.NoError(t, err)
+
+			pollResp, err := s.FrontendClient().PollWorkflowTaskQueue(ctx, &workflowservice.PollWorkflowTaskQueueRequest{
+				Namespace: s.Namespace().String(),
+				TaskQueue: &taskqueuepb.TaskQueue{Name: taskQueue, Kind: enumspb.TASK_QUEUE_KIND_NORMAL},
+				Identity:  "test-worker",
+			})
+			require.NoError(t, err)
+
+			scheduledEventID := pollResp.StartedEventId + 2
+
+			_, err = s.FrontendClient().RespondWorkflowTaskCompleted(ctx, &workflowservice.RespondWorkflowTaskCompletedRequest{
+				Namespace: s.Namespace().String(),
+				TaskToken: pollResp.TaskToken,
+				Commands: []*commandpb.Command{{
+					CommandType: enumspb.COMMAND_TYPE_SCHEDULE_ACTIVITY_TASK,
+					Attributes: &commandpb.Command_ScheduleActivityTaskCommandAttributes{
+						ScheduleActivityTaskCommandAttributes: &commandpb.ScheduleActivityTaskCommandAttributes{
+							ActivityId:             "activity-1",
+							ActivityType:           &commonpb.ActivityType{Name: "test-activity"},
+							TaskQueue:              &taskqueuepb.TaskQueue{Name: taskQueue},
+							ScheduleToCloseTimeout: durationpb.New(1 * time.Minute),
+							StartToCloseTimeout:    durationpb.New(1 * time.Minute),
+							RetryPolicy: &commonpb.RetryPolicy{
+								InitialInterval: durationpb.New(1 * time.Millisecond),
+								MaximumAttempts: 2,
+							},
+						},
+					},
+				}},
+				Identity: "test-worker",
+			})
+			require.NoError(t, err)
+
+			activityPollResp, err := s.FrontendClient().PollActivityTaskQueue(ctx, &workflowservice.PollActivityTaskQueueRequest{
+				Namespace: s.Namespace().String(),
+				TaskQueue: &taskqueuepb.TaskQueue{Name: taskQueue, Kind: enumspb.TASK_QUEUE_KIND_NORMAL},
+				Identity:  "test-worker",
+			})
+			require.NoError(t, err)
+			require.EqualValues(t, 1, activityPollResp.Attempt)
+
+			if requestCancellation {
+				_, err = s.FrontendClient().SignalWorkflowExecution(ctx, &workflowservice.SignalWorkflowExecutionRequest{
+					Namespace: s.Namespace().String(),
+					WorkflowExecution: &commonpb.WorkflowExecution{
+						WorkflowId: workflowID,
+					},
+					SignalName: "cancel-activity",
+					Identity:   "test",
+				})
+				require.NoError(t, err)
+
+				pollResp, err = s.FrontendClient().PollWorkflowTaskQueue(ctx, &workflowservice.PollWorkflowTaskQueueRequest{
+					Namespace: s.Namespace().String(),
+					TaskQueue: &taskqueuepb.TaskQueue{Name: taskQueue, Kind: enumspb.TASK_QUEUE_KIND_NORMAL},
+					Identity:  "test-worker",
+				})
+				require.NoError(t, err)
+
+				_, err = s.FrontendClient().RespondWorkflowTaskCompleted(ctx, &workflowservice.RespondWorkflowTaskCompletedRequest{
+					Namespace: s.Namespace().String(),
+					TaskToken: pollResp.TaskToken,
+					Commands: []*commandpb.Command{{
+						CommandType: enumspb.COMMAND_TYPE_REQUEST_CANCEL_ACTIVITY_TASK,
+						Attributes: &commandpb.Command_RequestCancelActivityTaskCommandAttributes{
+							RequestCancelActivityTaskCommandAttributes: &commandpb.RequestCancelActivityTaskCommandAttributes{
+								ScheduledEventId: scheduledEventID,
+							},
+						},
+					}},
+					Identity: "test-worker",
+				})
+				require.NoError(t, err)
+			}
+
+			_, err = s.FrontendClient().RespondActivityTaskFailed(ctx, &workflowservice.RespondActivityTaskFailedRequest{
+				Namespace: s.Namespace().String(),
+				TaskToken: activityPollResp.TaskToken,
+				Failure:   retryableFailure,
+				Identity:  "test-worker",
+			})
+			require.NoError(t, err)
+
+			descResp, err := s.FrontendClient().DescribeWorkflowExecution(ctx, &workflowservice.DescribeWorkflowExecutionRequest{
+				Namespace: s.Namespace().String(),
+				Execution: &commonpb.WorkflowExecution{
+					WorkflowId: workflowID,
+				},
+			})
+			require.NoError(t, err)
+
+			if requestCancellation {
+				require.Len(t, descResp.PendingActivities, 0)
+			} else {
+				require.Len(t, descResp.PendingActivities, 1)
+				require.EqualValues(t, 2, descResp.PendingActivities[0].Attempt)
+			}
+		}
+		t.Run("AllowedIfNotCancelRequested", func(t *testing.T) {
+			runTest(t, false)
+		})
+		t.Run("PreventedIfCancelRequested", func(t *testing.T) {
+			runTest(t, true)
+		})
+	})
+
 	testValidationFailureCases := []struct {
 		name   string
 		reqID  string
