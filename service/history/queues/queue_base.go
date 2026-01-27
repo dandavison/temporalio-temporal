@@ -1,31 +1,8 @@
-// The MIT License
-//
-// Copyright (c) 2020 Temporal Technologies Inc.  All rights reserved.
-//
-// Copyright (c) 2020 Uber Technologies, Inc.
-//
-// Permission is hereby granted, free of charge, to any person obtaining a copy
-// of this software and associated documentation files (the "Software"), to deal
-// in the Software without restriction, including without limitation the rights
-// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-// copies of the Software, and to permit persons to whom the Software is
-// furnished to do so, subject to the following conditions:
-//
-// The above copyright notice and this permission notice shall be included in
-// all copies or substantial portions of the Software.
-//
-// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
-// THE SOFTWARE.
-
 package queues
 
 import (
 	"context"
+	"math"
 	"sync"
 	"time"
 
@@ -41,17 +18,18 @@ import (
 	"go.temporal.io/server/common/persistence"
 	"go.temporal.io/server/common/predicates"
 	"go.temporal.io/server/common/quotas"
-	hshard "go.temporal.io/server/service/history/shard"
+	historyi "go.temporal.io/server/service/history/interfaces"
 	"go.temporal.io/server/service/history/tasks"
 )
 
 const (
 	DefaultReaderId = common.DefaultQueueReaderID
 
-	// Non-default readers will use critical pending task count * this coefficient
+	// Non-default readers will use critical pending task count * (this multiplier ^ readerID)
 	// as its max pending task count so that their loading will never trigger pending
 	// task alert & action
-	nonDefaultReaderMaxPendingTaskCoefficient = 0.8
+	maxPendingTaskMultiplier = 0.8
+	minMaxPendingTaskCount   = 1000
 
 	queueIOTimeout = 5 * time.Second * debug.TimeoutMultiplier
 
@@ -75,7 +53,7 @@ type (
 	}
 
 	queueBase struct {
-		shard hshard.Context
+		shard historyi.ShardContext
 
 		status     int32
 		shutdownCh chan struct{}
@@ -118,11 +96,13 @@ type (
 		CheckpointInterval                  dynamicconfig.DurationPropertyFn
 		CheckpointIntervalJitterCoefficient dynamicconfig.FloatPropertyFn
 		MaxReaderCount                      dynamicconfig.IntPropertyFn
+		MoveGroupTaskCountBase              dynamicconfig.IntPropertyFn
+		MoveGroupTaskCountMultiplier        dynamicconfig.FloatPropertyFn
 	}
 )
 
 func newQueueBase(
-	shard hshard.Context,
+	shard historyi.ShardContext,
 	category tasks.Category,
 	paginationFnProvider PaginationFnProvider,
 	scheduler Scheduler,
@@ -164,8 +144,15 @@ func newQueueBase(
 			// non-default reader should not trigger task unloading
 			// otherwise those readers will keep loading, hit pending task count limit, unload, throttle, load, etc...
 			// use a limit lower than the critical pending task count instead
+
+			// Use lower maxPendingTaskCount for lower reader to guarantee that higher reader can
+			// always have some tasks loaded.
 			readerOptions.MaxPendingTasksCount = func() int {
-				return int(float64(options.PendingTasksCriticalCount()) * nonDefaultReaderMaxPendingTaskCoefficient)
+				return max(
+					minMaxPendingTaskCount,
+					int(float64(options.PendingTasksCriticalCount())*
+						math.Pow(maxPendingTaskMultiplier, float64(readerID))),
+				)
 			}
 		}
 
@@ -305,14 +292,20 @@ func (p *queueBase) checkpoint() {
 		tasksCompleted += r.ShrinkSlices()
 	})
 
-	// Run slicePredicateAction to move slices with non-universal predicate to non-default reader
-	// so that upon shard reload, task loading for those slices won't block other slices in the default reader.
-	runAction(
-		newSlicePredicateAction(p.monitor, p.mitigator.maxReaderCount()),
-		p.readerGroup,
-		p.metricsHandler,
-		p.logger,
-	)
+	var checkpointAction Action
+	maxReaderCount := p.options.MaxReaderCount()
+	if taskCountBase := p.options.MoveGroupTaskCountBase(); taskCountBase > 0 {
+		// Run an action to proactively move task group with high pending task to non-default reader
+		// so that upon shard reload, those groups won't block other tasks in the default reader from
+		// being loaded.
+		checkpointAction = newMoveGroupAction(maxReaderCount, p.grouper, taskCountBase, p.options.MoveGroupTaskCountMultiplier(), p.logger)
+	} else {
+		// Run slicePredicateAction to move slices with non-universal predicate to non-default reader
+		// so that upon shard reload, task loading for those slices won't block other slices in the default reader.
+		checkpointAction = newSlicePredicateAction(p.monitor, maxReaderCount)
+	}
+
+	runAction(checkpointAction, p.readerGroup, p.metricsHandler)
 
 	readerScopes := make(map[int64][]Scope)
 	newExclusiveDeletionHighWatermark := p.nonReadableScope.Range.InclusiveMin
@@ -456,6 +449,6 @@ func createCheckpointRetryPolicy() backoff.RetryPolicy {
 
 func newQueueIOContext() (context.Context, context.CancelFunc) {
 	ctx, cancel := context.WithTimeout(context.Background(), queueIOTimeout)
-	ctx = headers.SetCallerInfo(ctx, headers.SystemBackgroundCallerInfo)
+	ctx = headers.SetCallerInfo(ctx, headers.SystemBackgroundHighCallerInfo)
 	return ctx, cancel
 }

@@ -1,27 +1,3 @@
-// The MIT License
-//
-// Copyright (c) 2020 Temporal Technologies Inc.  All rights reserved.
-//
-// Copyright (c) 2020 Uber Technologies, Inc.
-//
-// Permission is hereby granted, free of charge, to any person obtaining a copy
-// of this software and associated documentation files (the "Software"), to deal
-// in the Software without restriction, including without limitation the rights
-// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-// copies of the Software, and to permit persons to whom the Software is
-// furnished to do so, subject to the following conditions:
-//
-// The above copyright notice and this permission notice shall be included in
-// all copies or substantial portions of the Software.
-//
-// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
-// THE SOFTWARE.
-
 package respondactivitytaskfailed
 
 import (
@@ -35,37 +11,41 @@ import (
 	"go.temporal.io/server/common/definition"
 	"go.temporal.io/server/common/metrics"
 	"go.temporal.io/server/common/namespace"
+	"go.temporal.io/server/common/tasktoken"
 	"go.temporal.io/server/service/history/api"
 	"go.temporal.io/server/service/history/consts"
-	"go.temporal.io/server/service/history/shard"
+	historyi "go.temporal.io/server/service/history/interfaces"
 	"go.temporal.io/server/service/history/workflow"
 )
 
 func Invoke(
 	ctx context.Context,
 	req *historyservice.RespondActivityTaskFailedRequest,
-	shard shard.Context,
+	shard historyi.ShardContext,
 	workflowConsistencyChecker api.WorkflowConsistencyChecker,
 ) (resp *historyservice.RespondActivityTaskFailedResponse, retError error) {
-	namespaceEntry, err := api.GetActiveNamespace(shard, namespace.ID(req.GetNamespaceId()))
-	if err != nil {
-		return nil, err
-	}
-	namespace := namespaceEntry.Name()
-
 	request := req.FailedRequest
-	tokenSerializer := common.NewProtoTaskTokenSerializer()
+	tokenSerializer := tasktoken.NewSerializer()
 	token, err0 := tokenSerializer.Deserialize(request.TaskToken)
 	if err0 != nil {
 		return nil, consts.ErrDeserializingToken
 	}
+
+	namespaceEntry, err := api.GetActiveNamespace(shard, namespace.ID(req.GetNamespaceId()), token.WorkflowId)
+	if err != nil {
+		return nil, err
+	}
+	namespaceName := namespaceEntry.Name()
 	if err := api.SetActivityTaskRunID(ctx, token, workflowConsistencyChecker); err != nil {
 		return nil, err
 	}
 
-	var activityStartedTime time.Time
+	var attemptStartedTime time.Time
+	var firstScheduledTime time.Time
 	var taskQueue string
 	var workflowTypeName string
+	var closed bool
+	var versioningBehavior enumspb.VersioningBehavior
 	err = api.GetAndUpdateWorkflowWithNew(
 		ctx,
 		token.Clock,
@@ -99,10 +79,7 @@ func Invoke(
 				return nil, consts.ErrStaleState
 			}
 
-			if !activityRunning ||
-				ai.StartedEventId == common.EmptyEventID ||
-				(token.GetScheduledEventId() != common.EmptyEventID && token.Attempt != ai.Attempt) ||
-				(token.GetVersion() != common.EmptyVersion && token.Version != ai.Version) {
+			if !activityRunning || api.IsActivityTaskNotFoundForToken(token, ai, nil) {
 				return nil, consts.ErrActivityTaskNotFound
 			}
 
@@ -118,11 +95,13 @@ func Invoke(
 
 			postActions := &api.UpdateWorkflowAction{}
 			failure := request.GetFailure()
-			mutableState.RecordLastActivityStarted(ai)
+			mutableState.RecordLastActivityCompleteTime(ai)
 			retryState, err := mutableState.RetryActivity(ai, failure)
 			if err != nil {
 				return nil, err
 			}
+			// TODO uncomment once RETRY_STATE_PAUSED is supported
+			// if retryState != enumspb.RETRY_STATE_IN_PROGRESS && retryState != enumspb.RETRY_STATE_PAUSED {
 			if retryState != enumspb.RETRY_STATE_IN_PROGRESS {
 				// no more retry, and we want to record the failure event
 				if _, err := mutableState.AddActivityTaskFailedEvent(scheduledEventID, ai.StartedEventId, failure, retryState, request.GetIdentity(), request.GetWorkerVersion()); err != nil {
@@ -130,25 +109,37 @@ func Invoke(
 					return nil, err
 				}
 				postActions.CreateWorkflowTask = true
+				closed = true
+			} else {
+				closed = false
 			}
 
-			activityStartedTime = ai.StartedTime.AsTime()
+			attemptStartedTime = ai.StartedTime.AsTime()
+			firstScheduledTime = ai.FirstScheduledTime.AsTime()
 			taskQueue = ai.TaskQueue
+			versioningBehavior = mutableState.GetEffectiveVersioningBehavior()
 			return postActions, nil
 		},
 		nil,
 		shard,
 		workflowConsistencyChecker,
 	)
-	if err == nil && !activityStartedTime.IsZero() {
-		metrics.ActivityE2ELatency.With(
-			workflow.GetPerTaskQueueFamilyScope(
-				shard.GetMetricsHandler(), namespace, taskQueue, shard.GetConfig(),
-				metrics.OperationTag(metrics.HistoryRespondActivityTaskFailedScope),
-				metrics.WorkflowTypeTag(workflowTypeName),
-				metrics.ActivityTypeTag(token.ActivityType),
-			),
-		).Record(time.Since(activityStartedTime))
+	if err == nil {
+		completionMetrics := workflow.ActivityCompletionMetrics{
+			AttemptStartedTime: attemptStartedTime,
+			FirstScheduledTime: firstScheduledTime,
+			Status:             workflow.ActivityStatusFailed,
+			Closed:             closed,
+		}
+
+		workflow.RecordActivityCompletionMetrics(shard,
+			namespaceName,
+			taskQueue,
+			completionMetrics,
+			metrics.OperationTag(metrics.HistoryRespondActivityTaskFailedScope),
+			metrics.WorkflowTypeTag(workflowTypeName),
+			metrics.ActivityTypeTag(token.ActivityType),
+			metrics.VersioningBehaviorTag(versioningBehavior))
 	}
 	return &historyservice.RespondActivityTaskFailedResponse{}, err
 }

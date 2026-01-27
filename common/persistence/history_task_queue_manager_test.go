@@ -1,27 +1,3 @@
-// The MIT License
-//
-// Copyright (c) 2020 Temporal Technologies Inc.  All rights reserved.
-//
-// Copyright (c) 2020 Uber Technologies, Inc.
-//
-// Permission is hereby granted, free of charge, to any person obtaining a copy
-// of this software and associated documentation files (the "Software"), to deal
-// in the Software without restriction, including without limitation the rights
-// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-// copies of the Software, and to permit persons to whom the Software is
-// furnished to do so, subject to the following conditions:
-//
-// The above copyright notice and this permission notice shall be included in
-// all copies or substantial portions of the Software.
-//
-// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
-// THE SOFTWARE.
-
 package persistence_test
 
 import (
@@ -107,7 +83,8 @@ func TestHistoryTaskQueueManager_ErrSerializeTaskToEnqueue(t *testing.T) {
 	t.Parallel()
 
 	task := tasks.NewFakeTask(definition.WorkflowKey{}, tasks.Category{}, time.Time{})
-	m := persistence.NewHistoryTaskQueueManager(nil, serialization.NewSerializer())
+	serializer := serialization.NewSerializer()
+	m := persistence.NewHistoryTaskQueueManager(nil, serializer)
 	_, err := m.EnqueueTask(context.Background(), &persistence.EnqueueTaskRequest{
 		Task:          task,
 		SourceShardID: 1,
@@ -120,7 +97,8 @@ func TestHistoryTaskQueueManager_InvalidShardID(t *testing.T) {
 	t.Parallel()
 
 	task := &tasks.WorkflowTask{}
-	m := persistence.NewHistoryTaskQueueManager(nil, serialization.NewSerializer())
+	serializer := serialization.NewSerializer()
+	m := persistence.NewHistoryTaskQueueManager(nil, serializer)
 	_, err := m.EnqueueTask(context.Background(), &persistence.EnqueueTaskRequest{
 		Task:          task,
 		SourceShardID: 0,
@@ -153,7 +131,8 @@ func (f corruptQueue) ReadMessages(
 func TestHistoryTaskQueueManager_ReadTasks_ErrDeserializeRawHistoryTask(t *testing.T) {
 	t.Parallel()
 
-	m := persistence.NewHistoryTaskQueueManager(corruptQueue{}, serialization.NewSerializer())
+	serializer := serialization.NewSerializer()
+	m := persistence.NewHistoryTaskQueueManager(corruptQueue{}, serializer)
 	_, err := m.ReadTasks(context.Background(), &persistence.ReadTasksRequest{
 		QueueKey: persistence.QueueKey{
 			Category: tasks.CategoryTransfer,
@@ -168,7 +147,8 @@ func TestHistoryTaskQueueManager_ReadTasks_ErrDeserializeRawHistoryTask(t *testi
 func TestHistoryTaskQueueManager_ReadTasks_NonPositivePageSize(t *testing.T) {
 	t.Parallel()
 
-	m := persistence.NewHistoryTaskQueueManager(corruptQueue{}, serialization.NewSerializer())
+	serializer := serialization.NewSerializer()
+	m := persistence.NewHistoryTaskQueueManager(corruptQueue{}, serializer)
 	for _, pageSize := range []int{0, -1} {
 		_, err := m.ReadTasks(context.Background(), &persistence.ReadTasksRequest{
 			QueueKey: persistence.QueueKey{

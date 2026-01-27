@@ -1,30 +1,8 @@
-// The MIT License
-//
-// Copyright (c) 2020 Temporal Technologies Inc.  All rights reserved.
-//
-// Copyright (c) 2020 Uber Technologies, Inc.
-//
-// Permission is hereby granted, free of charge, to any person obtaining a copy
-// of this software and associated documentation files (the "Software"), to deal
-// in the Software without restriction, including without limitation the rights
-// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-// copies of the Software, and to permit persons to whom the Software is
-// furnished to do so, subject to the following conditions:
-//
-// The above copyright notice and this permission notice shall be included in
-// all copies or substantial portions of the Software.
-//
-// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
-// THE SOFTWARE.
-
 package schema
 
 import (
+	"os"
+	"path/filepath"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -47,6 +25,28 @@ func TestSchemaDirs(t *testing.T) {
 		"postgresql/v12/temporal",
 		"postgresql/v12/visibility",
 	}, dirs)
+}
+
+func TestElasticsearchIndexTemplateIsLatest(t *testing.T) {
+	embeddedContent, err := ElasticsearchIndexTemplate()
+	require.NoError(t, err, "Failed to get embedded index template")
+
+	symlinkPath := "elasticsearch/visibility/index_template_v7.json"
+	symlinkInfo, err := os.Lstat(symlinkPath)
+	require.NoError(t, err, "Failed to get symlink info")
+	require.True(t, symlinkInfo.Mode()&os.ModeSymlink != 0, "File is not a symlink")
+
+	targetPath, err := os.Readlink(symlinkPath)
+	require.NoError(t, err, "Failed to read symlink target")
+
+	fullTargetPath := filepath.Join(filepath.Dir(symlinkPath), targetPath)
+	targetContent, err := os.ReadFile(fullTargetPath)
+	require.NoError(t, err, "Failed to read symlink target file")
+
+	require.Equal(t, string(targetContent), embeddedContent,
+		"Embedded content does not match symlink target. "+
+			"Symlink points to: %s. "+
+			"Update the ElasticsearchIndexTemplate() function to use the correct path.", targetPath)
 }
 
 func requireContains(t *testing.T, expected []string, actual []string) {

@@ -1,27 +1,3 @@
-// The MIT License
-//
-// Copyright (c) 2020 Temporal Technologies Inc.  All rights reserved.
-//
-// Copyright (c) 2020 Uber Technologies, Inc.
-//
-// Permission is hereby granted, free of charge, to any person obtaining a copy
-// of this software and associated documentation files (the "Software"), to deal
-// in the Software without restriction, including without limitation the rights
-// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-// copies of the Software, and to permit persons to whom the Software is
-// furnished to do so, subject to the following conditions:
-//
-// The above copyright notice and this permission notice shall be included in
-// all copies or substantial portions of the Software.
-//
-// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
-// THE SOFTWARE.
-
 package tests
 
 import (
@@ -31,8 +7,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/pborman/uuid"
-	"github.com/stretchr/testify/require"
+	"github.com/google/uuid"
 	"github.com/stretchr/testify/suite"
 	commandpb "go.temporal.io/api/command/v1"
 	commonpb "go.temporal.io/api/common/v1"
@@ -48,23 +23,22 @@ import (
 	"go.temporal.io/server/common/log/tag"
 	"go.temporal.io/server/common/payloads"
 	"go.temporal.io/server/common/persistence/serialization"
-	"go.temporal.io/server/common/testing/historyrequire"
+	"go.temporal.io/server/common/testing/testvars"
 	"go.temporal.io/server/tests/testcore"
 	"google.golang.org/protobuf/types/known/durationpb"
 )
 
 type RawHistorySuite struct {
-	*require.Assertions
 	testcore.FunctionalTestBase
-	historyrequire.HistoryRequire
 }
 
 type RawHistoryClientSuite struct {
-	testcore.ClientFunctionalSuite
+	testcore.FunctionalTestBase
 }
 
 type GetHistoryFunctionalSuite struct {
-	testcore.FunctionalSuite
+	testcore.FunctionalTestBase
+	EnableTransitionHistory bool
 }
 
 func TestRawHistorySuite(t *testing.T) {
@@ -79,26 +53,41 @@ func TestRawHistoryClientSuite(t *testing.T) {
 
 func TestGetHistoryFunctionalSuite(t *testing.T) {
 	t.Parallel()
-	suite.Run(t, new(GetHistoryFunctionalSuite))
+	for _, tc := range []struct {
+		name                    string
+		enableTransitionHistory bool
+	}{
+		{
+			name:                    "DisableTransitionHistory",
+			enableTransitionHistory: false,
+		},
+		{
+			name:                    "EnableTransitionHistory",
+			enableTransitionHistory: true,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			s := &GetHistoryFunctionalSuite{
+				EnableTransitionHistory: tc.enableTransitionHistory,
+			}
+			suite.Run(t, s)
+		})
+	}
+}
+
+func (s *GetHistoryFunctionalSuite) SetupSuite() {
+	dynamicConfigOverrides := map[dynamicconfig.Key]any{
+		dynamicconfig.EnableTransitionHistory.Key(): s.EnableTransitionHistory,
+		dynamicconfig.ExternalPayloadsEnabled.Key(): true,
+	}
+	s.FunctionalTestBase.SetupSuiteWithCluster(testcore.WithDynamicConfigOverrides(dynamicConfigOverrides))
 }
 
 func (s *RawHistorySuite) SetupSuite() {
 	dynamicConfigOverrides := map[dynamicconfig.Key]any{
 		dynamicconfig.SendRawWorkflowHistory.Key(): true,
 	}
-	s.SetDynamicConfigOverrides(dynamicConfigOverrides)
-	s.FunctionalTestBase.SetupSuite("testdata/es_cluster.yaml")
-}
-
-func (s *RawHistorySuite) TearDownSuite() {
-	s.FunctionalTestBase.TearDownSuite()
-}
-
-func (s *RawHistorySuite) SetupTest() {
-	s.FunctionalTestBase.SetupTest()
-
-	s.Assertions = require.New(s.T())
-	s.HistoryRequire = historyrequire.New(s.T())
+	s.FunctionalTestBase.SetupSuiteWithCluster(testcore.WithDynamicConfigOverrides(dynamicConfigOverrides))
 }
 
 func (s *GetHistoryFunctionalSuite) TestGetWorkflowExecutionHistory_All() {
@@ -114,8 +103,8 @@ func (s *GetHistoryFunctionalSuite) TestGetWorkflowExecutionHistory_All() {
 
 	// Start workflow execution
 	request := &workflowservice.StartWorkflowExecutionRequest{
-		RequestId:           uuid.New(),
-		Namespace:           s.Namespace(),
+		RequestId:           uuid.NewString(),
+		Namespace:           s.Namespace().String(),
 		WorkflowId:          workflowID,
 		WorkflowType:        workflowType,
 		TaskQueue:           taskQueue,
@@ -171,7 +160,7 @@ func (s *GetHistoryFunctionalSuite) TestGetWorkflowExecutionHistory_All() {
 
 	poller := &testcore.TaskPoller{
 		Client:              s.FrontendClient(),
-		Namespace:           s.Namespace(),
+		Namespace:           s.Namespace().String(),
 		TaskQueue:           taskQueue,
 		Identity:            identity,
 		WorkflowTaskHandler: wtHandler,
@@ -204,7 +193,7 @@ func (s *GetHistoryFunctionalSuite) TestGetWorkflowExecutionHistory_All() {
 
 	// here do a long pull (which return immediately with at least the WorkflowExecutionStarted)
 	start := time.Now().UTC()
-	events, token = getHistory(s.Namespace(), workflowID, token, true)
+	events, token = getHistory(s.Namespace().String(), workflowID, token, true)
 	allEvents = append(allEvents, events...)
 	s.True(time.Now().UTC().Before(start.Add(time.Second * 5)))
 	s.NotEmpty(events)
@@ -217,7 +206,7 @@ func (s *GetHistoryFunctionalSuite) TestGetWorkflowExecutionHistory_All() {
 		s.Logger.Info("PollAndProcessWorkflowTask", tag.Error(errWorkflowTask1))
 	})
 	start = time.Now().UTC()
-	events, token = getHistory(s.Namespace(), workflowID, token, true)
+	events, token = getHistory(s.Namespace().String(), workflowID, token, true)
 	allEvents = append(allEvents, events...)
 	s.True(time.Now().UTC().After(start.Add(time.Second * 5)))
 	s.NotEmpty(events)
@@ -233,7 +222,7 @@ func (s *GetHistoryFunctionalSuite) TestGetWorkflowExecutionHistory_All() {
 		s.Logger.Info("PollAndProcessWorkflowTask", tag.Error(errWorkflowTask2))
 	})
 	for token != nil {
-		events, token = getHistory(s.Namespace(), workflowID, token, true)
+		events, token = getHistory(s.Namespace().String(), workflowID, token, true)
 		allEvents = append(allEvents, events...)
 	}
 	s.EqualHistoryEvents(`
@@ -253,7 +242,7 @@ func (s *GetHistoryFunctionalSuite) TestGetWorkflowExecutionHistory_All() {
 	allEvents = nil
 	token = nil
 	for {
-		events, token = getHistory(s.Namespace(), workflowID, token, false)
+		events, token = getHistory(s.Namespace().String(), workflowID, token, false)
 		allEvents = append(allEvents, events...)
 		if token == nil {
 			break
@@ -287,8 +276,8 @@ func (s *GetHistoryFunctionalSuite) TestGetWorkflowExecutionHistory_Close() {
 
 	// Start workflow execution
 	request := &workflowservice.StartWorkflowExecutionRequest{
-		RequestId:           uuid.New(),
-		Namespace:           s.Namespace(),
+		RequestId:           uuid.NewString(),
+		Namespace:           s.Namespace().String(),
 		WorkflowId:          workflowID,
 		WorkflowType:        workflowType,
 		TaskQueue:           taskQueue,
@@ -344,7 +333,7 @@ func (s *GetHistoryFunctionalSuite) TestGetWorkflowExecutionHistory_Close() {
 
 	poller := &testcore.TaskPoller{
 		Client:              s.FrontendClient(),
-		Namespace:           s.Namespace(),
+		Namespace:           s.Namespace().String(),
 		TaskQueue:           taskQueue,
 		Identity:            identity,
 		WorkflowTaskHandler: wtHandler,
@@ -378,7 +367,7 @@ func (s *GetHistoryFunctionalSuite) TestGetWorkflowExecutionHistory_Close() {
 
 	// here do a long pull (which return immediately with at least the WorkflowExecutionStarted)
 	start := time.Now().UTC()
-	events, token = getHistory(s.Namespace(), workflowID, token, true)
+	events, token = getHistory(s.Namespace().String(), workflowID, token, true)
 	s.True(time.Now().UTC().After(start.Add(time.Second * 10)))
 	// since we are only interested in close event
 	s.Empty(events)
@@ -391,7 +380,7 @@ func (s *GetHistoryFunctionalSuite) TestGetWorkflowExecutionHistory_Close() {
 		s.Logger.Info("PollAndProcessWorkflowTask", tag.Error(errWorkflowTask1))
 	})
 	start = time.Now().UTC()
-	events, token = getHistory(s.Namespace(), workflowID, token, true)
+	events, token = getHistory(s.Namespace().String(), workflowID, token, true)
 	s.True(time.Now().UTC().After(start.Add(time.Second * 10)))
 	// since we are only interested in close event
 	s.Empty(events)
@@ -407,7 +396,7 @@ func (s *GetHistoryFunctionalSuite) TestGetWorkflowExecutionHistory_Close() {
 		s.Logger.Info("PollAndProcessWorkflowTask", tag.Error(errWorkflowTask2))
 	})
 	for token != nil {
-		events, token = getHistory(s.Namespace(), workflowID, token, true)
+		events, token = getHistory(s.Namespace().String(), workflowID, token, true)
 
 		// since we are only interested in close event
 		if token == nil {
@@ -421,7 +410,7 @@ func (s *GetHistoryFunctionalSuite) TestGetWorkflowExecutionHistory_Close() {
 	// test non long poll for only closed events
 	token = nil
 	for {
-		events, token = getHistory(s.Namespace(), workflowID, token, false)
+		events, token = getHistory(s.Namespace().String(), workflowID, token, false)
 		if token == nil {
 			break
 		}
@@ -443,8 +432,8 @@ func (s *RawHistorySuite) TestGetWorkflowExecutionHistory_GetRawHistoryData() {
 
 	// Start workflow execution
 	request := &workflowservice.StartWorkflowExecutionRequest{
-		RequestId:           uuid.New(),
-		Namespace:           s.Namespace(),
+		RequestId:           uuid.NewString(),
+		Namespace:           s.Namespace().String(),
 		WorkflowId:          workflowID,
 		WorkflowType:        workflowType,
 		TaskQueue:           taskQueue,
@@ -504,7 +493,7 @@ func (s *RawHistorySuite) TestGetWorkflowExecutionHistory_GetRawHistoryData() {
 
 	poller := &testcore.TaskPoller{
 		Client:              s.FrontendClient(),
-		Namespace:           s.Namespace(),
+		Namespace:           s.Namespace().String(),
 		TaskQueue:           taskQueue,
 		Identity:            identity,
 		WorkflowTaskHandler: wtHandler,
@@ -543,12 +532,11 @@ func (s *RawHistorySuite) TestGetWorkflowExecutionHistory_GetRawHistoryData() {
 		return responseInner.RawHistory, responseInner.NextPageToken
 	}
 
-	serializer := serialization.NewSerializer()
 	convertBlob := func(blobs []*commonpb.DataBlob) []*historypb.HistoryEvent {
 		events := []*historypb.HistoryEvent{}
 		for _, blob := range blobs {
 			s.True(blob.GetEncodingType() == enumspb.ENCODING_TYPE_PROTO3)
-			blobEvents, err := serializer.DeserializeEvents(&commonpb.DataBlob{
+			blobEvents, err := serialization.DefaultDecoder.DeserializeEvents(&commonpb.DataBlob{
 				EncodingType: enumspb.ENCODING_TYPE_PROTO3,
 				Data:         blob.Data,
 			})
@@ -566,7 +554,7 @@ func (s *RawHistorySuite) TestGetWorkflowExecutionHistory_GetRawHistoryData() {
 
 	// here do a long pull (which return immediately with at least the WorkflowExecutionStarted)
 	start := time.Now().UTC()
-	blobs, token = getHistoryWithLongPoll(s.Namespace(), workflowID, token, true)
+	blobs, token = getHistoryWithLongPoll(s.Namespace().String(), workflowID, token, true)
 	events = convertBlob(blobs)
 	allEvents = append(allEvents, events...)
 	s.True(time.Now().UTC().Before(start.Add(time.Second * 5)))
@@ -580,7 +568,7 @@ func (s *RawHistorySuite) TestGetWorkflowExecutionHistory_GetRawHistoryData() {
 		s.Logger.Info("PollAndProcessWorkflowTask", tag.Error(errWorkflowTask1))
 	})
 	start = time.Now().UTC()
-	blobs, token = getHistoryWithLongPoll(s.Namespace(), workflowID, token, true)
+	blobs, token = getHistoryWithLongPoll(s.Namespace().String(), workflowID, token, true)
 	events = convertBlob(blobs)
 	allEvents = append(allEvents, events...)
 	s.True(time.Now().UTC().After(start.Add(time.Second * 5)))
@@ -597,7 +585,7 @@ func (s *RawHistorySuite) TestGetWorkflowExecutionHistory_GetRawHistoryData() {
 		s.Logger.Info("PollAndProcessWorkflowTask", tag.Error(errWorkflowTask2))
 	})
 	for token != nil {
-		blobs, token = getHistoryWithLongPoll(s.Namespace(), workflowID, token, true)
+		blobs, token = getHistoryWithLongPoll(s.Namespace().String(), workflowID, token, true)
 		events = convertBlob(blobs)
 		allEvents = append(allEvents, events...)
 	}
@@ -619,7 +607,7 @@ func (s *RawHistorySuite) TestGetWorkflowExecutionHistory_GetRawHistoryData() {
 	allEvents = nil
 	token = nil
 	for {
-		blobs, token = getHistory(s.Namespace(), workflowID, token)
+		blobs, token = getHistory(s.Namespace().String(), workflowID, token)
 		events = convertBlob(blobs)
 		allEvents = append(allEvents, events...)
 		if token == nil {
@@ -679,9 +667,7 @@ func (s *RawHistoryClientSuite) TestGetHistoryReverse() {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 	workflowRun, err := s.SdkClient().ExecuteWorkflow(ctx, workflowOptions, workflowFn)
-	if err != nil {
-		s.Logger.Fatal("Start workflow failed with err", tag.Error(err))
-	}
+	s.NoError(err)
 
 	s.NotNil(workflowRun)
 	s.True(workflowRun.GetRunID() != "")
@@ -692,18 +678,18 @@ func (s *RawHistoryClientSuite) TestGetHistoryReverse() {
 	wfeResponse, err := s.SdkClient().DescribeWorkflowExecution(ctx, workflowRun.GetID(), workflowRun.GetRunID())
 	s.Nil(err)
 
-	eventDefaultOrder := s.GetHistory(s.Namespace(), wfeResponse.WorkflowExecutionInfo.Execution)
+	eventDefaultOrder := s.GetHistory(s.Namespace().String(), wfeResponse.WorkflowExecutionInfo.Execution)
 	eventDefaultOrder = reverseSlice(eventDefaultOrder)
 
-	events := s.getHistoryReverse(s.Namespace(), wfeResponse.WorkflowExecutionInfo.Execution, 100)
+	events := s.getHistoryReverse(s.Namespace().String(), wfeResponse.WorkflowExecutionInfo.Execution, 100)
 	s.Equal(len(eventDefaultOrder), len(events))
 	s.Equal(eventDefaultOrder, events)
 
-	events = s.getHistoryReverse(s.Namespace(), wfeResponse.WorkflowExecutionInfo.Execution, 3)
+	events = s.getHistoryReverse(s.Namespace().String(), wfeResponse.WorkflowExecutionInfo.Execution, 3)
 	s.Equal(len(eventDefaultOrder), len(events))
 	s.Equal(eventDefaultOrder, events)
 
-	events = s.getHistoryReverse(s.Namespace(), wfeResponse.WorkflowExecutionInfo.Execution, 1)
+	events = s.getHistoryReverse(s.Namespace().String(), wfeResponse.WorkflowExecutionInfo.Execution, 1)
 	s.Equal(len(eventDefaultOrder), len(events))
 	s.Equal(eventDefaultOrder, events)
 }
@@ -756,9 +742,7 @@ func (s *RawHistoryClientSuite) TestGetHistoryReverse_MultipleBranches() {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 	workflowRun, err := s.SdkClient().ExecuteWorkflow(ctx, workflowOptions, workflowFn)
-	if err != nil {
-		s.Logger.Fatal("Start workflow failed with err", tag.Error(err))
-	}
+	s.NoError(err)
 
 	s.NotNil(workflowRun)
 	s.True(workflowRun.GetRunID() != "")
@@ -770,7 +754,7 @@ func (s *RawHistoryClientSuite) TestGetHistoryReverse_MultipleBranches() {
 	s.NoError(err)
 
 	rweResponse, err := s.SdkClient().ResetWorkflowExecution(ctx, &workflowservice.ResetWorkflowExecutionRequest{
-		Namespace:                 s.Namespace(),
+		Namespace:                 s.Namespace().String(),
 		WorkflowExecution:         wfeResponse.WorkflowExecutionInfo.Execution,
 		Reason:                    "TestGetHistoryReverseBranch",
 		WorkflowTaskFinishEventId: 10,
@@ -786,18 +770,18 @@ func (s *RawHistoryClientSuite) TestGetHistoryReverse_MultipleBranches() {
 	resetWfeResponse, err := s.SdkClient().DescribeWorkflowExecution(ctx, resetWorkflowRun.GetID(), resetWorkflowRun.GetRunID())
 	s.NoError(err)
 
-	eventsDefaultOrder := s.GetHistory(s.Namespace(), resetWfeResponse.WorkflowExecutionInfo.Execution)
+	eventsDefaultOrder := s.GetHistory(s.Namespace().String(), resetWfeResponse.WorkflowExecutionInfo.Execution)
 	eventsDefaultOrder = reverseSlice(eventsDefaultOrder)
 
-	events := s.getHistoryReverse(s.Namespace(), resetWfeResponse.WorkflowExecutionInfo.Execution, 100)
+	events := s.getHistoryReverse(s.Namespace().String(), resetWfeResponse.WorkflowExecutionInfo.Execution, 100)
 	s.Equal(len(eventsDefaultOrder), len(events))
 	s.Equal(eventsDefaultOrder, events)
 
-	events = s.getHistoryReverse(s.Namespace(), resetWfeResponse.WorkflowExecutionInfo.Execution, 3)
+	events = s.getHistoryReverse(s.Namespace().String(), resetWfeResponse.WorkflowExecutionInfo.Execution, 3)
 	s.Equal(len(eventsDefaultOrder), len(events))
 	s.Equal(eventsDefaultOrder, events)
 
-	events = s.getHistoryReverse(s.Namespace(), resetWfeResponse.WorkflowExecutionInfo.Execution, 1)
+	events = s.getHistoryReverse(s.Namespace().String(), resetWfeResponse.WorkflowExecutionInfo.Execution, 1)
 	s.Equal(len(eventsDefaultOrder), len(events))
 	s.Equal(eventsDefaultOrder, events)
 }
@@ -831,4 +815,73 @@ func (s *RawHistoryClientSuite) getHistoryReverse(namespace string, execution *c
 	}
 
 	return events
+}
+
+func (s *GetHistoryFunctionalSuite) TestGetWorkflowExecutionHistory_ExternalPayloadStats() {
+	tv := testvars.New(s.T())
+
+	workflowExternalPayloadSize := int64(1024)
+	workflowInputPayload := &commonpb.Payloads{
+		Payloads: []*commonpb.Payload{{
+			ExternalPayloads: []*commonpb.Payload_ExternalPayloadDetails{
+				{SizeBytes: workflowExternalPayloadSize},
+			},
+		}},
+	}
+
+	activityExternalPayloadSize := int64(2048)
+	activityInputPayload := &commonpb.Payloads{
+		Payloads: []*commonpb.Payload{{
+			ExternalPayloads: []*commonpb.Payload_ExternalPayloadDetails{
+				{SizeBytes: activityExternalPayloadSize},
+			},
+		}},
+	}
+
+	we, err := s.FrontendClient().StartWorkflowExecution(testcore.NewContext(), &workflowservice.StartWorkflowExecutionRequest{
+		RequestId:           uuid.NewString(),
+		Namespace:           s.Namespace().String(),
+		WorkflowId:          tv.WorkflowID(),
+		WorkflowType:        tv.WorkflowType(),
+		TaskQueue:           tv.TaskQueue(),
+		Input:               workflowInputPayload,
+		WorkflowRunTimeout:  durationpb.New(100 * time.Second),
+		WorkflowTaskTimeout: durationpb.New(1 * time.Second),
+		Identity:            tv.WorkerIdentity(),
+	})
+	s.NoError(err)
+
+	// Process first workflow task (schedules activity)
+	_, err = s.TaskPoller().PollAndHandleWorkflowTask(tv,
+		func(task *workflowservice.PollWorkflowTaskQueueResponse) (*workflowservice.RespondWorkflowTaskCompletedRequest, error) {
+			return &workflowservice.RespondWorkflowTaskCompletedRequest{
+				Commands: []*commandpb.Command{{
+					CommandType: enumspb.COMMAND_TYPE_SCHEDULE_ACTIVITY_TASK,
+					Attributes: &commandpb.Command_ScheduleActivityTaskCommandAttributes{
+						ScheduleActivityTaskCommandAttributes: &commandpb.ScheduleActivityTaskCommandAttributes{
+							ActivityId:             "activity1",
+							ActivityType:           &commonpb.ActivityType{Name: "TestActivity"},
+							TaskQueue:              tv.TaskQueue(),
+							Input:                  activityInputPayload,
+							ScheduleToCloseTimeout: durationpb.New(100 * time.Second),
+							ScheduleToStartTimeout: durationpb.New(100 * time.Second),
+							StartToCloseTimeout:    durationpb.New(50 * time.Second),
+							HeartbeatTimeout:       durationpb.New(5 * time.Second),
+						},
+					},
+				}},
+			}, nil
+		})
+	s.NoError(err)
+
+	descResp, err := s.FrontendClient().DescribeWorkflowExecution(testcore.NewContext(), &workflowservice.DescribeWorkflowExecutionRequest{
+		Namespace: s.Namespace().String(),
+		Execution: &commonpb.WorkflowExecution{
+			WorkflowId: tv.WorkflowID(),
+			RunId:      we.GetRunId(),
+		},
+	})
+	s.NoError(err)
+	s.Equal(int64(2), descResp.WorkflowExecutionInfo.ExternalPayloadCount)
+	s.Equal(workflowExternalPayloadSize+activityExternalPayloadSize, descResp.WorkflowExecutionInfo.ExternalPayloadSizeBytes)
 }

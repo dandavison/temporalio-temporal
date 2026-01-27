@@ -1,38 +1,15 @@
-// The MIT License
-//
-// Copyright (c) 2024 Temporal Technologies Inc.  All rights reserved.
-//
-// Permission is hereby granted, free of charge, to any person obtaining a copy
-// of this software and associated documentation files (the "Software"), to deal
-// in the Software without restriction, including without limitation the rights
-// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-// copies of the Software, and to permit persons to whom the Software is
-// furnished to do so, subject to the following conditions:
-//
-// The above copyright notice and this permission notice shall be included in
-// all copies or substantial portions of the Software.
-//
-// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
-// THE SOFTWARE.
-
 package tests
 
 import (
 	"context"
 	"errors"
-	"fmt"
-	"net"
-	"net/http"
+	"net/http/httptest"
 	"testing"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/nexus-rpc/sdk-go/nexus"
-	"github.com/pborman/uuid"
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"github.com/stretchr/testify/suite"
 	commonpb "go.temporal.io/api/common/v1"
@@ -45,54 +22,58 @@ import (
 	"go.temporal.io/sdk/worker"
 	"go.temporal.io/sdk/workflow"
 	"go.temporal.io/server/common/dynamicconfig"
+	"go.temporal.io/server/common/nexus/nexusrpc"
+	"go.temporal.io/server/common/testing/protoassert"
+	"go.temporal.io/server/common/testing/protorequire"
+	"go.temporal.io/server/common/testing/testvars"
 	"go.temporal.io/server/components/callbacks"
-	"go.temporal.io/server/internal/temporalite"
 	"go.temporal.io/server/tests/testcore"
+	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/durationpb"
 )
 
 type completionHandler struct {
-	requestCh         chan *nexus.CompletionRequest
+	requestCh         chan *nexusrpc.CompletionRequest
 	requestCompleteCh chan error
 }
 
-func (h *completionHandler) CompleteOperation(ctx context.Context, request *nexus.CompletionRequest) error {
+func (h *completionHandler) CompleteOperation(ctx context.Context, request *nexusrpc.CompletionRequest) error {
 	h.requestCh <- request
 	return <-h.requestCompleteCh
 }
 
 type CallbacksSuite struct {
-	testcore.FunctionalSuite
+	testcore.FunctionalTestBase
+
+	chasmEnabled bool
 }
 
-func TestCallbacksSuite(t *testing.T) {
+func TestCallbacksSuiteHSM(t *testing.T) {
 	t.Parallel()
 	suite.Run(t, new(CallbacksSuite))
 }
 
-func (s *CallbacksSuite) runNexusCompletionHTTPServer(h *completionHandler, listenAddr string) func() error {
-	hh := nexus.NewCompletionHTTPHandler(nexus.CompletionHandlerOptions{Handler: h})
-	srv := &http.Server{Addr: listenAddr, Handler: hh}
-	listener, err := net.Listen("tcp", listenAddr)
-	s.NoError(err)
+func TestCallbacksSuiteCHASM(t *testing.T) {
+	t.Parallel()
+	suite.Run(t, &CallbacksSuite{chasmEnabled: true})
+}
 
-	errCh := make(chan error, 1)
-	go func() {
-		errCh <- srv.Serve(listener)
-	}()
+func (s *CallbacksSuite) SetupSuite() {
+	s.SetupSuiteWithCluster(
+		testcore.WithDynamicConfigOverrides(map[dynamicconfig.Key]any{
+			dynamicconfig.EnableChasm.Key():          s.chasmEnabled,
+			dynamicconfig.EnableCHASMCallbacks.Key(): s.chasmEnabled,
+		}),
+	)
+}
 
-	return func() error {
-		// Graceful shutdown
-		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-		defer cancel()
-		if err := srv.Shutdown(ctx); err != nil {
-			return err
-		}
-		if err := <-errCh; err != nil && !errors.Is(err, http.ErrServerClosed) {
-			return err
-		}
-		return nil
-	}
+func (s *CallbacksSuite) runNexusCompletionHTTPServer(t *testing.T, h *completionHandler) string {
+	hh := nexusrpc.NewCompletionHTTPHandler(nexusrpc.CompletionHandlerOptions{Handler: h})
+	srv := httptest.NewServer(hh)
+	t.Cleanup(func() {
+		srv.Close()
+	})
+	return srv.URL
 }
 
 func (s *CallbacksSuite) TestWorkflowCallbacks_InvalidArgument() {
@@ -161,7 +142,7 @@ func (s *CallbacksSuite) TestWorkflowCallbacks_InvalidArgument() {
 	)
 
 	for _, tc := range cases {
-		s.T().Run(tc.name, func(t *testing.T) {
+		s.Run(tc.name, func() {
 			s.OverrideDynamicConfig(dynamicconfig.EnableNexus, tc.allow)
 			cbs := make([]*commonpb.Callback, 0, len(tc.urls))
 			for _, url := range tc.urls {
@@ -175,8 +156,8 @@ func (s *CallbacksSuite) TestWorkflowCallbacks_InvalidArgument() {
 				})
 			}
 			request := &workflowservice.StartWorkflowExecutionRequest{
-				RequestId:           uuid.New(),
-				Namespace:           s.Namespace(),
+				RequestId:           uuid.NewString(),
+				Namespace:           s.Namespace().String(),
 				WorkflowId:          testcore.RandomizeStr(s.T().Name()),
 				WorkflowType:        &commonpb.WorkflowType{Name: workflowType},
 				TaskQueue:           &taskqueuepb.TaskQueue{Name: taskQueue, Kind: enumspb.TASK_QUEUE_KIND_NORMAL},
@@ -195,7 +176,6 @@ func (s *CallbacksSuite) TestWorkflowCallbacks_InvalidArgument() {
 }
 
 func (s *CallbacksSuite) TestWorkflowNexusCallbacks_CarriedOver() {
-	s.OverrideDynamicConfig(dynamicconfig.EnableNexus, true)
 	s.OverrideDynamicConfig(
 		callbacks.AllowedAddresses,
 		[]any{map[string]any{"Pattern": "*", "AllowInsecure": true}},
@@ -210,6 +190,7 @@ func (s *CallbacksSuite) TestWorkflowNexusCallbacks_CarriedOver() {
 			name: "ContinueAsNew",
 			wf: func(ctx workflow.Context) (int, error) {
 				if workflow.GetInfo(ctx).ContinuedExecutionRunID == "" {
+					workflow.GetSignalChannel(ctx, "continue").Receive(ctx, nil)
 					return 0, workflow.NewContinueAsNewError(ctx, "test")
 				}
 				return 666, nil
@@ -221,18 +202,20 @@ func (s *CallbacksSuite) TestWorkflowNexusCallbacks_CarriedOver() {
 			wf: func(ctx workflow.Context) (int, error) {
 				info := workflow.GetInfo(ctx)
 				if info.FirstRunID == info.WorkflowExecution.RunID {
-					return 0, workflow.Sleep(ctx, 1*time.Second)
+					workflow.GetSignalChannel(ctx, "continue").Receive(ctx, nil)
+					return 0, workflow.Sleep(ctx, 10*time.Second)
 				}
 				s.Greater(info.Attempt, int32(1))
 				return 666, nil
 			},
-			runTimeout: 100 * time.Millisecond,
+			runTimeout: 500 * time.Millisecond,
 		},
 		{
 			name: "WorkflowFailureRetry",
 			wf: func(ctx workflow.Context) (int, error) {
 				info := workflow.GetInfo(ctx)
 				if info.FirstRunID == info.WorkflowExecution.RunID {
+					workflow.GetSignalChannel(ctx, "continue").Receive(ctx, nil)
 					return 0, errors.New("intentional workflow failure")
 				}
 				s.Greater(info.Attempt, int32(1))
@@ -243,38 +226,78 @@ func (s *CallbacksSuite) TestWorkflowNexusCallbacks_CarriedOver() {
 	}
 
 	for _, tc := range cases {
-		s.T().Run(tc.name, func(t *testing.T) {
+		s.Run(tc.name, func() {
+			tv := testvars.New(s.T())
 			ctx := testcore.NewContext()
 			sdkClient, err := client.Dial(client.Options{
 				HostPort:  s.FrontendGRPCAddress(),
-				Namespace: s.Namespace(),
+				Namespace: s.Namespace().String(),
 			})
 			s.NoError(err)
-			pp := temporalite.NewPortProvider()
 
 			taskQueue := testcore.RandomizeStr(s.T().Name())
 			workflowType := "test"
+			workflowID := tv.WorkflowID()
 
 			ch := &completionHandler{
-				requestCh:         make(chan *nexus.CompletionRequest, 1),
-				requestCompleteCh: make(chan error, 1),
+				requestCh:         make(chan *nexusrpc.CompletionRequest, 2),
+				requestCompleteCh: make(chan error, 2),
 			}
-			callbackAddress := fmt.Sprintf("localhost:%d", pp.MustGetFreePort())
-			s.NoError(pp.Close())
-			shutdownServer := s.runNexusCompletionHTTPServer(ch, callbackAddress)
-			t.Cleanup(func() {
-				require.NoError(t, shutdownServer())
-			})
+			defer func() {
+				close(ch.requestCh)
+				close(ch.requestCompleteCh)
+			}()
+			callbackAddress := s.runNexusCompletionHTTPServer(s.T(), ch)
 
 			w := worker.New(sdkClient, taskQueue, worker.Options{})
 			w.RegisterWorkflowWithOptions(tc.wf, workflow.RegisterOptions{Name: workflowType})
 			s.NoError(w.Start())
 			defer w.Stop()
 
+			links := []*commonpb.Link{
+				{
+					Variant: &commonpb.Link_WorkflowEvent_{
+						WorkflowEvent: &commonpb.Link_WorkflowEvent{
+							Namespace:  s.Namespace().String(),
+							WorkflowId: "some-caller-wfid-1",
+							RunId:      "some-caller-runid-1",
+						},
+					},
+				},
+				{
+					Variant: &commonpb.Link_WorkflowEvent_{
+						WorkflowEvent: &commonpb.Link_WorkflowEvent{
+							Namespace:  s.Namespace().String(),
+							WorkflowId: "some-caller-wfid-2",
+							RunId:      "some-caller-runid-2",
+						},
+					},
+				},
+			}
+
+			cbs := []*commonpb.Callback{
+				{
+					Variant: &commonpb.Callback_Nexus_{
+						Nexus: &commonpb.Callback_Nexus{
+							Url: callbackAddress + "/cb1",
+						},
+					},
+					Links: []*commonpb.Link{links[0]},
+				},
+				{
+					Variant: &commonpb.Callback_Nexus_{
+						Nexus: &commonpb.Callback_Nexus{
+							Url: callbackAddress + "/cb2",
+						},
+					},
+					Links: []*commonpb.Link{links[1]},
+				},
+			}
+
 			request := &workflowservice.StartWorkflowExecutionRequest{
-				RequestId:          uuid.New(),
-				Namespace:          s.Namespace(),
-				WorkflowId:         testcore.RandomizeStr(s.T().Name()),
+				RequestId:          uuid.NewString(),
+				Namespace:          s.Namespace().String(),
+				WorkflowId:         workflowID,
 				WorkflowType:       &commonpb.WorkflowType{Name: workflowType},
 				TaskQueue:          &taskqueuepb.TaskQueue{Name: taskQueue, Kind: enumspb.TASK_QUEUE_KIND_NORMAL},
 				Input:              nil,
@@ -285,86 +308,157 @@ func (s *CallbacksSuite) TestWorkflowNexusCallbacks_CarriedOver() {
 					MaximumInterval:    durationpb.New(1 * time.Second),
 					BackoffCoefficient: 1,
 				},
-				CompletionCallbacks: []*commonpb.Callback{
-					{
-						Variant: &commonpb.Callback_Nexus_{
-							Nexus: &commonpb.Callback_Nexus{
-								Url: "http://" + callbackAddress,
-							},
-						},
-					},
-				},
+				CompletionCallbacks: []*commonpb.Callback{cbs[0]},
+				Links:               []*commonpb.Link{links[0]},
 			}
 
-			_, err = s.FrontendClient().StartWorkflowExecution(ctx, request)
+			response1, err := s.FrontendClient().StartWorkflowExecution(ctx, request)
 			s.NoError(err)
 
-			run := sdkClient.GetWorkflow(ctx, request.WorkflowId, "")
+			workflowExecution := &commonpb.WorkflowExecution{
+				WorkflowId: workflowID,
+				RunId:      response1.RunId,
+			}
+
+			// Send another request to attach callback
+			request2 := proto.Clone(request).(*workflowservice.StartWorkflowExecutionRequest)
+			request2.RequestId = uuid.NewString()
+			request2.WorkflowIdConflictPolicy = enumspb.WORKFLOW_ID_CONFLICT_POLICY_USE_EXISTING
+			request2.OnConflictOptions = &workflowpb.OnConflictOptions{
+				AttachRequestId:           true,
+				AttachCompletionCallbacks: true,
+			}
+			request2.CompletionCallbacks = []*commonpb.Callback{cbs[1]}
+			request2.Links = []*commonpb.Link{links[1]}
+
+			response2, err := s.FrontendClient().StartWorkflowExecution(ctx, request2)
+			s.NoError(err)
+			s.False(response2.Started)
+			s.Equal(workflowExecution.RunId, response2.RunId)
+
+			_, err = s.FrontendClient().SignalWorkflowExecution(
+				ctx,
+				&workflowservice.SignalWorkflowExecutionRequest{
+					Namespace:         s.Namespace().String(),
+					WorkflowExecution: workflowExecution,
+					SignalName:        "continue",
+				},
+			)
+			s.NoError(err)
+
+			// Wait for workflow to complete.
+			run := sdkClient.GetWorkflow(ctx, workflowID, "")
 			s.NoError(run.Get(ctx, nil))
 
 			numAttempts := 2
 			for attempt := 1; attempt <= numAttempts; attempt++ {
-				completion := <-ch.requestCh
-				s.Equal(nexus.OperationStateSucceeded, completion.State)
-				var result int
-				s.NoError(completion.Result.Consume(&result))
-				s.Equal(666, result)
-				var err error
-				if attempt < numAttempts {
-					// force retry
-					err = nexus.HandlerErrorf(nexus.HandlerErrorTypeInternal, "intentional error")
+				for range cbs {
+					completion := <-ch.requestCh
+					s.Equal(nexus.OperationStateSucceeded, completion.State)
+					var result int
+					s.NoError(completion.Result.Consume(&result))
+					s.Equal(666, result)
 				}
-				ch.requestCompleteCh <- err
-				description, err := sdkClient.DescribeWorkflowExecution(ctx, request.WorkflowId, "")
+
+				for range cbs {
+					var err error
+					if attempt < numAttempts {
+						// force retry
+						err = nexus.HandlerErrorf(nexus.HandlerErrorTypeInternal, "intentional error")
+					}
+					ch.requestCompleteCh <- err
+				}
+
+				getHistoryResponse, err := s.FrontendClient().GetWorkflowExecutionHistory(
+					ctx,
+					&workflowservice.GetWorkflowExecutionHistoryRequest{
+						Namespace: s.Namespace().String(),
+						Execution: &commonpb.WorkflowExecution{
+							WorkflowId: workflowID,
+						},
+						MaximumPageSize: 1, // only interested in the start event
+					},
+				)
 				s.NoError(err)
-				s.Equal(1, len(description.Callbacks))
-				callbackInfo := description.Callbacks[0]
-				s.ProtoEqual(request.CompletionCallbacks[0], callbackInfo.Callback)
-				s.ProtoEqual(&workflowpb.CallbackInfo_Trigger{Variant: &workflowpb.CallbackInfo_Trigger_WorkflowClosed{WorkflowClosed: &workflowpb.CallbackInfo_WorkflowClosed{}}}, callbackInfo.Trigger)
-				s.Equal(int32(attempt), callbackInfo.Attempt)
-				// Loose check to see that this is set.
-				s.Greater(callbackInfo.LastAttemptCompleteTime.AsTime(), time.Now().Add(-time.Hour))
-				if attempt < numAttempts {
-					s.Equal(enumspb.CALLBACK_STATE_BACKING_OFF, callbackInfo.State)
-					s.Equal("request failed with: 500 Internal Server Error", callbackInfo.LastAttemptFailure.Message)
-				} else {
-					s.Equal(enumspb.CALLBACK_STATE_SUCCEEDED, callbackInfo.State)
-					s.Nil(callbackInfo.LastAttemptFailure)
-				}
+				s.Len(getHistoryResponse.History.Events, 1)
+				startEvent := getHistoryResponse.History.Events[0]
+				// Start event links is empty since it's deduped.
+				s.Empty(startEvent.Links)
+				startEventAttr := startEvent.GetWorkflowExecutionStartedEventAttributes()
+				s.NotNil(startEventAttr)
+				// Start event contains all callbacks attached to the first workflow.
+				s.ProtoElementsMatch(cbs, startEventAttr.CompletionCallbacks)
+
+				s.EventuallyWithT(func(col *assert.CollectT) {
+					description, err := sdkClient.DescribeWorkflowExecution(ctx, workflowID, "")
+					require.NoError(col, err)
+					require.Equal(col, len(cbs), len(description.Callbacks))
+					descCbs := make([]*commonpb.Callback, 0, len(description.Callbacks))
+					for _, callbackInfo := range description.Callbacks {
+						protorequire.ProtoEqual(
+							col,
+							&workflowpb.CallbackInfo_Trigger{
+								Variant: &workflowpb.CallbackInfo_Trigger_WorkflowClosed{
+									WorkflowClosed: &workflowpb.CallbackInfo_WorkflowClosed{},
+								},
+							},
+							callbackInfo.Trigger,
+						)
+						require.Equal(col, int32(attempt), callbackInfo.Attempt)
+						// Loose check to see that this is set.
+						require.Greater(
+							col,
+							callbackInfo.LastAttemptCompleteTime.AsTime(),
+							time.Now().Add(-time.Hour),
+						)
+						if attempt < numAttempts {
+							require.Equal(col, enumspb.CALLBACK_STATE_BACKING_OFF, callbackInfo.State)
+							require.Equal(
+								col,
+								"handler error (INTERNAL): intentional error",
+								callbackInfo.LastAttemptFailure.Message,
+							)
+						} else {
+							require.Equal(col, enumspb.CALLBACK_STATE_SUCCEEDED, callbackInfo.State)
+							require.Nil(col, callbackInfo.LastAttemptFailure)
+						}
+						descCbs = append(descCbs, callbackInfo.Callback)
+					}
+					protoassert.ProtoElementsMatch(col, cbs, descCbs)
+				}, 2*time.Second, 100*time.Millisecond)
 			}
 		})
 	}
 }
 
 func (s *CallbacksSuite) TestNexusResetWorkflowWithCallback() {
-	s.OverrideDynamicConfig(dynamicconfig.EnableNexus, true)
 	s.OverrideDynamicConfig(
 		callbacks.AllowedAddresses,
 		[]any{map[string]any{"Pattern": "*", "AllowInsecure": true}},
 	)
 
+	tv := testvars.New(s.T())
 	ctx := testcore.NewContext()
 	sdkClient, err := client.Dial(client.Options{
 		HostPort:  s.FrontendGRPCAddress(),
-		Namespace: s.Namespace(),
+		Namespace: s.Namespace().String(),
 	})
 	s.NoError(err)
-	pp := temporalite.NewPortProvider()
 
-	taskQueue := testcore.RandomizeStr(s.T().Name())
+	taskQueue := tv.TaskQueue()
+	workflowID := tv.WorkflowID()
 
 	ch := &completionHandler{
-		requestCh:         make(chan *nexus.CompletionRequest, 1),
-		requestCompleteCh: make(chan error, 1),
+		requestCh:         make(chan *nexusrpc.CompletionRequest, 2),
+		requestCompleteCh: make(chan error, 2),
 	}
-	callbackAddress := fmt.Sprintf("localhost:%d", pp.MustGetFreePort())
-	s.NoError(pp.Close())
-	shutdownServer := s.runNexusCompletionHTTPServer(ch, callbackAddress)
-	s.T().Cleanup(func() {
-		require.NoError(s.T(), shutdownServer())
-	})
+	defer func() {
+		close(ch.requestCh)
+		close(ch.requestCompleteCh)
+	}()
+	callbackAddress := s.runNexusCompletionHTTPServer(s.T(), ch)
 
-	w := worker.New(sdkClient, taskQueue, worker.Options{})
+	w := worker.New(sdkClient, taskQueue.GetName(), worker.Options{})
 
 	// A workflow that completes once it has been reset.
 	longRunningWorkflow := func(ctx workflow.Context) error {
@@ -381,45 +475,80 @@ func (s *CallbacksSuite) TestNexusResetWorkflowWithCallback() {
 	s.NoError(w.Start())
 	defer w.Stop()
 
-	request := &workflowservice.StartWorkflowExecutionRequest{
-		RequestId:          uuid.New(),
-		Namespace:          s.Namespace(),
-		WorkflowId:         testcore.RandomizeStr(s.T().Name()),
-		WorkflowType:       &commonpb.WorkflowType{Name: "longRunningWorkflow"},
-		TaskQueue:          &taskqueuepb.TaskQueue{Name: taskQueue, Kind: enumspb.TASK_QUEUE_KIND_NORMAL},
-		Input:              nil,
-		WorkflowRunTimeout: durationpb.New(20 * time.Second),
-		Identity:           s.T().Name(),
-		CompletionCallbacks: []*commonpb.Callback{
-			{
-				Variant: &commonpb.Callback_Nexus_{
-					Nexus: &commonpb.Callback_Nexus{
-						Url: "http://" + callbackAddress,
-					},
+	cbs := []*commonpb.Callback{
+		{
+			Variant: &commonpb.Callback_Nexus_{
+				Nexus: &commonpb.Callback_Nexus{
+					Url: callbackAddress + "/cb1",
+				},
+			},
+		},
+		{
+			Variant: &commonpb.Callback_Nexus_{
+				Nexus: &commonpb.Callback_Nexus{
+					Url: callbackAddress + "/cb2",
 				},
 			},
 		},
 	}
 
-	startResponse, err := s.FrontendClient().StartWorkflowExecution(ctx, request)
+	request1 := &workflowservice.StartWorkflowExecutionRequest{
+		RequestId:           uuid.NewString(),
+		Namespace:           s.Namespace().String(),
+		WorkflowId:          workflowID,
+		WorkflowType:        &commonpb.WorkflowType{Name: "longRunningWorkflow"},
+		TaskQueue:           taskQueue,
+		Input:               nil,
+		Identity:            s.T().Name(),
+		CompletionCallbacks: []*commonpb.Callback{cbs[0]},
+	}
+
+	startResponse1, err := s.FrontendClient().StartWorkflowExecution(ctx, request1)
 	s.NoError(err)
 
-	// Get history, iterate to ensure workflow task completed event exists. then reset
+	// Get history, iterate to ensure workflow task completed event exists.
 	workflowExecution := &commonpb.WorkflowExecution{
-		WorkflowId: request.WorkflowId,
-		RunId:      startResponse.RunId,
+		WorkflowId: workflowID,
+		RunId:      startResponse1.RunId,
 	}
 	s.WaitForHistoryEvents(`
 			1 WorkflowExecutionStarted
   			2 WorkflowTaskScheduled
   			3 WorkflowTaskStarted
   			4 WorkflowTaskCompleted`,
-		s.GetHistoryFunc(s.Namespace(), workflowExecution),
+		s.GetHistoryFunc(s.Namespace().String(), workflowExecution),
 		5*time.Second,
 		10*time.Millisecond)
 
+	// Try starting another workflow, which will have the callback attached to the previous workflow.
+	request2 := proto.Clone(request1).(*workflowservice.StartWorkflowExecutionRequest)
+	request2.RequestId = uuid.NewString()
+	request2.WorkflowIdConflictPolicy = enumspb.WORKFLOW_ID_CONFLICT_POLICY_USE_EXISTING
+	request2.OnConflictOptions = &workflowpb.OnConflictOptions{
+		AttachRequestId:           true,
+		AttachCompletionCallbacks: true,
+	}
+	request2.CompletionCallbacks = []*commonpb.Callback{cbs[1]}
+
+	startResponse2, err := s.FrontendClient().StartWorkflowExecution(ctx, request2)
+	s.NoError(err)
+	s.False(startResponse2.Started)
+	s.Equal(workflowExecution.RunId, startResponse2.RunId)
+
+	// Get history, iterate to ensure workflow execution options updated event exists.
+	s.WaitForHistoryEvents(`
+			1 WorkflowExecutionStarted
+  			2 WorkflowTaskScheduled
+  			3 WorkflowTaskStarted
+  			4 WorkflowTaskCompleted
+     		5 WorkflowExecutionOptionsUpdated`,
+		s.GetHistoryFunc(s.Namespace().String(), workflowExecution),
+		5*time.Second,
+		10*time.Millisecond)
+
+	// Reset workflow must copy all callbacks even after the reset point.
 	resetWfResponse, err := sdkClient.ResetWorkflowExecution(ctx, &workflowservice.ResetWorkflowExecutionRequest{
-		Namespace: s.Namespace(),
+		Namespace: s.Namespace().String(),
 
 		WorkflowExecution:         workflowExecution,
 		Reason:                    "TestNexusResetWorkflowWithCallback",
@@ -429,32 +558,185 @@ func (s *CallbacksSuite) TestNexusResetWorkflowWithCallback() {
 	s.NoError(err)
 
 	// Get the description of the run that was reset and ensure that its callback is still in STANDBY state.
-	description, err := sdkClient.DescribeWorkflowExecution(ctx, request.WorkflowId, startResponse.RunId)
+	description, err := sdkClient.DescribeWorkflowExecution(ctx, workflowID, startResponse1.RunId)
 	s.NoError(err)
 	s.Equal(enumspb.WORKFLOW_EXECUTION_STATUS_TERMINATED, description.WorkflowExecutionInfo.Status)
 
 	// Should not be invoked during a reset
-	s.Equal(1, len(description.Callbacks))
-	callbackInfo := description.Callbacks[0]
-	s.ProtoEqual(request.CompletionCallbacks[0], callbackInfo.Callback)
-	s.Equal(enumspb.CALLBACK_STATE_STANDBY, callbackInfo.State)
-	s.Equal(int32(0), callbackInfo.Attempt)
+	s.Equal(len(cbs), len(description.Callbacks))
+	descCbs := make([]*commonpb.Callback, 0, len(description.Callbacks))
+	for _, callbackInfo := range description.Callbacks {
+		s.Equal(enumspb.CALLBACK_STATE_STANDBY, callbackInfo.State)
+		s.Equal(int32(0), callbackInfo.Attempt)
+		descCbs = append(descCbs, callbackInfo.Callback)
+	}
+	s.ProtoElementsMatch(cbs, descCbs)
 
-	resetWorkflowRun := sdkClient.GetWorkflow(ctx, request.WorkflowId, resetWfResponse.RunId)
+	resetWorkflowRun := sdkClient.GetWorkflow(ctx, workflowID, resetWfResponse.RunId)
 	err = resetWorkflowRun.Get(ctx, nil)
 	s.NoError(err)
 
-	completion := <-ch.requestCh
-	s.Equal(nexus.OperationStateSucceeded, completion.State)
-	ch.requestCompleteCh <- err
+	for range cbs {
+		select {
+		case completion := <-ch.requestCh:
+			s.Equal(nexus.OperationStateSucceeded, completion.State)
+		case <-time.After(time.Second):
+			s.Fail("timeout waiting for callback")
+		}
+		select {
+		case ch.requestCompleteCh <- nil:
+		case <-time.After(time.Second):
+			s.Fail("timeout writing to completion channel")
+		}
+	}
 
-	// Get the description of the run post-reset and ensure that its callback is in SUCCEEDED state.
-	description, err = sdkClient.DescribeWorkflowExecution(ctx, resetWorkflowRun.GetID(), "")
+	s.EventuallyWithT(
+		func(t *assert.CollectT) {
+			// Get the description of the run post-reset and ensure its callbacks are in SUCCEEDED
+			// state.
+			description, err = sdkClient.DescribeWorkflowExecution(ctx, resetWorkflowRun.GetID(), "")
+			require.NoError(t, err)
+			require.Equal(
+				t,
+				enumspb.WORKFLOW_EXECUTION_STATUS_COMPLETED,
+				description.WorkflowExecutionInfo.Status,
+			)
+
+			require.Equal(t, len(cbs), len(description.Callbacks))
+			descCbs = make([]*commonpb.Callback, 0, len(description.Callbacks))
+			for _, callbackInfo := range description.Callbacks {
+				require.Equal(t, enumspb.CALLBACK_STATE_SUCCEEDED, callbackInfo.State)
+				descCbs = append(descCbs, callbackInfo.Callback)
+			}
+			protoassert.ProtoElementsMatch(t, cbs, descCbs)
+		},
+		2*time.Second,
+		100*time.Millisecond,
+	)
+}
+
+func blockingWorkflow(ctx workflow.Context) error {
+	return workflow.Await(ctx, func() bool {
+		return false
+	})
+}
+
+func (s *CallbacksSuite) TestNexusResetWorkflowWithCallback_ResetToNotBaseRun() {
+	s.OverrideDynamicConfig(
+		callbacks.AllowedAddresses,
+		[]any{map[string]any{"Pattern": "*", "AllowInsecure": true}},
+	)
+
+	/*
+	 * 1. Start WF w/ no callbacks and immediately terminate
+	 * 2. Start WF second time w/ a callback
+	 * 3. Reset WF back to the first run
+	 * 4. Verify callback is called
+	 */
+
+	tv := testvars.New(s.T())
+	ctx := testcore.NewContext()
+	sdkClient, err := client.Dial(client.Options{
+		HostPort:  s.FrontendGRPCAddress(),
+		Namespace: s.Namespace().String(),
+	})
 	s.NoError(err)
-	s.Equal(enumspb.WORKFLOW_EXECUTION_STATUS_COMPLETED, description.WorkflowExecutionInfo.Status)
 
-	s.Equal(1, len(description.Callbacks))
-	callbackInfo = description.Callbacks[0]
-	s.ProtoEqual(request.CompletionCallbacks[0], callbackInfo.Callback)
-	s.Equal(enumspb.CALLBACK_STATE_SUCCEEDED, callbackInfo.State)
+	taskQueue := tv.TaskQueue()
+	workflowID := tv.WorkflowID()
+
+	ch := &completionHandler{
+		requestCh:         make(chan *nexusrpc.CompletionRequest, 1),
+		requestCompleteCh: make(chan error, 1),
+	}
+	defer func() {
+		close(ch.requestCh)
+		close(ch.requestCompleteCh)
+	}()
+	callbackAddress := s.runNexusCompletionHTTPServer(s.T(), ch)
+
+	w := worker.New(sdkClient, taskQueue.GetName(), worker.Options{})
+
+	w.RegisterWorkflow(blockingWorkflow)
+	s.NoError(w.Start())
+	defer w.Stop()
+
+	// 1. Start WF w/ no callbacks and immediately terminate
+	request1 := &workflowservice.StartWorkflowExecutionRequest{
+		RequestId:          uuid.NewString(),
+		Namespace:          s.Namespace().String(),
+		WorkflowId:         workflowID,
+		WorkflowType:       &commonpb.WorkflowType{Name: "blockingWorkflow"},
+		TaskQueue:          taskQueue,
+		Input:              nil,
+		WorkflowRunTimeout: durationpb.New(20 * time.Second),
+		Identity:           s.T().Name(),
+	}
+
+	startResponse1, err := s.FrontendClient().StartWorkflowExecution(ctx, request1)
+	s.NoError(err)
+
+	// Validate the workflow started, then terminate it
+	workflowExecution := &commonpb.WorkflowExecution{
+		WorkflowId: workflowID,
+		RunId:      startResponse1.RunId,
+	}
+	s.WaitForHistoryEvents(`
+			1 WorkflowExecutionStarted
+			2 WorkflowTaskScheduled
+			3 WorkflowTaskStarted
+			4 WorkflowTaskCompleted`,
+		s.GetHistoryFunc(s.Namespace().String(), workflowExecution),
+		5*time.Second,
+		10*time.Millisecond)
+
+	_, err = s.FrontendClient().TerminateWorkflowExecution(ctx, &workflowservice.TerminateWorkflowExecutionRequest{
+		Namespace:         s.Namespace().String(),
+		WorkflowExecution: workflowExecution,
+		Reason:            s.T().Name(),
+		Identity:          tv.WorkerIdentity(),
+	})
+	s.NoError(err)
+
+	// 2. Start WF second time w/ callbacks (new run)
+	cbs := []*commonpb.Callback{
+		{Variant: &commonpb.Callback_Nexus_{Nexus: &commonpb.Callback_Nexus{Url: callbackAddress + "/cb1"}}},
+	}
+
+	request2 := proto.Clone(request1).(*workflowservice.StartWorkflowExecutionRequest)
+	request2.RequestId = uuid.NewString()
+	request2.CompletionCallbacks = cbs
+
+	_, err = s.FrontendClient().StartWorkflowExecution(ctx, request2)
+	s.NoError(err)
+
+	// 3. Reset workflow back to the first (terminated) run as base; must copy callbacks
+	_, err = sdkClient.ResetWorkflowExecution(ctx, &workflowservice.ResetWorkflowExecutionRequest{
+		Namespace:                 s.Namespace().String(),
+		WorkflowExecution:         workflowExecution, // base = first (terminated) run
+		Reason:                    s.T().Name(),
+		WorkflowTaskFinishEventId: 4,
+		RequestId:                 "test_id",
+	})
+	s.NoError(err)
+
+	// 4. Wait for callback deliveries via the handler channels
+	select {
+	case completion := <-ch.requestCh:
+		s.Equal(nexus.OperationStateFailed, completion.State)
+		ch.requestCompleteCh <- nil
+	case <-ctx.Done():
+		s.FailNow("timed out waiting for callback")
+	}
+
+	// Ensure the original workflow runs to completion to avoid leaving dangling runs
+	_, err = s.FrontendClient().TerminateWorkflowExecution(ctx, &workflowservice.TerminateWorkflowExecutionRequest{
+		Namespace: s.Namespace().String(),
+		WorkflowExecution: &commonpb.WorkflowExecution{
+			WorkflowId: workflowID,
+		},
+		Reason:   s.T().Name(),
+		Identity: tv.WorkerIdentity(),
+	})
+	s.NoError(err)
 }

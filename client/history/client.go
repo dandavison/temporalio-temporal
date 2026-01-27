@@ -1,27 +1,3 @@
-// The MIT License
-//
-// Copyright (c) 2020 Temporal Technologies Inc.  All rights reserved.
-//
-// Copyright (c) 2020 Uber Technologies, Inc.
-//
-// Permission is hereby granted, free of charge, to any person obtaining a copy
-// of this software and associated documentation files (the "Software"), to deal
-// in the Software without restriction, including without limitation the rights
-// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-// copies of the Software, and to permit persons to whom the Software is
-// furnished to do so, subject to the following conditions:
-//
-// The above copyright notice and this permission notice shall be included in
-// all copies or substantial portions of the Software.
-//
-// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
-// THE SOFTWARE.
-
 // Generates all three generated files in this package:
 //go:generate go run ../../cmd/tools/genrpcwrappers -service history
 
@@ -29,7 +5,6 @@ package history
 
 import (
 	"context"
-	"fmt"
 	"math/rand"
 	"sync"
 	"time"
@@ -44,6 +19,7 @@ import (
 	"go.temporal.io/server/common/log"
 	"go.temporal.io/server/common/log/tag"
 	"go.temporal.io/server/common/membership"
+	"go.temporal.io/server/common/tasktoken"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/metadata"
 )
@@ -58,12 +34,12 @@ const (
 )
 
 type clientImpl struct {
-	connections     connectionPool
+	connections     connectionPool[historyservice.HistoryServiceClient]
 	logger          log.Logger
 	numberOfShards  int32
-	redirector      redirector
+	redirector      Redirector[historyservice.HistoryServiceClient]
 	timeout         time.Duration
-	tokenSerializer common.TaskTokenSerializer
+	tokenSerializer *tasktoken.Serializer
 }
 
 // NewClient creates a new history service gRPC client
@@ -75,15 +51,20 @@ func NewClient(
 	rpcFactory RPCFactory,
 	timeout time.Duration,
 ) historyservice.HistoryServiceClient {
-	connections := newConnectionPool(historyServiceResolver, rpcFactory)
+	connections := NewConnectionPool(historyServiceResolver, rpcFactory, historyservice.NewHistoryServiceClient)
 
-	var redirector redirector
+	var redirector Redirector[historyservice.HistoryServiceClient]
 	if dynamicconfig.HistoryClientOwnershipCachingEnabled.Get(dc)() {
 		logger.Info("historyClient: ownership caching enabled")
-		redirector = newCachingRedirector(connections, historyServiceResolver, logger)
+		redirector = NewCachingRedirector(
+			connections,
+			historyServiceResolver,
+			logger,
+			dynamicconfig.HistoryClientOwnershipCachingStaleTTL.Get(dc),
+		)
 	} else {
 		logger.Info("historyClient: ownership caching disabled")
-		redirector = newBasicRedirector(connections, historyServiceResolver)
+		redirector = NewBasicRedirector(connections, historyServiceResolver)
 	}
 
 	return &clientImpl{
@@ -92,12 +73,12 @@ func NewClient(
 		numberOfShards:  numberOfShards,
 		redirector:      redirector,
 		timeout:         timeout,
-		tokenSerializer: common.NewProtoTaskTokenSerializer(),
+		tokenSerializer: tasktoken.NewSerializer(),
 	}
 }
 
 func (c *clientImpl) DeepHealthCheck(ctx context.Context, request *historyservice.DeepHealthCheckRequest, opts ...grpc.CallOption) (*historyservice.DeepHealthCheckResponse, error) {
-	return c.connections.getOrCreateClientConn(rpcAddress(request.GetHostAddress())).historyClient.DeepHealthCheck(ctx, request, opts...)
+	return c.connections.getOrCreateClientConn(rpcAddress(request.GetHostAddress())).grpcClient.DeepHealthCheck(ctx, request, opts...)
 }
 
 func (c *clientImpl) DescribeHistoryHost(
@@ -112,7 +93,7 @@ func (c *clientImpl) DescribeHistoryHost(
 		shardID = c.shardIDFromWorkflowID(request.GetNamespaceId(), request.GetWorkflowExecution().GetWorkflowId())
 	} else {
 		clientConn := c.connections.getOrCreateClientConn(rpcAddress(request.GetHostAddress()))
-		return clientConn.historyClient.DescribeHistoryHost(ctx, request, opts...)
+		return clientConn.grpcClient.DescribeHistoryHost(ctx, request, opts...)
 	}
 
 	var response *historyservice.DescribeHistoryHostResponse
@@ -206,7 +187,7 @@ func (c *clientImpl) GetReplicationStatus(
 	var wg sync.WaitGroup
 	wg.Add(len(clientConns))
 	for _, client := range clientConns {
-		historyClient := client.historyClient
+		historyClient := client.grpcClient
 		go func(client historyservice.HistoryServiceClient) {
 			defer wg.Done()
 			resp, err := historyClient.GetReplicationStatus(ctx, request, opts...)
@@ -234,6 +215,40 @@ func (c *clientImpl) GetReplicationStatus(
 		return response, err
 	}
 
+	return response, nil
+}
+
+func (c *clientImpl) RecordActivityTaskStarted(
+	ctx context.Context,
+	request *historyservice.RecordActivityTaskStartedRequest,
+	opts ...grpc.CallOption,
+) (*historyservice.RecordActivityTaskStartedResponse, error) {
+	var shardID int32
+
+	// For Chasm components we need to route the shard based on business ID. Note that shardIDFromWorkflowID simply
+	// calculates the hash from the ID so it works for both workflowID and businessID.
+	if len(request.GetComponentRef()) == 0 {
+		shardID = c.shardIDFromWorkflowID(request.GetNamespaceId(), request.GetWorkflowExecution().GetWorkflowId())
+	} else {
+		componentRef, err := c.tokenSerializer.DeserializeChasmComponentRef(request.GetComponentRef())
+		if err != nil {
+			return nil, err
+		}
+
+		shardID = c.shardIDFromWorkflowID(componentRef.GetNamespaceId(), componentRef.GetBusinessId())
+	}
+
+	var response *historyservice.RecordActivityTaskStartedResponse
+	op := func(ctx context.Context, client historyservice.HistoryServiceClient) error {
+		var err error
+		ctx, cancel := c.createContext(ctx)
+		defer cancel()
+		response, err = client.RecordActivityTaskStarted(ctx, request, opts...)
+		return err
+	}
+	if err := c.executeWithRedirect(ctx, shardID, op); err != nil {
+		return nil, err
+	}
 	return response, nil
 }
 
@@ -280,7 +295,7 @@ func (c *clientImpl) shardIDFromWorkflowID(namespaceID, workflowID string) int32
 
 func checkShardID(shardID int32) error {
 	if shardID <= 0 {
-		return serviceerror.NewInvalidArgument(fmt.Sprintf("Invalid ShardID: %d", shardID))
+		return serviceerror.NewInvalidArgumentf("Invalid ShardID: %d", shardID)
 	}
 	return nil
 }
@@ -288,7 +303,7 @@ func checkShardID(shardID int32) error {
 func (c *clientImpl) executeWithRedirect(
 	ctx context.Context,
 	shardID int32,
-	op clientOperation,
+	op ClientOperation[historyservice.HistoryServiceClient],
 ) error {
-	return c.redirector.execute(ctx, shardID, op)
+	return c.redirector.Execute(ctx, shardID, op)
 }

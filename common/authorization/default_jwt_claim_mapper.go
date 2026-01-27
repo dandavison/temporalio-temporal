@@ -1,32 +1,9 @@
-// The MIT License
-//
-// Copyright (c) 2020 Temporal Technologies Inc.  All rights reserved.
-//
-// Copyright (c) 2020 Uber Technologies, Inc.
-//
-// Permission is hereby granted, free of charge, to any person obtaining a copy
-// of this software and associated documentation files (the "Software"), to deal
-// in the Software without restriction, including without limitation the rights
-// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-// copies of the Software, and to permit persons to whom the Software is
-// furnished to do so, subject to the following conditions:
-//
-// The above copyright notice and this permission notice shall be included in
-// all copies or substantial portions of the Software.
-//
-// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
-// THE SOFTWARE.
-
 package authorization
 
 import (
 	"context"
 	"fmt"
+	"regexp"
 	"strings"
 
 	"github.com/golang-jwt/jwt/v4"
@@ -52,6 +29,9 @@ type defaultJWTClaimMapper struct {
 	keyProvider          TokenKeyProvider
 	logger               log.Logger
 	permissionsClaimName string
+	permissionsRegex     *regexp.Regexp
+	matchNamespaceIndex  int
+	matchRoleIndex       int
 }
 
 func NewDefaultJWTClaimMapper(provider TokenKeyProvider, cfg *config.Authorization, logger log.Logger) ClaimMapper {
@@ -59,7 +39,36 @@ func NewDefaultJWTClaimMapper(provider TokenKeyProvider, cfg *config.Authorizati
 	if claimName == "" {
 		claimName = defaultPermissionsClaimName
 	}
-	return &defaultJWTClaimMapper{keyProvider: provider, logger: logger, permissionsClaimName: claimName}
+	var permissionsRegex *regexp.Regexp
+	var namespaceIndex, roleIndex int
+	if cfg.PermissionsRegex != "" {
+		r, err := regexp.Compile(cfg.PermissionsRegex)
+		if err == nil {
+			for i, name := range r.SubexpNames() {
+				switch name {
+				case "namespace":
+					namespaceIndex = i
+				case "role":
+					roleIndex = i
+				}
+			}
+			if namespaceIndex != 0 && roleIndex != 0 {
+				permissionsRegex = r
+			} else {
+				logger.Warn("permissions regex does not have namespace or role named group")
+			}
+		} else {
+			logger.Warn(fmt.Sprintf("failed to compile permissions regex '%s': %v", cfg.PermissionsRegex, err))
+		}
+	}
+	return &defaultJWTClaimMapper{
+		keyProvider:          provider,
+		logger:               logger,
+		permissionsClaimName: claimName,
+		permissionsRegex:     permissionsRegex,
+		matchNamespaceIndex:  namespaceIndex,
+		matchRoleIndex:       roleIndex,
+	}
 }
 
 var _ ClaimMapper = (*defaultJWTClaimMapper)(nil)
@@ -72,7 +81,9 @@ func (a *defaultJWTClaimMapper) GetClaims(authInfo *AuthInfo) (*Claims, error) {
 		return &claims, nil
 	}
 
-	parts := strings.Split(authInfo.AuthToken, " ")
+	// We use strings.SplitN even though we check the length later, to avoid
+	// unnecessary allocations if the format is correct.
+	parts := strings.SplitN(authInfo.AuthToken, " ", 2)
 	if len(parts) != 2 {
 		return nil, serviceerror.NewPermissionDenied("unexpected authorization token format", "")
 	}
@@ -105,10 +116,20 @@ func (a *defaultJWTClaimMapper) extractPermissions(permissions []interface{}, cl
 			a.logger.Warn(fmt.Sprintf("ignoring permission that is not a string: %v", permission))
 			continue
 		}
-		parts := strings.Split(p, ":")
-		if len(parts) != 2 {
-			a.logger.Warn(fmt.Sprintf("ignoring permission in unexpected format: %v", permission))
-			continue
+		var parts []string
+		if a.permissionsRegex != nil {
+			match := a.permissionsRegex.FindStringSubmatch(p)
+			if len(match) == 0 {
+				a.logger.Warn(fmt.Sprintf("ignoring permission not matching pattern: %v", permission))
+				continue
+			}
+			parts = []string{match[a.matchNamespaceIndex], match[a.matchRoleIndex]}
+		} else {
+			parts = strings.SplitN(p, ":", 2)
+			if len(parts) != 2 {
+				a.logger.Warn(fmt.Sprintf("ignoring permission in unexpected format: %v", permission))
+				continue
+			}
 		}
 		namespace := parts[0]
 		if namespace == permissionScopeSystem {

@@ -1,27 +1,3 @@
-// The MIT License
-//
-// Copyright (c) 2020 Temporal Technologies Inc.  All rights reserved.
-//
-// Copyright (c) 2020 Uber Technologies, Inc.
-//
-// Permission is hereby granted, free of charge, to any person obtaining a copy
-// of this software and associated documentation files (the "Software"), to deal
-// in the Software without restriction, including without limitation the rights
-// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-// copies of the Software, and to permit persons to whom the Software is
-// furnished to do so, subject to the following conditions:
-//
-// The above copyright notice and this permission notice shall be included in
-// all copies or substantial portions of the Software.
-//
-// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
-// THE SOFTWARE.
-
 package sql
 
 import (
@@ -32,6 +8,7 @@ import (
 	"go.temporal.io/api/serviceerror"
 	"go.temporal.io/server/common/log"
 	"go.temporal.io/server/common/persistence"
+	"go.temporal.io/server/common/persistence/serialization"
 	"go.temporal.io/server/common/persistence/sql/sqlplugin"
 )
 
@@ -45,9 +22,10 @@ func newShardPersistence(
 	db sqlplugin.DB,
 	currentClusterName string,
 	logger log.Logger,
+	serializer serialization.Serializer,
 ) (persistence.ShardStore, error) {
 	return &sqlShardStore{
-		SqlStore:           NewSqlStore(db, logger),
+		SqlStore:           NewSQLStore(db, logger, serializer),
 		currentClusterName: currentClusterName,
 	}, nil
 }
@@ -60,7 +38,7 @@ func (m *sqlShardStore) GetOrCreateShard(
 	ctx context.Context,
 	request *persistence.InternalGetOrCreateShardRequest,
 ) (*persistence.InternalGetOrCreateShardResponse, error) {
-	row, err := m.Db.SelectFromShards(ctx, sqlplugin.ShardsFilter{
+	row, err := m.DB.SelectFromShards(ctx, sqlplugin.ShardsFilter{
 		ShardID: request.ShardID,
 	})
 	switch err {
@@ -70,16 +48,16 @@ func (m *sqlShardStore) GetOrCreateShard(
 		}, nil
 	case sql.ErrNoRows:
 	default:
-		return nil, serviceerror.NewUnavailable(fmt.Sprintf("GetOrCreateShard: failed to get ShardID %v. Error: %v", request.ShardID, err))
+		return nil, serviceerror.NewUnavailablef("GetOrCreateShard: failed to get ShardID %v. Error: %v", request.ShardID, err)
 	}
 
 	if request.CreateShardInfo == nil {
-		return nil, serviceerror.NewNotFound(fmt.Sprintf("GetOrCreateShard: ShardID %v not found. Error: %v", request.ShardID, err))
+		return nil, serviceerror.NewNotFoundf("GetOrCreateShard: ShardID %v not found. Error: %v", request.ShardID, err)
 	}
 
 	rangeID, shardInfo, err := request.CreateShardInfo()
 	if err != nil {
-		return nil, serviceerror.NewUnavailable(fmt.Sprintf("GetOrCreateShard: failed to encode shard info for ShardID %v. Error: %v", request.ShardID, err))
+		return nil, serviceerror.NewUnavailablef("GetOrCreateShard: failed to encode shard info for ShardID %v. Error: %v", request.ShardID, err)
 	}
 	row = &sqlplugin.ShardsRow{
 		ShardID:      request.ShardID,
@@ -87,17 +65,17 @@ func (m *sqlShardStore) GetOrCreateShard(
 		Data:         shardInfo.Data,
 		DataEncoding: shardInfo.EncodingType.String(),
 	}
-	_, err = m.Db.InsertIntoShards(ctx, row)
+	_, err = m.DB.InsertIntoShards(ctx, row)
 	if err == nil {
 		return &persistence.InternalGetOrCreateShardResponse{
 			ShardInfo: shardInfo,
 		}, nil
-	} else if m.Db.IsDupEntryError(err) {
+	} else if m.DB.IsDupEntryError(err) {
 		// conflict, try again
 		request.CreateShardInfo = nil // prevent loop
 		return m.GetOrCreateShard(ctx, request)
 	} else {
-		return nil, serviceerror.NewUnavailable(fmt.Sprintf("GetOrCreateShard: failed to insert into shards table. Error: %v", err))
+		return nil, serviceerror.NewUnavailablef("GetOrCreateShard: failed to insert into shards table. Error: %v", err)
 	}
 }
 
@@ -110,6 +88,7 @@ func (m *sqlShardStore) UpdateShard(
 			tx,
 			request.ShardID,
 			request.PreviousRangeID,
+			m.logger,
 		); err != nil {
 			return err
 		}
@@ -137,7 +116,8 @@ func (m *sqlShardStore) AssertShardOwnership(
 	ctx context.Context,
 	request *persistence.AssertShardOwnershipRequest,
 ) error {
-	return serviceerror.NewUnimplemented("AssertShardOwnership is not implemented for sql shard store")
+	// AssertShardOwnership is not implemented for sql shard store
+	return nil
 }
 
 // initiated by the owning shard
@@ -146,6 +126,7 @@ func lockShard(
 	tx sqlplugin.Tx,
 	shardID int32,
 	oldRangeID int64,
+	logger log.Logger,
 ) error {
 
 	rangeID, err := tx.WriteLockShards(ctx, sqlplugin.ShardsFilter{
@@ -161,9 +142,9 @@ func lockShard(
 		}
 		return nil
 	case sql.ErrNoRows:
-		return serviceerror.NewUnavailable(fmt.Sprintf("Failed to lock shard with ID %v that does not exist.", shardID))
+		return serviceerror.NewUnavailablef("Failed to lock shard with ID %v that does not exist.", shardID)
 	default:
-		return serviceerror.NewUnavailable(fmt.Sprintf("Failed to lock shard with ID: %v. Error: %v", shardID, err))
+		return serviceerror.NewUnavailablef("Failed to lock shard with ID: %v. Error: %v", shardID, err)
 	}
 }
 
@@ -187,8 +168,8 @@ func readLockShard(
 		}
 		return nil
 	case sql.ErrNoRows:
-		return serviceerror.NewUnavailable(fmt.Sprintf("Failed to lock shard with ID %v that does not exist.", shardID))
+		return serviceerror.NewUnavailablef("Failed to lock shard with ID %v that does not exist.", shardID)
 	default:
-		return serviceerror.NewUnavailable(fmt.Sprintf("Failed to lock shard with ID: %v. Error: %v", shardID, err))
+		return serviceerror.NewUnavailablef("Failed to lock shard with ID: %v. Error: %v", shardID, err)
 	}
 }

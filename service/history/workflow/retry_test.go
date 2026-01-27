@@ -1,27 +1,3 @@
-// The MIT License
-//
-// Copyright (c) 2020 Temporal Technologies Inc.  All rights reserved.
-//
-// Copyright (c) 2020 Uber Technologies, Inc.
-//
-// Permission is hereby granted, free of charge, to any person obtaining a copy
-// of this software and associated documentation files (the "Software"), to deal
-// in the Software without restriction, including without limitation the rights
-// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-// copies of the Software, and to permit persons to whom the Software is
-// furnished to do so, subject to the following conditions:
-//
-// The above copyright notice and this permission notice shall be included in
-// all copies or substantial portions of the Software.
-//
-// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
-// THE SOFTWARE.
-
 package workflow
 
 import (
@@ -213,7 +189,7 @@ func Test_nextBackoffInterval(t *testing.T) {
 			doNotCare(maxInterval(10*time.Second)),
 			doNotCare(expirationIn(30*time.Second)),
 			doNotCare[float64](2),
-			ExponentialBackoffAlgorithm,
+			backoff.ExponentialBackoffAlgorithm,
 		)
 		assert.Equal(t, initialDelay, interval)
 		assert.Equal(t, enumspb.RETRY_STATE_IN_PROGRESS, retryState)
@@ -231,7 +207,7 @@ func Test_nextBackoffInterval(t *testing.T) {
 			doNotCare(maxInterval(10*time.Second)),
 			doNotCare(expirationIn(30*time.Second)),
 			doNotCare[float64](2),
-			ExponentialBackoffAlgorithm,
+			backoff.ExponentialBackoffAlgorithm,
 		)
 		assert.Equal(t, initialDelay, interval)
 		assert.Equal(t, enumspb.RETRY_STATE_IN_PROGRESS, retryState)
@@ -249,7 +225,7 @@ func Test_nextBackoffInterval(t *testing.T) {
 			doNotCare(maxInterval(200*time.Second)),
 			doNotCare(expirationIn(600*time.Second)),
 			3,
-			ExponentialBackoffAlgorithm,
+			backoff.ExponentialBackoffAlgorithm,
 		)
 		assert.Equal(t, initialDelay*pow(3, int32(attempt)-1), interval)
 		assert.Equal(t, enumspb.RETRY_STATE_IN_PROGRESS, retryState)
@@ -265,7 +241,7 @@ func Test_nextBackoffInterval(t *testing.T) {
 			maxInterval(maxBackoff),
 			doNotCare(expirationIn(600*time.Second)),
 			doNotCare[float64](2),
-			ExponentialBackoffAlgorithm,
+			backoff.ExponentialBackoffAlgorithm,
 		)
 		assert.Equal(t, maxBackoff, interval)
 		assert.Equal(t, enumspb.RETRY_STATE_IN_PROGRESS, retryState)
@@ -280,7 +256,7 @@ func Test_nextBackoffInterval(t *testing.T) {
 			doNotCare(maxInterval(10*time.Second)),
 			doNotCare(expirationIn(600*time.Second)),
 			doNotCare[float64](2),
-			ExponentialBackoffAlgorithm,
+			backoff.ExponentialBackoffAlgorithm,
 		)
 		assert.Equal(t, backoff.NoBackoff, interval)
 		assert.Equal(t, enumspb.RETRY_STATE_MAXIMUM_ATTEMPTS_REACHED, retryState)
@@ -296,7 +272,7 @@ func Test_nextBackoffInterval(t *testing.T) {
 			doNotCare(maxInterval(30*time.Minute)),
 			doNotCare(expirationIn(60*time.Minute)),
 			2,
-			ExponentialBackoffAlgorithm,
+			backoff.ExponentialBackoffAlgorithm,
 		)
 		assert.Equal(t, initialDelay*pow(2, 10-1), interval)
 		assert.Equal(t, enumspb.RETRY_STATE_IN_PROGRESS, retryState)
@@ -312,7 +288,7 @@ func Test_nextBackoffInterval(t *testing.T) {
 			maxInterval(30*time.Minute),
 			expirationIn(1*time.Minute),
 			2,
-			ExponentialBackoffAlgorithm,
+			backoff.ExponentialBackoffAlgorithm,
 		)
 		assert.Equal(t, backoff.NoBackoff, interval)
 		assert.Equal(t, enumspb.RETRY_STATE_TIMEOUT, retryState)
@@ -328,7 +304,7 @@ func Test_nextBackoffInterval(t *testing.T) {
 			maxInterval(30*time.Minute),
 			expirationIn(0),
 			2,
-			ExponentialBackoffAlgorithm,
+			backoff.ExponentialBackoffAlgorithm,
 		)
 		assert.Equal(t, backoff.NoBackoff, interval)
 		assert.Equal(t, enumspb.RETRY_STATE_TIMEOUT, retryState)

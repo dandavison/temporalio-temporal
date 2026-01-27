@@ -1,25 +1,3 @@
-// The MIT License
-//
-// Copyright (c) 2019 Temporal Technologies, Inc.
-//
-// Permission is hereby granted, free of charge, to any person obtaining a copy
-// of this software and associated documentation files (the "Software"), to deal
-// in the Software without restriction, including without limitation the rights
-// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-// copies of the Software, and to permit persons to whom the Software is
-// furnished to do so, subject to the following conditions:
-//
-// The above copyright notice and this permission notice shall be included in
-// all copies or substantial portions of the Software.
-//
-// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
-// THE SOFTWARE.
-
 syntax = "proto3";
 
 package temporal.server.api.matchingservice.v1;
@@ -96,6 +74,11 @@ service MatchingService {
     rpc DescribeTaskQueuePartition (DescribeTaskQueuePartitionRequest) returns (DescribeTaskQueuePartitionResponse) {
     }
 
+    // DescribeVersionedTaskQueues returns details about the requested versioned task queues.
+    // It is an internal API; there is no direct user-facing equivalent.
+    rpc DescribeVersionedTaskQueues (DescribeVersionedTaskQueuesRequest) returns (DescribeVersionedTaskQueuesResponse) {
+    }
+
     // ListTaskQueuePartitions returns a map of partitionKey and hostAddress for a task queue.
     rpc  ListTaskQueuePartitions(ListTaskQueuePartitionsRequest) returns (ListTaskQueuePartitionsResponse){
     }
@@ -105,7 +88,9 @@ service MatchingService {
     // (-- api-linter: core::0134::method-signature=disabled
     //     aip.dev/not-precedent: UpdateWorkerBuildIdCompatibility RPC doesn't follow Google API format. --)
     rpc UpdateWorkerBuildIdCompatibility (UpdateWorkerBuildIdCompatibilityRequest) returns (UpdateWorkerBuildIdCompatibilityResponse) {}
+
     rpc GetWorkerBuildIdCompatibility (GetWorkerBuildIdCompatibilityRequest) returns (GetWorkerBuildIdCompatibilityResponse) {}
+
     // Fetch user data for a task queue, this request should always be routed to the node holding the root partition of the workflow task queue.
     rpc GetTaskQueueUserData (GetTaskQueueUserDataRequest) returns (GetTaskQueueUserDataResponse) {}
 
@@ -121,8 +106,10 @@ service MatchingService {
     //     aip.dev/not-precedent: GetWorkerVersioningRulesRequest RPC doesn't follow Google API format. --)
     // (-- api-linter: core::0131::http-uri-name=disabled
     //     aip.dev/not-precedent: GetWorkerVersioningRulesRequest RPC doesn't follow Google API format. --)
-    rpc GetWorkerVersioningRules (GetWorkerVersioningRulesRequest) returns (GetWorkerVersioningRulesResponse) {
-    }
+    rpc GetWorkerVersioningRules (GetWorkerVersioningRulesRequest) returns (GetWorkerVersioningRulesResponse) { }
+
+    // This request should always be routed to the node holding the root partition of the workflow task queue.
+    rpc SyncDeploymentUserData (SyncDeploymentUserDataRequest) returns (SyncDeploymentUserDataResponse) {}
 
     // Apply a user data replication event.
     rpc ApplyTaskQueueUserDataReplicationEvent (ApplyTaskQueueUserDataReplicationEventRequest) returns (ApplyTaskQueueUserDataReplicationEventResponse) {}
@@ -135,7 +122,7 @@ service MatchingService {
     // but not being forwarded/synced to the root partition to find the polling
     // worker which triggered the root partition being loaded in the first place.
     rpc ForceLoadTaskQueuePartition (ForceLoadTaskQueuePartitionRequest) returns (ForceLoadTaskQueuePartitionResponse) {}
-    
+
     // TODO Shivam - remove this in 123. Present for backwards compatibility.
     rpc ForceUnloadTaskQueue (ForceUnloadTaskQueueRequest) returns (ForceUnloadTaskQueueResponse) {}
 
@@ -153,6 +140,11 @@ service MatchingService {
 
     // Replicate task queue user data across clusters, must be done via the owning node for updates in namespace.
     rpc ReplicateTaskQueueUserData(ReplicateTaskQueueUserDataRequest) returns (ReplicateTaskQueueUserDataResponse) {}
+
+    // Blocks on user data propagation to all loaded partitions. If successful, all loaded
+    // workflow + activity partitions have the requested version or higher.
+    // Routed to user data owner (root partition of workflow task queue).
+    rpc CheckTaskQueueUserDataPropagation(CheckTaskQueueUserDataPropagationRequest) returns (CheckTaskQueueUserDataPropagationResponse) {}
 
     // Create a Nexus endpoint.
     // (-- api-linter: core::0133::method-signature=disabled
@@ -176,4 +168,40 @@ service MatchingService {
     rpc	DeleteNexusEndpoint(DeleteNexusEndpointRequest) returns (DeleteNexusEndpointResponse) {}
     // List all registered services.
     rpc	ListNexusEndpoints(ListNexusEndpointsRequest) returns (ListNexusEndpointsResponse) {}
+
+    // RecordWorkerHeartbeat receive heartbeat request from the worker.
+    rpc RecordWorkerHeartbeat (RecordWorkerHeartbeatRequest) returns (RecordWorkerHeartbeatResponse) {}
+
+    // ListWorkers retrieves a list of workers in the specified namespace that match the provided filters.
+    // Supports pagination for large result sets. Returns an empty list if no workers match the criteria.
+    // Returns an error if the namespace doesn't exist.
+    rpc ListWorkers (ListWorkersRequest) returns (ListWorkersResponse) {}
+
+    // Set the persisted task queue configuration.
+    // (-- api-linter: core::0134::method-signature=disabled
+    //     aip.dev/not-precedent: UpdateTaskQueueConfig RPC doesn't follow Google API format. --)
+    // (-- api-linter: core::0134::response-message-name=disabled
+    //     aip.dev/not-precedent: UpdateTaskQueueConfig RPC doesn't follow Google API format. --)
+    // (-- api-linter: core::0134::request-resource-required=disabled
+    //     aip.dev/not-precedent: UpdateTaskQueueConfig RPC doesn't follow Google API format. --)
+    rpc UpdateTaskQueueConfig (UpdateTaskQueueConfigRequest) returns (UpdateTaskQueueConfigResponse) {}
+
+    // DescribeWorker retrieves a worker information in the specified namespace that match the provided instance key.
+    // Returns an error if the namespace or worker doesn't exist.
+    rpc DescribeWorker (DescribeWorkerRequest) returns (DescribeWorkerResponse) {}
+
+    // UpdateFairnessState changes the fairness_state stored in UserData for automatically enabling
+    // priority and fairness.
+    // (-- api-linter: core::0134::method-signature=disabled
+    //     aip.dev/not-precedent: UpdateFairnessState RPC doesn't follow Google API format. --)
+    // (-- api-linter: core::0134::response-message-name=disabled
+    //     aip.dev/not-precedent: UpdateFairnessState RPC doesn't follow Google API format. --)
+    // (-- api-linter: core::0134::request-resource-required=disabled
+    //     aip.dev/not-precedent: UpdateFairnessState RPC doesn't follow Google API format. --)
+    rpc UpdateFairnessState(UpdateFairnessStateRequest) returns (UpdateFairnessStateResponse) {}
+
+    // CheckTaskQueueVersionMembership checks if a task queue is part of a specific deployment version.
+    rpc CheckTaskQueueVersionMembership(CheckTaskQueueVersionMembershipRequest) returns (CheckTaskQueueVersionMembershipResponse) {}
+
 }
+

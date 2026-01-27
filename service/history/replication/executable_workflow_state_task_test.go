@@ -1,27 +1,3 @@
-// The MIT License
-//
-// Copyright (c) 2020 Temporal Technologies Inc.  All rights reserved.
-//
-// Copyright (c) 2020 Uber Technologies, Inc.
-//
-// Permission is hereby granted, free of charge, to any person obtaining a copy
-// of this software and associated documentation files (the "Software"), to deal
-// in the Software without restriction, including without limitation the rights
-// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-// copies of the Software, and to permit persons to whom the Software is
-// furnished to do so, subject to the following conditions:
-//
-// The above copyright notice and this permission notice shall be included in
-// all copies or substantial portions of the Software.
-//
-// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
-// THE SOFTWARE.
-
 package replication
 
 import (
@@ -35,7 +11,7 @@ import (
 	"github.com/stretchr/testify/suite"
 	enumsspb "go.temporal.io/server/api/enums/v1"
 	"go.temporal.io/server/api/historyservice/v1"
-	persistencepb "go.temporal.io/server/api/persistence/v1"
+	persistencespb "go.temporal.io/server/api/persistence/v1"
 	replicationspb "go.temporal.io/server/api/replication/v1"
 	"go.temporal.io/server/client"
 	"go.temporal.io/server/common/cluster"
@@ -44,8 +20,8 @@ import (
 	"go.temporal.io/server/common/namespace"
 	"go.temporal.io/server/common/persistence"
 	serviceerrors "go.temporal.io/server/common/serviceerror"
-	"go.temporal.io/server/common/xdc"
 	"go.temporal.io/server/service/history/configs"
+	historyi "go.temporal.io/server/service/history/interfaces"
 	"go.temporal.io/server/service/history/shard"
 	"go.temporal.io/server/service/history/tests"
 	"go.uber.org/mock/gomock"
@@ -61,7 +37,6 @@ type (
 		clientBean              *client.MockBean
 		shardController         *shard.MockController
 		namespaceCache          *namespace.MockRegistry
-		ndcHistoryResender      *xdc.MockNDCHistoryResender
 		metricsHandler          metrics.Handler
 		logger                  log.Logger
 		executableTask          *MockExecutableTask
@@ -97,18 +72,17 @@ func (s *executableWorkflowStateTaskSuite) SetupTest() {
 	s.clientBean = client.NewMockBean(s.controller)
 	s.shardController = shard.NewMockController(s.controller)
 	s.namespaceCache = namespace.NewMockRegistry(s.controller)
-	s.ndcHistoryResender = xdc.NewMockNDCHistoryResender(s.controller)
 	s.metricsHandler = metrics.NoopMetricsHandler
 	s.logger = log.NewNoopLogger()
 	s.executableTask = NewMockExecutableTask(s.controller)
 	s.eagerNamespaceRefresher = NewMockEagerNamespaceRefresher(s.controller)
 	s.replicationTask = &replicationspb.SyncWorkflowStateTaskAttributes{
-		WorkflowState: &persistencepb.WorkflowMutableState{
-			ExecutionInfo: &persistencepb.WorkflowExecutionInfo{
+		WorkflowState: &persistencespb.WorkflowMutableState{
+			ExecutionInfo: &persistencespb.WorkflowExecutionInfo{
 				NamespaceId: uuid.NewString(),
 				WorkflowId:  uuid.NewString(),
 			},
-			ExecutionState: &persistencepb.WorkflowExecutionState{
+			ExecutionState: &persistencespb.WorkflowExecutionState{
 				RunId: uuid.NewString(),
 			},
 		},
@@ -128,7 +102,6 @@ func (s *executableWorkflowStateTaskSuite) SetupTest() {
 			ClientBean:              s.clientBean,
 			ShardController:         s.shardController,
 			NamespaceCache:          s.namespaceCache,
-			NDCHistoryResender:      s.ndcHistoryResender,
 			MetricsHandler:          s.metricsHandler,
 			Logger:                  s.logger,
 			EagerNamespaceRefresher: s.eagerNamespaceRefresher,
@@ -140,12 +113,14 @@ func (s *executableWorkflowStateTaskSuite) SetupTest() {
 		s.replicationTask,
 		s.sourceClusterName,
 		s.sourceShardKey,
-		enumsspb.TASK_PRIORITY_HIGH,
-		nil,
+		&replicationspb.ReplicationTask{
+			Priority: enumsspb.TASK_PRIORITY_HIGH,
+		},
 	)
 	s.task.ExecutableTask = s.executableTask
 	s.executableTask.EXPECT().TaskID().Return(s.taskID).AnyTimes()
 	s.executableTask.EXPECT().SourceClusterName().Return(s.sourceClusterName).AnyTimes()
+	s.executableTask.EXPECT().GetPriority().Return(enumsspb.TASK_PRIORITY_HIGH).AnyTimes()
 }
 
 func (s *executableWorkflowStateTaskSuite) TearDownTest() {
@@ -154,12 +129,13 @@ func (s *executableWorkflowStateTaskSuite) TearDownTest() {
 
 func (s *executableWorkflowStateTaskSuite) TestExecute_Process() {
 	s.executableTask.EXPECT().TerminalState().Return(false)
-	s.executableTask.EXPECT().GetNamespaceInfo(gomock.Any(), s.task.NamespaceID).Return(
+	s.executableTask.EXPECT().MarkExecutionStart()
+	s.executableTask.EXPECT().GetNamespaceInfo(gomock.Any(), s.task.NamespaceID, gomock.Any()).Return(
 		uuid.NewString(), true, nil,
 	).AnyTimes()
 
-	shardContext := shard.NewMockContext(s.controller)
-	engine := shard.NewMockEngine(s.controller)
+	shardContext := historyi.NewMockShardContext(s.controller)
+	engine := historyi.NewMockEngine(s.controller)
 	s.shardController.EXPECT().GetShardByNamespaceWorkflow(
 		namespace.ID(s.task.NamespaceID),
 		s.task.WorkflowID,
@@ -184,7 +160,8 @@ func (s *executableWorkflowStateTaskSuite) TestExecute_Skip_TerminalState() {
 
 func (s *executableWorkflowStateTaskSuite) TestExecute_Skip_Namespace() {
 	s.executableTask.EXPECT().TerminalState().Return(false)
-	s.executableTask.EXPECT().GetNamespaceInfo(gomock.Any(), s.task.NamespaceID).Return(
+	s.executableTask.EXPECT().MarkExecutionStart()
+	s.executableTask.EXPECT().GetNamespaceInfo(gomock.Any(), s.task.NamespaceID, gomock.Any()).Return(
 		uuid.NewString(), false, nil,
 	).AnyTimes()
 
@@ -194,8 +171,9 @@ func (s *executableWorkflowStateTaskSuite) TestExecute_Skip_Namespace() {
 
 func (s *executableWorkflowStateTaskSuite) TestExecute_Err() {
 	s.executableTask.EXPECT().TerminalState().Return(false)
+	s.executableTask.EXPECT().MarkExecutionStart()
 	err := errors.New("OwO")
-	s.executableTask.EXPECT().GetNamespaceInfo(gomock.Any(), s.task.NamespaceID).Return(
+	s.executableTask.EXPECT().GetNamespaceInfo(gomock.Any(), s.task.NamespaceID, gomock.Any()).Return(
 		"", false, err,
 	).AnyTimes()
 
@@ -203,12 +181,14 @@ func (s *executableWorkflowStateTaskSuite) TestExecute_Err() {
 }
 
 func (s *executableWorkflowStateTaskSuite) TestHandleErr_Resend_Success() {
+	s.executableTask.EXPECT().NamespaceName().Return("test-namespace").AnyTimes()
 	s.executableTask.EXPECT().TerminalState().Return(false)
-	s.executableTask.EXPECT().GetNamespaceInfo(gomock.Any(), s.task.NamespaceID).Return(
+	s.executableTask.EXPECT().MarkExecutionStart()
+	s.executableTask.EXPECT().GetNamespaceInfo(gomock.Any(), s.task.NamespaceID, gomock.Any()).Return(
 		uuid.NewString(), true, nil,
 	).AnyTimes()
-	shardContext := shard.NewMockContext(s.controller)
-	engine := shard.NewMockEngine(s.controller)
+	shardContext := historyi.NewMockShardContext(s.controller)
+	engine := historyi.NewMockEngine(s.controller)
 	s.shardController.EXPECT().GetShardByNamespaceWorkflow(
 		namespace.ID(s.task.NamespaceID),
 		s.task.WorkflowID,
@@ -230,7 +210,8 @@ func (s *executableWorkflowStateTaskSuite) TestHandleErr_Resend_Success() {
 }
 
 func (s *executableWorkflowStateTaskSuite) TestHandleErr_Resend_Error() {
-	s.executableTask.EXPECT().GetNamespaceInfo(gomock.Any(), s.task.NamespaceID).Return(
+	s.executableTask.EXPECT().NamespaceName().Return("test-namespace").AnyTimes()
+	s.executableTask.EXPECT().GetNamespaceInfo(gomock.Any(), s.task.NamespaceID, gomock.Any()).Return(
 		uuid.NewString(), true, nil,
 	).AnyTimes()
 	err := serviceerrors.NewRetryReplication(
@@ -263,7 +244,7 @@ func (s *executableWorkflowStateTaskSuite) TestMarkPoisonPill() {
 	err := s.task.MarkPoisonPill()
 	s.NoError(err)
 
-	s.Equal(&persistencepb.ReplicationTaskInfo{
+	s.Equal(&persistencespb.ReplicationTaskInfo{
 		NamespaceId: s.task.NamespaceID,
 		WorkflowId:  s.task.WorkflowID,
 		RunId:       s.task.RunID,

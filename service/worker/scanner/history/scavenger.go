@@ -1,27 +1,3 @@
-// The MIT License
-//
-// Copyright (c) 2020 Temporal Technologies Inc.  All rights reserved.
-//
-// Copyright (c) 2020 Uber Technologies, Inc.
-//
-// Permission is hereby granted, free of charge, to any person obtaining a copy
-// of this software and associated documentation files (the "Software"), to deal
-// in the Software without restriction, including without limitation the rights
-// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-// copies of the Software, and to permit persons to whom the Software is
-// furnished to do so, subject to the following conditions:
-//
-// The above copyright notice and this permission notice shall be included in
-// all copies or substantial portions of the Software.
-//
-// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
-// THE SOFTWARE.
-
 package history
 
 import (
@@ -33,9 +9,10 @@ import (
 	"go.temporal.io/api/serviceerror"
 	"go.temporal.io/sdk/activity"
 	"go.temporal.io/server/api/adminservice/v1"
-	"go.temporal.io/server/api/enums/v1"
+	enumsspb "go.temporal.io/server/api/enums/v1"
 	"go.temporal.io/server/api/historyservice/v1"
-	persistencepb "go.temporal.io/server/api/persistence/v1"
+	persistencespb "go.temporal.io/server/api/persistence/v1"
+	"go.temporal.io/server/chasm"
 	"go.temporal.io/server/common"
 	"go.temporal.io/server/common/collection"
 	"go.temporal.io/server/common/dynamicconfig"
@@ -70,6 +47,7 @@ type (
 		rateLimiter    quotas.RateLimiter
 		metricsHandler metrics.Handler
 		logger         log.Logger
+		serializer     serialization.Serializer
 		isInTest       bool
 		// only clean up history branches that older than this age
 		// Our history archiver delete mutable state, and then upload history to blob store and then delete history.
@@ -116,8 +94,8 @@ func NewScavenger(
 	enableRetentionVerification dynamicconfig.BoolPropertyFn,
 	metricsHandler metrics.Handler,
 	logger log.Logger,
+	serializer serialization.Serializer,
 ) *Scavenger {
-
 	return &Scavenger{
 		numShards:   numShards,
 		db:          db,
@@ -132,8 +110,8 @@ func NewScavenger(
 		enableRetentionVerification: enableRetentionVerification,
 		metricsHandler:              metricsHandler.WithTags(metrics.OperationTag(metrics.HistoryScavengerScope)),
 		logger:                      logger,
-
-		hbd: hbd,
+		serializer:                  serializer,
+		hbd:                         hbd,
 	}
 }
 
@@ -250,7 +228,7 @@ func (s *Scavenger) filterTask(
 	}
 	shardID := common.WorkflowIDToHistoryShard(namespaceID, workflowID, s.numShards)
 
-	branchToken, err := serialization.HistoryBranchToBlob(branch.BranchInfo)
+	branchToken, err := s.serializer.HistoryBranchToBlob(branch.BranchInfo)
 	if err != nil {
 		s.logger.Error("unable to serialize the history branch token", tag.DetailInfo(branch.Info), tag.Error(err))
 		metrics.HistoryScavengerErrorCount.With(s.metricsHandler).Record(1)
@@ -282,6 +260,7 @@ func (s *Scavenger) handleTask(
 			WorkflowId: task.workflowID,
 			RunId:      task.runID,
 		},
+		ArchetypeId: chasm.WorkflowArchetypeID,
 	})
 	switch err.(type) {
 	case nil:
@@ -296,7 +275,7 @@ func (s *Scavenger) handleTask(
 		return err
 	}
 
-	//deleting history branch
+	// deleting history branch
 	err = s.db.DeleteHistoryBranch(ctx, &persistence.DeleteHistoryBranchRequest{
 		ShardID:     task.shardID,
 		BranchToken: task.branchToken,
@@ -349,9 +328,9 @@ func (s *Scavenger) getPaginationFn(
 
 func (s *Scavenger) cleanUpWorkflowPastRetention(
 	ctx context.Context,
-	mutableState *persistencepb.WorkflowMutableState,
+	mutableState *persistencespb.WorkflowMutableState,
 ) error {
-	if mutableState.GetExecutionState().GetState() != enums.WORKFLOW_EXECUTION_STATE_COMPLETED {
+	if mutableState.GetExecutionState().GetState() != enumsspb.WORKFLOW_EXECUTION_STATE_COMPLETED {
 		// Skip running workflow
 		return nil
 	}
@@ -378,6 +357,7 @@ func (s *Scavenger) cleanUpWorkflowPastRetention(
 				WorkflowId: executionInfo.GetWorkflowId(),
 				RunId:      mutableState.GetExecutionState().GetRunId(),
 			},
+			Archetype: chasm.WorkflowArchetype,
 		})
 		if err != nil {
 			// This is experimental. Ignoring the error so it will not block the history scavenger.

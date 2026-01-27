@@ -1,27 +1,3 @@
-// The MIT License
-//
-// Copyright (c) 2020 Temporal Technologies Inc.  All rights reserved.
-//
-// Copyright (c) 2020 Uber Technologies, Inc.
-//
-// Permission is hereby granted, free of charge, to any person obtaining a copy
-// of this software and associated documentation files (the "Software"), to deal
-// in the Software without restriction, including without limitation the rights
-// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-// copies of the Software, and to permit persons to whom the Software is
-// furnished to do so, subject to the following conditions:
-//
-// The above copyright notice and this permission notice shall be included in
-// all copies or substantial portions of the Software.
-//
-// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
-// THE SOFTWARE.
-
 package sqlplugin
 
 import (
@@ -38,11 +14,12 @@ import (
 	"github.com/iancoleman/strcase"
 	enumspb "go.temporal.io/api/enums/v1"
 	"go.temporal.io/api/serviceerror"
-	"go.temporal.io/server/common/searchattribute"
+	"go.temporal.io/server/common/searchattribute/sadefs"
 )
 
 var (
 	ErrInvalidKeywordListDataType = errors.New("Unexpected data type in keyword list")
+	VersionColumnName             = "_version"
 )
 
 type (
@@ -72,6 +49,11 @@ type (
 		ParentRunID          *string
 		RootWorkflowID       string
 		RootRunID            string
+
+		// Version must be at the end because the version column has to be the last column in the insert statement.
+		// Otherwise we may do partial updates as the version changes halfway through.
+		// This is because MySQL doesn't support row versioning in a way that prevents out-of-order updates.
+		Version int64 `db:"_version"`
 	}
 
 	// VisibilitySelectFilter contains the column names within executions_visibility table that
@@ -158,7 +140,13 @@ func (vsa VisibilitySearchAttributes) Value() (driver.Value, error) {
 	return string(bs), nil
 }
 
-func ParseCountGroupByRows(rows *sql.Rows, groupBy []string) ([]VisibilityCountRow, error) {
+type dbRowsIf interface {
+	Next() bool
+	Scan(...any) error
+	Close() error
+}
+
+func ParseCountGroupByRows(rows dbRowsIf, groupBy []string) ([]VisibilityCountRow, error) {
 	// Number of columns is number of group by fields plus the count column.
 	rowValues := make([]any, len(groupBy)+1)
 	for i := range rowValues {
@@ -178,10 +166,25 @@ func ParseCountGroupByRows(rows *sql.Rows, groupBy []string) ([]VisibilityCountR
 				return nil, err
 			}
 		}
-		count := *(rowValues[len(rowValues)-1].(*any))
+		var countTyped int64
+		countValue := reflect.ValueOf(*(rowValues[len(rowValues)-1].(*any)))
+		if countValue.CanInt() {
+			countTyped = countValue.Int()
+		} else if countValue.CanUint() {
+			countTyped = int64(countValue.Uint())
+		} else {
+			// This should never happen.
+			return nil, serviceerror.NewInternal(
+				fmt.Sprintf(
+					"Unable to parse count value from DB (got: %v of type: %T, expected type: integer)",
+					countValue,
+					countValue,
+				),
+			)
+		}
 		res = append(res, VisibilityCountRow{
 			GroupValues: groupValues,
-			Count:       count.(int64),
+			Count:       countTyped,
 		})
 	}
 	return res, nil
@@ -189,26 +192,28 @@ func ParseCountGroupByRows(rows *sql.Rows, groupBy []string) ([]VisibilityCountR
 
 func parseCountGroupByGroupValue(fieldName string, value any) (any, error) {
 	switch fieldName {
-	case searchattribute.ExecutionStatus:
-		switch typedValue := value.(type) {
-		case int:
-			return enumspb.WorkflowExecutionStatus(typedValue).String(), nil
-		case int32:
-			return enumspb.WorkflowExecutionStatus(typedValue).String(), nil
-		case int64:
-			return enumspb.WorkflowExecutionStatus(typedValue).String(), nil
-		default:
-			// This should never happen.
-			return nil, serviceerror.NewInternal(
-				fmt.Sprintf(
-					"Unable to parse %s value from DB (got: %v of type: %T, expected type: integer)",
-					searchattribute.ExecutionStatus,
-					value,
-					value,
-				),
-			)
+	case sadefs.ExecutionStatus:
+		v := reflect.ValueOf(value)
+		if v.CanInt() {
+			return enumspb.WorkflowExecutionStatus(v.Int()).String(), nil
 		}
+		if v.CanUint() {
+			return enumspb.WorkflowExecutionStatus(v.Uint()).String(), nil
+		}
+		// This should never happen.
+		return nil, serviceerror.NewInternal(
+			fmt.Sprintf(
+				"Unable to parse %s value from DB (got: %v of type: %T, expected type: integer)",
+				sadefs.ExecutionStatus,
+				value,
+				value,
+			),
+		)
 	default:
+		// MySQL driver returns VARCHAR columns as []byte when scanning into *any.
+		if bs, ok := value.([]byte); ok {
+			return string(bs), nil
+		}
 		return value, nil
 	}
 }
@@ -239,14 +244,14 @@ func GenerateSelectQuery(
 
 	whereClauses = append(
 		whereClauses,
-		fmt.Sprintf("%s = ?", searchattribute.GetSqlDbColName(searchattribute.NamespaceID)),
+		fmt.Sprintf("%s = ?", sadefs.GetSqlDbColName(sadefs.NamespaceID)),
 	)
 	queryArgs = append(queryArgs, filter.NamespaceID)
 
 	if filter.WorkflowID != nil {
 		whereClauses = append(
 			whereClauses,
-			fmt.Sprintf("%s = ?", searchattribute.GetSqlDbColName(searchattribute.WorkflowID)),
+			fmt.Sprintf("%s = ?", sadefs.GetSqlDbColName(sadefs.WorkflowID)),
 		)
 		queryArgs = append(queryArgs, *filter.WorkflowID)
 	}
@@ -254,25 +259,25 @@ func GenerateSelectQuery(
 	if filter.WorkflowTypeName != nil {
 		whereClauses = append(
 			whereClauses,
-			fmt.Sprintf("%s = ?", searchattribute.GetSqlDbColName(searchattribute.WorkflowType)),
+			fmt.Sprintf("%s = ?", sadefs.GetSqlDbColName(sadefs.WorkflowType)),
 		)
 		queryArgs = append(queryArgs, *filter.WorkflowTypeName)
 	}
 
-	timeAttr := searchattribute.StartTime
+	timeAttr := sadefs.StartTime
 	if filter.Status != int32(enumspb.WORKFLOW_EXECUTION_STATUS_RUNNING) {
-		timeAttr = searchattribute.CloseTime
+		timeAttr = sadefs.CloseTime
 	}
 	if filter.Status == int32(enumspb.WORKFLOW_EXECUTION_STATUS_UNSPECIFIED) {
 		whereClauses = append(
 			whereClauses,
-			fmt.Sprintf("%s != ?", searchattribute.GetSqlDbColName(searchattribute.ExecutionStatus)),
+			fmt.Sprintf("%s != ?", sadefs.GetSqlDbColName(sadefs.ExecutionStatus)),
 		)
 		queryArgs = append(queryArgs, int32(enumspb.WORKFLOW_EXECUTION_STATUS_RUNNING))
 	} else {
 		whereClauses = append(
 			whereClauses,
-			fmt.Sprintf("%s = ?", searchattribute.GetSqlDbColName(searchattribute.ExecutionStatus)),
+			fmt.Sprintf("%s = ?", sadefs.GetSqlDbColName(sadefs.ExecutionStatus)),
 		)
 		queryArgs = append(queryArgs, filter.Status)
 	}
@@ -281,7 +286,7 @@ func GenerateSelectQuery(
 	case filter.RunID != nil && filter.MinTime == nil && filter.Status != 1:
 		whereClauses = append(
 			whereClauses,
-			fmt.Sprintf("%s = ?", searchattribute.GetSqlDbColName(searchattribute.RunID)),
+			fmt.Sprintf("%s = ?", sadefs.GetSqlDbColName(sadefs.RunID)),
 		)
 		queryArgs = append(
 			queryArgs,
@@ -294,13 +299,13 @@ func GenerateSelectQuery(
 		*filter.MaxTime = convertToDbDateTime(*filter.MaxTime)
 		whereClauses = append(
 			whereClauses,
-			fmt.Sprintf("%s >= ?", searchattribute.GetSqlDbColName(timeAttr)),
-			fmt.Sprintf("%s <= ?", searchattribute.GetSqlDbColName(timeAttr)),
+			fmt.Sprintf("%s >= ?", sadefs.GetSqlDbColName(timeAttr)),
+			fmt.Sprintf("%s <= ?", sadefs.GetSqlDbColName(timeAttr)),
 			fmt.Sprintf(
 				"((%s = ? AND %s > ?) OR %s < ?)",
-				searchattribute.GetSqlDbColName(timeAttr),
-				searchattribute.GetSqlDbColName(searchattribute.RunID),
-				searchattribute.GetSqlDbColName(timeAttr),
+				sadefs.GetSqlDbColName(timeAttr),
+				sadefs.GetSqlDbColName(sadefs.RunID),
+				sadefs.GetSqlDbColName(timeAttr),
 			),
 		)
 		queryArgs = append(
@@ -323,8 +328,8 @@ func GenerateSelectQuery(
 		LIMIT ?`,
 		strings.Join(DbFields, ", "),
 		strings.Join(whereClauses, " AND "),
-		searchattribute.GetSqlDbColName(timeAttr),
-		searchattribute.GetSqlDbColName(searchattribute.RunID),
+		sadefs.GetSqlDbColName(timeAttr),
+		sadefs.GetSqlDbColName(sadefs.RunID),
 	)
 	filter.QueryArgs = queryArgs
 	return nil

@@ -1,27 +1,3 @@
-// The MIT License
-//
-// Copyright (c) 2020 Temporal Technologies Inc.  All rights reserved.
-//
-// Copyright (c) 2020 Uber Technologies, Inc.
-//
-// Permission is hereby granted, free of charge, to any person obtaining a copy
-// of this software and associated documentation files (the "Software"), to deal
-// in the Software without restriction, including without limitation the rights
-// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-// copies of the Software, and to permit persons to whom the Software is
-// furnished to do so, subject to the following conditions:
-//
-// The above copyright notice and this permission notice shall be included in
-// all copies or substantial portions of the Software.
-//
-// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
-// THE SOFTWARE.
-
 package matching
 
 import (
@@ -31,6 +7,7 @@ import (
 
 	enumspb "go.temporal.io/api/enums/v1"
 	taskqueuepb "go.temporal.io/api/taskqueue/v1"
+	workerpb "go.temporal.io/api/worker/v1"
 	"go.temporal.io/api/workflowservice/v1"
 	"go.temporal.io/server/api/matchingservice/v1"
 	"go.temporal.io/server/common"
@@ -40,9 +17,15 @@ import (
 	"go.temporal.io/server/common/metrics"
 	"go.temporal.io/server/common/namespace"
 	"go.temporal.io/server/common/persistence"
+	"go.temporal.io/server/common/persistence/serialization"
 	"go.temporal.io/server/common/persistence/visibility/manager"
 	"go.temporal.io/server/common/resource"
+	"go.temporal.io/server/common/searchattribute"
+	"go.temporal.io/server/common/testing/testhooks"
 	"go.temporal.io/server/common/tqid"
+	"go.temporal.io/server/service/matching/workers"
+	"go.temporal.io/server/service/worker/workerdeployment"
+	"go.uber.org/fx"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/reflect/protoreflect"
 )
@@ -50,7 +33,7 @@ import (
 type (
 	// Handler - gRPC handler interface for matchingservice
 	Handler struct {
-		matchingservice.UnsafeMatchingServiceServer
+		matchingservice.UnimplementedMatchingServiceServer
 
 		engine            Engine
 		config            *Config
@@ -59,6 +42,34 @@ type (
 		startWG           sync.WaitGroup
 		throttledLogger   log.Logger
 		namespaceRegistry namespace.Registry
+		workersRegistry   workers.Registry
+	}
+
+	HandlerParams struct {
+		fx.In
+
+		Config                        *Config
+		Logger                        log.Logger
+		ThrottledLogger               log.Logger
+		TaskManager                   persistence.TaskManager
+		FairTaskManager               persistence.FairTaskManager
+		HistoryClient                 resource.HistoryClient
+		MatchingRawClient             resource.MatchingRawClient
+		WorkerDeploymentClient        workerdeployment.Client
+		HostInfoProvider              membership.HostInfoProvider
+		MatchingServiceResolver       membership.ServiceResolver
+		MetricsHandler                metrics.Handler
+		NamespaceRegistry             namespace.Registry
+		ClusterMetadata               cluster.Metadata
+		NamespaceReplicationQueue     persistence.NamespaceReplicationQueue
+		VisibilityManager             manager.VisibilityManager
+		NexusEndpointManager          persistence.NexusEndpointManager
+		TestHooks                     testhooks.TestHooks
+		SearchAttributeProvider       searchattribute.Provider
+		SearchAttributeMapperProvider searchattribute.MapperProvider
+		RateLimiter                   TaskDispatchRateLimiter `optional:"true"`
+		WorkersRegistry               workers.Registry
+		Serializer                    serialization.Serializer
 	}
 )
 
@@ -72,43 +83,38 @@ var (
 
 // NewHandler creates a gRPC handler for the matchingservice
 func NewHandler(
-	config *Config,
-	logger log.Logger,
-	throttledLogger log.Logger,
-	taskManager persistence.TaskManager,
-	historyClient resource.HistoryClient,
-	matchingRawClient resource.MatchingRawClient,
-	hostInfoProvider membership.HostInfoProvider,
-	matchingServiceResolver membership.ServiceResolver,
-	metricsHandler metrics.Handler,
-	namespaceRegistry namespace.Registry,
-	clusterMetadata cluster.Metadata,
-	namespaceReplicationQueue persistence.NamespaceReplicationQueue,
-	visibilityManager manager.VisibilityManager,
-	nexusEndpointManager persistence.NexusEndpointManager,
+	params HandlerParams,
 ) *Handler {
 	handler := &Handler{
-		config:          config,
-		metricsHandler:  metricsHandler,
-		logger:          logger,
-		throttledLogger: throttledLogger,
+		config:          params.Config,
+		metricsHandler:  params.MetricsHandler,
+		logger:          params.Logger,
+		throttledLogger: params.ThrottledLogger,
 		engine: NewEngine(
-			taskManager,
-			historyClient,
-			matchingRawClient, // Use non retry client inside matching
-			config,
-			logger,
-			throttledLogger,
-			metricsHandler,
-			namespaceRegistry,
-			hostInfoProvider,
-			matchingServiceResolver,
-			clusterMetadata,
-			namespaceReplicationQueue,
-			visibilityManager,
-			nexusEndpointManager,
+			params.TaskManager,
+			params.FairTaskManager,
+			params.HistoryClient,
+			params.MatchingRawClient, // Use non retry client inside matching
+			params.WorkerDeploymentClient,
+			params.Config,
+			params.Logger,
+			params.ThrottledLogger,
+			params.MetricsHandler,
+			params.NamespaceRegistry,
+			params.HostInfoProvider,
+			params.MatchingServiceResolver,
+			params.ClusterMetadata,
+			params.NamespaceReplicationQueue,
+			params.VisibilityManager,
+			params.NexusEndpointManager,
+			params.TestHooks,
+			params.SearchAttributeProvider,
+			params.SearchAttributeMapperProvider,
+			params.RateLimiter,
+			params.Serializer,
 		),
-		namespaceRegistry: namespaceRegistry,
+		namespaceRegistry: params.NamespaceRegistry,
+		workersRegistry:   params.WorkersRegistry,
 	}
 
 	// prevent from serving requests before matching engine is started and ready
@@ -327,6 +333,14 @@ func (h *Handler) DescribeTaskQueue(
 	return resp, nil
 }
 
+func (h *Handler) DescribeVersionedTaskQueues(
+	ctx context.Context,
+	request *matchingservice.DescribeVersionedTaskQueuesRequest,
+) (_ *matchingservice.DescribeVersionedTaskQueuesResponse, retError error) {
+	defer log.CapturePanic(h.logger, &retError)
+	return h.engine.DescribeVersionedTaskQueues(ctx, request)
+}
+
 // DescribeTaskQueuePartition returns information about the target task queue partition.
 func (h *Handler) DescribeTaskQueuePartition(
 	ctx context.Context,
@@ -389,6 +403,14 @@ func (h *Handler) GetTaskQueueUserData(
 	return h.engine.GetTaskQueueUserData(ctx, request)
 }
 
+func (h *Handler) SyncDeploymentUserData(
+	ctx context.Context,
+	request *matchingservice.SyncDeploymentUserDataRequest,
+) (_ *matchingservice.SyncDeploymentUserDataResponse, retError error) {
+	defer log.CapturePanic(h.logger, &retError)
+	return h.engine.SyncDeploymentUserData(ctx, request)
+}
+
 func (h *Handler) ApplyTaskQueueUserDataReplicationEvent(
 	ctx context.Context,
 	request *matchingservice.ApplyTaskQueueUserDataReplicationEventRequest,
@@ -443,6 +465,22 @@ func (h *Handler) ReplicateTaskQueueUserData(
 ) (_ *matchingservice.ReplicateTaskQueueUserDataResponse, retError error) {
 	defer log.CapturePanic(h.logger, &retError)
 	return h.engine.ReplicateTaskQueueUserData(ctx, request)
+}
+
+func (h *Handler) CheckTaskQueueUserDataPropagation(
+	ctx context.Context,
+	request *matchingservice.CheckTaskQueueUserDataPropagationRequest,
+) (_ *matchingservice.CheckTaskQueueUserDataPropagationResponse, retError error) {
+	defer log.CapturePanic(h.logger, &retError)
+	return h.engine.CheckTaskQueueUserDataPropagation(ctx, request)
+}
+
+func (h *Handler) CheckTaskQueueVersionMembership(
+	ctx context.Context,
+	request *matchingservice.CheckTaskQueueVersionMembershipRequest,
+) (_ *matchingservice.CheckTaskQueueVersionMembershipResponse, retError error) {
+	defer log.CapturePanic(h.logger, &retError)
+	return h.engine.CheckTaskQueueVersionMembership(ctx, request)
 }
 
 func (h *Handler) DispatchNexusTask(ctx context.Context, request *matchingservice.DispatchNexusTaskRequest) (_ *matchingservice.DispatchNexusTaskResponse, retError error) {
@@ -517,6 +555,49 @@ func (h *Handler) ListNexusEndpoints(ctx context.Context, request *matchingservi
 	return h.engine.ListNexusEndpoints(ctx, request)
 }
 
+// RecordWorkerHeartbeat receive heartbeat request from the worker.
+func (h *Handler) RecordWorkerHeartbeat(
+	_ context.Context, request *matchingservice.RecordWorkerHeartbeatRequest,
+) (*matchingservice.RecordWorkerHeartbeatResponse, error) {
+	nsID := namespace.ID(request.GetNamespaceId())
+	nsName := h.namespaceName(nsID)
+
+	h.workersRegistry.RecordWorkerHeartbeats(nsID, nsName, request.GetHeartbeartRequest().GetWorkerHeartbeat())
+	return &matchingservice.RecordWorkerHeartbeatResponse{}, nil
+}
+
+// ListWorkers retrieves a list of workers in the specified namespace that match the provided filters.
+func (h *Handler) ListWorkers(
+	_ context.Context, request *matchingservice.ListWorkersRequest,
+) (*matchingservice.ListWorkersResponse, error) {
+	nsID := namespace.ID(request.GetNamespaceId())
+	listRequest := request.GetListRequest()
+	resp, err := h.workersRegistry.ListWorkers(nsID, workers.ListWorkersParams{
+		Query:         listRequest.GetQuery(),
+		PageSize:      int(listRequest.GetPageSize()),
+		NextPageToken: listRequest.GetNextPageToken(),
+	})
+	if err != nil {
+		return nil, err
+	}
+	var workersInfo []*workerpb.WorkerInfo
+	for _, heartbeat := range resp.Workers {
+		workersInfo = append(workersInfo, &workerpb.WorkerInfo{
+			WorkerHeartbeat: heartbeat,
+		})
+	}
+	return &matchingservice.ListWorkersResponse{
+		WorkersInfo:   workersInfo,
+		NextPageToken: resp.NextPageToken,
+	}, nil
+}
+
+func (h *Handler) UpdateFairnessState(
+	ctx context.Context, request *matchingservice.UpdateFairnessStateRequest,
+) (*matchingservice.UpdateFairnessStateResponse, error) {
+	return h.engine.UpdateFairnessState(ctx, request)
+}
+
 func (h *Handler) namespaceName(id namespace.ID) namespace.Name {
 	entry, err := h.namespaceRegistry.GetNamespaceByID(id)
 	if err != nil {
@@ -533,4 +614,26 @@ func (h *Handler) reportForwardedPerTaskQueueCounter(opMetrics metrics.Handler, 
 			metrics.OperationTag(metrics.MatchingAddWorkflowTaskScope),
 			metrics.NamespaceTag(h.namespaceName(namespaceId).String()),
 			metrics.ServiceRoleTag(metrics.MatchingRoleTagValue))
+}
+
+func (h *Handler) UpdateTaskQueueConfig(
+	ctx context.Context, request *matchingservice.UpdateTaskQueueConfigRequest,
+) (*matchingservice.UpdateTaskQueueConfigResponse, error) {
+	return h.engine.UpdateTaskQueueConfig(ctx, request)
+}
+
+func (h *Handler) DescribeWorker(
+	_ context.Context, request *matchingservice.DescribeWorkerRequest,
+) (*matchingservice.DescribeWorkerResponse, error) {
+	nsID := namespace.ID(request.GetNamespaceId())
+	hb, err := h.workersRegistry.DescribeWorker(
+		nsID, request.Request.GetWorkerInstanceKey())
+	if err != nil {
+		return nil, err
+	}
+	return &matchingservice.DescribeWorkerResponse{
+		WorkerInfo: &workerpb.WorkerInfo{
+			WorkerHeartbeat: hb,
+		},
+	}, nil
 }

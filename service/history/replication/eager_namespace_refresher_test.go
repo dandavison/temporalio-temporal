@@ -1,27 +1,3 @@
-// The MIT License
-//
-// Copyright (c) 2020 Temporal Technologies Inc.  All rights reserved.
-//
-// Copyright (c) 2020 Uber Technologies, Inc.
-//
-// Permission is hereby granted, free of charge, to any person obtaining a copy
-// of this software and associated documentation files (the "Software"), to deal
-// in the Software without restriction, including without limitation the rights
-// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-// copies of the Software, and to permit persons to whom the Software is
-// furnished to do so, subject to the following conditions:
-//
-// The above copyright notice and this permission notice shall be included in
-// all copies or substantial portions of the Software.
-//
-// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
-// THE SOFTWARE.
-
 package replication
 
 import (
@@ -46,8 +22,8 @@ import (
 	"go.temporal.io/server/common/log"
 	"go.temporal.io/server/common/metrics"
 	"go.temporal.io/server/common/namespace"
+	"go.temporal.io/server/common/namespace/nsreplication"
 	"go.temporal.io/server/common/persistence"
-	"go.temporal.io/server/common/primitives/timestamp"
 	"go.temporal.io/server/service/history/shard"
 	"go.uber.org/mock/gomock"
 )
@@ -66,7 +42,7 @@ type (
 		eagerNamespaceRefresher     EagerNamespaceRefresher
 		logger                      log.Logger
 		clientBean                  *client.MockBean
-		mockReplicationTaskExecutor *namespace.MockReplicationTaskExecutor
+		mockReplicationTaskExecutor *nsreplication.MockTaskExecutor
 		currentCluster              string
 		mockMetricsHandler          metrics.Handler
 		remoteAdminClient           *adminservicemock.MockAdminServiceClient
@@ -84,7 +60,7 @@ func (s *EagerNamespaceRefresherSuite) SetupTest() {
 	s.remoteAdminClient = adminservicemock.NewMockAdminServiceClient(s.controller)
 	s.clientBean.EXPECT().GetRemoteAdminClient(gomock.Any()).Return(s.remoteAdminClient, nil).AnyTimes()
 	scope := tally.NewTestScope("test", nil)
-	s.mockReplicationTaskExecutor = namespace.NewMockReplicationTaskExecutor(s.controller)
+	s.mockReplicationTaskExecutor = nsreplication.NewMockTaskExecutor(s.controller)
 	s.mockMetricsHandler = metrics.NewTallyMetricsHandler(metrics.ClientConfig{}, scope).WithTags(
 		metrics.ServiceNameTag("serviceName"))
 	s.eagerNamespaceRefresher = NewEagerNamespaceRefresher(
@@ -100,257 +76,6 @@ func (s *EagerNamespaceRefresherSuite) SetupTest() {
 
 func TestEagerNamespaceRefresherSuite(t *testing.T) {
 	suite.Run(t, new(EagerNamespaceRefresherSuite))
-}
-
-func (s *EagerNamespaceRefresherSuite) TestUpdateNamespaceFailoverVersion() {
-	namespaceID := "test-namespace-id"
-	targetFailoverVersion := int64(100)
-	currentFailoverVersion := targetFailoverVersion - 1
-
-	nsResponse := &persistence.GetNamespaceResponse{
-		Namespace: &persistencespb.NamespaceDetail{
-			FailoverVersion: currentFailoverVersion,
-			Info: &persistencespb.NamespaceInfo{
-				Id:    namespace.NewID().String(),
-				Name:  "another random namespace name",
-				State: enumspb.NAMESPACE_STATE_DELETED, // Still must be included.
-				Data:  make(map[string]string)},
-			Config: &persistencespb.NamespaceConfig{
-				Retention: timestamp.DurationFromDays(2),
-				BadBinaries: &namespacepb.BadBinaries{
-					Binaries: map[string]*namespacepb.BadBinaryInfo{},
-				}},
-			ReplicationConfig: &persistencespb.NamespaceReplicationConfig{
-				ActiveClusterName: cluster.TestAlternativeClusterName,
-				Clusters: []string{
-					cluster.TestCurrentClusterName,
-					cluster.TestAlternativeClusterName,
-				},
-			},
-			FailoverNotificationVersion: 0,
-		},
-	}
-	ns := namespace.FromPersistentState(nsResponse)
-	s.mockNamespaceRegistry.EXPECT().GetNamespaceByID(namespace.ID(namespaceID)).Return(ns, nil).Times(1)
-
-	s.mockMetadataManager.EXPECT().GetMetadata(gomock.Any()).Return(&persistence.GetMetadataResponse{NotificationVersion: 123}, nil).Times(1)
-	s.mockMetadataManager.EXPECT().GetNamespace(gomock.Any(), &persistence.GetNamespaceRequest{
-		ID: namespaceID,
-	}).Return(nsResponse, nil).Times(1)
-	s.mockMetadataManager.EXPECT().UpdateNamespace(gomock.Any(), gomock.Any()).Return(nil).Times(1)
-
-	err := s.eagerNamespaceRefresher.UpdateNamespaceFailoverVersion(namespace.ID(namespaceID), targetFailoverVersion)
-
-	s.Nil(err)
-}
-
-func (s *EagerNamespaceRefresherSuite) TestUpdateNamespaceFailoverVersion_TargetVersionSmallerThanVersionInCache() {
-	namespaceID := "test-namespace-id"
-	targetFailoverVersion := int64(100)
-	currentFailoverVersion := targetFailoverVersion + 1
-
-	nsResponse := &persistence.GetNamespaceResponse{
-		Namespace: &persistencespb.NamespaceDetail{
-			FailoverVersion: currentFailoverVersion,
-			Info: &persistencespb.NamespaceInfo{
-				Id:    namespace.NewID().String(),
-				Name:  "another random namespace name",
-				State: enumspb.NAMESPACE_STATE_DELETED, // Still must be included.
-				Data:  make(map[string]string)},
-			Config: &persistencespb.NamespaceConfig{
-				Retention: timestamp.DurationFromDays(2),
-				BadBinaries: &namespacepb.BadBinaries{
-					Binaries: map[string]*namespacepb.BadBinaryInfo{},
-				}},
-			ReplicationConfig: &persistencespb.NamespaceReplicationConfig{
-				ActiveClusterName: cluster.TestAlternativeClusterName,
-				Clusters: []string{
-					cluster.TestCurrentClusterName,
-					cluster.TestAlternativeClusterName,
-				},
-			},
-			FailoverNotificationVersion: 0,
-		},
-	}
-	ns := namespace.FromPersistentState(nsResponse)
-	s.mockNamespaceRegistry.EXPECT().GetNamespaceByID(namespace.ID(namespaceID)).Return(ns, nil).Times(1)
-
-	err := s.eagerNamespaceRefresher.UpdateNamespaceFailoverVersion(namespace.ID(namespaceID), targetFailoverVersion)
-
-	s.Nil(err)
-}
-
-func (s *EagerNamespaceRefresherSuite) TestUpdateNamespaceFailoverVersion_TargetVersionSmallerThanVersionInPersistent() {
-	namespaceID := "test-namespace-id"
-	targetFailoverVersion := int64(100)
-	currentFailoverVersion := targetFailoverVersion - 1
-
-	nsFromCache := namespace.FromPersistentState(&persistence.GetNamespaceResponse{
-		Namespace: &persistencespb.NamespaceDetail{
-			FailoverVersion: currentFailoverVersion,
-			Info: &persistencespb.NamespaceInfo{
-				Id:    namespace.NewID().String(),
-				Name:  "another random namespace name",
-				State: enumspb.NAMESPACE_STATE_DELETED,
-				Data:  make(map[string]string)},
-			Config: &persistencespb.NamespaceConfig{
-				Retention: timestamp.DurationFromDays(2),
-				BadBinaries: &namespacepb.BadBinaries{
-					Binaries: map[string]*namespacepb.BadBinaryInfo{},
-				}},
-			ReplicationConfig: &persistencespb.NamespaceReplicationConfig{
-				ActiveClusterName: cluster.TestAlternativeClusterName,
-				Clusters: []string{
-					cluster.TestCurrentClusterName,
-					cluster.TestAlternativeClusterName,
-				},
-			},
-			FailoverNotificationVersion: 0,
-		},
-	})
-
-	nsFromPersistent := &persistence.GetNamespaceResponse{
-		Namespace: &persistencespb.NamespaceDetail{
-			FailoverVersion: targetFailoverVersion,
-			Info: &persistencespb.NamespaceInfo{
-				Id:    namespace.NewID().String(),
-				Name:  "another random namespace name",
-				State: enumspb.NAMESPACE_STATE_DELETED,
-				Data:  make(map[string]string)},
-			Config: &persistencespb.NamespaceConfig{
-				Retention: timestamp.DurationFromDays(2),
-				BadBinaries: &namespacepb.BadBinaries{
-					Binaries: map[string]*namespacepb.BadBinaryInfo{},
-				}},
-			ReplicationConfig: &persistencespb.NamespaceReplicationConfig{
-				ActiveClusterName: cluster.TestAlternativeClusterName,
-				Clusters: []string{
-					cluster.TestCurrentClusterName,
-					cluster.TestAlternativeClusterName,
-				},
-			},
-			FailoverNotificationVersion: 0,
-		},
-	}
-
-	s.mockNamespaceRegistry.EXPECT().GetNamespaceByID(namespace.ID(namespaceID)).Return(nsFromCache, nil).Times(1)
-
-	s.mockMetadataManager.EXPECT().GetNamespace(gomock.Any(), &persistence.GetNamespaceRequest{
-		ID: namespaceID,
-	}).Return(nsFromPersistent, nil).Times(1)
-
-	s.mockMetadataManager.EXPECT().UpdateNamespace(gomock.Any(), gomock.Any()).Return(nil).Times(0)
-
-	err := s.eagerNamespaceRefresher.UpdateNamespaceFailoverVersion(namespace.ID(namespaceID), targetFailoverVersion)
-
-	s.Nil(err)
-}
-
-func (s *EagerNamespaceRefresherSuite) TestUpdateNamespaceFailoverVersion_NamespaceNotFoundFromRegistry() {
-	namespaceID := "test-namespace-id"
-	targetFailoverVersion := int64(100)
-
-	s.mockNamespaceRegistry.EXPECT().GetNamespaceByID(namespace.ID(namespaceID)).Return(nil, serviceerror.NewNamespaceNotFound("namespace not found")).Times(1)
-
-	err := s.eagerNamespaceRefresher.UpdateNamespaceFailoverVersion(namespace.ID(namespaceID), targetFailoverVersion)
-	s.Nil(err)
-}
-
-func (s *EagerNamespaceRefresherSuite) TestUpdateNamespaceFailoverVersion_GetNamespaceErrorFromRegistry() {
-	namespaceID := "test-namespace-id"
-	targetFailoverVersion := int64(100)
-
-	s.mockNamespaceRegistry.EXPECT().GetNamespaceByID(namespace.ID(namespaceID)).Return(nil, errors.New("some error")).Times(1)
-
-	err := s.eagerNamespaceRefresher.UpdateNamespaceFailoverVersion(namespace.ID(namespaceID), targetFailoverVersion)
-	s.Error(err)
-}
-
-func (s *EagerNamespaceRefresherSuite) TestUpdateNamespaceFailoverVersion_GetNamespaceErrorFromPersistent() {
-	namespaceID := "test-namespace-id"
-	targetFailoverVersion := int64(100)
-	currentFailoverVersion := targetFailoverVersion - 1
-
-	nsResponse := &persistence.GetNamespaceResponse{
-		Namespace: &persistencespb.NamespaceDetail{
-			FailoverVersion: currentFailoverVersion,
-			Info: &persistencespb.NamespaceInfo{
-				Id:    namespace.NewID().String(),
-				Name:  "another random namespace name",
-				State: enumspb.NAMESPACE_STATE_DELETED, // Still must be included.
-				Data:  make(map[string]string)},
-			Config: &persistencespb.NamespaceConfig{
-				Retention: timestamp.DurationFromDays(2),
-				BadBinaries: &namespacepb.BadBinaries{
-					Binaries: map[string]*namespacepb.BadBinaryInfo{},
-				}},
-			ReplicationConfig: &persistencespb.NamespaceReplicationConfig{
-				ActiveClusterName: cluster.TestAlternativeClusterName,
-				Clusters: []string{
-					cluster.TestCurrentClusterName,
-					cluster.TestAlternativeClusterName,
-				},
-			},
-			FailoverNotificationVersion: 0,
-		},
-	}
-	ns := namespace.FromPersistentState(nsResponse)
-	s.mockNamespaceRegistry.EXPECT().GetNamespaceByID(namespace.ID(namespaceID)).Return(ns, nil).Times(1)
-
-	s.mockMetadataManager.EXPECT().GetNamespace(gomock.Any(), &persistence.GetNamespaceRequest{
-		ID: namespaceID,
-	}).Return(nil, errors.New("some error")).Times(1)
-	// No more interaction with metadata manager
-	s.mockMetadataManager.EXPECT().GetMetadata(gomock.Any()).Return(&persistence.GetMetadataResponse{NotificationVersion: 123}, nil).Times(0)
-	s.mockMetadataManager.EXPECT().UpdateNamespace(gomock.Any(), gomock.Any()).Return(nil).Times(0)
-
-	err := s.eagerNamespaceRefresher.UpdateNamespaceFailoverVersion(namespace.ID(namespaceID), targetFailoverVersion)
-
-	s.Error(err)
-}
-
-func (s *EagerNamespaceRefresherSuite) TestUpdateNamespaceFailoverVersion_GetMetadataErrorFrom() {
-	namespaceID := "test-namespace-id"
-	targetFailoverVersion := int64(100)
-	currentFailoverVersion := targetFailoverVersion - 1
-
-	nsResponse := &persistence.GetNamespaceResponse{
-		Namespace: &persistencespb.NamespaceDetail{
-			FailoverVersion: currentFailoverVersion,
-			Info: &persistencespb.NamespaceInfo{
-				Id:    namespace.NewID().String(),
-				Name:  "another random namespace name",
-				State: enumspb.NAMESPACE_STATE_DELETED, // Still must be included.
-				Data:  make(map[string]string)},
-			Config: &persistencespb.NamespaceConfig{
-				Retention: timestamp.DurationFromDays(2),
-				BadBinaries: &namespacepb.BadBinaries{
-					Binaries: map[string]*namespacepb.BadBinaryInfo{},
-				}},
-			ReplicationConfig: &persistencespb.NamespaceReplicationConfig{
-				ActiveClusterName: cluster.TestAlternativeClusterName,
-				Clusters: []string{
-					cluster.TestCurrentClusterName,
-					cluster.TestAlternativeClusterName,
-				},
-			},
-			FailoverNotificationVersion: 0,
-		},
-	}
-	ns := namespace.FromPersistentState(nsResponse)
-	s.mockNamespaceRegistry.EXPECT().GetNamespaceByID(namespace.ID(namespaceID)).Return(ns, nil).Times(1)
-
-	s.mockMetadataManager.EXPECT().GetNamespace(gomock.Any(), &persistence.GetNamespaceRequest{
-		ID: namespaceID,
-	}).Return(nsResponse, nil).Times(1)
-	s.mockMetadataManager.EXPECT().GetMetadata(gomock.Any()).Return(nil, errors.New("some error")).Times(1)
-
-	// No more interaction with metadata manager
-	s.mockMetadataManager.EXPECT().UpdateNamespace(gomock.Any(), gomock.Any()).Return(nil).Times(0)
-
-	err := s.eagerNamespaceRefresher.UpdateNamespaceFailoverVersion(namespace.ID(namespaceID), targetFailoverVersion)
-
-	s.Error(err)
 }
 
 func (s *EagerNamespaceRefresherSuite) TestSyncNamespaceFromSourceCluster_CreateSuccess() {
@@ -388,7 +113,9 @@ func (s *EagerNamespaceRefresherSuite) TestSyncNamespaceFromSourceCluster_Create
 	}).Return(nsResponse, nil)
 	s.mockReplicationTaskExecutor.EXPECT().Execute(gomock.Any(), task).Return(nil).Times(1)
 	s.mockNamespaceRegistry.EXPECT().GetNamespaceByID(namespaceId).Return(nil, serviceerror.NewNamespaceNotFound("namespace not found")).Times(1)
-	s.mockNamespaceRegistry.EXPECT().RefreshNamespaceById(namespaceId).Return(namespace.FromAdminClientApiResponse(nsResponse), nil).Times(1)
+	nsFromResponse, err := fromAdminClientAPIResponse(nsResponse)
+	s.NoError(err)
+	s.mockNamespaceRegistry.EXPECT().RefreshNamespaceById(namespaceId).Return(nsFromResponse, nil).Times(1)
 	ns, err := s.eagerNamespaceRefresher.SyncNamespaceFromSourceCluster(context.Background(), namespaceId, "currentCluster")
 	s.Nil(err)
 	s.Equal(namespaceId, ns.ID())
@@ -429,7 +156,9 @@ func (s *EagerNamespaceRefresherSuite) TestSyncNamespaceFromSourceCluster_Update
 	}
 	s.mockReplicationTaskExecutor.EXPECT().Execute(gomock.Any(), task).Return(nil).Times(1)
 	s.mockNamespaceRegistry.EXPECT().GetNamespaceByID(namespaceId).Return(nil, nil).Times(1)
-	s.mockNamespaceRegistry.EXPECT().RefreshNamespaceById(namespaceId).Return(namespace.FromAdminClientApiResponse(nsResponse), nil).Times(1)
+	nsFromResponse, err := fromAdminClientAPIResponse(nsResponse)
+	s.NoError(err)
+	s.mockNamespaceRegistry.EXPECT().RefreshNamespaceById(namespaceId).Return(nsFromResponse, nil).Times(1)
 	ns, err := s.eagerNamespaceRefresher.SyncNamespaceFromSourceCluster(context.Background(), namespaceId, "currentCluster")
 	s.Nil(err)
 	s.Equal(namespaceId, ns.ID())
@@ -516,4 +245,43 @@ func (s *EagerNamespaceRefresherSuite) TestSyncNamespaceFromSourceCluster_Namesp
 	_, err := s.eagerNamespaceRefresher.SyncNamespaceFromSourceCluster(context.Background(), namespaceId, "currentCluster")
 	s.Error(err)
 	s.IsType(&serviceerror.FailedPrecondition{}, err)
+}
+
+func fromAdminClientAPIResponse(response *adminservice.GetNamespaceResponse) (*namespace.Namespace, error) {
+	info := &persistencespb.NamespaceInfo{
+		Id:          response.GetInfo().GetId(),
+		Name:        response.GetInfo().GetName(),
+		State:       response.GetInfo().GetState(),
+		Description: response.GetInfo().GetDescription(),
+		Owner:       response.GetInfo().GetOwnerEmail(),
+		Data:        response.GetInfo().GetData(),
+	}
+	config := &persistencespb.NamespaceConfig{
+		Retention:                    response.GetConfig().GetWorkflowExecutionRetentionTtl(),
+		HistoryArchivalState:         response.GetConfig().GetHistoryArchivalState(),
+		HistoryArchivalUri:           response.GetConfig().GetHistoryArchivalUri(),
+		VisibilityArchivalState:      response.GetConfig().GetVisibilityArchivalState(),
+		VisibilityArchivalUri:        response.GetConfig().GetVisibilityArchivalUri(),
+		CustomSearchAttributeAliases: response.GetConfig().GetCustomSearchAttributeAliases(),
+	}
+	replicationConfig := &persistencespb.NamespaceReplicationConfig{
+		ActiveClusterName: response.GetReplicationConfig().GetActiveClusterName(),
+		State:             response.GetReplicationConfig().GetState(),
+		Clusters:          nsreplication.ConvertClusterReplicationConfigFromProto(response.GetReplicationConfig().GetClusters()),
+		FailoverHistory:   nsreplication.ConvertFailoverHistoryToPersistenceProto(response.GetFailoverHistory()),
+	}
+
+	factory := namespace.NewDefaultReplicationResolverFactory()
+	detail := &persistencespb.NamespaceDetail{
+		Info:              info,
+		Config:            config,
+		ReplicationConfig: replicationConfig,
+		ConfigVersion:     response.ConfigVersion,
+		FailoverVersion:   response.GetFailoverVersion(),
+	}
+	ns, err := namespace.FromPersistentState(
+		detail,
+		factory(detail),
+		namespace.WithGlobalFlag(response.IsGlobalNamespace))
+	return ns, err
 }

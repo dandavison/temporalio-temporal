@@ -1,50 +1,41 @@
-// The MIT License
-//
-// Copyright (c) 2020 Temporal Technologies Inc.  All rights reserved.
-//
-// Copyright (c) 2020 Uber Technologies, Inc.
-//
-// Permission is hereby granted, free of charge, to any person obtaining a copy
-// of this software and associated documentation files (the "Software"), to deal
-// in the Software without restriction, including without limitation the rights
-// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-// copies of the Software, and to permit persons to whom the Software is
-// furnished to do so, subject to the following conditions:
-//
-// The above copyright notice and this permission notice shall be included in
-// all copies or substantial portions of the Software.
-//
-// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
-// THE SOFTWARE.
-
 package queuestest
 
 import (
 	"context"
+	"sync"
 
 	"go.temporal.io/server/common/persistence"
 	"go.temporal.io/server/service/history/queues"
 )
 
+// EnqueueTaskFunc is a function type for custom EnqueueTask behavior in tests
+type EnqueueTaskFunc func(context.Context, *persistence.EnqueueTaskRequest) (*persistence.EnqueueTaskResponse, error)
+
 // FakeQueueWriter is a [queues.QueueWriter] which records the requests it receives and returns the provided errors.
 type FakeQueueWriter struct {
+	mu                  sync.Mutex
 	EnqueueTaskRequests []*persistence.EnqueueTaskRequest
 	EnqueueTaskErr      error
 	CreateQueueErr      error
+	// EnqueueTaskFunc allows tests to provide custom behavior for EnqueueTask calls.
+	// If set, this function is called instead of the default behavior.
+	EnqueueTaskFunc EnqueueTaskFunc
 }
 
 var _ queues.QueueWriter = (*FakeQueueWriter)(nil)
 
 func (d *FakeQueueWriter) EnqueueTask(
-	_ context.Context,
+	ctx context.Context,
 	request *persistence.EnqueueTaskRequest,
 ) (*persistence.EnqueueTaskResponse, error) {
+	// Protect the slice append from concurrent access
+	d.mu.Lock()
 	d.EnqueueTaskRequests = append(d.EnqueueTaskRequests, request)
+	d.mu.Unlock()
+
+	if d.EnqueueTaskFunc != nil {
+		return d.EnqueueTaskFunc(ctx, request)
+	}
 	return &persistence.EnqueueTaskResponse{Metadata: persistence.MessageMetadata{ID: 0}}, d.EnqueueTaskErr
 }
 

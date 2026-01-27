@@ -1,27 +1,3 @@
-// The MIT License
-//
-// Copyright (c) 2020 Temporal Technologies Inc.  All rights reserved.
-//
-// Copyright (c) 2020 Uber Technologies, Inc.
-//
-// Permission is hereby granted, free of charge, to any person obtaining a copy
-// of this software and associated documentation files (the "Software"), to deal
-// in the Software without restriction, including without limitation the rights
-// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-// copies of the Software, and to permit persons to whom the Software is
-// furnished to do so, subject to the following conditions:
-//
-// The above copyright notice and this permission notice shall be included in
-// all copies or substantial portions of the Software.
-//
-// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
-// THE SOFTWARE.
-
 package dynamicconfig
 
 import (
@@ -47,6 +23,11 @@ type (
 		// Note that GetValue is called very often! You should not synchronously call out to an
 		// external system. Instead you should keep a set of all configured values, refresh it
 		// periodically or when notified, and only do in-memory lookups inside of GetValue.
+		//
+		// Implementations should prefer to return the same slice in response to the same key
+		// as long as the value hasn't changed. Value conversions are cached using weak
+		// pointers into the returned slice, so new slices will result in unnecessary calls to
+		// conversion functions.
 		GetValue(key Key) []ConstrainedValue
 	}
 
@@ -55,17 +36,13 @@ type (
 	NotifyingClient interface {
 		// Adds a subscription to all updates from this Client. `update` will be called on any
 		// change to the current value set. The caller should call `cancel` to cancel the
-		// subscription. Calls to `update` will not be made concurrently.
+		// subscription.
 		Subscribe(update ClientUpdateFunc) (cancel func())
 	}
 
 	// Called with modified keys on any change to the current value set.
 	// Deleted keys/constraints will get a nil value.
 	ClientUpdateFunc func(map[Key][]ConstrainedValue)
-
-	// Key is a key/property stored in dynamic config. For convenience, it is recommended that
-	// you treat keys as case-insensitive.
-	Key string
 
 	// ConstrainedValue is a value plus associated constraints.
 	//
@@ -111,13 +88,9 @@ type (
 		Namespace     string
 		NamespaceID   string
 		TaskQueueName string
+		Destination   string
 		TaskQueueType enumspb.TaskQueueType
 		ShardID       int32
 		TaskType      enumsspb.TaskType
-		Destination   string
 	}
 )
-
-func (k Key) String() string {
-	return string(k)
-}

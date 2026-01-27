@@ -1,27 +1,3 @@
-// The MIT License
-//
-// Copyright (c) 2020 Temporal Technologies Inc.  All rights reserved.
-//
-// Copyright (c) 2020 Uber Technologies, Inc.
-//
-// Permission is hereby granted, free of charge, to any person obtaining a copy
-// of this software and associated documentation files (the "Software"), to deal
-// in the Software without restriction, including without limitation the rights
-// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-// copies of the Software, and to permit persons to whom the Software is
-// furnished to do so, subject to the following conditions:
-//
-// The above copyright notice and this permission notice shall be included in
-// all copies or substantial portions of the Software.
-//
-// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
-// THE SOFTWARE.
-
 package namespace
 
 import (
@@ -29,7 +5,7 @@ import (
 	"go.temporal.io/server/common"
 )
 
-//TODO: delete this whole file and transition usages to FromPersistentState
+// TODO: delete this whole file and transition usages to FromPersistentState
 
 // NewLocalNamespaceForTest returns an entry with test data
 func NewLocalNamespaceForTest(
@@ -37,16 +13,19 @@ func NewLocalNamespaceForTest(
 	config *persistencespb.NamespaceConfig,
 	targetCluster string,
 ) *Namespace {
-	return &Namespace{
-		info:              ensureInfo(info),
-		config:            ensureConfig(config),
-		isGlobalNamespace: false,
-		replicationConfig: &persistencespb.NamespaceReplicationConfig{
+	detail := &persistencespb.NamespaceDetail{
+		Info:   ensureInfo(info),
+		Config: ensureConfig(config),
+		ReplicationConfig: &persistencespb.NamespaceReplicationConfig{
 			ActiveClusterName: targetCluster,
 			Clusters:          []string{targetCluster},
 		},
-		failoverVersion: common.EmptyVersion,
+		FailoverVersion: common.EmptyVersion,
 	}
+	factory := NewDefaultReplicationResolverFactory()
+	resolver := factory(detail)
+	ns, _ := FromPersistentState(detail, resolver, WithGlobalFlag(false))
+	return ns
 }
 
 // NewNamespaceForTest returns an entry with test data
@@ -57,13 +36,16 @@ func NewNamespaceForTest(
 	repConfig *persistencespb.NamespaceReplicationConfig,
 	failoverVersion int64,
 ) *Namespace {
-	return &Namespace{
-		info:              ensureInfo(info),
-		config:            ensureConfig(config),
-		isGlobalNamespace: isGlobalNamespace,
-		replicationConfig: ensureRepConfig(repConfig),
-		failoverVersion:   failoverVersion,
+	detail := &persistencespb.NamespaceDetail{
+		Info:              ensureInfo(info),
+		Config:            ensureConfig(config),
+		ReplicationConfig: ensureRepConfig(repConfig),
+		FailoverVersion:   failoverVersion,
 	}
+	factory := NewDefaultReplicationResolverFactory()
+	resolver := factory(detail)
+	ns, _ := FromPersistentState(detail, resolver, WithGlobalFlag(isGlobalNamespace))
+	return ns
 }
 
 // newGlobalNamespaceForTest returns an entry with test data
@@ -73,13 +55,16 @@ func NewGlobalNamespaceForTest(
 	repConfig *persistencespb.NamespaceReplicationConfig,
 	failoverVersion int64,
 ) *Namespace {
-	return &Namespace{
-		info:              ensureInfo(info),
-		config:            ensureConfig(config),
-		isGlobalNamespace: true,
-		replicationConfig: ensureRepConfig(repConfig),
-		failoverVersion:   failoverVersion,
+	detail := &persistencespb.NamespaceDetail{
+		Info:              ensureInfo(info),
+		Config:            ensureConfig(config),
+		ReplicationConfig: ensureRepConfig(repConfig),
+		FailoverVersion:   failoverVersion,
 	}
+	factory := NewDefaultReplicationResolverFactory()
+	resolver := factory(detail)
+	ns, _ := FromPersistentState(detail, resolver, WithGlobalFlag(true))
+	return ns
 }
 
 func ensureInfo(proto *persistencespb.NamespaceInfo) *persistencespb.NamespaceInfo {

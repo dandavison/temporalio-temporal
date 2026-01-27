@@ -1,30 +1,7 @@
-// The MIT License
-//
-// Copyright (c) 2020 Temporal Technologies Inc.  All rights reserved.
-//
-// Copyright (c) 2020 Uber Technologies, Inc.
-//
-// Permission is hereby granted, free of charge, to any person obtaining a copy
-// of this software and associated documentation files (the "Software"), to deal
-// in the Software without restriction, including without limitation the rights
-// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-// copies of the Software, and to permit persons to whom the Software is
-// furnished to do so, subject to the following conditions:
-//
-// The above copyright notice and this permission notice shall be included in
-// all copies or substantial portions of the Software.
-//
-// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
-// THE SOFTWARE.
-
 package replication
 
 import (
+	"context"
 	"errors"
 	"math"
 	"math/rand"
@@ -40,12 +17,15 @@ import (
 	replicationspb "go.temporal.io/server/api/replication/v1"
 	"go.temporal.io/server/common/collection"
 	"go.temporal.io/server/common/definition"
+	"go.temporal.io/server/common/dynamicconfig"
 	"go.temporal.io/server/common/log"
 	"go.temporal.io/server/common/metrics"
 	"go.temporal.io/server/common/namespace"
 	"go.temporal.io/server/common/persistence"
+	"go.temporal.io/server/common/quotas"
 	serviceerrors "go.temporal.io/server/common/serviceerror"
 	"go.temporal.io/server/service/history/configs"
+	historyi "go.temporal.io/server/service/history/interfaces"
 	"go.temporal.io/server/service/history/shard"
 	"go.temporal.io/server/service/history/tasks"
 	"go.temporal.io/server/service/history/tests"
@@ -60,8 +40,8 @@ type (
 
 		controller    *gomock.Controller
 		server        *historyservicemock.MockHistoryService_StreamWorkflowReplicationMessagesServer
-		shardContext  *shard.MockContext
-		historyEngine *shard.MockEngine
+		shardContext  *historyi.MockShardContext
+		historyEngine *historyi.MockEngine
 		taskConverter *MockSourceTaskConverter
 
 		clientShardKey ClusterShardKey
@@ -89,11 +69,11 @@ func (s *streamSenderSuite) SetupTest() {
 
 	s.controller = gomock.NewController(s.T())
 	s.server = historyservicemock.NewMockHistoryService_StreamWorkflowReplicationMessagesServer(s.controller)
-	s.shardContext = shard.NewMockContext(s.controller)
-	s.historyEngine = shard.NewMockEngine(s.controller)
+	s.server.EXPECT().Context().Return(context.Background()).AnyTimes()
+	s.shardContext = historyi.NewMockShardContext(s.controller)
+	s.historyEngine = historyi.NewMockEngine(s.controller)
 	s.taskConverter = NewMockSourceTaskConverter(s.controller)
 	s.config = tests.NewDynamicConfig()
-
 	s.clientShardKey = NewClusterShardKey(rand.Int31(), 1)
 	s.serverShardKey = NewClusterShardKey(rand.Int31(), 1)
 	s.shardContext.EXPECT().GetEngine(gomock.Any()).Return(s.historyEngine, nil).AnyTimes()
@@ -104,6 +84,7 @@ func (s *streamSenderSuite) SetupTest() {
 		s.server,
 		s.shardContext,
 		s.historyEngine,
+		quotas.NoopRequestRateLimiter,
 		s.taskConverter,
 		"target_cluster",
 		2,
@@ -777,6 +758,14 @@ func (s *streamSenderSuite) TestSendTasks_WithTasks() {
 	item1.EXPECT().GetWorkflowID().Return("3").AnyTimes()
 	item2.EXPECT().GetWorkflowID().Return("2").AnyTimes()
 	item3.EXPECT().GetWorkflowID().Return("1").AnyTimes()
+	item0.EXPECT().GetVisibilityTime().Return(time.Now().UTC()).AnyTimes()
+	item1.EXPECT().GetVisibilityTime().Return(time.Now().UTC()).AnyTimes()
+	item2.EXPECT().GetVisibilityTime().Return(time.Now().UTC()).AnyTimes()
+	item3.EXPECT().GetVisibilityTime().Return(time.Now().UTC()).AnyTimes()
+	item0.EXPECT().GetType().Return(enumsspb.TASK_TYPE_REPLICATION_HISTORY).AnyTimes()
+	item1.EXPECT().GetType().Return(enumsspb.TASK_TYPE_REPLICATION_HISTORY).AnyTimes()
+	item2.EXPECT().GetType().Return(enumsspb.TASK_TYPE_REPLICATION_HISTORY).AnyTimes()
+	item3.EXPECT().GetType().Return(enumsspb.TASK_TYPE_REPLICATION_HISTORY).AnyTimes()
 	task0 := &replicationspb.ReplicationTask{
 		SourceTaskId:   beginInclusiveWatermark,
 		VisibilityTime: timestamppb.New(time.Unix(0, rand.Int63())),
@@ -807,10 +796,10 @@ func (s *streamSenderSuite) TestSendTasks_WithTasks() {
 		beginInclusiveWatermark,
 		endExclusiveWatermark,
 	).Return(iter, nil)
-	s.taskConverter.EXPECT().Convert(item0, s.clientShardKey.ClusterID).Return(task0, nil)
-	s.taskConverter.EXPECT().Convert(item1, s.clientShardKey.ClusterID).Times(0)
-	s.taskConverter.EXPECT().Convert(item2, s.clientShardKey.ClusterID).Return(task2, nil)
-	s.taskConverter.EXPECT().Convert(item3, s.clientShardKey.ClusterID).Times(0)
+	s.taskConverter.EXPECT().Convert(item0, s.clientShardKey.ClusterID, enumsspb.TASK_PRIORITY_UNSPECIFIED).Return(task0, nil)
+	s.taskConverter.EXPECT().Convert(item1, s.clientShardKey.ClusterID, gomock.Any()).Times(0)
+	s.taskConverter.EXPECT().Convert(item2, s.clientShardKey.ClusterID, enumsspb.TASK_PRIORITY_UNSPECIFIED).Return(task2, nil)
+	s.taskConverter.EXPECT().Convert(item3, s.clientShardKey.ClusterID, gomock.Any()).Times(0)
 	gomock.InOrder(
 		s.server.EXPECT().Send(&historyservice.StreamWorkflowReplicationMessagesResponse{
 			Attributes: &historyservice.StreamWorkflowReplicationMessagesResponse_Messages{
@@ -887,14 +876,14 @@ func (s *streamSenderSuite) TestSendTasks_TieredStack_HighPriority() {
 			return []tasks.Task{item0, item1, item2}, nil, nil
 		},
 	)
-	s.senderFlowController.EXPECT().Wait(enumsspb.TASK_PRIORITY_HIGH).Return().Times(1)
+	s.senderFlowController.EXPECT().Wait(gomock.Any(), enumsspb.TASK_PRIORITY_HIGH).Return(nil).Times(1)
 	s.historyEngine.EXPECT().GetReplicationTasksIter(
 		gomock.Any(),
 		string(s.clientShardKey.ClusterID),
 		beginInclusiveWatermark,
 		endExclusiveWatermark,
 	).Return(iter, nil)
-	s.taskConverter.EXPECT().Convert(item1, s.clientShardKey.ClusterID).Return(task1, nil)
+	s.taskConverter.EXPECT().Convert(item1, s.clientShardKey.ClusterID, item1.Priority).Return(task1, nil)
 
 	gomock.InOrder(
 		s.server.EXPECT().Send(&historyservice.StreamWorkflowReplicationMessagesResponse{
@@ -964,21 +953,22 @@ func (s *streamSenderSuite) TestSendTasks_TieredStack_LowPriority() {
 		nil, nil, &persistencespb.NamespaceReplicationConfig{
 			Clusters: []string{"source_cluster", "target_cluster"},
 		}, 100), nil).AnyTimes()
+	mockRegistry.EXPECT().GetNamespaceName(namespace.ID("1")).Return(namespace.Name("test"), nil).AnyTimes()
 	s.shardContext.EXPECT().GetNamespaceRegistry().Return(mockRegistry).AnyTimes()
 	iter := collection.NewPagingIterator[tasks.Task](
 		func(paginationToken []byte) ([]tasks.Task, []byte, error) {
 			return []tasks.Task{item0, item1, item2}, nil, nil
 		},
 	)
-	s.senderFlowController.EXPECT().Wait(enumsspb.TASK_PRIORITY_LOW).Return().Times(2)
+	s.senderFlowController.EXPECT().Wait(gomock.Any(), enumsspb.TASK_PRIORITY_LOW).Return(nil).Times(2)
 	s.historyEngine.EXPECT().GetReplicationTasksIter(
 		gomock.Any(),
 		string(s.clientShardKey.ClusterID),
 		beginInclusiveWatermark,
 		endExclusiveWatermark,
 	).Return(iter, nil)
-	s.taskConverter.EXPECT().Convert(item0, s.clientShardKey.ClusterID).Return(task0, nil)
-	s.taskConverter.EXPECT().Convert(item0, s.clientShardKey.ClusterID).Return(task2, nil)
+	s.taskConverter.EXPECT().Convert(item0, s.clientShardKey.ClusterID, item0.Priority).Return(task0, nil)
+	s.taskConverter.EXPECT().Convert(item0, s.clientShardKey.ClusterID, item0.Priority).Return(task2, nil)
 
 	gomock.InOrder(
 		s.server.EXPECT().Send(&historyservice.StreamWorkflowReplicationMessagesResponse{
@@ -1018,7 +1008,7 @@ func (s *streamSenderSuite) TestSendTasks_TieredStack_LowPriority() {
 }
 
 func (s *streamSenderSuite) TestSendEventLoop_Panic_ShouldCaptureAsError() {
-	s.historyEngine.EXPECT().SubscribeReplicationNotification().Do(func() {
+	s.historyEngine.EXPECT().SubscribeReplicationNotification("target_cluster").Do(func(_ string) {
 		panic("panic")
 	})
 	err := s.streamSender.sendEventLoop(enumsspb.TASK_PRIORITY_UNSPECIFIED)
@@ -1056,4 +1046,17 @@ func (s *streamSenderSuite) TestRecvEventLoop_RpcError_ShouldReturnStreamError()
 	s.Error(err)
 	s.Error(err, "rpc error")
 	s.IsType(&StreamError{}, err)
+}
+
+func (s *streamSenderSuite) TestLivenessMonitor() {
+	s.streamSender.recvSignalChan <- struct{}{}
+	livenessMonitor(
+		s.streamSender.recvSignalChan,
+		dynamicconfig.GetDurationPropertyFn(time.Second),
+		dynamicconfig.GetIntPropertyFn(1),
+		s.streamSender.shutdownChan,
+		s.streamSender.Stop,
+		s.streamSender.logger,
+	)
+	s.False(s.streamSender.IsValid())
 }

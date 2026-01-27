@@ -1,27 +1,3 @@
-// The MIT License
-//
-// Copyright (c) 2020 Temporal Technologies Inc.  All rights reserved.
-//
-// Copyright (c) 2020 Uber Technologies, Inc.
-//
-// Permission is hereby granted, free of charge, to any person obtaining a copy
-// of this software and associated documentation files (the "Software"), to deal
-// in the Software without restriction, including without limitation the rights
-// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-// copies of the Software, and to permit persons to whom the Software is
-// furnished to do so, subject to the following conditions:
-//
-// The above copyright notice and this permission notice shall be included in
-// all copies or substantial portions of the Software.
-//
-// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
-// THE SOFTWARE.
-
 package ringpop
 
 import (
@@ -35,7 +11,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/pborman/uuid"
+	"github.com/google/uuid"
 	"github.com/temporalio/ringpop-go"
 	"github.com/temporalio/ringpop-go/discovery/statichosts"
 	"github.com/temporalio/ringpop-go/swim"
@@ -88,7 +64,7 @@ type monitor struct {
 	logger                    log.Logger
 	metadataManager           persistence.ClusterMetadataManager
 	broadcastHostPortResolver func() (string, error)
-	hostID                    uuid.UUID
+	hostID                    []byte
 	initialized               *future.FutureImpl[struct{}]
 }
 
@@ -109,8 +85,10 @@ func newMonitor(
 	lifecycleCtx, lifecycleCancel := context.WithCancel(context.Background())
 	lifecycleCtx = headers.SetCallerInfo(
 		lifecycleCtx,
-		headers.SystemBackgroundCallerInfo,
+		headers.SystemBackgroundHighCallerInfo,
 	)
+	hostID, _ := uuid.New().MarshalBinary()
+	// MarshalBinary should never error.
 
 	rpo := &monitor{
 		status: common.DaemonStatusInitialized,
@@ -125,7 +103,7 @@ func newMonitor(
 		logger:                    logger,
 		metadataManager:           metadataManager,
 		broadcastHostPortResolver: broadcastHostPortResolver,
-		hostID:                    uuid.NewUUID(),
+		hostID:                    hostID,
 		initialized:               future.NewFuture[struct{}](),
 		maxJoinDuration:           maxJoinDuration,
 		propagationTime:           propagationTime,
@@ -275,10 +253,14 @@ func (rpo *monitor) upsertMyMembership(
 	err := rpo.metadataManager.UpsertClusterMembership(ctx, request)
 
 	if err == nil {
+		hostID, err := uuid.FromBytes(request.HostID)
+		if err != nil {
+			return err
+		}
 		rpo.logger.Debug("Membership heartbeat upserted successfully",
 			tag.Address(request.RPCAddress.String()),
 			tag.Port(int(request.RPCPort)),
-			tag.HostID(request.HostID.String()))
+			tag.HostID(hostID.String()))
 	}
 
 	return err
@@ -337,10 +319,14 @@ func (rpo *monitor) startHeartbeat(broadcastHostport string) error {
 	// read side by filtering on the last time a heartbeat was seen.
 	err = rpo.upsertMyMembership(rpo.lifecycleCtx, req)
 	if err == nil {
+		hostID, err := uuid.FromBytes(rpo.hostID)
+		if err != nil {
+			return err
+		}
 		rpo.logger.Info("Membership heartbeat upserted successfully",
 			tag.Address(broadcastAddress.String()),
 			tag.Port(int(broadcastPort)),
-			tag.HostID(rpo.hostID.String()))
+			tag.HostID(hostID.String()))
 
 		rpo.startHeartbeatUpsertLoop(req)
 	}
@@ -371,9 +357,10 @@ func (rpo *monitor) fetchCurrentBootstrapHostports() ([]string, error) {
 		for _, host := range resp.ActiveMembers {
 			set[net.JoinHostPort(host.RPCAddress.String(), convert.Uint16ToString(host.RPCPort))] = struct{}{}
 		}
+		nextPageToken = resp.NextPageToken
 
 		// Stop iterating once we have either 500 unique ip:port combos or there is no more results.
-		if nextPageToken == nil || len(set) >= 500 {
+		if len(nextPageToken) == 0 || len(set) >= 500 {
 			bootstrapHostPorts := make([]string, 0, len(set))
 			for k := range set {
 				bootstrapHostPorts = append(bootstrapHostPorts, k)

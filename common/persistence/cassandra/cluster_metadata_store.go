@@ -1,27 +1,3 @@
-// The MIT License
-//
-// Copyright (c) 2020 Temporal Technologies Inc.  All rights reserved.
-//
-// Copyright (c) 2020 Uber Technologies, Inc.
-//
-// Permission is hereby granted, free of charge, to any person obtaining a copy
-// of this software and associated documentation files (the "Software"), to deal
-// in the Software without restriction, including without limitation the rights
-// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-// copies of the Software, and to permit persons to whom the Software is
-// furnished to do so, subject to the following conditions:
-//
-// The above copyright notice and this permission notice shall be included in
-// all copies or substantial portions of the Software.
-//
-// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
-// THE SOFTWARE.
-
 package cassandra
 
 import (
@@ -30,7 +6,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/pborman/uuid"
 	"go.temporal.io/api/serviceerror"
 	"go.temporal.io/server/common/log"
 	p "go.temporal.io/server/common/persistence"
@@ -200,9 +175,9 @@ func (m *ClusterMetadataStore) GetClusterMembers(
 	queryString.WriteString(templateGetClusterMembership)
 	operands = append(operands, constMembershipPartition)
 
-	if request.HostIDEquals != nil {
+	if len(request.HostIDEquals) != 0 {
 		queryString.WriteString(templateWithHostIDSuffix)
-		operands = append(operands, []byte(request.HostIDEquals))
+		operands = append(operands, request.HostIDEquals)
 	}
 
 	if request.RPCAddressEquals != nil {
@@ -244,7 +219,7 @@ func (m *ClusterMetadataStore) GetClusterMembers(
 
 	for iter.Scan(&cqlHostID, &rpcAddress, &rpcPort, &role, &sessionStart, &lastHeartbeat, &cassNow, &ttl) {
 		member := p.ClusterMember{
-			HostID:        uuid.UUID(cqlHostID),
+			HostID:        cqlHostID,
 			RPCAddress:    rpcAddress,
 			RPCPort:       rpcPort,
 			Role:          role,
@@ -275,7 +250,7 @@ func (m *ClusterMetadataStore) UpsertClusterMembership(
 	query := m.session.Query(
 		templateUpsertActiveClusterMembership,
 		constMembershipPartition,
-		[]byte(request.HostID),
+		request.HostID,
 		request.RPCAddress,
 		request.RPCPort,
 		request.Role,

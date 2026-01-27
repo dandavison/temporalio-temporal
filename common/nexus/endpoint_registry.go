@@ -1,31 +1,8 @@
-// The MIT License
-//
-// Copyright (c) 2024 Temporal Technologies Inc.  All rights reserved.
-//
-// Permission is hereby granted, free of charge, to any person obtaining a copy
-// of this software and associated documentation files (the "Software"), to deal
-// in the Software without restriction, including without limitation the rights
-// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-// copies of the Software, and to permit persons to whom the Software is
-// furnished to do so, subject to the following conditions:
-//
-// The above copyright notice and this permission notice shall be included in
-// all copies or substantial portions of the Software.
-//
-// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
-// THE SOFTWARE.
-
 package nexus
 
 import (
 	"context"
 	"errors"
-	"fmt"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -37,6 +14,7 @@ import (
 	"go.temporal.io/server/common/cache"
 	"go.temporal.io/server/common/dynamicconfig"
 	"go.temporal.io/server/common/future"
+	"go.temporal.io/server/common/goro"
 	"go.temporal.io/server/common/headers"
 	"go.temporal.io/server/common/log"
 	"go.temporal.io/server/common/log/tag"
@@ -44,7 +22,6 @@ import (
 	"go.temporal.io/server/common/namespace"
 	p "go.temporal.io/server/common/persistence"
 	"go.temporal.io/server/common/util"
-	"go.temporal.io/server/internal/goro"
 )
 
 type (
@@ -150,7 +127,7 @@ func (r *EndpointRegistryImpl) setEnabled(enabled bool) {
 	if oldReady == nil && enabled {
 		backgroundCtx := headers.SetCallerInfo(
 			context.Background(),
-			headers.SystemBackgroundCallerInfo,
+			headers.SystemBackgroundHighCallerInfo,
 		)
 		newReady := &dataReady{
 			refresh: goro.NewHandle(backgroundCtx),
@@ -183,7 +160,7 @@ func (r *EndpointRegistryImpl) GetByName(ctx context.Context, _ namespace.ID, en
 	r.dataLock.RUnlock()
 
 	if !ok {
-		return nil, serviceerror.NewNotFound(fmt.Sprintf("could not find Nexus endpoint by name: %v", endpointName))
+		return nil, serviceerror.NewNotFoundf("could not find Nexus endpoint by name: %v", endpointName)
 	}
 	return endpoint, nil
 }
@@ -235,37 +212,42 @@ func (r *EndpointRegistryImpl) refreshEndpointsLoop(ctx context.Context, dataRea
 	hasLoadedEndpointData := false
 
 	for ctx.Err() == nil {
-		minWaitTime := r.config.refreshMinWait()
 		start := time.Now()
+		enforceMinWait := true
 		if !hasLoadedEndpointData {
 			// Loading endpoints for the first time after being (re)enabled, so load with fallback to persistence
 			// and unblock any threads waiting on r.dataReady if successful.
 			err := backoff.ThrottleRetryContext(ctx, r.loadEndpoints, r.config.refreshRetryPolicy, nil)
 			if err == nil {
 				hasLoadedEndpointData = true
+				enforceMinWait = false
 				// Note: do not reload r.dataReady here, use value from argument to ensure that
 				// each channel is closed no more than once.
 				close(dataReady.ready)
 			}
 		} else {
+			r.dataLock.Lock()
+			prevTableVersion := r.tableVersion
+			r.dataLock.Unlock()
+
 			// Endpoints have previously been loaded, so just keep them up to date with long poll requests to
 			// matching, without fallback to persistence. Ignoring long poll errors since we will just retry
 			// on next loop iteration.
 			_ = backoff.ThrottleRetryContext(ctx, r.refreshEndpoints, r.config.refreshRetryPolicy, nil)
+
+			r.dataLock.Lock()
+			enforceMinWait = prevTableVersion == r.tableVersion
+			r.dataLock.Unlock()
 		}
 		elapsed := time.Since(start)
 
-		// In general, we want to start a new call immediately on completion of the previous
-		// one. But if the remote is broken and returns success immediately, we might end up
-		// spinning. So enforce a minimum wait time that increases as long as we keep getting
-		// very fast replies.
-		if elapsed < minWaitTime {
+		minWaitTime := r.config.refreshMinWait()
+		// In general, we want to start a new call immediately on completion of the previous one. But if the remote is
+		// broken and returns success immediately, we might end up spinning. So enforce a minimum wait time that
+		// increases as long as we keep getting very fast replies. Only enforce the min wait if the remote does not
+		// return new data.
+		if enforceMinWait && elapsed < minWaitTime {
 			util.InterruptibleSleep(ctx, minWaitTime-elapsed)
-			// Don't let this get near our call timeout, otherwise we can't tell the difference
-			// between a fast reply and a timeout.
-			minWaitTime = min(minWaitTime*2, r.config.refreshLongPollTimeout()/2)
-		} else {
-			minWaitTime = r.config.refreshMinWait()
 		}
 	}
 

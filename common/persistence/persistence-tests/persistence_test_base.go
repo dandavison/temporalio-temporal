@@ -1,30 +1,7 @@
-// The MIT License
-//
-// Copyright (c) 2020 Temporal Technologies Inc.  All rights reserved.
-//
-// Copyright (c) 2020 Uber Technologies, Inc.
-//
-// Permission is hereby granted, free of charge, to any person obtaining a copy
-// of this software and associated documentation files (the "Software"), to deal
-// in the Software without restriction, including without limitation the rights
-// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-// copies of the Software, and to permit persons to whom the Software is
-// furnished to do so, subject to the following conditions:
-//
-// The above copyright notice and this permission notice shall be included in
-// all copies or substantial portions of the Software.
-//
-// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
-// THE SOFTWARE.
-
 package persistencetests
 
 import (
+	"cmp"
 	"context"
 	"fmt"
 	"math/rand"
@@ -33,6 +10,7 @@ import (
 	"time"
 
 	"github.com/stretchr/testify/suite"
+	"go.opentelemetry.io/otel/trace"
 	persistencespb "go.temporal.io/server/api/persistence/v1"
 	replicationspb "go.temporal.io/server/api/replication/v1"
 	"go.temporal.io/server/common"
@@ -56,7 +34,8 @@ import (
 	"go.temporal.io/server/common/quotas"
 	"go.temporal.io/server/common/resolver"
 	"go.temporal.io/server/common/searchattribute"
-	"go.temporal.io/server/environment"
+	"go.temporal.io/server/common/telemetry"
+	"go.temporal.io/server/temporal/environment"
 )
 
 // TimePrecision is needed to account for database timestamp precision.
@@ -83,7 +62,24 @@ type (
 		FaultInjection    *config.FaultInjection
 		Logger            log.Logger `yaml:"-"`
 	}
+)
 
+// ApplyDefaults copies database configuration from src, preserving any non-zero values already set.
+func (o *TestBaseOptions) ApplyDefaults(src *TestBaseOptions) {
+	o.StoreType = cmp.Or(o.StoreType, src.StoreType)
+	o.SQLDBPluginName = cmp.Or(o.SQLDBPluginName, src.SQLDBPluginName)
+	o.DBName = cmp.Or(o.DBName, src.DBName)
+	o.DBUsername = cmp.Or(o.DBUsername, src.DBUsername)
+	o.DBPassword = cmp.Or(o.DBPassword, src.DBPassword)
+	o.DBHost = cmp.Or(o.DBHost, src.DBHost)
+	o.DBPort = cmp.Or(o.DBPort, src.DBPort)
+	o.SchemaDir = cmp.Or(o.SchemaDir, src.SchemaDir)
+	if o.ConnectAttributes == nil {
+		o.ConnectAttributes = src.ConnectAttributes
+	}
+}
+
+type (
 	// TestBase wraps the base setup needed to create workflows over persistence layer.
 	TestBase struct {
 		suite.Suite
@@ -93,6 +89,7 @@ type (
 		Factory                   client.Factory
 		ExecutionManager          persistence.ExecutionManager
 		TaskMgr                   persistence.TaskManager
+		FairTaskMgr               persistence.FairTaskManager
 		ClusterMetadataManager    persistence.ClusterMetadataManager
 		MetadataManager           persistence.MetadataManager
 		NamespaceReplicationQueue persistence.NamespaceReplicationQueue
@@ -107,6 +104,7 @@ type (
 		ReplicationReadLevel      int64
 		DefaultTestCluster        PersistenceTestCluster
 		Logger                    log.Logger
+		TracerProvider            trace.TracerProvider
 	}
 
 	// PersistenceTestCluster exposes management operations on a database
@@ -139,9 +137,6 @@ func NewTestClusterForCassandra(options *TestBaseOptions, logger log.Logger) *ca
 
 // NewTestBaseWithSQL returns a new persistence test base backed by SQL
 func NewTestBaseWithSQL(options *TestBaseOptions) *TestBase {
-	if options.DBName == "" {
-		options.DBName = "test_" + GenerateRandomDBName(3)
-	}
 	logger := options.Logger
 	if logger == nil {
 		logger = log.NewTestLogger()
@@ -191,6 +186,7 @@ func NewTestBaseForCluster(testCluster PersistenceTestCluster, logger log.Logger
 	return &TestBase{
 		DefaultTestCluster: testCluster,
 		Logger:             logger,
+		TracerProvider:     telemetry.NoopTracerProvider,
 	}
 }
 
@@ -210,6 +206,7 @@ func (s *TestBase) Setup(clusterMetadataConfig *cluster.Config) {
 	s.DefaultTestCluster.SetupTestDatabase()
 
 	cfg := s.DefaultTestCluster.Config()
+	serializer := serialization.NewSerializer()
 	dataStoreFactory := client.DataStoreFactoryProvider(
 		client.ClusterName(clusterName),
 		resolver.NewNoopResolver(),
@@ -217,6 +214,8 @@ func (s *TestBase) Setup(clusterMetadataConfig *cluster.Config) {
 		s.AbstractDataStoreFactory,
 		s.Logger,
 		metrics.NoopMetricsHandler,
+		s.TracerProvider,
+		serializer,
 	)
 	factory := client.NewFactory(
 		dataStoreFactory,
@@ -224,22 +223,34 @@ func (s *TestBase) Setup(clusterMetadataConfig *cluster.Config) {
 		s.PersistenceRateLimiter,
 		quotas.NoopRequestRateLimiter,
 		quotas.NoopRequestRateLimiter,
-		serialization.NewSerializer(),
+		serializer,
 		nil,
 		clusterName,
 		metrics.NoopMetricsHandler,
 		s.Logger,
 		s.PersistenceHealthSignals,
+		func() bool { return false },
+		func() bool { return false },
 	)
 
 	s.TaskMgr, err = factory.NewTaskManager()
 	s.fatalOnError("NewTaskManager", err)
 
+	s.FairTaskMgr, err = factory.NewFairTaskManager()
+	// TODO: re-enable error check after FairTaskManager is implemented for sql
+	// s.fatalOnError("NewFairTaskManager", err)
+	_ = err
+
 	s.ClusterMetadataManager, err = factory.NewClusterMetadataManager()
 	s.fatalOnError("NewClusterMetadataManager", err)
 
 	s.ClusterMetadata = cluster.NewMetadataFromConfig(clusterMetadataConfig, s.ClusterMetadataManager, dynamicconfig.NewNoopCollection(), s.Logger)
-	s.SearchAttributesManager = searchattribute.NewManager(clock.NewRealTimeSource(), s.ClusterMetadataManager, dynamicconfig.GetBoolPropertyFn(true))
+	s.SearchAttributesManager = searchattribute.NewManager(
+		clock.NewRealTimeSource(),
+		s.ClusterMetadataManager,
+		s.Logger,
+		dynamicconfig.GetBoolPropertyFn(true),
+	)
 
 	s.MetadataManager, err = factory.NewMetadataManager()
 	s.fatalOnError("NewMetadataManager", err)

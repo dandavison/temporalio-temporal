@@ -1,27 +1,3 @@
-// The MIT License
-//
-// Copyright (c) 2020 Temporal Technologies Inc.  All rights reserved.
-//
-// Copyright (c) 2020 Uber Technologies, Inc.
-//
-// Permission is hereby granted, free of charge, to any person obtaining a copy
-// of this software and associated documentation files (the "Software"), to deal
-// in the Software without restriction, including without limitation the rights
-// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-// copies of the Software, and to permit persons to whom the Software is
-// furnished to do so, subject to the following conditions:
-//
-// The above copyright notice and this permission notice shall be included in
-// all copies or substantial portions of the Software.
-//
-// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
-// THE SOFTWARE.
-
 package ndc
 
 import (
@@ -29,11 +5,12 @@ import (
 	"testing"
 	"time"
 
-	"github.com/pborman/uuid"
+	"github.com/google/uuid"
 	"github.com/stretchr/testify/require"
 	"github.com/stretchr/testify/suite"
 	historyspb "go.temporal.io/server/api/history/v1"
 	persistencespb "go.temporal.io/server/api/persistence/v1"
+	"go.temporal.io/server/chasm"
 	"go.temporal.io/server/common"
 	"go.temporal.io/server/common/definition"
 	"go.temporal.io/server/common/log"
@@ -42,6 +19,7 @@ import (
 	"go.temporal.io/server/common/persistence/versionhistory"
 	serviceerrors "go.temporal.io/server/common/serviceerror"
 	"go.temporal.io/server/common/util"
+	historyi "go.temporal.io/server/service/history/interfaces"
 	"go.temporal.io/server/service/history/shard"
 	"go.temporal.io/server/service/history/tests"
 	"go.temporal.io/server/service/history/workflow"
@@ -55,8 +33,8 @@ type (
 
 		controller              *gomock.Controller
 		mockShard               *shard.ContextTest
-		mockBaseMutableState    *workflow.MockMutableState
-		mockRebuiltMutableState *workflow.MockMutableState
+		mockBaseMutableState    *historyi.MockMutableState
+		mockRebuiltMutableState *historyi.MockMutableState
 		mockTransactionMgr      *MockTransactionManager
 		mockStateBuilder        *MockStateRebuilder
 
@@ -67,7 +45,7 @@ type (
 		namespace   namespace.Name
 		workflowID  string
 		baseRunID   string
-		newContext  workflow.Context
+		newContext  historyi.WorkflowContext
 		newRunID    string
 
 		workflowResetter *resetterImpl
@@ -83,8 +61,8 @@ func (s *resetterSuite) SetupTest() {
 	s.Assertions = require.New(s.T())
 
 	s.controller = gomock.NewController(s.T())
-	s.mockBaseMutableState = workflow.NewMockMutableState(s.controller)
-	s.mockRebuiltMutableState = workflow.NewMockMutableState(s.controller)
+	s.mockBaseMutableState = historyi.NewMockMutableState(s.controller)
+	s.mockRebuiltMutableState = historyi.NewMockMutableState(s.controller)
 	s.mockTransactionMgr = NewMockTransactionManager(s.controller)
 	s.mockStateBuilder = NewMockStateRebuilder(s.controller)
 
@@ -101,10 +79,10 @@ func (s *resetterSuite) SetupTest() {
 
 	s.logger = s.mockShard.GetLogger()
 
-	s.namespaceID = namespace.ID(uuid.New())
+	s.namespaceID = namespace.ID(uuid.NewString())
 	s.namespace = "some random namespace name"
 	s.workflowID = "some random workflow ID"
-	s.baseRunID = uuid.New()
+	s.baseRunID = uuid.NewString()
 	s.newContext = workflow.NewContext(
 		s.mockShard.GetConfig(),
 		definition.NewWorkflowKey(
@@ -112,11 +90,12 @@ func (s *resetterSuite) SetupTest() {
 			s.workflowID,
 			s.newRunID,
 		),
+		chasm.WorkflowArchetypeID,
 		s.logger,
 		s.mockShard.GetThrottledLogger(),
 		s.mockShard.GetMetricsHandler(),
 	)
-	s.newRunID = uuid.New()
+	s.newRunID = uuid.NewString()
 
 	s.workflowResetter = NewResetter(
 		s.mockShard, s.mockTransactionMgr, s.namespaceID, s.workflowID, s.baseRunID, s.newContext, s.newRunID, s.logger,
@@ -147,7 +126,11 @@ func (s *resetterSuite) TestResetWorkflow_NoError() {
 	incomingFirstEventID := baseEventID + 12
 	incomingVersion := baseVersion + 3
 
-	rebuiltHistorySize := int64(9999)
+	rebuildStats := RebuildStats{
+		HistorySize:          9999,
+		ExternalPayloadSize:  1234,
+		ExternalPayloadCount: 56,
+	}
 	newBranchToken := []byte("other random branch token")
 
 	s.mockBaseMutableState.EXPECT().GetExecutionInfo().Return(&persistencespb.WorkflowExecutionInfo{VersionHistories: versionHistories}).AnyTimes()
@@ -165,6 +148,7 @@ func (s *resetterSuite) TestResetWorkflow_NoError() {
 		s.namespaceID,
 		s.workflowID,
 		s.baseRunID,
+		chasm.WorkflowArchetypeID,
 	).Return(mockBaseWorkflow, nil)
 
 	s.mockStateBuilder.EXPECT().Rebuild(
@@ -185,8 +169,10 @@ func (s *resetterSuite) TestResetWorkflow_NoError() {
 		),
 		newBranchToken,
 		gomock.Any(),
-	).Return(s.mockRebuiltMutableState, rebuiltHistorySize, nil)
-	s.mockRebuiltMutableState.EXPECT().AddHistorySize(rebuiltHistorySize)
+	).Return(s.mockRebuiltMutableState, rebuildStats, nil)
+	s.mockRebuiltMutableState.EXPECT().AddHistorySize(rebuildStats.HistorySize)
+	s.mockRebuiltMutableState.EXPECT().AddExternalPayloadSize(rebuildStats.ExternalPayloadSize)
+	s.mockRebuiltMutableState.EXPECT().AddExternalPayloadCount(rebuildStats.ExternalPayloadCount)
 
 	shardID := s.mockShard.GetShardID()
 	s.mockExecManager.EXPECT().ForkHistoryBranch(gomock.Any(), &persistence.ForkHistoryBranchRequest{
@@ -243,6 +229,7 @@ func (s *resetterSuite) TestResetWorkflow_Error() {
 		s.namespaceID,
 		s.workflowID,
 		s.baseRunID,
+		chasm.WorkflowArchetypeID,
 	).Return(mockBaseWorkflow, nil)
 
 	rebuiltMutableState, err := s.workflowResetter.resetWorkflow(

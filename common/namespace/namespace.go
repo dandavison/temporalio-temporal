@@ -1,27 +1,3 @@
-// The MIT License
-//
-// Copyright (c) 2020 Temporal Technologies Inc.  All rights reserved.
-//
-// Copyright (c) 2020 Uber Technologies, Inc.
-//
-// Permission is hereby granted, free of charge, to any person obtaining a copy
-// of this software and associated documentation files (the "Software"), to deal
-// in the Software without restriction, including without limitation the rights
-// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-// copies of the Software, and to permit persons to whom the Software is
-// furnished to do so, subject to the following conditions:
-//
-// The above copyright notice and this permission notice shall be included in
-// all copies or substantial portions of the Software.
-//
-// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
-// THE SOFTWARE.
-
 package namespace
 
 import (
@@ -32,19 +8,18 @@ import (
 	"github.com/google/uuid"
 	enumspb "go.temporal.io/api/enums/v1"
 	namespacepb "go.temporal.io/api/namespace/v1"
-	"go.temporal.io/api/replication/v1"
+	rulespb "go.temporal.io/api/rules/v1"
 	"go.temporal.io/api/serviceerror"
-	"go.temporal.io/server/api/adminservice/v1"
 	persistencespb "go.temporal.io/server/api/persistence/v1"
 	"go.temporal.io/server/common"
-	"go.temporal.io/server/common/persistence"
 	"go.temporal.io/server/common/util"
+	expmaps "golang.org/x/exp/maps"
 )
 
 type (
 	// Mutation changes a Namespace "in-flight" during a Clone operation.
 	Mutation interface {
-		apply(*persistence.GetNamespaceResponse)
+		apply(*Namespace)
 	}
 
 	// BadBinaryError is an error type carrying additional information about
@@ -65,16 +40,13 @@ type (
 
 	// Namespace contains the info and config for a namespace
 	Namespace struct {
-		info                        *persistencespb.NamespaceInfo
-		config                      *persistencespb.NamespaceConfig
-		replicationConfig           *persistencespb.NamespaceReplicationConfig
-		configVersion               int64
-		failoverVersion             int64
-		isGlobalNamespace           bool
-		failoverNotificationVersion int64
-		notificationVersion         int64
+		info                *persistencespb.NamespaceInfo
+		config              *persistencespb.NamespaceConfig
+		configVersion       int64
+		notificationVersion int64
 
 		customSearchAttributesMapper CustomSearchAttributesMapper
+		replicationResolver          ReplicationResolver
 	}
 
 	CustomSearchAttributesMapper struct {
@@ -88,8 +60,9 @@ type (
 )
 
 const (
-	EmptyName Name = ""
-	EmptyID   ID   = ""
+	EmptyName       Name = ""
+	EmptyID         ID   = ""
+	EmptyBusinessID      = ""
 
 	// ReplicationPolicyOneCluster indicate that workflows does not need to be replicated
 	// applicable to local namespace & global namespace with one cluster
@@ -102,74 +75,53 @@ func NewID() ID {
 	return ID(uuid.NewString())
 }
 
-func FromPersistentState(record *persistence.GetNamespaceResponse) *Namespace {
-	return &Namespace{
-		info:                        record.Namespace.Info,
-		config:                      record.Namespace.Config,
-		replicationConfig:           record.Namespace.ReplicationConfig,
-		configVersion:               record.Namespace.ConfigVersion,
-		failoverVersion:             record.Namespace.FailoverVersion,
-		isGlobalNamespace:           record.IsGlobalNamespace,
-		failoverNotificationVersion: record.Namespace.FailoverNotificationVersion,
-		notificationVersion:         record.NotificationVersion,
+func FromPersistentState(
+	detail *persistencespb.NamespaceDetail,
+	resolver ReplicationResolver,
+	mutations ...Mutation,
+) (*Namespace, error) {
+	if resolver == nil {
+		return nil, serviceerror.NewInvalidArgument("replicationResolver must be provided")
+	}
+	ns := &Namespace{
+		info:          detail.Info,
+		config:        detail.Config,
+		configVersion: detail.ConfigVersion,
 		customSearchAttributesMapper: CustomSearchAttributesMapper{
-			fieldToAlias: record.Namespace.Config.CustomSearchAttributeAliases,
-			aliasToField: util.InverseMap(record.Namespace.Config.CustomSearchAttributeAliases),
+			fieldToAlias: detail.Config.CustomSearchAttributeAliases,
+			aliasToField: util.InverseMap(detail.Config.CustomSearchAttributeAliases),
 		},
+		replicationResolver: resolver,
 	}
+
+	for _, m := range mutations {
+		m.apply(ns)
+	}
+
+	return ns, nil
 }
 
-func FromAdminClientApiResponse(response *adminservice.GetNamespaceResponse) *Namespace {
-	info := &persistencespb.NamespaceInfo{
-		Id:          response.GetInfo().GetId(),
-		Name:        response.GetInfo().GetName(),
-		State:       response.GetInfo().GetState(),
-		Description: response.GetInfo().GetDescription(),
-		Owner:       response.GetInfo().GetOwnerEmail(),
-		Data:        response.GetInfo().GetData(),
-	}
-	config := &persistencespb.NamespaceConfig{
-		Retention:                    response.GetConfig().GetWorkflowExecutionRetentionTtl(),
-		HistoryArchivalState:         response.GetConfig().GetHistoryArchivalState(),
-		HistoryArchivalUri:           response.GetConfig().GetHistoryArchivalUri(),
-		VisibilityArchivalState:      response.GetConfig().GetVisibilityArchivalState(),
-		VisibilityArchivalUri:        response.GetConfig().GetVisibilityArchivalUri(),
-		CustomSearchAttributeAliases: response.GetConfig().GetCustomSearchAttributeAliases(),
-	}
-	replicationConfig := &persistencespb.NamespaceReplicationConfig{
-		ActiveClusterName: response.GetReplicationConfig().GetActiveClusterName(),
-		State:             response.GetReplicationConfig().GetState(),
-		Clusters:          ConvertClusterReplicationConfigFromProto(response.GetReplicationConfig().GetClusters()),
-		FailoverHistory:   convertFailoverHistoryToPersistenceProto(response.GetFailoverHistory()),
-	}
-	return &Namespace{
-		info:              info,
-		config:            config,
-		replicationConfig: replicationConfig,
-		configVersion:     response.GetConfigVersion(),
-		failoverVersion:   response.GetFailoverVersion(),
-		isGlobalNamespace: response.GetIsGlobalNamespace(),
-	}
-}
+func (ns *Namespace) Clone(mutations ...Mutation) *Namespace {
+	// Clone the resolver to get a deep copy of replication state
+	clonedResolver := ns.replicationResolver.Clone()
 
-func (ns *Namespace) Clone(ms ...Mutation) *Namespace {
-	newns := *ns
-	r := persistence.GetNamespaceResponse{
-		Namespace: &persistencespb.NamespaceDetail{
-			Info:                        common.CloneProto(newns.info),
-			Config:                      common.CloneProto(newns.config),
-			ReplicationConfig:           common.CloneProto(newns.replicationConfig),
-			ConfigVersion:               newns.configVersion,
-			FailoverNotificationVersion: newns.failoverNotificationVersion,
-			FailoverVersion:             newns.failoverVersion,
+	cloned := &Namespace{
+		info:          common.CloneProto(ns.info),
+		config:        common.CloneProto(ns.config),
+		configVersion: ns.configVersion,
+		customSearchAttributesMapper: CustomSearchAttributesMapper{
+			fieldToAlias: ns.customSearchAttributesMapper.fieldToAlias,
+			aliasToField: ns.customSearchAttributesMapper.aliasToField,
 		},
-		IsGlobalNamespace:   newns.isGlobalNamespace,
-		NotificationVersion: newns.notificationVersion,
+		notificationVersion: ns.notificationVersion,
+		replicationResolver: clonedResolver,
 	}
-	for _, m := range ms {
-		m.apply(&r)
+
+	for _, m := range mutations {
+		m.apply(cloned)
 	}
-	return FromPersistentState(&r)
+
+	return cloned
 }
 
 // VisibilityArchivalState observes the visibility archive configuration (state
@@ -228,45 +180,29 @@ func (ns *Namespace) State() enumspb.NamespaceState {
 }
 
 func (ns *Namespace) ReplicationState() enumspb.ReplicationState {
-	if ns.replicationConfig == nil {
-		return enumspb.REPLICATION_STATE_UNSPECIFIED
-	}
-	return ns.replicationConfig.State
+	return ns.replicationResolver.ReplicationState()
 }
 
 // ActiveClusterName observes the name of the cluster that is currently active
 // for this namspace.
-func (ns *Namespace) ActiveClusterName() string {
-	if ns.replicationConfig == nil {
-		return ""
-	}
-	return ns.replicationConfig.ActiveClusterName
+func (ns *Namespace) ActiveClusterName(businessID string) string {
+	return ns.replicationResolver.ActiveClusterName(businessID)
 }
 
 // ClusterNames observes the names of the clusters to which this namespace is
 // replicated.
-func (ns *Namespace) ClusterNames() []string {
-	// copy slice to preserve immutability
-	out := make([]string, len(ns.replicationConfig.Clusters))
-	copy(out, ns.replicationConfig.Clusters)
-	return out
+func (ns *Namespace) ClusterNames(businessID string) []string {
+	return ns.replicationResolver.ClusterNames(businessID)
 }
 
 // IsOnCluster returns true is namespace is registered on cluster otherwise false.
 func (ns *Namespace) IsOnCluster(clusterName string) bool {
-	for _, namespaceCluster := range ns.replicationConfig.Clusters {
-		if namespaceCluster == clusterName {
+	for _, cluster := range ns.ClusterNames(EmptyBusinessID) {
+		if cluster == clusterName {
 			return true
 		}
 	}
 	return false
-}
-
-// FailoverHistory returns the a copy of failover history for this namespace.
-func (ns *Namespace) FailoverHistory() []*replication.FailoverStatus {
-	return convertFailoverHistoryToReplicationProto(
-		ns.replicationConfig.GetFailoverHistory(),
-	)
 }
 
 // ConfigVersion return the namespace config version
@@ -275,20 +211,21 @@ func (ns *Namespace) ConfigVersion() int64 {
 }
 
 // FailoverVersion return the namespace failover version
-func (ns *Namespace) FailoverVersion() int64 {
-	return ns.failoverVersion
+func (ns *Namespace) FailoverVersion(businessID string) int64 {
+	return ns.replicationResolver.FailoverVersion(businessID)
+
 }
 
 // IsGlobalNamespace returns whether the namespace is a global namespace.
 // Being a global namespace doesn't necessarily mean that there are multiple registered clusters for it, only that it
 // has a failover version. To determine whether operations should be replicated for a namespace, see ReplicationPolicy.
 func (ns *Namespace) IsGlobalNamespace() bool {
-	return ns.isGlobalNamespace
+	return ns.replicationResolver.IsGlobalNamespace()
 }
 
 // FailoverNotificationVersion return the global notification version of when failover happened
 func (ns *Namespace) FailoverNotificationVersion() int64 {
-	return ns.failoverNotificationVersion
+	return ns.replicationResolver.FailoverNotificationVersion()
 }
 
 // NotificationVersion return the global notification version of when namespace changed
@@ -299,12 +236,12 @@ func (ns *Namespace) NotificationVersion() int64 {
 // ActiveInCluster returns whether the namespace is active, i.e. non global
 // namespace or global namespace which active cluster is the provided cluster
 func (ns *Namespace) ActiveInCluster(clusterName string) bool {
-	if !ns.isGlobalNamespace {
+	if !ns.replicationResolver.IsGlobalNamespace() {
 		// namespace is not a global namespace, meaning namespace is always
 		// "active" within each cluster
 		return true
 	}
-	return clusterName == ns.ActiveClusterName()
+	return clusterName == ns.ActiveClusterName(EmptyBusinessID)
 }
 
 // ReplicationPolicy return the derived workflow replication policy
@@ -312,10 +249,15 @@ func (ns *Namespace) ReplicationPolicy() ReplicationPolicy {
 	// frontend guarantee that the clusters always contains the active
 	// namespace, so if the # of clusters is 1 then we do not need to send out
 	// any events for replication
-	if ns.isGlobalNamespace && len(ns.replicationConfig.Clusters) > 1 {
+	if ns.replicationResolver.IsGlobalNamespace() && len(ns.ClusterNames(EmptyBusinessID)) > 1 {
 		return ReplicationPolicyMultiCluster
 	}
 	return ReplicationPolicyOneCluster
+}
+
+// GetReplicationResolver return the replication resolover
+func (ns *Namespace) GetReplicationResolver() ReplicationResolver {
+	return ns.replicationResolver
 }
 
 func (ns *Namespace) GetCustomData(key string) string {
@@ -334,8 +276,24 @@ func (ns *Namespace) Retention() time.Duration {
 	return ns.config.Retention.AsDuration()
 }
 
+// CustomSearchAttributesMapper is a part of temporary solution. Do not use this method.
 func (ns *Namespace) CustomSearchAttributesMapper() CustomSearchAttributesMapper {
 	return ns.customSearchAttributesMapper
+}
+
+func (ns *Namespace) GetWorkflowRules() []*rulespb.WorkflowRule {
+	if ns.config.WorkflowRules == nil {
+		return nil
+	}
+	return expmaps.Values(ns.config.WorkflowRules)
+}
+
+func (ns *Namespace) GetWorkflowRule(ruleID string) (*rulespb.WorkflowRule, bool) {
+	if ns.config.WorkflowRules == nil {
+		return nil, false
+	}
+	result, ok := ns.config.WorkflowRules[ruleID]
+	return result, ok
 }
 
 // Error returns the reason associated with this bad binary.

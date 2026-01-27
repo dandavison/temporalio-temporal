@@ -1,27 +1,3 @@
-// The MIT License
-//
-// Copyright (c) 2020 Temporal Technologies Inc.  All rights reserved.
-//
-// Copyright (c) 2020 Uber Technologies, Inc.
-//
-// Permission is hereby granted, free of charge, to any person obtaining a copy
-// of this software and associated documentation files (the "Software"), to deal
-// in the Software without restriction, including without limitation the rights
-// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-// copies of the Software, and to permit persons to whom the Software is
-// furnished to do so, subject to the following conditions:
-//
-// The above copyright notice and this permission notice shall be included in
-// all copies or substantial portions of the Software.
-//
-// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
-// THE SOFTWARE.
-
 package persistencetests
 
 import (
@@ -29,14 +5,13 @@ import (
 	"net"
 	"time"
 
-	"github.com/pborman/uuid"
+	"github.com/google/uuid"
 	"github.com/stretchr/testify/require"
 	"go.temporal.io/api/serviceerror"
 	versionpb "go.temporal.io/api/version/v1"
 	persistencespb "go.temporal.io/server/api/persistence/v1"
 	"go.temporal.io/server/common/debug"
 	p "go.temporal.io/server/common/persistence"
-	"go.temporal.io/server/common/primitives"
 )
 
 type (
@@ -65,6 +40,9 @@ func (s *ClusterMetadataManagerSuite) SetupTest() {
 
 // TearDownTest implementation
 func (s *ClusterMetadataManagerSuite) TearDownTest() {
+	// Ensure all tests clean up after themselves
+	// Todo: MetaMgr should provide api to clear all members
+	s.waitForPrune(1 * time.Second)
 	s.cancel()
 }
 
@@ -81,10 +59,12 @@ func (s *ClusterMetadataManagerSuite) TestClusterMembershipEmptyInitially() {
 	s.Empty(resp.ActiveMembers)
 }
 
-// TestClusterMembershipUpsertCanRead verifies that we can UpsertClusterMembership and read our result
+// TestClusterMembershipUpsertCanReadAny verifies that we can UpsertClusterMembership and read our result
 func (s *ClusterMetadataManagerSuite) TestClusterMembershipUpsertCanReadAny() {
+	hostID, err := uuid.New().MarshalBinary()
+	s.NoError(err)
 	req := &p.UpsertClusterMembershipRequest{
-		HostID:       []byte{0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1},
+		HostID:       hostID,
 		RPCAddress:   net.ParseIP("127.0.0.2"),
 		RPCPort:      123,
 		Role:         p.Frontend,
@@ -92,7 +72,7 @@ func (s *ClusterMetadataManagerSuite) TestClusterMembershipUpsertCanReadAny() {
 		RecordExpiry: time.Second,
 	}
 
-	err := s.ClusterMetadataManager.UpsertClusterMembership(s.ctx, req)
+	err = s.ClusterMetadataManager.UpsertClusterMembership(s.ctx, req)
 	s.Nil(err)
 
 	resp, err := s.ClusterMetadataManager.GetClusterMembers(s.ctx, &p.GetClusterMembersRequest{})
@@ -100,22 +80,22 @@ func (s *ClusterMetadataManagerSuite) TestClusterMembershipUpsertCanReadAny() {
 	s.Nil(err)
 	s.NotNil(resp)
 	s.NotEmpty(resp.ActiveMembers)
+
+	s.waitForPrune(5 * time.Second)
 }
 
-// TestClusterMembershipUpsertCanRead verifies that we can UpsertClusterMembership and read our result
+// TestClusterMembershipUpsertCanPageRead verifies that we can UpsertClusterMembership and read our result
 func (s *ClusterMetadataManagerSuite) TestClusterMembershipUpsertCanPageRead() {
-	// Expire previous records
-	// Todo: MetaMgr should provide api to clear all members
-	time.Sleep(time.Second * 3)
-	err := s.ClusterMetadataManager.PruneClusterMembership(s.ctx, &p.PruneClusterMembershipRequest{MaxRecordsPruned: 100})
-	s.Nil(err)
-
 	expectedIds := make(map[string]int, 100)
 	for i := 0; i < 100; i++ {
-		hostID := primitives.NewUUID().Downcast()
-		expectedIds[primitives.UUIDString(hostID)]++
+		hostID := uuid.New()
+
+		expectedIds[hostID.String()]++
+		hostIDBytes, err := hostID.MarshalBinary()
+		s.NoError(err)
+
 		req := &p.UpsertClusterMembershipRequest{
-			HostID:       hostID,
+			HostID:       hostIDBytes,
 			RPCAddress:   net.ParseIP("127.0.0.2"),
 			RPCPort:      123,
 			Role:         p.Frontend,
@@ -123,7 +103,7 @@ func (s *ClusterMetadataManagerSuite) TestClusterMembershipUpsertCanPageRead() {
 			RecordExpiry: 3 * time.Second,
 		}
 
-		err := s.ClusterMetadataManager.UpsertClusterMembership(s.ctx, req)
+		err = s.ClusterMetadataManager.UpsertClusterMembership(s.ctx, req)
 		s.NoError(err)
 	}
 
@@ -134,7 +114,9 @@ func (s *ClusterMetadataManagerSuite) TestClusterMembershipUpsertCanPageRead() {
 		s.NoError(err)
 		nextPageToken = resp.NextPageToken
 		for _, member := range resp.ActiveMembers {
-			expectedIds[primitives.UUIDString(member.HostID)]--
+			hostID, err := uuid.FromBytes(member.HostID)
+			s.NoError(err)
+			expectedIds[hostID.String()]--
 			hostCount++
 		}
 
@@ -148,9 +130,7 @@ func (s *ClusterMetadataManagerSuite) TestClusterMembershipUpsertCanPageRead() {
 		s.Zero(val, "identifier was either not found in db, or shouldn't be there - "+id)
 	}
 
-	time.Sleep(time.Second * 3)
-	err = s.ClusterMetadataManager.PruneClusterMembership(s.ctx, &p.PruneClusterMembershipRequest{MaxRecordsPruned: 1000})
-	s.NoError(err)
+	s.waitForPrune(5 * time.Second)
 }
 
 func (s *ClusterMetadataManagerSuite) validateUpsert(req *p.UpsertClusterMembershipRequest, resp *p.GetClusterMembersResponse, err error) {
@@ -170,8 +150,10 @@ func (s *ClusterMetadataManagerSuite) validateUpsert(req *p.UpsertClusterMembers
 // TestClusterMembershipReadFiltersCorrectly verifies that we can UpsertClusterMembership and read our result using filters
 func (s *ClusterMetadataManagerSuite) TestClusterMembershipReadFiltersCorrectly() {
 	now := time.Now().UTC()
+	hostID, err := uuid.New().MarshalBinary()
+	s.NoError(err)
 	req := &p.UpsertClusterMembershipRequest{
-		HostID:       []byte{0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1},
+		HostID:       hostID,
 		RPCAddress:   net.ParseIP("127.0.0.2"),
 		RPCPort:      123,
 		Role:         p.Frontend,
@@ -179,7 +161,7 @@ func (s *ClusterMetadataManagerSuite) TestClusterMembershipReadFiltersCorrectly(
 		RecordExpiry: time.Second * 4,
 	}
 
-	err := s.ClusterMetadataManager.UpsertClusterMembership(s.ctx, req)
+	err = s.ClusterMetadataManager.UpsertClusterMembership(s.ctx, req)
 	s.Nil(err)
 
 	resp, err := s.ClusterMetadataManager.GetClusterMembers(
@@ -223,16 +205,15 @@ func (s *ClusterMetadataManagerSuite) TestClusterMembershipReadFiltersCorrectly(
 	)
 
 	s.validateUpsert(req, resp, err)
-
-	time.Sleep(time.Second * 3)
-	err = s.ClusterMetadataManager.PruneClusterMembership(s.ctx, &p.PruneClusterMembershipRequest{MaxRecordsPruned: 1000})
-	s.NoError(err)
+	s.waitForPrune(5 * time.Second)
 }
 
 // TestClusterMembershipUpsertExpiresCorrectly verifies RecordExpiry functions properly for ClusterMembership records
 func (s *ClusterMetadataManagerSuite) TestClusterMembershipUpsertExpiresCorrectly() {
+	hostID, err := uuid.New().MarshalBinary()
+	s.NoError(err)
 	req := &p.UpsertClusterMembershipRequest{
-		HostID:       uuid.NewUUID(),
+		HostID:       hostID,
 		RPCAddress:   net.ParseIP("127.0.0.2"),
 		RPCPort:      123,
 		Role:         p.Frontend,
@@ -240,7 +221,7 @@ func (s *ClusterMetadataManagerSuite) TestClusterMembershipUpsertExpiresCorrectl
 		RecordExpiry: time.Second,
 	}
 
-	err := s.ClusterMetadataManager.UpsertClusterMembership(s.ctx, req)
+	err = s.ClusterMetadataManager.UpsertClusterMembership(s.ctx, req)
 	s.NoError(err)
 
 	err = s.ClusterMetadataManager.PruneClusterMembership(s.ctx, &p.PruneClusterMembershipRequest{MaxRecordsPruned: 100})
@@ -263,25 +244,35 @@ func (s *ClusterMetadataManagerSuite) TestClusterMembershipUpsertExpiresCorrectl
 	s.Equal(resp.ActiveMembers[0].HostID, req.HostID)
 	s.Equal(resp.ActiveMembers[0].Role, req.Role)
 
-	time.Sleep(time.Second * 2)
+	s.waitForPrune(5 * time.Second)
+}
 
-	err = s.ClusterMetadataManager.PruneClusterMembership(s.ctx, &p.PruneClusterMembershipRequest{MaxRecordsPruned: 100})
-	s.Nil(err)
+// waitForPrune waits up for the persistence backend to prune all records. Some persistence backends
+// may not remove TTL'd entries at the exact instant they should expire, so we allow some timing flexibility here.
+func (s *ClusterMetadataManagerSuite) waitForPrune(waitFor time.Duration) {
+	s.Eventually(func() bool {
+		err := s.ClusterMetadataManager.PruneClusterMembership(s.ctx, &p.PruneClusterMembershipRequest{MaxRecordsPruned: 100})
+		s.Nil(err)
 
-	resp, err = s.ClusterMetadataManager.GetClusterMembers(
-		s.ctx,
-		&p.GetClusterMembersRequest{LastHeartbeatWithin: time.Minute * 10},
-	)
+		resp, err := s.ClusterMetadataManager.GetClusterMembers(
+			s.ctx,
+			&p.GetClusterMembersRequest{LastHeartbeatWithin: time.Minute * 10},
+		)
+		s.NoError(err)
+		s.NotNil(resp)
+		return len(resp.ActiveMembers) == 0
 
-	s.Nil(err)
-	s.NotNil(resp)
-	s.Empty(resp.ActiveMembers)
+	},
+		waitFor,
+		500*time.Millisecond)
 }
 
 // TestClusterMembershipUpsertInvalidExpiry verifies we cannot specify a non-positive RecordExpiry duration
 func (s *ClusterMetadataManagerSuite) TestClusterMembershipUpsertInvalidExpiry() {
+	hostID, err := uuid.New().MarshalBinary()
+	s.NoError(err)
 	req := &p.UpsertClusterMembershipRequest{
-		HostID:       []byte{0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1},
+		HostID:       hostID,
 		RPCAddress:   net.ParseIP("127.0.0.2"),
 		RPCPort:      123,
 		Role:         p.Frontend,
@@ -289,7 +280,7 @@ func (s *ClusterMetadataManagerSuite) TestClusterMembershipUpsertInvalidExpiry()
 		RecordExpiry: time.Second * 0,
 	}
 
-	err := s.ClusterMetadataManager.UpsertClusterMembership(s.ctx, req)
+	err = s.ClusterMetadataManager.UpsertClusterMembership(s.ctx, req)
 	s.NotNil(err)
 	s.IsType(err, p.ErrInvalidMembershipExpiry)
 }

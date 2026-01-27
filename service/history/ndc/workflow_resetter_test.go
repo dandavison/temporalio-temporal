@@ -1,44 +1,27 @@
-// The MIT License
-//
-// Copyright (c) 2020 Temporal Technologies Inc.  All rights reserved.
-//
-// Copyright (c) 2020 Uber Technologies, Inc.
-//
-// Permission is hereby granted, free of charge, to any person obtaining a copy
-// of this software and associated documentation files (the "Software"), to deal
-// in the Software without restriction, including without limitation the rights
-// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-// copies of the Software, and to permit persons to whom the Software is
-// furnished to do so, subject to the following conditions:
-//
-// The above copyright notice and this permission notice shall be included in
-// all copies or substantial portions of the Software.
-//
-// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
-// THE SOFTWARE.
-
 package ndc
 
 import (
 	"context"
+	"slices"
 	"testing"
 	"time"
 
-	"github.com/pborman/uuid"
+	"github.com/google/uuid"
 	"github.com/stretchr/testify/require"
 	"github.com/stretchr/testify/suite"
 	commonpb "go.temporal.io/api/common/v1"
 	enumspb "go.temporal.io/api/enums/v1"
+	failurepb "go.temporal.io/api/failure/v1"
 	historypb "go.temporal.io/api/history/v1"
 	taskqueuepb "go.temporal.io/api/taskqueue/v1"
 	updatepb "go.temporal.io/api/update/v1"
+	workflowpb "go.temporal.io/api/workflow/v1"
+	"go.temporal.io/api/workflowservice/v1"
+	clockspb "go.temporal.io/server/api/clock/v1"
 	historyspb "go.temporal.io/server/api/history/v1"
+	"go.temporal.io/server/api/historyservice/v1"
 	persistencespb "go.temporal.io/server/api/persistence/v1"
+	"go.temporal.io/server/chasm"
 	"go.temporal.io/server/common"
 	"go.temporal.io/server/common/collection"
 	"go.temporal.io/server/common/definition"
@@ -54,6 +37,7 @@ import (
 	"go.temporal.io/server/components/nexusoperations"
 	"go.temporal.io/server/service/history/consts"
 	"go.temporal.io/server/service/history/hsm"
+	historyi "go.temporal.io/server/service/history/interfaces"
 	"go.temporal.io/server/service/history/shard"
 	"go.temporal.io/server/service/history/tests"
 	"go.temporal.io/server/service/history/workflow"
@@ -83,6 +67,11 @@ type (
 
 		workflowResetter *workflowResetterImpl
 	}
+)
+
+var (
+	testIdentity      = "test identity"
+	testRequestReason = "test request reason"
 )
 
 func TestWorkflowResetterSuite(t *testing.T) {
@@ -124,9 +113,9 @@ func (s *workflowResetterSuite) SetupTest() {
 
 	s.namespaceID = tests.NamespaceID
 	s.workflowID = "some random workflow ID"
-	s.baseRunID = uuid.New()
-	s.currentRunID = uuid.New()
-	s.resetRunID = uuid.New()
+	s.baseRunID = uuid.NewString()
+	s.currentRunID = uuid.NewString()
+	s.resetRunID = uuid.NewString()
 }
 
 func (s *workflowResetterSuite) TearDownTest() {
@@ -137,14 +126,18 @@ func (s *workflowResetterSuite) TearDownTest() {
 func (s *workflowResetterSuite) TestPersistToDB_CurrentTerminated() {
 	currentWorkflow := NewMockWorkflow(s.controller)
 	currentReleaseCalled := false
-	currentContext := workflow.NewMockContext(s.controller)
-	currentMutableState := workflow.NewMockMutableState(s.controller)
-	var currentReleaseFn wcache.ReleaseCacheFunc = func(error) { currentReleaseCalled = true }
+	currentContext := historyi.NewMockWorkflowContext(s.controller)
+	currentMutableState := historyi.NewMockMutableState(s.controller)
+	var currentReleaseFn historyi.ReleaseWorkflowContextFunc = func(error) { currentReleaseCalled = true }
 	currentWorkflow.EXPECT().GetContext().Return(currentContext).AnyTimes()
 	currentWorkflow.EXPECT().GetMutableState().Return(currentMutableState).AnyTimes()
 	currentWorkflow.EXPECT().GetReleaseFn().Return(currentReleaseFn).AnyTimes()
+	currentMutableState.EXPECT().GetExecutionState().Return(&persistencespb.WorkflowExecutionState{
+		RunId: s.currentRunID,
+	}).AnyTimes()
 
 	currentMutableState.EXPECT().GetCurrentVersion().Return(int64(0)).AnyTimes()
+	currentMutableState.EXPECT().IsWorkflow().Return(true).AnyTimes()
 	currentNewEventsSize := int64(3444)
 	currentMutation := &persistence.WorkflowMutation{
 		ExecutionInfo: &persistencespb.WorkflowExecutionInfo{
@@ -168,9 +161,9 @@ func (s *workflowResetterSuite) TestPersistToDB_CurrentTerminated() {
 
 	resetWorkflow := NewMockWorkflow(s.controller)
 	resetReleaseCalled := false
-	resetContext := workflow.NewMockContext(s.controller)
-	resetMutableState := workflow.NewMockMutableState(s.controller)
-	var tarGetReleaseFn wcache.ReleaseCacheFunc = func(error) { resetReleaseCalled = true }
+	resetContext := historyi.NewMockWorkflowContext(s.controller)
+	resetMutableState := historyi.NewMockMutableState(s.controller)
+	var tarGetReleaseFn historyi.ReleaseWorkflowContextFunc = func(error) { resetReleaseCalled = true }
 	resetWorkflow.EXPECT().GetContext().Return(resetContext).AnyTimes()
 	resetWorkflow.EXPECT().GetMutableState().Return(resetMutableState).AnyTimes()
 	resetWorkflow.EXPECT().GetReleaseFn().Return(tarGetReleaseFn).AnyTimes()
@@ -197,21 +190,24 @@ func (s *workflowResetterSuite) TestPersistToDB_CurrentTerminated() {
 		}},
 	}}
 	resetMutableState.EXPECT().CloseTransactionAsSnapshot(
-		workflow.TransactionPolicyActive,
+		context.Background(),
+		historyi.TransactionPolicyActive,
 	).Return(resetSnapshot, resetEventsSeq, nil)
 
 	s.mockTransaction.EXPECT().UpdateWorkflowExecution(
 		gomock.Any(),
 		persistence.UpdateWorkflowModeUpdateCurrent,
+		chasm.WorkflowArchetypeID,
 		int64(0),
 		currentMutation,
 		currentEventsSeq,
 		util.Ptr(int64(0)),
 		resetSnapshot,
 		resetEventsSeq,
+		true, // isWorkflow
 	).Return(currentNewEventsSize, resetNewEventsSize, nil)
 
-	err := s.workflowResetter.persistToDB(context.Background(), currentWorkflow, currentMutation, currentEventsSeq, resetWorkflow)
+	err := s.workflowResetter.persistToDB(context.Background(), currentWorkflow, currentWorkflow, currentMutation, currentEventsSeq, resetWorkflow)
 	s.NoError(err)
 	// persistToDB function is not charged of releasing locks
 	s.False(currentReleaseCalled)
@@ -219,13 +215,11 @@ func (s *workflowResetterSuite) TestPersistToDB_CurrentTerminated() {
 }
 
 func (s *workflowResetterSuite) TestPersistToDB_CurrentNotTerminated() {
-	currentCloseVersion := int64(1234)
-
 	currentWorkflow := NewMockWorkflow(s.controller)
 	currentReleaseCalled := false
-	currentContext := workflow.NewMockContext(s.controller)
-	currentMutableState := workflow.NewMockMutableState(s.controller)
-	var currentReleaseFn wcache.ReleaseCacheFunc = func(error) { currentReleaseCalled = true }
+	currentContext := historyi.NewMockWorkflowContext(s.controller)
+	currentMutableState := historyi.NewMockMutableState(s.controller)
+	var currentReleaseFn historyi.ReleaseWorkflowContextFunc = func(error) { currentReleaseCalled = true }
 	currentWorkflow.EXPECT().GetContext().Return(currentContext).AnyTimes()
 	currentWorkflow.EXPECT().GetMutableState().Return(currentMutableState).AnyTimes()
 	currentWorkflow.EXPECT().GetReleaseFn().Return(currentReleaseFn).AnyTimes()
@@ -233,13 +227,18 @@ func (s *workflowResetterSuite) TestPersistToDB_CurrentNotTerminated() {
 		RunId: s.currentRunID,
 	}).AnyTimes()
 
-	currentMutableState.EXPECT().GetCloseVersion().Return(currentCloseVersion, nil).AnyTimes()
+	currentMutation := &persistence.WorkflowMutation{}
+	currentEventsSeq := []*persistence.WorkflowEvents{{}}
+	currentMutableState.EXPECT().GetCurrentVersion().Return(int64(0)).AnyTimes()
+	currentMutableState.EXPECT().IsWorkflow().Return(true).AnyTimes()
+	currentMutableState.EXPECT().CloseTransactionAsMutation(context.Background(), historyi.TransactionPolicyActive).Return(currentMutation, currentEventsSeq, nil)
 
 	resetWorkflow := NewMockWorkflow(s.controller)
 	resetReleaseCalled := false
-	resetContext := workflow.NewMockContext(s.controller)
-	resetMutableState := workflow.NewMockMutableState(s.controller)
-	var tarGetReleaseFn wcache.ReleaseCacheFunc = func(error) { resetReleaseCalled = true }
+	resetContext := historyi.NewMockWorkflowContext(s.controller)
+	resetMutableState := historyi.NewMockMutableState(s.controller)
+	resetMutableState.EXPECT().GetCurrentVersion().Return(int64(0)).AnyTimes()
+	var tarGetReleaseFn historyi.ReleaseWorkflowContextFunc = func(error) { resetReleaseCalled = true }
 	resetWorkflow.EXPECT().GetContext().Return(resetContext).AnyTimes()
 	resetWorkflow.EXPECT().GetMutableState().Return(resetMutableState).AnyTimes()
 	resetWorkflow.EXPECT().GetReleaseFn().Return(tarGetReleaseFn).AnyTimes()
@@ -257,20 +256,24 @@ func (s *workflowResetterSuite) TestPersistToDB_CurrentNotTerminated() {
 		}},
 	}}
 	resetMutableState.EXPECT().CloseTransactionAsSnapshot(
-		workflow.TransactionPolicyActive,
+		context.Background(),
+		historyi.TransactionPolicyActive,
 	).Return(resetSnapshot, resetEventsSeq, nil)
-	resetContext.EXPECT().CreateWorkflowExecution(
+
+	s.mockTransaction.EXPECT().UpdateWorkflowExecution(
 		gomock.Any(),
-		s.mockShard,
-		persistence.CreateWorkflowModeUpdateCurrent,
-		s.currentRunID,
-		currentCloseVersion,
-		resetMutableState,
+		persistence.UpdateWorkflowModeUpdateCurrent,
+		chasm.WorkflowArchetypeID,
+		int64(0),
+		currentMutation,
+		currentEventsSeq,
+		util.Ptr(int64(0)),
 		resetSnapshot,
 		resetEventsSeq,
-	).Return(nil)
+		true, // isWorkflow
+	).Return(int64(0), int64(0), nil)
 
-	err := s.workflowResetter.persistToDB(context.Background(), currentWorkflow, nil, nil, resetWorkflow)
+	err := s.workflowResetter.persistToDB(context.Background(), currentWorkflow, currentWorkflow, nil, nil, resetWorkflow)
 	s.NoError(err)
 	// persistToDB function is not charged of releasing locks
 	s.False(currentReleaseCalled)
@@ -284,9 +287,13 @@ func (s *workflowResetterSuite) TestReplayResetWorkflow() {
 	baseRebuildLastEventVersion := int64(12)
 
 	resetBranchToken := []byte("some random reset branch token")
-	resetRequestID := uuid.New()
-	resetHistorySize := int64(4411)
-	resetMutableState := workflow.NewMockMutableState(s.controller)
+	resetRequestID := uuid.NewString()
+	resetStats := RebuildStats{
+		HistorySize:          4411,
+		ExternalPayloadSize:  1234,
+		ExternalPayloadCount: 56,
+	}
+	resetMutableState := historyi.NewMockMutableState(s.controller)
 
 	s.mockExecutionMgr.EXPECT().ForkHistoryBranch(gomock.Any(), gomock.Any()).Return(
 		&persistence.ForkHistoryBranchResponse{NewBranchToken: resetBranchToken}, nil,
@@ -310,13 +317,15 @@ func (s *workflowResetterSuite) TestReplayResetWorkflow() {
 		),
 		resetBranchToken,
 		resetRequestID,
-	).Return(resetMutableState, resetHistorySize, nil)
+	).Return(resetMutableState, resetStats, nil)
 	resetMutableState.EXPECT().SetBaseWorkflow(
 		s.baseRunID,
 		baseRebuildLastEventID,
 		baseRebuildLastEventVersion,
 	)
-	resetMutableState.EXPECT().AddHistorySize(resetHistorySize)
+	resetMutableState.EXPECT().AddHistorySize(resetStats.HistorySize)
+	resetMutableState.EXPECT().AddExternalPayloadSize(resetStats.ExternalPayloadSize)
+	resetMutableState.EXPECT().AddExternalPayloadCount(resetStats.ExternalPayloadCount)
 
 	resetWorkflow, err := s.workflowResetter.replayResetWorkflow(
 		ctx,
@@ -334,13 +343,13 @@ func (s *workflowResetterSuite) TestReplayResetWorkflow() {
 }
 
 func (s *workflowResetterSuite) TestFailWorkflowTask_NoWorkflowTask() {
-	baseRunID := uuid.New()
+	baseRunID := uuid.NewString()
 	baseRebuildLastEventID := int64(1234)
 	baseRebuildLastEventVersion := int64(5678)
-	resetRunID := uuid.New()
+	resetRunID := uuid.NewString()
 	resetReason := "some random reset reason"
 
-	mutableState := workflow.NewMockMutableState(s.controller)
+	mutableState := historyi.NewMockMutableState(s.controller)
 	mutableState.EXPECT().GetPendingWorkflowTask().Return(nil).AnyTimes()
 
 	err := s.workflowResetter.failWorkflowTask(
@@ -355,23 +364,23 @@ func (s *workflowResetterSuite) TestFailWorkflowTask_NoWorkflowTask() {
 }
 
 func (s *workflowResetterSuite) TestFailWorkflowTask_WorkflowTaskScheduled() {
-	baseRunID := uuid.New()
+	baseRunID := uuid.NewString()
 	baseRebuildLastEventID := int64(1234)
 	baseRebuildLastEventVersion := int64(5678)
-	resetRunID := uuid.New()
+	resetRunID := uuid.NewString()
 	resetReason := "some random reset reason"
 
-	mutableState := workflow.NewMockMutableState(s.controller)
-	workflowTaskSchedule := &workflow.WorkflowTaskInfo{
+	mutableState := historyi.NewMockMutableState(s.controller)
+	workflowTaskSchedule := &historyi.WorkflowTaskInfo{
 		ScheduledEventID: baseRebuildLastEventID - 12,
 		StartedEventID:   common.EmptyEventID,
-		RequestID:        uuid.New(),
+		RequestID:        uuid.NewString(),
 		TaskQueue: &taskqueuepb.TaskQueue{
 			Name: "random task queue name",
 			Kind: enumspb.TASK_QUEUE_KIND_NORMAL,
 		},
 	}
-	workflowTaskStart := &workflow.WorkflowTaskInfo{
+	workflowTaskStart := &historyi.WorkflowTaskInfo{
 		ScheduledEventID: workflowTaskSchedule.ScheduledEventID,
 		StartedEventID:   workflowTaskSchedule.ScheduledEventID + 1,
 		RequestID:        workflowTaskSchedule.RequestID,
@@ -385,7 +394,9 @@ func (s *workflowResetterSuite) TestFailWorkflowTask_WorkflowTaskScheduled() {
 		consts.IdentityHistoryService,
 		nil,
 		nil,
+		nil,
 		true,
+		nil,
 	).Return(&historypb.HistoryEvent{}, workflowTaskStart, nil)
 	mutableState.EXPECT().AddWorkflowTaskFailedEvent(
 		workflowTaskStart,
@@ -411,17 +422,17 @@ func (s *workflowResetterSuite) TestFailWorkflowTask_WorkflowTaskScheduled() {
 }
 
 func (s *workflowResetterSuite) TestFailWorkflowTask_WorkflowTaskStarted() {
-	baseRunID := uuid.New()
+	baseRunID := uuid.NewString()
 	baseRebuildLastEventID := int64(1234)
 	baseRebuildLastEventVersion := int64(5678)
-	resetRunID := uuid.New()
+	resetRunID := uuid.NewString()
 	resetReason := "some random reset reason"
 
-	mutableState := workflow.NewMockMutableState(s.controller)
-	workflowTask := &workflow.WorkflowTaskInfo{
+	mutableState := historyi.NewMockMutableState(s.controller)
+	workflowTask := &historyi.WorkflowTaskInfo{
 		ScheduledEventID: baseRebuildLastEventID - 12,
 		StartedEventID:   baseRebuildLastEventID - 10,
-		RequestID:        uuid.New(),
+		RequestID:        uuid.NewString(),
 		TaskQueue: &taskqueuepb.TaskQueue{
 			Name: "random task queue name",
 			Kind: enumspb.TASK_QUEUE_KIND_NORMAL,
@@ -455,7 +466,7 @@ func (s *workflowResetterSuite) TestFailInflightActivity() {
 	now := time.Now().UTC()
 	terminateReason := "some random termination reason"
 
-	mutableState := workflow.NewMockMutableState(s.controller)
+	mutableState := historyi.NewMockMutableState(s.controller)
 
 	activity1 := &persistencespb.ActivityInfo{
 		Version:              12,
@@ -487,13 +498,7 @@ func (s *workflowResetterSuite) TestFailInflightActivity() {
 		activity1.LastWorkerVersionStamp,
 	).Return(&historypb.HistoryEvent{}, nil)
 
-	mutableState.EXPECT().UpdateActivity(&persistencespb.ActivityInfo{
-		Version:            activity2.Version,
-		ScheduledEventId:   activity2.ScheduledEventId,
-		ScheduledTime:      timestamppb.New(now),
-		FirstScheduledTime: timestamppb.New(now),
-		StartedEventId:     activity2.StartedEventId,
-	}).Return(nil)
+	mutableState.EXPECT().UpdateActivity(gomock.Any(), gomock.Any()).Return(nil)
 
 	err := s.workflowResetter.failInflightActivity(now, mutableState, terminateReason)
 	s.NoError(err)
@@ -523,7 +528,7 @@ func (s *workflowResetterSuite) TestGenerateBranchToken() {
 }
 
 func (s *workflowResetterSuite) TestTerminateWorkflow() {
-	workflowTask := &workflow.WorkflowTaskInfo{
+	workflowTask := &historyi.WorkflowTaskInfo{
 		Version:          123,
 		ScheduledEventID: 1234,
 		StartedEventID:   5678,
@@ -531,7 +536,7 @@ func (s *workflowResetterSuite) TestTerminateWorkflow() {
 	wtFailedEventID := int64(666)
 	terminateReason := "some random terminate reason"
 
-	mutableState := workflow.NewMockMutableState(s.controller)
+	mutableState := historyi.NewMockMutableState(s.controller)
 
 	randomEventID := int64(2208)
 	mutableState.EXPECT().GetNextEventID().Return(randomEventID).AnyTimes() // This doesn't matter, GetNextEventID is not used if there is started WT.
@@ -602,7 +607,7 @@ func (s *workflowResetterSuite) TestReapplyContinueAsNewWorkflowEvents_WithOutCo
 		NextPageToken: nil,
 	}, nil)
 
-	mutableState := workflow.NewMockMutableState(s.controller)
+	mutableState := historyi.NewMockMutableState(s.controller)
 	currentWorkflow := NewMockWorkflow(s.controller)
 	smReg := hsm.NewRegistry()
 	s.NoError(workflow.RegisterStateMachine(smReg))
@@ -621,6 +626,7 @@ func (s *workflowResetterSuite) TestReapplyContinueAsNewWorkflowEvents_WithOutCo
 		baseFirstEventID,
 		baseNextEventID,
 		nil,
+		false, // allowResetWithPendingChildren
 	)
 	s.NoError(err)
 	s.Equal(s.baseRunID, lastVisitedRunID)
@@ -632,7 +638,7 @@ func (s *workflowResetterSuite) TestReapplyContinueAsNewWorkflowEvents_WithConti
 	baseNextEventID := int64(456)
 	baseBranchToken := []byte("some random base branch token")
 
-	newRunID := uuid.New()
+	newRunID := uuid.NewString()
 	newFirstEventID := common.FirstEventID
 	newNextEventID := int64(6)
 	newBranchToken := []byte("some random new branch token")
@@ -713,13 +719,14 @@ func (s *workflowResetterSuite) TestReapplyContinueAsNewWorkflowEvents_WithConti
 		NextPageToken: nil,
 	}, nil)
 
-	resetContext := workflow.NewMockContext(s.controller)
+	resetContext := historyi.NewMockWorkflowContext(s.controller)
 	resetContext.EXPECT().Lock(gomock.Any(), locks.PriorityHigh).Return(nil)
 	resetContext.EXPECT().Unlock()
 	resetContext.EXPECT().IsDirty().Return(false).AnyTimes()
-	resetMutableState := workflow.NewMockMutableState(s.controller)
+	resetMutableState := historyi.NewMockMutableState(s.controller)
 	resetContextCacheKey := wcache.Key{
 		WorkflowKey: definition.NewWorkflowKey(s.namespaceID.String(), s.workflowID, newRunID),
+		ArchetypeID: chasm.WorkflowArchetypeID,
 		ShardUUID:   s.mockShard.GetOwner(),
 	}
 	resetContext.EXPECT().LoadMutableState(gomock.Any(), s.mockShard).Return(resetMutableState, nil)
@@ -728,7 +735,7 @@ func (s *workflowResetterSuite) TestReapplyContinueAsNewWorkflowEvents_WithConti
 	err := wcache.PutContextIfNotExist(s.workflowResetter.workflowCache, resetContextCacheKey, resetContext)
 	s.NoError(err)
 
-	mutableState := workflow.NewMockMutableState(s.controller)
+	mutableState := historyi.NewMockMutableState(s.controller)
 	mutableState.EXPECT().GetWorkflowKey().Return(definition.WorkflowKey{RunID: "random-run-id"})
 	currentWorkflow := NewMockWorkflow(s.controller)
 	currentWorkflow.EXPECT().GetMutableState().Return(mutableState)
@@ -749,6 +756,7 @@ func (s *workflowResetterSuite) TestReapplyContinueAsNewWorkflowEvents_WithConti
 		baseFirstEventID,
 		baseNextEventID,
 		nil,
+		false, // allowResetWithPendingChildren
 	)
 	s.NoError(err)
 	s.Equal(newRunID, lastVisitedRunID)
@@ -759,7 +767,7 @@ func (s *workflowResetterSuite) TestReapplyWorkflowEvents() {
 	nextEventID := int64(6)
 	branchToken := []byte("some random branch token")
 
-	newRunID := uuid.New()
+	newRunID := uuid.NewString()
 	event1 := &historypb.HistoryEvent{
 		EventId:    1,
 		EventType:  enumspb.EVENT_TYPE_WORKFLOW_EXECUTION_STARTED,
@@ -801,7 +809,7 @@ func (s *workflowResetterSuite) TestReapplyWorkflowEvents() {
 		NextPageToken: nil,
 	}, nil)
 
-	mutableState := workflow.NewMockMutableState(s.controller)
+	mutableState := historyi.NewMockMutableState(s.controller)
 	smReg := hsm.NewRegistry()
 	s.NoError(workflow.RegisterStateMachine(smReg))
 	root, err := hsm.NewRoot(smReg, workflow.StateMachineType, nil, make(map[string]*persistencespb.StateMachineMap), nil)
@@ -815,9 +823,215 @@ func (s *workflowResetterSuite) TestReapplyWorkflowEvents() {
 		nextEventID,
 		branchToken,
 		nil,
+		false, // allowResetWithPendingChildren
+		map[string]*persistencespb.ResetChildInfo{},
 	)
 	s.NoError(err)
 	s.Equal(newRunID, nextRunID)
+}
+
+// TestReapplyEvents_WithPendingChildren tests applying events related to child workflow.
+// It asserts that reapplyEvents() function checks mutableState.GetChildExecutionInfo() before applying the event.
+func (s *workflowResetterSuite) TestReapplyEvents_WithPendingChildren() {
+	testChildClock := &clockspb.VectorClock{ShardId: 1, Clock: 10, ClusterId: 1}
+	testInitiatedEventID := int64(123)
+	testChildWFType := &commonpb.WorkflowType{Name: "TEST-CHILD-WF-TYPE"}
+	testChildWFExecution := &commonpb.WorkflowExecution{
+		WorkflowId: uuid.NewString(),
+		RunId:      uuid.NewString(),
+	}
+
+	testStartEventHeader := &commonpb.Header{}
+	startedEvent := &historypb.HistoryEvent{
+		EventType: enumspb.EVENT_TYPE_CHILD_WORKFLOW_EXECUTION_STARTED,
+		Attributes: &historypb.HistoryEvent_ChildWorkflowExecutionStartedEventAttributes{ChildWorkflowExecutionStartedEventAttributes: &historypb.ChildWorkflowExecutionStartedEventAttributes{
+			InitiatedEventId:  testInitiatedEventID,
+			WorkflowExecution: testChildWFExecution,
+			WorkflowType:      testChildWFType,
+			Header:            testStartEventHeader,
+		}},
+	}
+	testCompletedEventResult := &commonpb.Payloads{}
+	completedEvent := &historypb.HistoryEvent{
+		EventType: enumspb.EVENT_TYPE_CHILD_WORKFLOW_EXECUTION_COMPLETED,
+		Attributes: &historypb.HistoryEvent_ChildWorkflowExecutionCompletedEventAttributes{ChildWorkflowExecutionCompletedEventAttributes: &historypb.ChildWorkflowExecutionCompletedEventAttributes{
+			InitiatedEventId:  testInitiatedEventID,
+			WorkflowExecution: testChildWFExecution,
+			Result:            testCompletedEventResult,
+		}},
+	}
+	startFailedEvent := &historypb.HistoryEvent{
+		EventType: enumspb.EVENT_TYPE_START_CHILD_WORKFLOW_EXECUTION_FAILED,
+		Attributes: &historypb.HistoryEvent_StartChildWorkflowExecutionFailedEventAttributes{StartChildWorkflowExecutionFailedEventAttributes: &historypb.StartChildWorkflowExecutionFailedEventAttributes{
+			InitiatedEventId: testInitiatedEventID,
+			WorkflowId:       testChildWFExecution.WorkflowId,
+			Cause:            enumspb.START_CHILD_WORKFLOW_EXECUTION_FAILED_CAUSE_NAMESPACE_NOT_FOUND,
+		}},
+	}
+	childExecutionFailedEvent := &historypb.HistoryEvent{
+		EventType: enumspb.EVENT_TYPE_CHILD_WORKFLOW_EXECUTION_FAILED,
+		Attributes: &historypb.HistoryEvent_ChildWorkflowExecutionFailedEventAttributes{ChildWorkflowExecutionFailedEventAttributes: &historypb.ChildWorkflowExecutionFailedEventAttributes{
+			InitiatedEventId:  testInitiatedEventID,
+			WorkflowExecution: testChildWFExecution,
+			Failure:           &failurepb.Failure{},
+			RetryState:        enumspb.RETRY_STATE_NON_RETRYABLE_FAILURE,
+		}},
+	}
+	childExecutionCancelledEvent := &historypb.HistoryEvent{
+		EventType: enumspb.EVENT_TYPE_CHILD_WORKFLOW_EXECUTION_CANCELED,
+		Attributes: &historypb.HistoryEvent_ChildWorkflowExecutionCanceledEventAttributes{ChildWorkflowExecutionCanceledEventAttributes: &historypb.ChildWorkflowExecutionCanceledEventAttributes{
+			InitiatedEventId:  testInitiatedEventID,
+			WorkflowExecution: testChildWFExecution,
+			Details:           &commonpb.Payloads{},
+		}},
+	}
+	childExecutionTimeoutEvent := &historypb.HistoryEvent{
+		EventType: enumspb.EVENT_TYPE_CHILD_WORKFLOW_EXECUTION_TIMED_OUT,
+		Attributes: &historypb.HistoryEvent_ChildWorkflowExecutionTimedOutEventAttributes{ChildWorkflowExecutionTimedOutEventAttributes: &historypb.ChildWorkflowExecutionTimedOutEventAttributes{
+			InitiatedEventId:  testInitiatedEventID,
+			WorkflowExecution: testChildWFExecution,
+			RetryState:        enumspb.RETRY_STATE_NON_RETRYABLE_FAILURE,
+		}},
+	}
+	childExecutionTerminatedEvent := &historypb.HistoryEvent{
+		EventType: enumspb.EVENT_TYPE_CHILD_WORKFLOW_EXECUTION_TERMINATED,
+		Attributes: &historypb.HistoryEvent_ChildWorkflowExecutionTerminatedEventAttributes{ChildWorkflowExecutionTerminatedEventAttributes: &historypb.ChildWorkflowExecutionTerminatedEventAttributes{
+			InitiatedEventId:  testInitiatedEventID,
+			WorkflowExecution: testChildWFExecution,
+		}},
+	}
+
+	testcases := []struct {
+		name   string
+		events []*historypb.HistoryEvent
+	}{
+		{name: "apply started event", events: []*historypb.HistoryEvent{startedEvent}},
+		{name: "apply completed event", events: []*historypb.HistoryEvent{completedEvent}},
+		{name: "apply start failed event", events: []*historypb.HistoryEvent{startFailedEvent}},
+		{name: "apply child failed event", events: []*historypb.HistoryEvent{childExecutionFailedEvent}},
+		{name: "apply child cancelled event", events: []*historypb.HistoryEvent{childExecutionCancelledEvent}},
+		{name: "apply child timeout event", events: []*historypb.HistoryEvent{childExecutionTimeoutEvent}},
+		{name: "apply child terminated event", events: []*historypb.HistoryEvent{childExecutionTerminatedEvent}},
+	}
+	resetcases := []struct {
+		name    string
+		isReset bool
+	}{
+		{name: "reset", isReset: true},
+		{name: "no reset", isReset: false},
+	}
+	for _, tcReset := range resetcases {
+		mutableState := historyi.NewMockMutableState(s.controller)
+		mutableState.EXPECT().GetChildExecutionInfo(testInitiatedEventID).
+			Times(len(testcases)). // GetChildExecutionInfo should be called exactly once for each test case.
+			Return(&persistencespb.ChildExecutionInfo{Clock: testChildClock}, true)
+
+		// Each of the events must be picked with the correct args exactly once.
+		mutableState.EXPECT().AddChildWorkflowExecutionStartedEvent(testChildWFExecution, testChildWFType, testInitiatedEventID, testStartEventHeader, testChildClock).Return(nil, nil).Times(1)
+		mutableState.EXPECT().AddChildWorkflowExecutionCompletedEvent(
+			testInitiatedEventID,
+			testChildWFExecution,
+			&historypb.WorkflowExecutionCompletedEventAttributes{Result: testCompletedEventResult},
+		).Return(nil, nil).Times(1)
+		mutableState.EXPECT().AddStartChildWorkflowExecutionFailedEvent(
+			testInitiatedEventID,
+			enumspb.START_CHILD_WORKFLOW_EXECUTION_FAILED_CAUSE_NAMESPACE_NOT_FOUND,
+			&historypb.StartChildWorkflowExecutionInitiatedEventAttributes{WorkflowId: testChildWFExecution.WorkflowId},
+		).Return(nil, nil).Times(1)
+		mutableState.EXPECT().AddChildWorkflowExecutionFailedEvent(
+			testInitiatedEventID,
+			testChildWFExecution,
+			&historypb.WorkflowExecutionFailedEventAttributes{Failure: &failurepb.Failure{}, RetryState: enumspb.RETRY_STATE_NON_RETRYABLE_FAILURE},
+		).Return(nil, nil).Times(1)
+		mutableState.EXPECT().AddChildWorkflowExecutionCanceledEvent(
+			testInitiatedEventID,
+			testChildWFExecution,
+			&historypb.WorkflowExecutionCanceledEventAttributes{Details: &commonpb.Payloads{}},
+		).Return(nil, nil).Times(1)
+		mutableState.EXPECT().AddChildWorkflowExecutionTimedOutEvent(
+			testInitiatedEventID,
+			testChildWFExecution,
+			&historypb.WorkflowExecutionTimedOutEventAttributes{RetryState: enumspb.RETRY_STATE_NON_RETRYABLE_FAILURE},
+		).Return(nil, nil).Times(1)
+		mutableState.EXPECT().AddChildWorkflowExecutionTerminatedEvent(
+			testInitiatedEventID,
+			testChildWFExecution,
+		).Return(nil, nil).Times(1)
+
+		for _, tc := range testcases {
+			s.Run(tc.name+" "+tcReset.name, func() {
+				_, err := reapplyEvents(context.Background(), mutableState, nil, nil, tc.events, nil, "", tcReset.isReset)
+				s.NoError(err)
+			})
+		}
+	}
+}
+
+// TestReapplyEvents_WithNoPendingChildren asserts that none of the child events are picked when there is no pending child correspondng to the init event ID.
+func (s *workflowResetterSuite) TestReapplyEvents_WithNoPendingChildren() {
+	testInitiatedEventID := int64(123)
+	startedEvent := &historypb.HistoryEvent{
+		EventType:  enumspb.EVENT_TYPE_CHILD_WORKFLOW_EXECUTION_STARTED,
+		Attributes: &historypb.HistoryEvent_ChildWorkflowExecutionStartedEventAttributes{ChildWorkflowExecutionStartedEventAttributes: &historypb.ChildWorkflowExecutionStartedEventAttributes{InitiatedEventId: testInitiatedEventID}},
+	}
+	completedEvent := &historypb.HistoryEvent{
+		EventType:  enumspb.EVENT_TYPE_CHILD_WORKFLOW_EXECUTION_COMPLETED,
+		Attributes: &historypb.HistoryEvent_ChildWorkflowExecutionCompletedEventAttributes{ChildWorkflowExecutionCompletedEventAttributes: &historypb.ChildWorkflowExecutionCompletedEventAttributes{InitiatedEventId: testInitiatedEventID}},
+	}
+	startFailedEvent := &historypb.HistoryEvent{
+		EventType:  enumspb.EVENT_TYPE_START_CHILD_WORKFLOW_EXECUTION_FAILED,
+		Attributes: &historypb.HistoryEvent_StartChildWorkflowExecutionFailedEventAttributes{StartChildWorkflowExecutionFailedEventAttributes: &historypb.StartChildWorkflowExecutionFailedEventAttributes{InitiatedEventId: testInitiatedEventID}},
+	}
+	childExecutionFailedEvent := &historypb.HistoryEvent{
+		EventType:  enumspb.EVENT_TYPE_CHILD_WORKFLOW_EXECUTION_FAILED,
+		Attributes: &historypb.HistoryEvent_ChildWorkflowExecutionFailedEventAttributes{ChildWorkflowExecutionFailedEventAttributes: &historypb.ChildWorkflowExecutionFailedEventAttributes{InitiatedEventId: testInitiatedEventID}},
+	}
+	childExecutionCancelledEvent := &historypb.HistoryEvent{
+		EventType:  enumspb.EVENT_TYPE_CHILD_WORKFLOW_EXECUTION_CANCELED,
+		Attributes: &historypb.HistoryEvent_ChildWorkflowExecutionCanceledEventAttributes{ChildWorkflowExecutionCanceledEventAttributes: &historypb.ChildWorkflowExecutionCanceledEventAttributes{InitiatedEventId: testInitiatedEventID}},
+	}
+	childExecutionTimeoutEvent := &historypb.HistoryEvent{
+		EventType:  enumspb.EVENT_TYPE_CHILD_WORKFLOW_EXECUTION_TIMED_OUT,
+		Attributes: &historypb.HistoryEvent_ChildWorkflowExecutionTimedOutEventAttributes{ChildWorkflowExecutionTimedOutEventAttributes: &historypb.ChildWorkflowExecutionTimedOutEventAttributes{InitiatedEventId: testInitiatedEventID}},
+	}
+	childExecutionTerminatedEvent := &historypb.HistoryEvent{
+		EventType:  enumspb.EVENT_TYPE_CHILD_WORKFLOW_EXECUTION_TERMINATED,
+		Attributes: &historypb.HistoryEvent_ChildWorkflowExecutionTerminatedEventAttributes{ChildWorkflowExecutionTerminatedEventAttributes: &historypb.ChildWorkflowExecutionTerminatedEventAttributes{InitiatedEventId: testInitiatedEventID}},
+	}
+
+	testCases := []struct {
+		name   string
+		events []*historypb.HistoryEvent
+	}{
+		{name: "apply started event", events: []*historypb.HistoryEvent{startedEvent}},
+		{name: "apply completed event", events: []*historypb.HistoryEvent{completedEvent}},
+		{name: "apply start failed event", events: []*historypb.HistoryEvent{startFailedEvent}},
+		{name: "apply child failed event", events: []*historypb.HistoryEvent{childExecutionFailedEvent}},
+		{name: "apply child cancelled event", events: []*historypb.HistoryEvent{childExecutionCancelledEvent}},
+		{name: "apply child timeout event", events: []*historypb.HistoryEvent{childExecutionTimeoutEvent}},
+		{name: "apply child terminated event", events: []*historypb.HistoryEvent{childExecutionTerminatedEvent}},
+	}
+	resetcases := []struct {
+		name    string
+		isReset bool
+	}{
+		{name: "reset", isReset: true},
+		{name: "no reset", isReset: false},
+	}
+	for _, tcReset := range resetcases {
+		mutableState := historyi.NewMockMutableState(s.controller)
+		// GetChildExecutionInfo should be called exactly once for each test case and none of the Add event methods must be called.
+		mutableState.EXPECT().GetChildExecutionInfo(testInitiatedEventID).
+			Times(len(testCases)).
+			Return(nil, false)
+
+		for _, tc := range testCases {
+			s.Run(tc.name+" "+tcReset.name, func() {
+				_, err := reapplyEvents(context.Background(), mutableState, nil, nil, tc.events, nil, "", tcReset.isReset)
+				s.NoError(err)
+			})
+		}
+	}
 }
 
 func (s *workflowResetterSuite) TestReapplyEvents() {
@@ -872,52 +1086,186 @@ func (s *workflowResetterSuite) TestReapplyEvents() {
 	}
 	// This event is not reapplied
 	event6 := &historypb.HistoryEvent{
-		EventId:   105,
+		EventId:   106,
 		EventType: enumspb.EVENT_TYPE_WORKFLOW_EXECUTION_UPDATE_COMPLETED,
 		Attributes: &historypb.HistoryEvent_WorkflowExecutionUpdateCompletedEventAttributes{
 			WorkflowExecutionUpdateCompletedEventAttributes: &historypb.WorkflowExecutionUpdateCompletedEventAttributes{},
 		},
 	}
-	events := []*historypb.HistoryEvent{event1, event2, event3, event4, event5, event6}
+	event7 := &historypb.HistoryEvent{
+		EventId:   107,
+		EventType: enumspb.EVENT_TYPE_WORKFLOW_EXECUTION_CANCEL_REQUESTED,
+		Attributes: &historypb.HistoryEvent_WorkflowExecutionCancelRequestedEventAttributes{
+			WorkflowExecutionCancelRequestedEventAttributes: &historypb.WorkflowExecutionCancelRequestedEventAttributes{
+				Cause:    testRequestReason,
+				Identity: testIdentity,
+			},
+		},
+	}
+	event8 := &historypb.HistoryEvent{
+		EventId:   108,
+		EventType: enumspb.EVENT_TYPE_WORKFLOW_EXECUTION_CANCEL_REQUESTED,
+		Attributes: &historypb.HistoryEvent_WorkflowExecutionCancelRequestedEventAttributes{
+			WorkflowExecutionCancelRequestedEventAttributes: &historypb.WorkflowExecutionCancelRequestedEventAttributes{
+				Cause:    "duplicated cancel cause",
+				Identity: "duplicated cancel identity",
+			},
+		},
+	}
+	event9 := &historypb.HistoryEvent{
+		EventId:   109,
+		EventType: enumspb.EVENT_TYPE_WORKFLOW_EXECUTION_TERMINATED,
+		Attributes: &historypb.HistoryEvent_WorkflowExecutionTerminatedEventAttributes{
+			WorkflowExecutionTerminatedEventAttributes: &historypb.WorkflowExecutionTerminatedEventAttributes{
+				Reason:   testRequestReason,
+				Details:  payloads.EncodeString("test details"),
+				Identity: testIdentity,
+			},
+		},
+	}
+	event10 := &historypb.HistoryEvent{
+		EventId:   110,
+		EventType: enumspb.EVENT_TYPE_WORKFLOW_EXECUTION_OPTIONS_UPDATED,
+		Attributes: &historypb.HistoryEvent_WorkflowExecutionOptionsUpdatedEventAttributes{
+			WorkflowExecutionOptionsUpdatedEventAttributes: &historypb.WorkflowExecutionOptionsUpdatedEventAttributes{
+				AttachedRequestId: "test attached request id",
+			},
+		},
+	}
+	// This event is not reapplied
+	event11 := &historypb.HistoryEvent{
+		EventId:   111,
+		EventType: enumspb.EVENT_TYPE_WORKFLOW_EXECUTION_TERMINATED,
+		Attributes: &historypb.HistoryEvent_WorkflowExecutionTerminatedEventAttributes{
+			WorkflowExecutionTerminatedEventAttributes: &historypb.WorkflowExecutionTerminatedEventAttributes{
+				Reason:   testRequestReason,
+				Details:  payloads.EncodeString("test details"),
+				Identity: consts.IdentityHistoryService,
+			},
+		},
+	}
+	// This event is not reapplied
+	event12 := &historypb.HistoryEvent{
+		EventId:   112,
+		EventType: enumspb.EVENT_TYPE_WORKFLOW_EXECUTION_TERMINATED,
+		Attributes: &historypb.HistoryEvent_WorkflowExecutionTerminatedEventAttributes{
+			WorkflowExecutionTerminatedEventAttributes: &historypb.WorkflowExecutionTerminatedEventAttributes{
+				Reason:   testRequestReason,
+				Details:  payloads.EncodeString("test details"),
+				Identity: consts.IdentityResetter,
+			},
+		},
+	}
+	events := []*historypb.HistoryEvent{event1, event2, event3, event4, event5, event6, event7, event8, event9, event10, event11, event12}
 
-	ms := workflow.NewMockMutableState(s.controller)
-
-	for _, event := range events {
-		switch event.GetEventType() {
-		case enumspb.EVENT_TYPE_WORKFLOW_EXECUTION_SIGNALED:
-			attr := event.GetWorkflowExecutionSignaledEventAttributes()
-			ms.EXPECT().AddWorkflowExecutionSignaled(
-				attr.GetSignalName(),
-				attr.GetInput(),
-				attr.GetIdentity(),
-				attr.GetHeader(),
-				attr.GetSkipGenerateWorkflowTask(),
-				event.Links,
-			).Return(&historypb.HistoryEvent{}, nil)
-		case enumspb.EVENT_TYPE_WORKFLOW_EXECUTION_UPDATE_ADMITTED:
-			attr := event.GetWorkflowExecutionUpdateAdmittedEventAttributes()
-			ms.EXPECT().AddWorkflowExecutionUpdateAdmittedEvent(
-				attr.GetRequest(),
-				enumspb.UPDATE_ADMITTED_EVENT_ORIGIN_UNSPECIFIED,
-			).Return(&historypb.HistoryEvent{}, nil)
-		case enumspb.EVENT_TYPE_WORKFLOW_EXECUTION_UPDATE_ACCEPTED:
-			attr := event.GetWorkflowExecutionUpdateAcceptedEventAttributes()
-			ms.EXPECT().AddWorkflowExecutionUpdateAdmittedEvent(
-				attr.GetAcceptedRequest(),
-				enumspb.UPDATE_ADMITTED_EVENT_ORIGIN_REAPPLY,
-			).Return(&historypb.HistoryEvent{}, nil)
-		}
+	testcases := []struct {
+		name     string
+		isReset  bool
+		expected []*historypb.HistoryEvent
+	}{
+		{
+			name:     "reset",
+			isReset:  true,
+			expected: []*historypb.HistoryEvent{event1, event3, event4, event5, event10},
+		},
+		{
+			name:     "not reset",
+			isReset:  false,
+			expected: []*historypb.HistoryEvent{event1, event3, event4, event5, event7, event8, event9, event10},
+		},
 	}
 
-	smReg := hsm.NewRegistry()
-	s.NoError(workflow.RegisterStateMachine(smReg))
-	root, err := hsm.NewRoot(smReg, workflow.StateMachineType, nil, make(map[string]*persistencespb.StateMachineMap), nil)
-	s.NoError(err)
-	ms.EXPECT().HSM().Return(root).AnyTimes()
+	ms := historyi.NewMockMutableState(s.controller)
 
-	_, err = reapplyEvents(context.Background(), ms, nil, smReg, events, nil, "")
-	s.NoError(err)
+	for _, tc := range testcases {
+		s.Run(tc.name, func() {
+			smReg := hsm.NewRegistry()
+			s.NoError(workflow.RegisterStateMachine(smReg))
+			root, err := hsm.NewRoot(smReg, workflow.StateMachineType, nil, make(map[string]*persistencespb.StateMachineMap), nil)
+			s.NoError(err)
+			ms.EXPECT().HSM().Return(root).AnyTimes()
+
+			for _, event := range events {
+				expected := slices.ContainsFunc(tc.expected, func(e *historypb.HistoryEvent) bool {
+					return e.GetEventId() == event.GetEventId()
+				})
+				if !expected {
+					continue
+				}
+				switch event.GetEventType() { // nolint:exhaustive
+				case enumspb.EVENT_TYPE_WORKFLOW_EXECUTION_OPTIONS_UPDATED:
+					attr := event.GetWorkflowExecutionOptionsUpdatedEventAttributes()
+					ms.EXPECT().AddWorkflowExecutionOptionsUpdatedEvent(
+						attr.GetVersioningOverride(),
+						attr.GetUnsetVersioningOverride(),
+						attr.GetAttachedRequestId(),
+						attr.GetAttachedCompletionCallbacks(),
+						event.Links,
+						attr.GetIdentity(),
+						attr.GetPriority(),
+					).Return(&historypb.HistoryEvent{}, nil)
+				case enumspb.EVENT_TYPE_WORKFLOW_EXECUTION_SIGNALED:
+					attr := event.GetWorkflowExecutionSignaledEventAttributes()
+					ms.EXPECT().AddWorkflowExecutionSignaled(
+						attr.GetSignalName(),
+						attr.GetInput(),
+						attr.GetIdentity(),
+						attr.GetHeader(),
+						event.Links,
+					).Return(&historypb.HistoryEvent{}, nil)
+				case enumspb.EVENT_TYPE_WORKFLOW_EXECUTION_UPDATE_ADMITTED:
+					attr := event.GetWorkflowExecutionUpdateAdmittedEventAttributes()
+					ms.EXPECT().AddWorkflowExecutionUpdateAdmittedEvent(
+						attr.GetRequest(),
+						enumspb.UPDATE_ADMITTED_EVENT_ORIGIN_UNSPECIFIED,
+					).Return(&historypb.HistoryEvent{}, nil)
+				case enumspb.EVENT_TYPE_WORKFLOW_EXECUTION_UPDATE_ACCEPTED:
+					attr := event.GetWorkflowExecutionUpdateAcceptedEventAttributes()
+					ms.EXPECT().AddWorkflowExecutionUpdateAdmittedEvent(
+						attr.GetAcceptedRequest(),
+						enumspb.UPDATE_ADMITTED_EVENT_ORIGIN_REAPPLY,
+					).Return(&historypb.HistoryEvent{}, nil)
+				case enumspb.EVENT_TYPE_WORKFLOW_EXECUTION_CANCEL_REQUESTED:
+					if !tc.isReset {
+						attr := event.GetWorkflowExecutionCancelRequestedEventAttributes()
+						ms.EXPECT().IsCancelRequested().Return(false)
+						ms.EXPECT().AddWorkflowExecutionCancelRequestedEvent(
+							&historyservice.RequestCancelWorkflowExecutionRequest{
+								CancelRequest: &workflowservice.RequestCancelWorkflowExecutionRequest{
+									Reason:   attr.GetCause(),
+									Identity: attr.GetIdentity(),
+									Links:    event.Links,
+								},
+								ExternalInitiatedEventId:  attr.GetExternalInitiatedEventId(),
+								ExternalWorkflowExecution: attr.GetExternalWorkflowExecution(),
+							},
+						).Return(&historypb.HistoryEvent{}, nil)
+					}
+				case enumspb.EVENT_TYPE_WORKFLOW_EXECUTION_TERMINATED:
+					if !tc.isReset {
+						ms.EXPECT().GetNextEventID().Return(event.GetEventId() + 1)
+						ms.EXPECT().GetStartedWorkflowTask().Return(nil)
+						attr := event.GetWorkflowExecutionTerminatedEventAttributes()
+						ms.EXPECT().AddWorkflowExecutionTerminatedEvent(
+							event.GetEventId()+1,
+							attr.GetReason(),
+							attr.GetDetails(),
+							attr.GetIdentity(),
+							false,
+							event.Links,
+						).Return(&historypb.HistoryEvent{}, nil)
+					}
+				}
+			}
+
+			appliedEvents, err := reapplyEvents(context.Background(), ms, nil, smReg, events, nil, "", tc.isReset)
+			s.NoError(err)
+
+			s.Equal(tc.expected, appliedEvents)
+		})
+	}
 }
+
 func (s *workflowResetterSuite) TestReapplyEvents_Excludes() {
 	event1 := &historypb.HistoryEvent{
 		EventId:   101,
@@ -962,10 +1310,10 @@ func (s *workflowResetterSuite) TestReapplyEvents_Excludes() {
 	}
 	events := []*historypb.HistoryEvent{event1, event2, event3, event4, event5, event6}
 
-	ms := workflow.NewMockMutableState(s.controller)
+	ms := historyi.NewMockMutableState(s.controller)
 	// Assert that none of these following methods are invoked.
 	arg := gomock.Any()
-	ms.EXPECT().AddWorkflowExecutionSignaled(arg, arg, arg, arg, arg, arg).Times(0)
+	ms.EXPECT().AddWorkflowExecutionSignaled(arg, arg, arg, arg, arg).Times(0)
 	ms.EXPECT().AddWorkflowExecutionUpdateAdmittedEvent(arg, arg).Times(0)
 	ms.EXPECT().AddHistoryEvent(arg, arg).Times(0)
 
@@ -981,7 +1329,33 @@ func (s *workflowResetterSuite) TestReapplyEvents_Excludes() {
 		enumspb.RESET_REAPPLY_EXCLUDE_TYPE_UPDATE: {},
 		enumspb.RESET_REAPPLY_EXCLUDE_TYPE_NEXUS:  {},
 	}
-	reappliedEvents, err := reapplyEvents(context.Background(), ms, nil, smReg, events, excludes, "")
+	reappliedEvents, err := reapplyEvents(context.Background(), ms, nil, smReg, events, excludes, "", false)
+	s.Empty(reappliedEvents)
+	s.NoError(err)
+
+	event7 := &historypb.HistoryEvent{
+		EventId:   107,
+		EventType: enumspb.EVENT_TYPE_WORKFLOW_EXECUTION_CANCEL_REQUESTED,
+		Attributes: &historypb.HistoryEvent_WorkflowExecutionCancelRequestedEventAttributes{
+			WorkflowExecutionCancelRequestedEventAttributes: &historypb.WorkflowExecutionCancelRequestedEventAttributes{
+				Cause:    testRequestReason,
+				Identity: testIdentity,
+			},
+		},
+	}
+	event8 := &historypb.HistoryEvent{
+		EventId:   108,
+		EventType: enumspb.EVENT_TYPE_WORKFLOW_EXECUTION_TERMINATED,
+		Attributes: &historypb.HistoryEvent_WorkflowExecutionTerminatedEventAttributes{
+			WorkflowExecutionTerminatedEventAttributes: &historypb.WorkflowExecutionTerminatedEventAttributes{
+				Reason:   testRequestReason,
+				Details:  payloads.EncodeString("test details"),
+				Identity: testIdentity,
+			},
+		},
+	}
+	events = append(events, event7, event8)
+	reappliedEvents, err = reapplyEvents(context.Background(), ms, nil, smReg, events, excludes, "", true)
 	s.Empty(reappliedEvents)
 	s.NoError(err)
 }
@@ -992,12 +1366,13 @@ func (s *workflowResetterSuite) TestReapplyContinueAsNewWorkflowEvents_ExcludeAl
 	baseNextEventID := int64(456)
 	baseBranchToken := []byte("some random base branch token")
 	optionExcludeAllReapplyEvents := map[enumspb.ResetReapplyExcludeType]struct{}{
-		enumspb.RESET_REAPPLY_EXCLUDE_TYPE_SIGNAL: {},
-		enumspb.RESET_REAPPLY_EXCLUDE_TYPE_UPDATE: {},
-		enumspb.RESET_REAPPLY_EXCLUDE_TYPE_NEXUS:  {},
+		enumspb.RESET_REAPPLY_EXCLUDE_TYPE_SIGNAL:         {},
+		enumspb.RESET_REAPPLY_EXCLUDE_TYPE_UPDATE:         {},
+		enumspb.RESET_REAPPLY_EXCLUDE_TYPE_NEXUS:          {},
+		enumspb.RESET_REAPPLY_EXCLUDE_TYPE_CANCEL_REQUEST: {},
 	}
 
-	mutableState := workflow.NewMockMutableState(s.controller)
+	mutableState := historyi.NewMockMutableState(s.controller)
 	currentWorkflow := NewMockWorkflow(s.controller)
 
 	// Assert that we don't read any history events when we are asked to exclude all reapply events.
@@ -1016,6 +1391,7 @@ func (s *workflowResetterSuite) TestReapplyContinueAsNewWorkflowEvents_ExcludeAl
 		baseFirstEventID,
 		baseNextEventID,
 		optionExcludeAllReapplyEvents,
+		false, // allowResetWithPendingChildren
 	)
 	s.NoError(err)
 	s.Equal(s.baseRunID, lastVisitedRunID)
@@ -1104,15 +1480,19 @@ func (s *workflowResetterSuite) TestWorkflowRestartAfterExecutionTimeout() {
 	resetReason := "some random reset reason"
 
 	resetBranchToken := []byte("some random reset branch token")
-	resetRequestID := uuid.New()
-	resetHistorySize := int64(4411)
-	resetMutableState := workflow.NewMockMutableState(s.controller)
+	resetRequestID := uuid.NewString()
+	resetStats := RebuildStats{
+		HistorySize:          4411,
+		ExternalPayloadSize:  1234,
+		ExternalPayloadCount: 56,
+	}
+	resetMutableState := historyi.NewMockMutableState(s.controller)
 	executionInfos := make(map[int64]*persistencespb.ChildExecutionInfo)
 
-	workflowTaskSchedule := &workflow.WorkflowTaskInfo{
+	workflowTaskSchedule := &historyi.WorkflowTaskInfo{
 		ScheduledEventID: baseRebuildLastEventID - 12,
 		StartedEventID:   common.EmptyEventID,
-		RequestID:        uuid.New(),
+		RequestID:        uuid.NewString(),
 		TaskQueue: &taskqueuepb.TaskQueue{
 			Name: "random task queue name",
 			Kind: enumspb.TASK_QUEUE_KIND_NORMAL,
@@ -1133,10 +1513,12 @@ func (s *workflowResetterSuite) TestWorkflowRestartAfterExecutionTimeout() {
 		definition.NewWorkflowKey(s.namespaceID.String(), s.workflowID, s.resetRunID),
 		resetBranchToken,
 		resetRequestID,
-	).Return(resetMutableState, resetHistorySize, nil)
+	).Return(resetMutableState, resetStats, nil)
 
 	resetMutableState.EXPECT().SetBaseWorkflow(s.baseRunID, baseRebuildLastEventID, baseRebuildLastEventVersion)
-	resetMutableState.EXPECT().AddHistorySize(resetHistorySize)
+	resetMutableState.EXPECT().AddHistorySize(resetStats.HistorySize)
+	resetMutableState.EXPECT().AddExternalPayloadSize(resetStats.ExternalPayloadSize)
+	resetMutableState.EXPECT().AddExternalPayloadCount(resetStats.ExternalPayloadCount)
 	resetMutableState.EXPECT().GetCurrentVersion().Return(resetWorkflowVersion).AnyTimes()
 	resetMutableState.EXPECT().UpdateCurrentVersion(resetWorkflowVersion, false).Return(nil).AnyTimes()
 	resetMutableState.EXPECT().GetExecutionState().Return(&persistencespb.WorkflowExecutionState{
@@ -1154,7 +1536,7 @@ func (s *workflowResetterSuite) TestWorkflowRestartAfterExecutionTimeout() {
 	s.NoError(err)
 	resetMutableState.EXPECT().HSM().Return(root).AnyTimes()
 
-	workflowTaskStart := &workflow.WorkflowTaskInfo{
+	workflowTaskStart := &historyi.WorkflowTaskInfo{
 		ScheduledEventID: workflowTaskSchedule.ScheduledEventID,
 		StartedEventID:   workflowTaskSchedule.ScheduledEventID + 1,
 		RequestID:        workflowTaskSchedule.RequestID,
@@ -1167,7 +1549,9 @@ func (s *workflowResetterSuite) TestWorkflowRestartAfterExecutionTimeout() {
 		consts.IdentityHistoryService,
 		nil,
 		nil,
+		nil,
 		true,
+		nil,
 	).Return(&historypb.HistoryEvent{}, workflowTaskStart, nil)
 
 	resetMutableState.EXPECT().AddWorkflowTaskFailedEvent(
@@ -1194,7 +1578,126 @@ func (s *workflowResetterSuite) TestWorkflowRestartAfterExecutionTimeout() {
 		resetRequestID,
 		resetWorkflowVersion,
 		resetReason,
+		false, // allowResetWithPendingChildren
 	)
 	s.NoError(err)
 	s.Equal(resetMutableState, resetWorkflow.GetMutableState())
+}
+
+func (s *workflowResetterSuite) TestReapplyEvents_WorkflowOptionsUpdated_CompletionCallbackErrors() {
+	testCases := []struct {
+		name                  string
+		requestIDExists       bool
+		totalCallbacks        int
+		hasVersioningOverride bool
+		expectedErrorContains string
+	}{
+		{
+			name:                  "callbacks_exist_with_additional_updates",
+			requestIDExists:       true,
+			totalCallbacks:        3,
+			hasVersioningOverride: true,
+			expectedErrorContains: "unable to reapply WorkflowExecutionOptionsUpdated event: 3 completion callbacks are already attached but the event contains additional workflow option updates",
+		},
+	}
+
+	for _, tc := range testCases {
+		s.Run(tc.name, func() {
+			ms := historyi.NewMockMutableState(s.controller)
+			smReg := hsm.NewRegistry()
+			s.NoError(workflow.RegisterStateMachine(smReg))
+			root, err := hsm.NewRoot(smReg, workflow.StateMachineType, nil, make(map[string]*persistencespb.StateMachineMap), nil)
+			s.NoError(err)
+			ms.EXPECT().HSM().Return(root).AnyTimes()
+
+			// Create completion callbacks
+			callbacks := make([]*commonpb.Callback, tc.totalCallbacks)
+			for i := 0; i < tc.totalCallbacks; i++ {
+				callbacks[i] = &commonpb.Callback{
+					Variant: &commonpb.Callback_Nexus_{
+						Nexus: &commonpb.Callback_Nexus{
+							Url: "http://example.com",
+							Header: map[string]string{
+								"test": "value",
+							},
+						},
+					},
+				}
+			}
+
+			// Create the event
+			event := &historypb.HistoryEvent{
+				EventId:   101,
+				EventType: enumspb.EVENT_TYPE_WORKFLOW_EXECUTION_OPTIONS_UPDATED,
+				Attributes: &historypb.HistoryEvent_WorkflowExecutionOptionsUpdatedEventAttributes{
+					WorkflowExecutionOptionsUpdatedEventAttributes: &historypb.WorkflowExecutionOptionsUpdatedEventAttributes{
+						AttachedRequestId:           "test-request-id",
+						AttachedCompletionCallbacks: callbacks,
+					},
+				},
+			}
+
+			// Add versioning override if specified
+			if tc.hasVersioningOverride {
+				event.GetWorkflowExecutionOptionsUpdatedEventAttributes().VersioningOverride = &workflowpb.VersioningOverride{
+					Behavior: enumspb.VERSIONING_BEHAVIOR_PINNED,
+				}
+			}
+
+			ms.EXPECT().HasRequestID("test-request-id").Return(tc.requestIDExists)
+
+			events := []*historypb.HistoryEvent{event}
+
+			// Call reapplyEvents and expect an error
+			appliedEvents, err := reapplyEvents(context.Background(), ms, nil, smReg, events, nil, "", true)
+			s.Error(err)
+			s.Contains(err.Error(), tc.expectedErrorContains)
+			s.Empty(appliedEvents)
+		})
+	}
+}
+
+func (s *workflowResetterSuite) TestReapplyEvents_WorkflowOptionsUpdated_CompletionCallbacksSkip() {
+	ms := historyi.NewMockMutableState(s.controller)
+	smReg := hsm.NewRegistry()
+	s.NoError(workflow.RegisterStateMachine(smReg))
+	root, err := hsm.NewRoot(smReg, workflow.StateMachineType, nil, make(map[string]*persistencespb.StateMachineMap), nil)
+	s.NoError(err)
+	ms.EXPECT().HSM().Return(root).AnyTimes()
+
+	// Create completion callbacks
+	callbacks := []*commonpb.Callback{
+		{
+			Variant: &commonpb.Callback_Nexus_{
+				Nexus: &commonpb.Callback_Nexus{
+					Url: "http://example.com",
+					Header: map[string]string{
+						"test": "value",
+					},
+				},
+			},
+		},
+	}
+
+	// Create the event where all callbacks exist but no other updates
+	event := &historypb.HistoryEvent{
+		EventId:   101,
+		EventType: enumspb.EVENT_TYPE_WORKFLOW_EXECUTION_OPTIONS_UPDATED,
+		Attributes: &historypb.HistoryEvent_WorkflowExecutionOptionsUpdatedEventAttributes{
+			WorkflowExecutionOptionsUpdatedEventAttributes: &historypb.WorkflowExecutionOptionsUpdatedEventAttributes{
+				AttachedRequestId:           "test-request-id",
+				AttachedCompletionCallbacks: callbacks,
+				// No VersioningOverride and UnsetVersioningOverride is false
+			},
+		},
+	}
+
+	ms.EXPECT().HasRequestID("test-request-id").Return(true)
+
+	events := []*historypb.HistoryEvent{event}
+
+	// Call reapplyEvents - should skip the event (no error, no applied events)
+	appliedEvents, err := reapplyEvents(context.Background(), ms, nil, smReg, events, nil, "", true)
+	s.NoError(err)
+	s.Empty(appliedEvents) // Event should be skipped
 }

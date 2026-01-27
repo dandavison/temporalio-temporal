@@ -1,27 +1,3 @@
-// The MIT License
-//
-// Copyright (c) 2024 Temporal Technologies Inc.  All rights reserved.
-//
-// Copyright (c) 2020 Uber Technologies, Inc.
-//
-// Permission is hereby granted, free of charge, to any person obtaining a copy
-// of this software and associated documentation files (the "Software"), to deal
-// in the Software without restriction, including without limitation the rights
-// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-// copies of the Software, and to permit persons to whom the Software is
-// furnished to do so, subject to the following conditions:
-//
-// The above copyright notice and this permission notice shall be included in
-// all copies or substantial portions of the Software.
-//
-// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
-// THE SOFTWARE.
-
 package historybuilder
 
 import (
@@ -34,7 +10,7 @@ import (
 	historypb "go.temporal.io/api/history/v1"
 	"go.temporal.io/api/workflowservice/v1"
 	"go.temporal.io/server/api/historyservice/v1"
-	"go.temporal.io/server/api/workflow/v1"
+	workflowspb "go.temporal.io/server/api/workflow/v1"
 	"go.temporal.io/server/common"
 	"go.temporal.io/server/common/clock"
 	"go.temporal.io/server/common/log"
@@ -113,7 +89,7 @@ func TestHistoryBuilder_AddWorkflowExecutionStartedEvent(t *testing.T) {
 
 	t.Run("When ParentExecutionInfo is not nil should copy values to attributes", func(t *testing.T) {
 		hb := HistoryBuilder{}
-		parentInfo := &workflow.ParentExecutionInfo{Namespace: ns}
+		parentInfo := &workflowspb.ParentExecutionInfo{Namespace: ns}
 		startReq := &workflowservice.StartWorkflowExecutionRequest{}
 		req := &historyservice.StartWorkflowExecutionRequest{StartRequest: startReq, ParentExecutionInfo: parentInfo}
 
@@ -149,17 +125,25 @@ func TestHistoryBuilder_AddWorkflowExecutionStartedEvent(t *testing.T) {
 func TestHistoryBuilder_FlushBufferToCurrentBatch(t *testing.T) {
 	t.Run("when no events in dbBufferBatch or meBufferBatch will return scheduledIDToStartedID", func(t *testing.T) {
 		hb := HistoryBuilder{
-			EventStore{scheduledIDToStartedID: make(map[int64]int64)},
+			EventStore{scheduledIDToStartedID: make(map[int64]int64), requestIDToEventID: make(map[string]int64)},
 			EventFactory{},
 		}
 		hb.scheduledIDToStartedID[71] = 42
+		hb.requestIDToEventID["request-id-1"] = 7
 
-		schedlued := hb.FlushBufferToCurrentBatch()
-		if len(schedlued) != len(hb.scheduledIDToStartedID) {
+		scheduled, requestIDToEventID := hb.FlushBufferToCurrentBatch()
+		if len(scheduled) != len(hb.scheduledIDToStartedID) {
 			t.Errorf("wrong scheduled2started map")
 		}
-		if schedlued[71] != 42 {
-			t.Errorf("wrong value in map, expected 42 got %d", schedlued[42])
+		if scheduled[71] != 42 {
+			t.Errorf("wrong value in map, expected 42 got %d", scheduled[42])
+		}
+
+		if len(requestIDToEventID) != len(hb.requestIDToEventID) {
+			t.Errorf("wrong requestIDToEventID map")
+		}
+		if requestIDToEventID["request-id-1"] != 7 {
+			t.Errorf("wrong value in map, expected 7 got %d", requestIDToEventID["request-id-1"])
 		}
 	})
 
@@ -168,6 +152,7 @@ func TestHistoryBuilder_FlushBufferToCurrentBatch(t *testing.T) {
 		hb.AddActivityTaskScheduledEvent(
 			32,
 			&commandpb.ScheduleActivityTaskCommandAttributes{},
+			defaultNamespace,
 		)
 		hb.AddActivityTaskStartedEvent(42, 1, "request-id-1", "identity-1", nil, nil, 0)
 		hb.workflowFinished = true
@@ -180,8 +165,9 @@ func TestHistoryBuilder_FlushBufferToCurrentBatch(t *testing.T) {
 			)
 		}
 	})
+
 	t.Run("when there are events in both memBufferBatch and dbBufferBatch will move all to latest", func(t *testing.T) {
-		assertEventsWired := func(scheduled map[int64]int64) {
+		assertEventsWired := func(scheduled map[int64]int64, requestIDToEventID map[string]int64) {
 			t.Helper()
 			if len(scheduled) != 1 {
 				t.Fatalf("expected one scheduledToStartedIds event got %d", len(scheduled))
@@ -191,7 +177,18 @@ func TestHistoryBuilder_FlushBufferToCurrentBatch(t *testing.T) {
 				t.Fatal("scheduledToStartedIds event not found")
 			}
 			if startedId != 13 {
-				t.Fatalf("wrong started id expected 42 got %d", startedId)
+				t.Fatalf("wrong started id expected 13 got %d", startedId)
+			}
+
+			if len(requestIDToEventID) != 1 {
+				t.Fatalf("expected one requestIDToEventID event got %d", len(requestIDToEventID))
+			}
+			eventID, ok := requestIDToEventID["request-id-1"]
+			if !ok {
+				t.Fatal("requestIDToEventID event not found")
+			}
+			if eventID != 14 {
+				t.Fatalf("wrong event id expected 14 got %d", eventID)
 			}
 		}
 
@@ -200,6 +197,7 @@ func TestHistoryBuilder_FlushBufferToCurrentBatch(t *testing.T) {
 		hb.AddActivityTaskScheduledEvent(
 			32,
 			&commandpb.ScheduleActivityTaskCommandAttributes{},
+			defaultNamespace,
 		)
 		if len(hb.memLatestBatch) != 1 {
 			t.Errorf("expected 1 event in memLatestBatch got %d", len(hb.memLatestBatch))
@@ -209,11 +207,16 @@ func TestHistoryBuilder_FlushBufferToCurrentBatch(t *testing.T) {
 		if len(hb.memBufferBatch) != 1 {
 			t.Errorf("expected 1 event in memBufferBatch got %d", len(hb.memBufferBatch))
 		}
+		// add another event to memBufferBatch
+		hb.AddWorkflowExecutionOptionsUpdatedEvent(nil, false, "request-id-1", nil, nil, "", nil)
+		if len(hb.memBufferBatch) != 2 {
+			t.Errorf("expected 2 event in memBufferBatch got %d", len(hb.memBufferBatch))
+		}
 
-		scheduledToStartedIds := hb.FlushBufferToCurrentBatch()
-		assertEventsWired(scheduledToStartedIds)
-		if len(hb.memLatestBatch) != 2 {
-			t.Errorf("wrong size of memLatestBatch expected 2 got %d", len(hb.memLatestBatch))
+		scheduledToStartedIds, requestIDToEventID := hb.FlushBufferToCurrentBatch()
+		assertEventsWired(scheduledToStartedIds, requestIDToEventID)
+		if len(hb.memLatestBatch) != 3 {
+			t.Errorf("wrong size of memLatestBatch expected 3 got %d", len(hb.memLatestBatch))
 		}
 		if len(hb.memBufferBatch) != 0 {
 			t.Errorf("wrong size of memBufferBatch expected 0 got %d", len(hb.memBufferBatch))
@@ -222,10 +225,11 @@ func TestHistoryBuilder_FlushBufferToCurrentBatch(t *testing.T) {
 
 	t.Run("when there is ACTIVITY_TASK_COMPLETED event will move it to the end", func(t *testing.T) {
 		hb := newHistoryBuilderFromConfig(builderConfig{nextEventId: 12})
-		hb.AddActivityTaskCompletedEvent(14, 13, "activity-completed", nil)
+		hb.AddActivityTaskCompletedEvent(14, 13, "activity-completed", nil, defaultNamespace)
 		hb.AddActivityTaskScheduledEvent(
 			32,
 			&commandpb.ScheduleActivityTaskCommandAttributes{},
+			defaultNamespace,
 		)
 		hb.AddActivityTaskStartedEvent(42, 1, "request-id-1", "identity-1", nil, nil, 0)
 		hb.FlushBufferToCurrentBatch()
@@ -247,7 +251,7 @@ func TestHistoryBuilder_FlushBufferToCurrentBatch(t *testing.T) {
 		hb := newSUT()
 		hb.AddActivityTaskStartedEvent(eventConfig{scheduledId: 42})
 		hb.AddActivityTaskCanceledEvent()
-		scheduledToStarted := hb.FlushBufferToCurrentBatch()
+		scheduledToStarted, _ := hb.FlushBufferToCurrentBatch()
 		scheduled, ok := scheduledToStarted[42]
 		if !ok {
 			t.Fatalf("event not in map %v", scheduled)
@@ -270,10 +274,12 @@ func TestHistoryBuilder_Finish(t *testing.T) {
 		hb.AddActivityTaskScheduledEvent(
 			32,
 			&commandpb.ScheduleActivityTaskCommandAttributes{},
+			defaultNamespace,
 		)
 		hb.AddActivityTaskScheduledEvent(
 			32,
 			&commandpb.ScheduleActivityTaskCommandAttributes{},
+			defaultNamespace,
 		)
 		hb.AddActivityTaskStartedEvent(42, 1, "request-id-1", "identity-1", nil, nil, 0)
 		result, err := hb.Finish(false)
@@ -313,10 +319,12 @@ func TestHistoryBuilder_GetAndRemoveTimerFireEvent(t *testing.T) {
 		hb.AddActivityTaskScheduledEvent(
 			32,
 			&commandpb.ScheduleActivityTaskCommandAttributes{},
+			defaultNamespace,
 		)
 		hb.AddActivityTaskScheduledEvent(
 			32,
 			&commandpb.ScheduleActivityTaskCommandAttributes{},
+			defaultNamespace,
 		)
 		hb.AddActivityTaskStartedEvent(42, 1, "request-id-1", "identity-1", nil, nil, 0)
 		memBufferSize := len(hb.memBufferBatch)
@@ -983,7 +991,7 @@ func TestHistoryBuilder_FlushBufferToCurrentBatch_WiringEvents(t *testing.T) {
 		timedOut := sut.AddActivityTaskTimedOutEvent(eventConfig{scheduledId: 2, startedId: 26})
 		canceled := sut.AddActivityTaskCanceledEvent(eventConfig{scheduledId: 2})
 
-		scheduledToStarted := sut.FlushBufferToCurrentBatch()
+		scheduledToStarted, _ := sut.FlushBufferToCurrentBatch()
 
 		if scheduledToStarted[2] != started.EventId {
 			t.Errorf(
@@ -1034,7 +1042,7 @@ func TestHistoryBuilder_FlushBufferToCurrentBatch_WiringEvents(t *testing.T) {
 		canceled := sut.AddChildWorkflowExecutionCanceledEvent(eventConfig{initiatedId: 42, startedId: 98})
 		terminated := sut.AddChildWorkflowExecutionTerminatedEvent(eventConfig{initiatedId: 42, startedId: 100})
 
-		scheduledToStarted := sut.FlushBufferToCurrentBatch()
+		scheduledToStarted, _ := sut.FlushBufferToCurrentBatch()
 
 		if scheduledToStarted[42] != started.EventId {
 			t.Errorf(
@@ -1223,14 +1231,14 @@ func (s *sutTestingAdapter) ResetHistoryBuilder() {
 }
 
 func (s *sutTestingAdapter) AddWorkflowExecutionStartedEvent(_ ...eventConfig) *historypb.HistoryEvent {
-	parentInfo := &workflow.ParentExecutionInfo{Namespace: "ns-1"}
+	parentInfo := &workflowspb.ParentExecutionInfo{Namespace: "ns-1"}
 	startReq := &workflowservice.StartWorkflowExecutionRequest{}
 	req := &historyservice.StartWorkflowExecutionRequest{StartRequest: startReq, ParentExecutionInfo: parentInfo}
 	return s.HistoryBuilder.AddWorkflowExecutionStartedEvent(s.today, req, nil, "prev-run-1", "first-run-1", "original-run-1")
 }
 
 func (s *sutTestingAdapter) AddWorkflowTaskStartedEvent(_ ...eventConfig) *historypb.HistoryEvent {
-	return s.HistoryBuilder.AddWorkflowTaskStartedEvent(64, "request-1", "identity-1", s.today, false, 100, nil, 0)
+	return s.HistoryBuilder.AddWorkflowTaskStartedEvent(64, "request-1", "identity-1", s.today, false, 100, nil, 0, nil)
 }
 
 func (s *sutTestingAdapter) AddWorkflowTaskCompletedEvent(_ ...eventConfig) *historypb.HistoryEvent {
@@ -1242,6 +1250,9 @@ func (s *sutTestingAdapter) AddWorkflowTaskCompletedEvent(_ ...eventConfig) *his
 		nil,
 		nil,
 		nil,
+		"",
+		nil,
+		enumspb.VERSIONING_BEHAVIOR_UNSPECIFIED,
 	)
 }
 
@@ -1253,6 +1264,7 @@ func (s *sutTestingAdapter) AddActivityTaskFailedEvent(optionalConfig ...eventCo
 		nil,
 		enumspb.RETRY_STATE_IN_PROGRESS,
 		"identity-1",
+		defaultNamespace,
 	)
 }
 
@@ -1260,6 +1272,7 @@ func (s *sutTestingAdapter) AddActivityTaskScheduledEvent(_ ...eventConfig) *his
 	return s.HistoryBuilder.AddActivityTaskScheduledEvent(
 		64,
 		&commandpb.ScheduleActivityTaskCommandAttributes{},
+		defaultNamespace,
 	)
 }
 
@@ -1291,7 +1304,7 @@ func (s *sutTestingAdapter) AddActivityTaskStartedEvent(optionalConfig ...eventC
 
 func (s *sutTestingAdapter) AddActivityTaskCompletedEvent(optionalConfig ...eventConfig) *historypb.HistoryEvent {
 	config := getConfigOrDefault(optionalConfig)
-	return s.HistoryBuilder.AddActivityTaskCompletedEvent(config.scheduledId, config.scheduledId, "identity-1", nil)
+	return s.HistoryBuilder.AddActivityTaskCompletedEvent(config.scheduledId, config.scheduledId, "identity-1", nil, defaultNamespace)
 }
 
 func (s *sutTestingAdapter) AddActivityTaskTimedOutEvent(optionalConfig ...eventConfig) *historypb.HistoryEvent {
@@ -1459,7 +1472,6 @@ func (s *sutTestingAdapter) AddWorkflowExecutionSignaledEvent(_ ...eventConfig) 
 		nil,
 		"identity-1",
 		nil,
-		false,
 		nil,
 		nil,
 	)

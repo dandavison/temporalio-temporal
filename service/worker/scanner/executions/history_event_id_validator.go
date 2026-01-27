@@ -1,33 +1,10 @@
-// The MIT License
-//
-// Copyright (c) 2020 Temporal Technologies Inc.  All rights reserved.
-//
-// Copyright (c) 2020 Uber Technologies, Inc.
-//
-// Permission is hereby granted, free of charge, to any person obtaining a copy
-// of this software and associated documentation files (the "Software"), to deal
-// in the Software without restriction, including without limitation the rights
-// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-// copies of the Software, and to permit persons to whom the Software is
-// furnished to do so, subject to the following conditions:
-//
-// The above copyright notice and this permission notice shall be included in
-// all copies or substantial portions of the Software.
-//
-// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
-// THE SOFTWARE.
-
 package executions
 
 import (
 	"context"
 
 	"go.temporal.io/api/serviceerror"
+	"go.temporal.io/server/chasm"
 	"go.temporal.io/server/common"
 	"go.temporal.io/server/common/persistence"
 	"go.temporal.io/server/common/persistence/versionhistory"
@@ -70,6 +47,10 @@ func (v *historyEventIDValidator) Validate(
 		return nil, err
 	}
 
+	if versionhistory.IsEmptyVersionHistory(currentVersionHistory) {
+		return nil, nil
+	}
+
 	// TODO currently history event ID validator only verifies
 	//  the first event batch exists, before doing whole history
 	//  validation, ensure not too much capacity is consumed
@@ -92,6 +73,9 @@ func (v *historyEventIDValidator) Validate(
 			NamespaceID: mutableState.GetExecutionInfo().NamespaceId,
 			WorkflowID:  mutableState.GetExecutionInfo().WorkflowId,
 			RunID:       mutableState.GetExecutionState().RunId,
+			// TODO: for now only workflow has events and non-empty event version history
+			// Later when supporting events for non-workflow component, we need to get ArchetypeID from MutableState.
+			ArchetypeID: chasm.WorkflowArchetypeID,
 		})
 		switch err.(type) {
 		case nil:

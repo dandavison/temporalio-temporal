@@ -1,27 +1,3 @@
-// The MIT License
-//
-// Copyright (c) 2020 Temporal Technologies Inc.  All rights reserved.
-//
-// Copyright (c) 2020 Uber Technologies, Inc.
-//
-// Permission is hereby granted, free of charge, to any person obtaining a copy
-// of this software and associated documentation files (the "Software"), to deal
-// in the Software without restriction, including without limitation the rights
-// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-// copies of the Software, and to permit persons to whom the Software is
-// furnished to do so, subject to the following conditions:
-//
-// The above copyright notice and this permission notice shall be included in
-// all copies or substantial portions of the Software.
-//
-// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
-// THE SOFTWARE.
-
 package persistence
 
 import (
@@ -57,6 +33,14 @@ func (s *queryUtilSuite) SetupTest() {
 
 func (s *queryUtilSuite) TestLoadAndSplitQueryFromReaders() {
 	input := `
+		DO LANGUAGE 'plpgsql' $$
+			BEGIN
+				IF ( NOT EXISTS (select extname from pg_extension where extname = 'btree_gin') ) THEN
+					CREATE EXTENSION btree_gin;
+				END  IF; --Intentionally add multiple spaces between END and IF
+			END
+		$$;
+
 		CREATE TABLE test (
 			id BIGINT not null,
 			col1 BIGINT, -- comment with unmatched parenthesis )
@@ -77,7 +61,17 @@ func (s *queryUtilSuite) TestLoadAndSplitQueryFromReaders() {
 	`
 	statements, err := LoadAndSplitQueryFromReaders([]io.Reader{bytes.NewBufferString(input)})
 	s.NoError(err)
-	s.Equal(3, len(statements))
+	s.Equal(4, len(statements))
+	s.Equal(
+		`DO LANGUAGE 'plpgsql' $$
+			BEGIN
+				IF ( NOT EXISTS (select extname from pg_extension where extname = 'btree_gin') ) THEN
+					CREATE EXTENSION btree_gin;
+				END  IF;
+			END
+		$$;`,
+		statements[0],
+	)
 	s.Equal(
 		`CREATE TABLE test (
 			id BIGINT not null,
@@ -85,9 +79,9 @@ func (s *queryUtilSuite) TestLoadAndSplitQueryFromReaders() {
 			col2 VARCHAR(255),
 			PRIMARY KEY (id)
 		);`,
-		statements[0],
+		statements[1],
 	)
-	s.Equal(`CREATE INDEX test_idx ON test (col1);`, statements[1])
+	s.Equal(`CREATE INDEX test_idx ON test (col1);`, statements[2])
 	// comments are removed, but the inner content is not trimmed
 	s.Equal(
 		`CREATE TRIGGER test_ai AFTER INSERT ON test
@@ -95,7 +89,7 @@ func (s *queryUtilSuite) TestLoadAndSplitQueryFromReaders() {
 			SELECT *, 'string with unmatched chars ")' FROM test;
 			
 		END;`,
-		statements[2],
+		statements[3],
 	)
 
 	input = "CREATE TABLE test (;"

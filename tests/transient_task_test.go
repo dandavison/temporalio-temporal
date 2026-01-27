@@ -1,27 +1,3 @@
-// The MIT License
-//
-// Copyright (c) 2020 Temporal Technologies Inc.  All rights reserved.
-//
-// Copyright (c) 2020 Uber Technologies, Inc.
-//
-// Permission is hereby granted, free of charge, to any person obtaining a copy
-// of this software and associated documentation files (the "Software"), to deal
-// in the Software without restriction, including without limitation the rights
-// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-// copies of the Software, and to permit persons to whom the Software is
-// furnished to do so, subject to the following conditions:
-//
-// The above copyright notice and this permission notice shall be included in
-// all copies or substantial portions of the Software.
-//
-// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
-// THE SOFTWARE.
-
 package tests
 
 import (
@@ -30,7 +6,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/pborman/uuid"
+	"github.com/google/uuid"
 	"github.com/stretchr/testify/suite"
 	commandpb "go.temporal.io/api/command/v1"
 	commonpb "go.temporal.io/api/common/v1"
@@ -46,7 +22,7 @@ import (
 )
 
 type TransientTaskSuite struct {
-	testcore.FunctionalSuite
+	testcore.FunctionalTestBase
 }
 
 func TestTransientTaskSuite(t *testing.T) {
@@ -62,8 +38,8 @@ func (s *TransientTaskSuite) TestTransientWorkflowTaskTimeout() {
 
 	// Start workflow execution
 	request := &workflowservice.StartWorkflowExecutionRequest{
-		RequestId:           uuid.New(),
-		Namespace:           s.Namespace(),
+		RequestId:           uuid.NewString(),
+		Namespace:           s.Namespace().String(),
 		WorkflowId:          id,
 		WorkflowType:        &commonpb.WorkflowType{Name: wt},
 		TaskQueue:           &taskqueuepb.TaskQueue{Name: tl, Kind: enumspb.TASK_QUEUE_KIND_NORMAL},
@@ -111,7 +87,7 @@ func (s *TransientTaskSuite) TestTransientWorkflowTaskTimeout() {
 
 	poller := &testcore.TaskPoller{
 		Client:              s.FrontendClient(),
-		Namespace:           s.Namespace(),
+		Namespace:           s.Namespace().String(),
 		TaskQueue:           &taskqueuepb.TaskQueue{Name: tl, Kind: enumspb.TASK_QUEUE_KIND_NORMAL},
 		Identity:            identity,
 		WorkflowTaskHandler: wtHandler,
@@ -126,7 +102,7 @@ func (s *TransientTaskSuite) TestTransientWorkflowTaskTimeout() {
 	s.NoError(err)
 
 	// Now send a signal when transient workflow task is scheduled
-	err = s.SendSignal(s.Namespace(), workflowExecution, "signalA", nil, identity)
+	err = s.SendSignal(s.Namespace().String(), workflowExecution, "signalA", nil, identity)
 	s.NoError(err, "failed to send signal to execution")
 
 	// Drop workflow task to cause a workflow task timeout
@@ -151,14 +127,14 @@ func (s *TransientTaskSuite) TestTransientWorkflowTaskHistorySize() {
 
 	// Start workflow execution
 	request := &workflowservice.StartWorkflowExecutionRequest{
-		RequestId:           uuid.New(),
-		Namespace:           s.Namespace(),
+		RequestId:           uuid.NewString(),
+		Namespace:           s.Namespace().String(),
 		WorkflowId:          id,
 		WorkflowType:        &commonpb.WorkflowType{Name: wt},
 		TaskQueue:           &taskqueuepb.TaskQueue{Name: tl, Kind: enumspb.TASK_QUEUE_KIND_NORMAL},
 		Input:               nil,
 		WorkflowRunTimeout:  durationpb.New(100 * time.Second),
-		WorkflowTaskTimeout: durationpb.New(2 * time.Second),
+		WorkflowTaskTimeout: durationpb.New(4 * time.Second), // use a higher timeout as this test uses large payloads.
 		Identity:            identity,
 	}
 
@@ -258,7 +234,7 @@ func (s *TransientTaskSuite) TestTransientWorkflowTaskHistorySize() {
 
 	poller := &testcore.TaskPoller{
 		Client:              s.FrontendClient(),
-		Namespace:           s.Namespace(),
+		Namespace:           s.Namespace().String(),
 		TaskQueue:           &taskqueuepb.TaskQueue{Name: tl, Kind: enumspb.TASK_QUEUE_KIND_NORMAL},
 		Identity:            identity,
 		WorkflowTaskHandler: wtHandler,
@@ -272,7 +248,7 @@ func (s *TransientTaskSuite) TestTransientWorkflowTaskHistorySize() {
 	s.Logger.Info("PollAndProcessWorkflowTask", tag.Error(err))
 	s.NoError(err)
 
-	err = s.SendSignal(s.Namespace(), workflowExecution, "signal", nil, identity)
+	err = s.SendSignal(s.Namespace().String(), workflowExecution, "signal", nil, identity)
 	s.NoError(err, "failed to send signal to execution")
 
 	// stage 2
@@ -280,7 +256,7 @@ func (s *TransientTaskSuite) TestTransientWorkflowTaskHistorySize() {
 	s.Logger.Info("PollAndProcessWorkflowTask", tag.Error(err))
 	s.NoError(err)
 
-	err = s.SendSignal(s.Namespace(), workflowExecution, "signal", nil, identity)
+	err = s.SendSignal(s.Namespace().String(), workflowExecution, "signal", nil, identity)
 	s.NoError(err, "failed to send signal to execution")
 
 	// stage 3: this one fails with a panic
@@ -297,7 +273,7 @@ func (s *TransientTaskSuite) TestTransientWorkflowTaskHistorySize() {
 	s.Logger.Info("PollAndProcessWorkflowTask", tag.Error(err))
 	s.NoError(err)
 
-	err = s.SendSignal(s.Namespace(), workflowExecution, "signal", nil, identity)
+	err = s.SendSignal(s.Namespace().String(), workflowExecution, "signal", nil, identity)
 	s.NoError(err, "failed to send signal to execution")
 
 	// drop workflow task to cause a workflow task timeout
@@ -317,7 +293,7 @@ func (s *TransientTaskSuite) TestTransientWorkflowTaskHistorySize() {
 		sawFieldsFlat = append(sawFieldsFlat, f.size, f.suggest)
 	}
 
-	allEvents := s.GetHistory(s.Namespace(), workflowExecution)
+	allEvents := s.GetHistory(s.Namespace().String(), workflowExecution)
 	s.EqualHistoryEvents(fmt.Sprintf(`
   1 WorkflowExecutionStarted
   2 WorkflowTaskScheduled
@@ -354,8 +330,8 @@ func (s *TransientTaskSuite) TestNoTransientWorkflowTaskAfterFlushBufferedEvents
 
 	// Start workflow execution
 	request := &workflowservice.StartWorkflowExecutionRequest{
-		RequestId:           uuid.New(),
-		Namespace:           s.Namespace(),
+		RequestId:           uuid.NewString(),
+		Namespace:           s.Namespace().String(),
 		WorkflowId:          id,
 		WorkflowType:        &commonpb.WorkflowType{Name: wt},
 		TaskQueue:           &taskqueuepb.TaskQueue{Name: tl, Kind: enumspb.TASK_QUEUE_KIND_NORMAL},
@@ -379,7 +355,7 @@ func (s *TransientTaskSuite) TestNoTransientWorkflowTaskAfterFlushBufferedEvents
 			// this will create new event when there is in-flight workflow task, and the new event will be buffered
 			_, err := s.FrontendClient().SignalWorkflowExecution(testcore.NewContext(),
 				&workflowservice.SignalWorkflowExecutionRequest{
-					Namespace: s.Namespace(),
+					Namespace: s.Namespace().String(),
 					WorkflowExecution: &commonpb.WorkflowExecution{
 						WorkflowId: id,
 					},
@@ -412,7 +388,7 @@ func (s *TransientTaskSuite) TestNoTransientWorkflowTaskAfterFlushBufferedEvents
 
 	poller := &testcore.TaskPoller{
 		Client:              s.FrontendClient(),
-		Namespace:           s.Namespace(),
+		Namespace:           s.Namespace().String(),
 		TaskQueue:           &taskqueuepb.TaskQueue{Name: tl, Kind: enumspb.TASK_QUEUE_KIND_NORMAL},
 		Identity:            identity,
 		WorkflowTaskHandler: wtHandler,

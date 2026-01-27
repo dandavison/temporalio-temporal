@@ -1,40 +1,15 @@
-// The MIT License
-//
-// Copyright (c) 2020 Temporal Technologies Inc.  All rights reserved.
-//
-// Copyright (c) 2020 Uber Technologies, Inc.
-//
-// Permission is hereby granted, free of charge, to any person obtaining a copy
-// of this software and associated documentation files (the "Software"), to deal
-// in the Software without restriction, including without limitation the rights
-// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-// copies of the Software, and to permit persons to whom the Software is
-// furnished to do so, subject to the following conditions:
-//
-// The above copyright notice and this permission notice shall be included in
-// all copies or substantial portions of the Software.
-//
-// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
-// THE SOFTWARE.
-
 package addtasks
 
 import (
 	"context"
-	"fmt"
 
 	commonpb "go.temporal.io/api/common/v1"
 	"go.temporal.io/api/serviceerror"
 	"go.temporal.io/server/api/historyservice/v1"
-	"go.temporal.io/server/common/definition"
+	"go.temporal.io/server/chasm"
 	"go.temporal.io/server/common/persistence"
 	"go.temporal.io/server/service/history/api"
-	"go.temporal.io/server/service/history/shard"
+	historyi "go.temporal.io/server/service/history/interfaces"
 	"go.temporal.io/server/service/history/tasks"
 )
 
@@ -43,6 +18,12 @@ type (
 	// requires only the DeserializeTask method.
 	TaskDeserializer interface {
 		DeserializeTask(category tasks.Category, blob *commonpb.DataBlob) (tasks.Task, error)
+	}
+
+	taskGroupKey struct {
+		namespaceID string
+		businessID  string
+		archetypeID chasm.ArchetypeID
 	}
 )
 
@@ -59,29 +40,29 @@ const (
 // any validation on the shard ID because that must have been done by whoever provided the shard.Context to this method.
 func Invoke(
 	ctx context.Context,
-	shardContext shard.Context,
+	shardContext historyi.ShardContext,
 	deserializer TaskDeserializer,
 	numShards int,
 	req *historyservice.AddTasksRequest,
 	taskRegistry tasks.TaskCategoryRegistry,
 ) (*historyservice.AddTasksResponse, error) {
 	if len(req.Tasks) > maxTasksPerRequest {
-		return nil, serviceerror.NewInvalidArgument(fmt.Sprintf(
+		return nil, serviceerror.NewInvalidArgumentf(
 			"Too many tasks in request: %d > %d",
 			len(req.Tasks),
 			maxTasksPerRequest,
-		))
+		)
 	}
 
 	if len(req.Tasks) == 0 {
 		return nil, serviceerror.NewInvalidArgument("No tasks in request")
 	}
 
-	taskBatches := make(map[definition.WorkflowKey]map[tasks.Category][]tasks.Task)
+	taskGroups := make(map[taskGroupKey]map[tasks.Category][]tasks.Task)
 
 	for i, task := range req.Tasks {
 		if task == nil {
-			return nil, serviceerror.NewInvalidArgument(fmt.Sprintf("Nil task at index: %d", i))
+			return nil, serviceerror.NewInvalidArgumentf("Nil task at index: %d", i)
 		}
 
 		category, err := api.GetTaskCategory(int(task.CategoryId), taskRegistry)
@@ -90,10 +71,10 @@ func Invoke(
 		}
 
 		if task.Blob == nil {
-			return nil, serviceerror.NewInvalidArgument(fmt.Sprintf(
+			return nil, serviceerror.NewInvalidArgumentf(
 				"Task blob is nil at index: %d",
 				i,
-			))
+			)
 		}
 
 		deserializedTask, err := deserializer.DeserializeTask(category, task.Blob)
@@ -103,32 +84,41 @@ func Invoke(
 
 		shardID := tasks.GetShardIDForTask(deserializedTask, numShards)
 		if shardID != int(req.ShardId) {
-			return nil, serviceerror.NewInvalidArgument(fmt.Sprintf(
+			return nil, serviceerror.NewInvalidArgumentf(
 				"Task is for wrong shard: index = %d, task shard = %d, request shard = %d",
 				i, shardID, req.ShardId,
-			))
+			)
 		}
 
-		// group by namespaceID + workflowID
-		workflowKey := definition.NewWorkflowKey(
-			deserializedTask.GetNamespaceID(),
-			deserializedTask.GetWorkflowID(),
-			"",
-		)
-		if _, ok := taskBatches[workflowKey]; !ok {
-			taskBatches[workflowKey] = make(map[tasks.Category][]tasks.Task, 1)
+		// group by namespaceID + execution businessID + archetypeID
+		archetypeID := chasm.WorkflowArchetypeID
+		if hasArchetypeID, ok := deserializedTask.(tasks.HasArchetypeID); ok {
+			archetypeID = hasArchetypeID.GetArchetypeID()
+		}
+		if archetypeID == chasm.UnspecifiedArchetypeID {
+			archetypeID = chasm.WorkflowArchetypeID
+		}
+		groupKey := taskGroupKey{
+			namespaceID: deserializedTask.GetNamespaceID(),
+			businessID:  deserializedTask.GetWorkflowID(),
+			archetypeID: archetypeID,
 		}
 
-		taskBatches[workflowKey][category] = append(taskBatches[workflowKey][category], deserializedTask)
+		if _, ok := taskGroups[groupKey]; !ok {
+			taskGroups[groupKey] = make(map[tasks.Category][]tasks.Task, 1)
+		}
+
+		taskGroups[groupKey][category] = append(taskGroups[groupKey][category], deserializedTask)
 	}
 
-	for workflowKey, taskBatch := range taskBatches {
+	for groupKey, taskGroup := range taskGroups {
 		err := shardContext.AddTasks(ctx, &persistence.AddHistoryTasksRequest{
 			ShardID:     shardContext.GetShardID(),
 			RangeID:     shardContext.GetRangeID(),
-			NamespaceID: workflowKey.NamespaceID,
-			WorkflowID:  workflowKey.WorkflowID,
-			Tasks:       taskBatch,
+			NamespaceID: groupKey.namespaceID,
+			WorkflowID:  groupKey.businessID,
+			ArchetypeID: groupKey.archetypeID,
+			Tasks:       taskGroup,
 		})
 		if err != nil {
 			return nil, err

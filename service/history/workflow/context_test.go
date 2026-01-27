@@ -1,27 +1,3 @@
-// The MIT License
-//
-// Copyright (c) 2020 Temporal Technologies Inc.  All rights reserved.
-//
-// Copyright (c) 2020 Uber Technologies, Inc.
-//
-// Permission is hereby granted, free of charge, to any person obtaining a copy
-// of this software and associated documentation files (the "Software"), to deal
-// in the Software without restriction, including without limitation the rights
-// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-// copies of the Software, and to permit persons to whom the Software is
-// furnished to do so, subject to the following conditions:
-//
-// The above copyright notice and this permission notice shall be included in
-// all copies or substantial portions of the Software.
-//
-// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
-// THE SOFTWARE.
-
 package workflow
 
 import (
@@ -29,7 +5,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/pborman/uuid"
+	"github.com/google/uuid"
 	"github.com/stretchr/testify/require"
 	"github.com/stretchr/testify/suite"
 	enumspb "go.temporal.io/api/enums/v1"
@@ -37,6 +13,7 @@ import (
 	enumsspb "go.temporal.io/server/api/enums/v1"
 	historyspb "go.temporal.io/server/api/history/v1"
 	persistencespb "go.temporal.io/server/api/persistence/v1"
+	"go.temporal.io/server/chasm"
 	"go.temporal.io/server/common"
 	"go.temporal.io/server/common/cluster"
 	"go.temporal.io/server/common/definition"
@@ -44,6 +21,7 @@ import (
 	"go.temporal.io/server/common/metrics"
 	"go.temporal.io/server/common/persistence"
 	"go.temporal.io/server/common/primitives/timestamp"
+	historyi "go.temporal.io/server/service/history/interfaces"
 	"go.temporal.io/server/service/history/shard"
 	"go.temporal.io/server/service/history/tasks"
 	"go.temporal.io/server/service/history/tests"
@@ -77,7 +55,7 @@ func (s *contextSuite) SetupTest() {
 		&persistencespb.ShardInfo{ShardId: 1},
 		configs,
 	)
-	mockEngine := shard.NewMockEngine(controller)
+	mockEngine := historyi.NewMockEngine(controller)
 	mockEngine.EXPECT().NotifyNewTasks(gomock.Any()).AnyTimes()
 	mockEngine.EXPECT().NotifyNewHistoryEvent(gomock.Any()).AnyTimes()
 	s.mockShard.SetEngineForTesting(mockEngine)
@@ -95,6 +73,7 @@ func (s *contextSuite) SetupTest() {
 	s.workflowContext = NewContext(
 		configs,
 		tests.WorkflowKey,
+		chasm.WorkflowArchetypeID,
 		log.NewNoopLogger(),
 		log.NewNoopLogger(),
 		metrics.NoopMetricsHandler,
@@ -166,7 +145,7 @@ func (s *contextSuite) TestMergeReplicationTasks_SingleReplicationTask() {
 		},
 	}
 
-	newRunID := uuid.New()
+	newRunID := uuid.NewString()
 	newWorkflowSnapshot := &persistence.WorkflowSnapshot{
 		ExecutionState: &persistencespb.WorkflowExecutionState{
 			Status: enumspb.WORKFLOW_EXECUTION_STATUS_RUNNING,
@@ -232,7 +211,7 @@ func (s *contextSuite) TestMergeReplicationTasks_SyncVersionedTransitionTask_Sho
 		},
 	}
 
-	newRunID := uuid.New()
+	newRunID := uuid.NewString()
 	newWorkflowSnapshot := &persistence.WorkflowSnapshot{
 		ExecutionState: &persistencespb.WorkflowExecutionState{
 			Status: enumspb.WORKFLOW_EXECUTION_STATUS_RUNNING,
@@ -296,7 +275,7 @@ func (s *contextSuite) TestMergeReplicationTasks_MultipleReplicationTasks() {
 		},
 	}
 
-	newRunID := uuid.New()
+	newRunID := uuid.NewString()
 	newWorkflowSnapshot := &persistence.WorkflowSnapshot{
 		ExecutionState: &persistencespb.WorkflowExecutionState{
 			Status: enumspb.WORKFLOW_EXECUTION_STATUS_RUNNING,
@@ -524,11 +503,7 @@ func (s *contextSuite) TestRefreshTask() {
 						s.Equal(persistence.UpdateWorkflowModeUpdateCurrent, request.Mode)
 						s.NotEmpty(request.UpdateWorkflowMutation.Tasks)
 						s.Empty(request.UpdateWorkflowEvents)
-						return &persistence.UpdateWorkflowExecutionResponse{
-							UpdateMutableStateStats: persistence.MutableStateStatistics{
-								HistoryStatistics: &persistence.HistoryStatistics{},
-							},
-						}, nil
+						return tests.UpdateWorkflowExecutionResponse, nil
 					}).Times(1)
 			},
 		},
@@ -545,10 +520,11 @@ func (s *contextSuite) TestRefreshTask() {
 				return base
 			},
 			setupMock: func(mockShard *shard.ContextTest) {
-				mockShard.Resource.ExecutionMgr.EXPECT().SetWorkflowExecution(gomock.Any(), gomock.Any()).DoAndReturn(
-					func(_ context.Context, request *persistence.SetWorkflowExecutionRequest) (*persistence.SetWorkflowExecutionResponse, error) {
-						s.NotEmpty(request.SetWorkflowSnapshot.Tasks)
-						return &persistence.SetWorkflowExecutionResponse{}, nil
+				mockShard.Resource.ExecutionMgr.EXPECT().UpdateWorkflowExecution(gomock.Any(), gomock.Any()).DoAndReturn(
+					func(_ context.Context, request *persistence.UpdateWorkflowExecutionRequest) (*persistence.UpdateWorkflowExecutionResponse, error) {
+						s.NotEmpty(request.UpdateWorkflowMutation.Tasks)
+						s.Equal(persistence.UpdateWorkflowModeIgnoreCurrent, request.Mode)
+						return tests.UpdateWorkflowExecutionResponse, nil
 					}).Times(1)
 			},
 		},
@@ -573,10 +549,11 @@ func (s *contextSuite) TestRefreshTask() {
 					Version:    common.EmptyVersion,
 					Attributes: &historypb.HistoryEvent_WorkflowExecutionStartedEventAttributes{},
 				}, nil).Times(2)
-				mockShard.Resource.ExecutionMgr.EXPECT().SetWorkflowExecution(gomock.Any(), gomock.Any()).DoAndReturn(
-					func(_ context.Context, request *persistence.SetWorkflowExecutionRequest) (*persistence.SetWorkflowExecutionResponse, error) {
-						s.NotEmpty(request.SetWorkflowSnapshot.Tasks)
-						return &persistence.SetWorkflowExecutionResponse{}, nil
+				mockShard.Resource.ExecutionMgr.EXPECT().UpdateWorkflowExecution(gomock.Any(), gomock.Any()).DoAndReturn(
+					func(_ context.Context, request *persistence.UpdateWorkflowExecutionRequest) (*persistence.UpdateWorkflowExecutionResponse, error) {
+						s.NotEmpty(request.UpdateWorkflowMutation.Tasks)
+						s.Equal(persistence.UpdateWorkflowModeBypassCurrent, request.Mode)
+						return tests.UpdateWorkflowExecutionResponse, nil
 					}).Times(1)
 			},
 		},

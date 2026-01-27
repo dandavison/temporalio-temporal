@@ -1,27 +1,3 @@
-// The MIT License
-//
-// Copyright (c) 2020 Temporal Technologies Inc.  All rights reserved.
-//
-// Copyright (c) 2020 Uber Technologies, Inc.
-//
-// Permission is hereby granted, free of charge, to any person obtaining a copy
-// of this software and associated documentation files (the "Software"), to deal
-// in the Software without restriction, including without limitation the rights
-// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-// copies of the Software, and to permit persons to whom the Software is
-// furnished to do so, subject to the following conditions:
-//
-// The above copyright notice and this permission notice shall be included in
-// all copies or substantial portions of the Software.
-//
-// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
-// THE SOFTWARE.
-
 package tqid
 
 import (
@@ -69,6 +45,7 @@ type (
 		// IsRoot always returns false for Sticky partitions
 		IsRoot() bool
 		Kind() enumspb.TaskQueueKind
+		IsChild() bool
 
 		// RpcName returns the mangled name of the task queue partition, to be used in RPCs.
 		//
@@ -87,6 +64,8 @@ type (
 		Key() PartitionKey
 		// RoutingKey returns the string that should be used to find the owner of a task queue partition.
 		RoutingKey() string
+		// GradualChangeKey returns an identifier that can be used with gradual changes.
+		GradualChangeKey() []byte
 	}
 
 	// NormalPartition is used to distribute load of a TaskQueue in multiple Matching instances. A normal partition is
@@ -170,7 +149,7 @@ func PartitionFromProto(proto *taskqueuepb.TaskQueue, namespaceId string, taskTy
 	kind := proto.GetKind()
 	normalName := proto.GetNormalName()
 	if normalName != "" && kind != enumspb.TASK_QUEUE_KIND_STICKY {
-		return nil, serviceerror.NewInvalidArgument(fmt.Sprintf("only sticky queues can have normal name. tq: %s, normal name: %s", baseName, normalName))
+		return nil, serviceerror.NewInvalidArgumentf("only sticky queues can have normal name. tq: %s, normal name: %s", baseName, normalName)
 	}
 
 	switch kind {
@@ -287,6 +266,10 @@ func (s *StickyPartition) IsRoot() bool {
 	return false
 }
 
+func (s *StickyPartition) IsChild() bool {
+	return false
+}
+
 func (s *StickyPartition) RpcName() string {
 	return s.stickyName
 }
@@ -303,12 +286,21 @@ func (s *StickyPartition) RoutingKey() string {
 	return fmt.Sprintf("%s:%s:%d", s.NamespaceId(), s.RpcName(), s.TaskType())
 }
 
+func (s *StickyPartition) GradualChangeKey() []byte {
+	key := fmt.Sprintf("%s:%s:%d", s.NamespaceId(), s.RpcName(), s.TaskType())
+	return []byte(key)
+}
+
 func (p *NormalPartition) TaskQueue() *TaskQueue {
 	return p.taskQueue
 }
 
 func (p *NormalPartition) IsRoot() bool {
 	return p.partitionId == 0
+}
+
+func (p *NormalPartition) IsChild() bool {
+	return !p.IsRoot()
 }
 
 func (p *NormalPartition) Kind() enumspb.TaskQueueKind {
@@ -358,6 +350,11 @@ func (p *NormalPartition) RoutingKey() string {
 	return fmt.Sprintf("%s:%s:%d", p.NamespaceId(), p.RpcName(), p.TaskType())
 }
 
+func (p *NormalPartition) GradualChangeKey() []byte {
+	key := fmt.Sprintf("%s:%s:%d", p.NamespaceId(), p.RpcName(), p.TaskType())
+	return []byte(key)
+}
+
 // parseRpcName takes the rpc name of a task queue partition and returns a ParseTaskQueuePartition.
 // Returns an error if the given name is not a valid rpc name.
 func parseRpcName(rpcName string) (string, int, error) {
@@ -368,7 +365,6 @@ func parseRpcName(rpcName string) (string, int, error) {
 		suffixOff := strings.LastIndex(rpcName, partitionDelimiter)
 		if suffixOff <= len(nonRootPartitionPrefix) {
 			return "", 0, serviceerror.NewInvalidArgument("invalid task queue partition name " + rpcName)
-			// nolint:goerr113
 		}
 		baseName = rpcName[len(nonRootPartitionPrefix):suffixOff]
 		suffix := rpcName[suffixOff+1:]

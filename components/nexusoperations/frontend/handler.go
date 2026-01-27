@@ -1,25 +1,3 @@
-// The MIT License
-//
-// Copyright (c) 2024 Temporal Technologies Inc.  All rights reserved.
-//
-// Permission is hereby granted, free of charge, to any person obtaining a copy
-// of this software and associated documentation files (the "Software"), to deal
-// in the Software without restriction, including without limitation the rights
-// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-// copies of the Software, and to permit persons to whom the Software is
-// furnished to do so, subject to the following conditions:
-//
-// The above copyright notice and this permission notice shall be included in
-// all copies or substantial portions of the Software.
-//
-// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
-// THE SOFTWARE.
-
 package frontend
 
 import (
@@ -31,6 +9,7 @@ import (
 	"io"
 	"mime"
 	"net/http"
+	"net/http/httptrace"
 	"net/url"
 	"runtime/debug"
 	"strconv"
@@ -51,14 +30,15 @@ import (
 	"go.temporal.io/server/common/metrics"
 	"go.temporal.io/server/common/namespace"
 	commonnexus "go.temporal.io/server/common/nexus"
+	"go.temporal.io/server/common/nexus/nexusrpc"
 	"go.temporal.io/server/common/resource"
 	"go.temporal.io/server/common/rpc/interceptor"
+	"go.temporal.io/server/components/nexusoperations"
 	"go.temporal.io/server/service/frontend/configs"
 	"go.uber.org/fx"
-	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/credentials"
 	"google.golang.org/grpc/metadata"
-	"google.golang.org/grpc/status"
+	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
 var apiName = configs.CompleteNexusOperation
@@ -72,6 +52,7 @@ const (
 
 type Config struct {
 	Enabled                       dynamicconfig.BoolPropertyFn
+	MaxOperationTokenLength       dynamicconfig.IntPropertyFnWithNamespaceFilter
 	PayloadSizeLimit              dynamicconfig.IntPropertyFnWithNamespaceFilter
 	ForwardingEnabledForNamespace dynamicconfig.BoolPropertyFnWithNamespaceFilter
 }
@@ -87,13 +68,15 @@ type HandlerOptions struct {
 	CallbackTokenGenerator               *commonnexus.CallbackTokenGenerator
 	HistoryClient                        resource.HistoryClient
 	TelemetryInterceptor                 *interceptor.TelemetryInterceptor
+	RequestErrorHandler                  *interceptor.RequestErrorHandler
 	NamespaceValidationInterceptor       *interceptor.NamespaceValidatorInterceptor
-	NamespaceRateLimitInterceptor        *interceptor.NamespaceRateLimitInterceptor
+	NamespaceRateLimitInterceptor        interceptor.NamespaceRateLimitInterceptor
 	NamespaceConcurrencyLimitInterceptor *interceptor.ConcurrentRequestLimitInterceptor
 	RateLimitInterceptor                 *interceptor.RateLimitInterceptor
 	AuthInterceptor                      *authorization.Interceptor
 	RedirectionInterceptor               *interceptor.Redirection
 	ForwardingClients                    *cluster.FrontendHTTPClientCache
+	HTTPTraceProvider                    commonnexus.HTTPClientTraceProvider
 }
 
 type completionHandler struct {
@@ -103,43 +86,75 @@ type completionHandler struct {
 }
 
 // CompleteOperation implements nexus.CompletionHandler.
-func (h *completionHandler) CompleteOperation(ctx context.Context, r *nexus.CompletionRequest) (retErr error) {
+// nolint:revive // (cyclomatic complexity) This function is long but the complexity is justified.
+func (h *completionHandler) CompleteOperation(ctx context.Context, r *nexusrpc.CompletionRequest) (retErr error) {
 	startTime := time.Now()
 	if !h.Config.Enabled() {
 		h.preProcessErrorsCounter.Record(1)
 		return nexus.HandlerErrorf(nexus.HandlerErrorTypeNotFound, "Nexus APIs are disabled")
 	}
-	nsNameEscaped := commonnexus.RouteCompletionCallback.Deserialize(mux.Vars(r.HTTPRequest))
-	nsName, err := url.PathUnescape(nsNameEscaped)
+	token, err := commonnexus.DecodeCallbackToken(r.HTTPRequest.Header.Get(commonnexus.CallbackTokenHeader))
 	if err != nil {
-		h.Logger.Error("failed to extract namespace from request", tag.Error(err))
-		h.preProcessErrorsCounter.Record(1)
-		return nexus.HandlerErrorf(nexus.HandlerErrorTypeBadRequest, "invalid URL")
+		h.Logger.Error("failed to decode callback token", tag.Error(err))
+		return nexus.HandlerErrorf(nexus.HandlerErrorTypeBadRequest, "invalid callback token")
 	}
-	ns, err := h.NamespaceRegistry.GetNamespace(namespace.Name(nsName))
+
+	completion, err := h.CallbackTokenGenerator.DecodeCompletion(token)
 	if err != nil {
-		h.Logger.Error("failed to get namespace for nexus completion request", tag.WorkflowNamespace(nsName), tag.Error(err))
+		h.Logger.Error("failed to decode completion from token", tag.Error(err))
+		return nexus.HandlerErrorf(nexus.HandlerErrorTypeBadRequest, "invalid callback token")
+	}
+	ns, err := h.NamespaceRegistry.GetNamespaceByID(namespace.ID(completion.NamespaceId))
+	if err != nil {
+		h.Logger.Error("failed to get namespace for nexus completion request", tag.WorkflowNamespaceID(completion.NamespaceId), tag.Error(err))
 		h.preProcessErrorsCounter.Record(1)
 		var nfe *serviceerror.NamespaceNotFound
 		if errors.As(err, &nfe) {
-			return nexus.HandlerErrorf(nexus.HandlerErrorTypeNotFound, "namespace %q not found", nsName)
+			return nexus.HandlerErrorf(nexus.HandlerErrorTypeNotFound, "namespace %q not found", completion.NamespaceId)
 		}
 		return commonnexus.ConvertGRPCError(err, false)
 	}
-
+	logger := log.With(
+		h.Logger,
+		tag.WorkflowNamespace(ns.Name().String()),
+		tag.WorkflowID(completion.GetWorkflowId()),
+		tag.WorkflowRunID(completion.GetRunId()),
+	)
 	rCtx := &requestContext{
 		completionHandler: h,
 		namespace:         ns,
+		workflowID:        completion.GetWorkflowId(),
 		logger:            log.With(h.Logger, tag.WorkflowNamespace(ns.Name().String())),
-		metricsHandler:    h.MetricsHandler.WithTags(metrics.NamespaceTag(nsName)),
+		metricsHandler:    h.MetricsHandler.WithTags(metrics.NamespaceTag(ns.Name().String())),
 		metricsHandlerForInterceptors: h.MetricsHandler.WithTags(
 			metrics.OperationTag(methodNameForMetrics),
-			metrics.NamespaceTag(nsName),
+			metrics.NamespaceTag(ns.Name().String()),
 		),
 		requestStartTime: startTime,
 	}
+	if r.HTTPRequest.Header != nil {
+		rCtx.originalHeaders = r.HTTPRequest.Header.Clone()
+	}
 	ctx = rCtx.augmentContext(ctx, r.HTTPRequest.Header)
 	defer rCtx.capturePanicAndRecordMetrics(&ctx, &retErr)
+	if r.HTTPRequest.URL.Path != commonnexus.PathCompletionCallbackNoIdentifier {
+		nsNameEscaped := commonnexus.RouteCompletionCallback.Deserialize(mux.Vars(r.HTTPRequest))
+		nsName, err := url.PathUnescape(nsNameEscaped)
+		if err != nil {
+			h.Logger.Error("failed to extract namespace from request", tag.Error(err))
+			h.preProcessErrorsCounter.Record(1)
+			return nexus.HandlerErrorf(nexus.HandlerErrorTypeBadRequest, "invalid URL")
+		}
+		if nsName != ns.Name().String() {
+			logger.Error(
+				"namespace ID in token doesn't match the token",
+				tag.WorkflowNamespaceID(ns.ID().String()),
+				tag.Error(err),
+				tag.NewStringTag("completion-namespace-id", completion.GetNamespaceId()),
+			)
+			return nexus.HandlerErrorf(nexus.HandlerErrorTypeBadRequest, "invalid callback token")
+		}
+	}
 
 	if err := rCtx.interceptRequest(ctx, r); err != nil {
 		var notActiveErr *serviceerror.NamespaceNotActive
@@ -148,42 +163,53 @@ func (h *completionHandler) CompleteOperation(ctx context.Context, r *nexus.Comp
 		}
 		return err
 	}
-
-	token, err := commonnexus.DecodeCallbackToken(r.HTTPRequest.Header.Get(commonnexus.CallbackTokenHeader))
-	if err != nil {
-		h.Logger.Error("failed to decode callback token", tag.WorkflowNamespace(ns.Name().String()), tag.Error(err))
-		return nexus.HandlerErrorf(nexus.HandlerErrorTypeBadRequest, "invalid callback token")
+	tokenLimit := h.Config.MaxOperationTokenLength(ns.Name().String())
+	if len(r.OperationToken) > tokenLimit {
+		return nexus.HandlerErrorf(nexus.HandlerErrorTypeBadRequest, "operation token length exceeds allowed limit (%d/%d)", len(r.OperationToken), tokenLimit)
 	}
 
-	completion, err := h.CallbackTokenGenerator.DecodeCompletion(token)
-	if err != nil {
-		h.Logger.Error("failed to decode completion from token", tag.WorkflowNamespace(ns.Name().String()), tag.Error(err))
-		return nexus.HandlerErrorf(nexus.HandlerErrorTypeBadRequest, "invalid callback token")
-	}
-
-	logger := log.With(
-		h.Logger,
-		tag.WorkflowNamespace(ns.Name().String()),
-		tag.WorkflowID(completion.GetWorkflowId()),
-		tag.WorkflowRunID(completion.GetRunId()),
-	)
-	if completion.GetNamespaceId() != ns.ID().String() {
-		logger.Error(
-			"namespace ID in token doesn't match the token",
-			tag.WorkflowNamespaceID(ns.ID().String()),
-			tag.Error(err),
-			tag.NewStringTag("completion-namespace-id", completion.GetNamespaceId()),
-		)
-		return nexus.HandlerErrorf(nexus.HandlerErrorTypeBadRequest, "invalid callback token")
+	var links []*commonpb.Link
+	for _, nexusLink := range r.Links {
+		switch nexusLink.Type {
+		case string((&commonpb.Link_WorkflowEvent{}).ProtoReflect().Descriptor().FullName()):
+			link, err := nexusoperations.ConvertNexusLinkToLinkWorkflowEvent(nexusLink)
+			if err != nil {
+				// TODO(rodrigozhou): links are non-essential for the execution of the workflow,
+				// so ignoring the error for now; we will revisit how to handle these errors later.
+				h.Logger.Warn(
+					fmt.Sprintf("failed to parse link to %q: %s", nexusLink.Type, nexusLink.URL),
+					tag.Error(err),
+				)
+				continue
+			}
+			links = append(links, &commonpb.Link{
+				Variant: &commonpb.Link_WorkflowEvent_{
+					WorkflowEvent: link,
+				},
+			})
+		default:
+			// If the link data type is unsupported, just ignore it for now.
+			h.Logger.Warn(fmt.Sprintf("invalid link data type: %q", nexusLink.Type))
+		}
 	}
 	hr := &historyservice.CompleteNexusOperationRequest{
-		Completion: completion,
-		State:      string(r.State),
+		Completion:     completion,
+		State:          string(r.State),
+		OperationToken: r.OperationToken,
+		StartTime:      timestamppb.New(r.StartTime),
+		Links:          links,
 	}
 	switch r.State { // nolint:exhaustive
 	case nexus.OperationStateFailed, nexus.OperationStateCanceled:
+		failureErr, ok := r.Error.(*nexus.FailureError)
+		if !ok {
+			// This shouldn't happen as the Nexus SDK is always expected to convert Failures from the wire to
+			// FailureErrors.
+			logger.Error("result error is not a FailureError", tag.Error(err))
+			return nexus.HandlerErrorf(nexus.HandlerErrorTypeInternal, "internal server error")
+		}
 		hr.Outcome = &historyservice.CompleteNexusOperationRequest_Failure{
-			Failure: commonnexus.NexusFailureToProtoFailure(r.Failure),
+			Failure: commonnexus.NexusFailureToProtoFailure(failureErr.Failure),
 		}
 	case nexus.OperationStateSucceeded:
 		var result *commonpb.Payload
@@ -210,35 +236,80 @@ func (h *completionHandler) CompleteOperation(ctx context.Context, r *nexus.Comp
 		if errors.As(err, &namespaceInactiveErr) {
 			return nexus.HandlerErrorf(nexus.HandlerErrorTypeUnavailable, "cluster inactive")
 		}
-		if st, ok := status.FromError(err); ok && st.Code() == codes.NotFound {
-			return nexus.HandlerErrorf(nexus.HandlerErrorTypeNotFound, "operation not found")
+		var notFoundErr *serviceerror.NotFound
+		if errors.As(err, &notFoundErr) {
+			return commonnexus.ConvertGRPCError(err, true)
 		}
 		return commonnexus.ConvertGRPCError(err, false)
 	}
 	return nil
 }
 
-func (h *completionHandler) forwardCompleteOperation(ctx context.Context, r *nexus.CompletionRequest, rCtx *requestContext) error {
-	client, err := h.ForwardingClients.Get(rCtx.namespace.ActiveClusterName())
+func (h *completionHandler) forwardCompleteOperation(ctx context.Context, r *nexusrpc.CompletionRequest, rCtx *requestContext) error {
+	client, err := h.ForwardingClients.Get(rCtx.namespace.ActiveClusterName(rCtx.workflowID))
 	if err != nil {
-		h.Logger.Error("unable to get HTTP client for forward request", tag.Operation(apiName), tag.WorkflowNamespace(rCtx.namespace.Name().String()), tag.Error(err), tag.SourceCluster(h.ClusterMetadata.GetCurrentClusterName()), tag.TargetCluster(rCtx.namespace.ActiveClusterName()))
+		h.Logger.Error("unable to get HTTP client for forward request", tag.Operation(apiName), tag.WorkflowNamespace(rCtx.namespace.Name().String()), tag.Error(err), tag.SourceCluster(h.ClusterMetadata.GetCurrentClusterName()), tag.TargetCluster(rCtx.namespace.ActiveClusterName(rCtx.workflowID)))
 		return nexus.HandlerErrorf(nexus.HandlerErrorTypeInternal, "internal error")
 	}
 
 	forwardURL, err := url.JoinPath(client.BaseURL(), commonnexus.RouteCompletionCallback.Path(rCtx.namespace.Name().String()))
 	if err != nil {
-		h.Logger.Error("failed to construct forwarding request URL", tag.Operation(apiName), tag.WorkflowNamespace(rCtx.namespace.Name().String()), tag.Error(err), tag.TargetCluster(rCtx.namespace.ActiveClusterName()))
+		h.Logger.Error("failed to construct forwarding request URL", tag.Operation(apiName), tag.WorkflowNamespace(rCtx.namespace.Name().String()), tag.Error(err), tag.TargetCluster(rCtx.namespace.ActiveClusterName(rCtx.workflowID)))
 		return nexus.HandlerErrorf(nexus.HandlerErrorTypeInternal, "internal error")
 	}
 
-	forwardReq, err := http.NewRequestWithContext(ctx, r.HTTPRequest.Method, forwardURL, r.HTTPRequest.Body)
-	if err != nil {
-		h.Logger.Error("failed to construct forwarding HTTP request", tag.Operation(apiName), tag.WorkflowNamespace(rCtx.namespace.Name().String()), tag.Error(err))
-		return nexus.HandlerErrorf(nexus.HandlerErrorTypeInternal, "internal error")
+	if h.HTTPTraceProvider != nil {
+		traceLogger := log.With(h.Logger,
+			tag.Operation(apiName),
+			tag.WorkflowNamespace(rCtx.namespace.Name().String()),
+			tag.AttemptStart(time.Now().UTC()),
+			tag.SourceCluster(h.ClusterMetadata.GetCurrentClusterName()),
+			tag.TargetCluster(rCtx.namespace.ActiveClusterName(rCtx.workflowID)),
+		)
+		if trace := h.HTTPTraceProvider.NewForwardingTrace(traceLogger); trace != nil {
+			ctx = httptrace.WithClientTrace(ctx, trace)
+		}
 	}
 
-	if r.HTTPRequest.Header != nil {
-		forwardReq.Header = r.HTTPRequest.Header.Clone()
+	var forwardReq *http.Request
+	switch r.State {
+	case nexus.OperationStateSucceeded:
+		// For successful operations, the Nexus framework streams the result as a LazyValue, so we can reuse the
+		// incoming request body.
+		forwardReq, err = http.NewRequestWithContext(ctx, r.HTTPRequest.Method, forwardURL, r.HTTPRequest.Body)
+		if err != nil {
+			h.Logger.Error("failed to construct forwarding HTTP request", tag.Operation(apiName), tag.WorkflowNamespace(rCtx.namespace.Name().String()), tag.Error(err))
+			return nexus.HandlerErrorf(nexus.HandlerErrorTypeInternal, "internal error")
+		}
+	case nexus.OperationStateFailed, nexus.OperationStateCanceled:
+		// For unsuccessful operations, the Nexus framework reads and closes the original request body to deserialize
+		// the failure, so we must construct a new completion to forward.
+		var failureErr *nexus.FailureError
+		if !errors.As(r.Error, &failureErr) {
+			// This shouldn't happen as the Nexus SDK is always expected to convert Failures from the wire to
+			// FailureErrors.
+			h.Logger.Error("received unexpected error type when trying to forward Nexus operation completion", tag.WorkflowNamespace(rCtx.namespace.Name().String()), tag.Error(err))
+			return nexus.HandlerErrorf(nexus.HandlerErrorTypeInternal, "internal error")
+		}
+		c := &nexusrpc.OperationCompletionUnsuccessful{
+			State:          r.State,
+			OperationToken: r.OperationToken,
+			StartTime:      r.StartTime,
+			Links:          r.Links,
+			Failure:        failureErr.Failure,
+		}
+		forwardReq, err = nexusrpc.NewCompletionHTTPRequest(ctx, forwardURL, c)
+		if err != nil {
+			h.Logger.Error("failed to construct forwarding HTTP request", tag.Operation(apiName), tag.WorkflowNamespace(rCtx.namespace.Name().String()), tag.Error(err))
+			return nexus.HandlerErrorf(nexus.HandlerErrorTypeInternal, "internal error")
+		}
+	default:
+		return nexus.HandlerErrorf(nexus.HandlerErrorTypeBadRequest, "invalid operation state: %q", r.State)
+	}
+
+	forwardReq.Header = rCtx.originalHeaders
+	if forwardReq.Header == nil {
+		forwardReq.Header = make(http.Header, 1)
 	}
 	forwardReq.Header.Set(interceptor.DCRedirectionApiHeaderName, "true")
 
@@ -248,6 +319,7 @@ func (h *completionHandler) forwardCompleteOperation(ctx context.Context, r *nex
 		return nexus.HandlerErrorf(nexus.HandlerErrorTypeInternal, "internal error")
 	}
 
+	// TODO: The following response handling logic is duplicated in the nexus_invocation executor. Eventually it should live in the Nexus SDK.
 	body, err := readAndReplaceBody(resp)
 	if err != nil {
 		h.Logger.Error("unable to read HTTP response for forwarded request", tag.Operation(apiName), tag.WorkflowNamespace(rCtx.namespace.Name().String()), tag.Error(err))
@@ -270,14 +342,15 @@ func (h *completionHandler) forwardCompleteOperation(ctx context.Context, r *nex
 		return nexus.HandlerErrorf(nexus.HandlerErrorTypeInternal, "internal error")
 	}
 
+	// TODO: Upgrade Nexus SDK in order to reduce HTTP exposure
 	handlerErr := &nexus.HandlerError{
-		Type:    commonnexus.HandlerErrorTypeFromHTTPStatus(resp.StatusCode),
-		Failure: &failure,
+		Type:  commonnexus.HandlerErrorTypeFromHTTPStatus(resp.StatusCode),
+		Cause: &nexus.FailureError{Failure: failure},
 	}
 
 	if handlerErr.Type == nexus.HandlerErrorTypeInternal && resp.StatusCode != http.StatusInternalServerError {
 		h.Logger.Warn("received unknown status code on Nexus client unexpected response error", tag.Value(resp.StatusCode))
-		handlerErr.Failure.Message = "internal error"
+		handlerErr.Cause = errors.New("internal error")
 	}
 
 	return handlerErr
@@ -302,16 +375,31 @@ func isMediaTypeJSON(contentType string) bool {
 	return err == nil && mediaType == "application/json"
 }
 
+// Copies HTTP request headers to Nexus headers except those starting with content- since those will be added by the client.
+func httpHeaderToNexusHeader(httpHeader http.Header) nexus.Header {
+	header := nexus.Header{}
+	for k, v := range httpHeader {
+		lowerK := strings.ToLower(k)
+		if !strings.HasPrefix(lowerK, "content-") {
+			// Nexus headers can only have single values, ignore multiple values.
+			header[lowerK] = v[0]
+		}
+	}
+	return header
+}
+
 type requestContext struct {
 	*completionHandler
 	logger                        log.Logger
 	metricsHandler                metrics.Handler
 	metricsHandlerForInterceptors metrics.Handler
 	namespace                     *namespace.Namespace
+	workflowID                    string
 	cleanupFunctions              []func(error)
 	requestStartTime              time.Time
 	outcomeTag                    metrics.Tag
 	forwarded                     bool
+	originalHeaders               http.Header
 }
 
 func (c *requestContext) augmentContext(ctx context.Context, header http.Header) context.Context {
@@ -322,16 +410,22 @@ func (c *requestContext) augmentContext(ctx context.Context, header http.Header)
 		func() string { return c.namespace.Name().String() },
 		func() string { return methodNameForMetrics },
 	)
-	if userAgent := header.Get(http.CanonicalHeaderKey(headerUserAgent)); userAgent != "" {
-		parts := strings.Split(userAgent, clientNameVersionDelim)
-		if len(parts) == 2 {
-			return metadata.NewIncomingContext(ctx, metadata.New(map[string]string{
-				headers.ClientNameHeaderName:    parts[0],
-				headers.ClientVersionHeaderName: parts[1],
-			}))
+	if userAgent := header.Get(headerUserAgent); userAgent != "" {
+		// Preserve original strict behavior: only process if exactly one delimiter present.
+		if strings.Count(userAgent, clientNameVersionDelim) == 1 {
+			parts := strings.SplitN(userAgent, clientNameVersionDelim, 2)
+			if len(parts) == 2 { // defensive
+				mdIncoming, ok := metadata.FromIncomingContext(ctx)
+				if !ok {
+					mdIncoming = metadata.MD{}
+				}
+				mdIncoming.Set(headers.ClientNameHeaderName, parts[0])
+				mdIncoming.Set(headers.ClientVersionHeaderName, parts[1])
+				ctx = metadata.NewIncomingContext(ctx, mdIncoming)
+			}
 		}
 	}
-	return ctx
+	return headers.Propagate(ctx)
 }
 
 func (c *requestContext) capturePanicAndRecordMetrics(ctxPtr *context.Context, errPtr *error) {
@@ -339,7 +433,7 @@ func (c *requestContext) capturePanicAndRecordMetrics(ctxPtr *context.Context, e
 	if recovered != nil {
 		err, ok := recovered.(error)
 		if !ok {
-			err = fmt.Errorf("panic: %v", recovered) //nolint:goerr113
+			err = fmt.Errorf("panic: %v", recovered)
 		}
 
 		st := string(debug.Stack())
@@ -353,7 +447,7 @@ func (c *requestContext) capturePanicAndRecordMetrics(ctxPtr *context.Context, e
 		} else {
 			c.metricsHandler = c.metricsHandler.WithTags(metrics.OutcomeTag("success"))
 		}
-	} else if c.outcomeTag != nil {
+	} else if c.outcomeTag.Key != "" {
 		c.metricsHandler = c.metricsHandler.WithTags(c.outcomeTag)
 	} else {
 		var he *nexus.HandlerError
@@ -378,7 +472,7 @@ func (c *requestContext) capturePanicAndRecordMetrics(ctxPtr *context.Context, e
 }
 
 // TODO(bergundy): Merge this with the interceptRequest method in nexus_handler.go.
-func (c *requestContext) interceptRequest(ctx context.Context, request *nexus.CompletionRequest) error {
+func (c *requestContext) interceptRequest(ctx context.Context, request *nexusrpc.CompletionRequest) error {
 	var tlsInfo *credentials.TLSInfo
 	if request.HTTPRequest.TLS != nil {
 		tlsInfo = &credentials.TLSInfo{
@@ -408,7 +502,17 @@ func (c *requestContext) interceptRequest(ctx context.Context, request *nexus.Co
 		Request:   request,
 	})
 	if err != nil {
-		return commonnexus.AdaptAuthorizeError(err)
+		// If frontend.exposeAuthorizerErrors is false, Authorize err is either an explicitly set reason, or a generic
+		// "Request unauthorized." message.
+		// Otherwise, expose the underlying error.
+		var permissionDeniedError *serviceerror.PermissionDenied
+		if errors.As(err, &permissionDeniedError) {
+			c.outcomeTag = metrics.OutcomeTag("unauthorized")
+			return commonnexus.AdaptAuthorizeError(permissionDeniedError)
+		}
+		c.outcomeTag = metrics.OutcomeTag("internal_auth_error")
+		c.logger.Error("Authorization internal error with processing nexus callback", tag.Error(err))
+		return commonnexus.ConvertGRPCError(err, false)
 	}
 
 	if err := c.NamespaceValidationInterceptor.ValidateState(c.namespace, apiName); err != nil {
@@ -417,15 +521,15 @@ func (c *requestContext) interceptRequest(ctx context.Context, request *nexus.Co
 	}
 
 	// Redirect if current cluster is passive for this namespace.
-	if !c.namespace.ActiveInCluster(c.ClusterMetadata.GetCurrentClusterName()) {
-		if c.shouldForwardRequest(ctx, request.HTTPRequest.Header) {
+	if c.namespace.ActiveClusterName(c.workflowID) != c.ClusterMetadata.GetCurrentClusterName() {
+		if c.shouldForwardRequest(ctx, request.HTTPRequest.Header, c.workflowID) {
 			c.forwarded = true
 			handler, forwardStartTime := c.RedirectionInterceptor.BeforeCall(methodNameForMetrics)
 			c.cleanupFunctions = append(c.cleanupFunctions, func(retErr error) {
-				c.RedirectionInterceptor.AfterCall(handler, forwardStartTime, c.namespace.ActiveClusterName(), retErr)
+				c.RedirectionInterceptor.AfterCall(handler, forwardStartTime, c.namespace.ActiveClusterName(c.workflowID), c.namespace.Name().String(), retErr)
 			})
 			// Handler methods should have special logic to forward requests if this method returns a serviceerror.NamespaceNotActive error.
-			return serviceerror.NewNamespaceNotActive(c.namespace.Name().String(), c.ClusterMetadata.GetCurrentClusterName(), c.namespace.ActiveClusterName())
+			return serviceerror.NewNamespaceNotActive(c.namespace.Name().String(), c.ClusterMetadata.GetCurrentClusterName(), c.namespace.ActiveClusterName(c.workflowID))
 		}
 		c.metricsHandler = c.metricsHandler.WithTags(metrics.OutcomeTag("namespace_inactive_forwarding_disabled"))
 		return nexus.HandlerErrorf(nexus.HandlerErrorTypeUnavailable, "cluster inactive")
@@ -433,7 +537,7 @@ func (c *requestContext) interceptRequest(ctx context.Context, request *nexus.Co
 
 	c.cleanupFunctions = append(c.cleanupFunctions, func(retErr error) {
 		if retErr != nil {
-			c.TelemetryInterceptor.HandleError(
+			c.RequestErrorHandler.HandleError(
 				request,
 				"",
 				c.metricsHandlerForInterceptors,
@@ -474,7 +578,7 @@ func (c *requestContext) interceptRequest(ctx context.Context, request *nexus.Co
 // SelectedAPIsForwardingRedirectionPolicy.getTargetClusterAndIsNamespaceNotActiveAutoForwarding so all
 // redirection conditions can be checked at once. If either of those methods are updated, this should
 // be kept in sync.
-func (c *requestContext) shouldForwardRequest(ctx context.Context, header http.Header) bool {
+func (c *requestContext) shouldForwardRequest(ctx context.Context, header http.Header, businessID string) bool {
 	redirectHeader := header.Get(interceptor.DCRedirectionContextHeaderName)
 	redirectAllowed, err := strconv.ParseBool(redirectHeader)
 	if err != nil {
@@ -483,6 +587,6 @@ func (c *requestContext) shouldForwardRequest(ctx context.Context, header http.H
 	return redirectAllowed &&
 		c.RedirectionInterceptor.RedirectionAllowed(ctx) &&
 		c.namespace.IsGlobalNamespace() &&
-		len(c.namespace.ClusterNames()) > 1 &&
+		len(c.namespace.ClusterNames(businessID)) > 1 &&
 		c.Config.ForwardingEnabledForNamespace(c.namespace.Name().String())
 }

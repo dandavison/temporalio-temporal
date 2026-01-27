@@ -1,32 +1,9 @@
-// The MIT License
-//
-// Copyright (c) 2020 Temporal Technologies Inc.  All rights reserved.
-//
-// Copyright (c) 2020 Uber Technologies, Inc.
-//
-// Permission is hereby granted, free of charge, to any person obtaining a copy
-// of this software and associated documentation files (the "Software"), to deal
-// in the Software without restriction, including without limitation the rights
-// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-// copies of the Software, and to permit persons to whom the Software is
-// furnished to do so, subject to the following conditions:
-//
-// The above copyright notice and this permission notice shall be included in
-// all copies or substantial portions of the Software.
-//
-// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
-// THE SOFTWARE.
-
-//go:generate mockgen -copyright_file ../../../LICENSE -package $GOPACKAGE -source $GOFILE -destination scheduler_mock.go
+//go:generate mockgen -package $GOPACKAGE -source $GOFILE -destination scheduler_mock.go
 
 package queues
 
 import (
+	"go.temporal.io/server/chasm"
 	"go.temporal.io/server/common/clock"
 	"go.temporal.io/server/common/dynamicconfig"
 	"go.temporal.io/server/common/log"
@@ -70,12 +47,14 @@ type (
 	ChannelWeightFn  = tasks.ChannelWeightFn[TaskChannelKey]
 
 	SchedulerOptions struct {
-		WorkerCount             dynamicconfig.TypedSubscribable[int]
-		ActiveNamespaceWeights  dynamicconfig.MapPropertyFnWithNamespaceFilter
-		StandbyNamespaceWeights dynamicconfig.MapPropertyFnWithNamespaceFilter
+		WorkerCount                    dynamicconfig.TypedSubscribable[int]
+		ActiveNamespaceWeights         dynamicconfig.MapPropertyFnWithNamespaceFilter
+		StandbyNamespaceWeights        dynamicconfig.MapPropertyFnWithNamespaceFilter
+		InactiveNamespaceDeletionDelay dynamicconfig.DurationPropertyFn
 	}
 
 	RateLimitedSchedulerOptions struct {
+		Enabled          dynamicconfig.BoolPropertyFn
 		EnableShadowMode dynamicconfig.BoolPropertyFn
 		StartupDelay     dynamicconfig.DurationPropertyFn
 	}
@@ -129,10 +108,19 @@ func NewScheduler(
 			)
 		}
 
-		return configs.ConvertDynamicConfigValueToWeights(
+		weight, ok := configs.ConvertDynamicConfigValueToWeights(
 			namespaceWeights(namespaceName.String()),
 			logger,
 		)[key.Priority]
+		if !ok || weight <= 0 {
+			logger.Warn("Task priority weight not specified or is invalid, using default weight",
+				tag.TaskPriority(key.Priority.String()),
+				tag.NewInt("priority-weight", weight),
+				tag.NewInt("default-weight", configs.DefaultPriorityWeight),
+			)
+			weight = configs.DefaultPriorityWeight
+		}
+		return weight
 	}
 	channelWeightUpdateCh := make(chan struct{}, 1)
 	fifoSchedulerOptions := &tasks.FIFOSchedulerOptions{
@@ -142,9 +130,10 @@ func NewScheduler(
 
 	scheduler = tasks.NewInterleavedWeightedRoundRobinScheduler(
 		tasks.InterleavedWeightedRoundRobinSchedulerOptions[Executable, TaskChannelKey]{
-			TaskChannelKeyFn:      taskChannelKeyFn,
-			ChannelWeightFn:       channelWeightFn,
-			ChannelWeightUpdateCh: channelWeightUpdateCh,
+			TaskChannelKeyFn:             taskChannelKeyFn,
+			ChannelWeightFn:              channelWeightFn,
+			ChannelWeightUpdateCh:        channelWeightUpdateCh,
+			InactiveChannelDeletionDelay: options.InactiveNamespaceDeletionDelay,
 		},
 		tasks.Scheduler[Executable](tasks.NewFIFOScheduler[Executable](
 			fifoSchedulerOptions,
@@ -211,6 +200,7 @@ func NewRateLimitedScheduler(
 	namespaceRegistry namespace.Registry,
 	rateLimiter SchedulerRateLimiter,
 	timeSource clock.TimeSource,
+	chasmRegistry *chasm.Registry,
 	logger log.Logger,
 	metricsHandler metrics.Handler,
 ) Scheduler {
@@ -233,10 +223,13 @@ func NewRateLimitedScheduler(
 		if err != nil {
 			namespaceName = namespace.EmptyName
 		}
-		return quotas.NewRequest("", taskSchedulerToken, namespaceName.String(), tasks.PriorityName[e.GetPriority()], 0, "")
+		return quotas.NewRequest(e.GetType().String(), taskSchedulerToken, namespaceName.String(), e.GetPriority().CallerType(), 0, "")
 	}
 	taskMetricsTagsFn := func(e Executable) []metrics.Tag {
-		return append(EstimateTaskMetricTag(e, namespaceRegistry, currentClusterName), metrics.TaskPriorityTag(e.GetPriority().String()))
+		return append(
+			estimateTaskMetricTags(e.GetTask(), namespaceRegistry, currentClusterName, chasmRegistry, GetTaskTypeTagValue),
+			metrics.TaskPriorityTag(e.GetPriority().String()),
+		)
 	}
 
 	rateLimitedScheduler := tasks.NewRateLimitedScheduler[Executable](
@@ -246,7 +239,8 @@ func NewRateLimitedScheduler(
 		taskQuotaRequestFn,
 		taskMetricsTagsFn,
 		tasks.RateLimitedSchedulerOptions{
-			EnableShadowMode: options.EnableShadowMode(),
+			Enabled:          options.Enabled,
+			EnableShadowMode: options.EnableShadowMode,
 		},
 		logger,
 		metricsHandler,

@@ -1,39 +1,15 @@
-// The MIT License
-//
-// Copyright (c) 2020 Temporal Technologies Inc.  All rights reserved.
-//
-// Copyright (c) 2020 Uber Technologies, Inc.
-//
-// Permission is hereby granted, free of charge, to any person obtaining a copy
-// of this software and associated documentation files (the "Software"), to deal
-// in the Software without restriction, including without limitation the rights
-// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-// copies of the Software, and to permit persons to whom the Software is
-// furnished to do so, subject to the following conditions:
-//
-// The above copyright notice and this permission notice shall be included in
-// all copies or substantial portions of the Software.
-//
-// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
-// THE SOFTWARE.
-
 package sql
 
 import (
 	"context"
 	"database/sql"
-	"fmt"
 	"net"
 	"time"
 
 	"go.temporal.io/api/serviceerror"
 	"go.temporal.io/server/common/log"
 	p "go.temporal.io/server/common/persistence"
+	"go.temporal.io/server/common/persistence/serialization"
 	"go.temporal.io/server/common/persistence/sql/sqlplugin"
 )
 
@@ -51,16 +27,16 @@ func (s *sqlClusterMetadataManager) ListClusterMetadata(
 	if request.NextPageToken != nil {
 		err := gobDeserialize(request.NextPageToken, &clusterName)
 		if err != nil {
-			return nil, serviceerror.NewInternal(fmt.Sprintf("error deserializing page token: %v", err))
+			return nil, serviceerror.NewInternalf("error deserializing page token: %v", err)
 		}
 	}
 
-	rows, err := s.Db.ListClusterMetadata(ctx, &sqlplugin.ClusterMetadataFilter{ClusterName: clusterName, PageSize: &request.PageSize})
+	rows, err := s.DB.ListClusterMetadata(ctx, &sqlplugin.ClusterMetadataFilter{ClusterName: clusterName, PageSize: &request.PageSize})
 	if err != nil {
 		if err == sql.ErrNoRows {
 			return &p.InternalListClusterMetadataResponse{}, nil
 		}
-		return nil, serviceerror.NewUnavailable(fmt.Sprintf("ListClusterMetadata operation failed. Failed to get cluster metadata rows. Error: %v", err))
+		return nil, serviceerror.NewUnavailablef("ListClusterMetadata operation failed. Failed to get cluster metadata rows. Error: %v", err)
 	}
 
 	var clusterMetadata []*p.InternalGetClusterMetadataResponse
@@ -69,9 +45,6 @@ func (s *sqlClusterMetadataManager) ListClusterMetadata(
 			ClusterMetadata: p.NewDataBlob(row.Data, row.DataEncoding),
 			Version:         row.Version,
 		}
-		if err != nil {
-			return nil, err
-		}
 		clusterMetadata = append(clusterMetadata, resp)
 	}
 
@@ -79,7 +52,7 @@ func (s *sqlClusterMetadataManager) ListClusterMetadata(
 	if len(rows) >= request.PageSize {
 		nextPageToken, err := gobSerialize(rows[len(rows)-1].ClusterName)
 		if err != nil {
-			return nil, serviceerror.NewInternal(fmt.Sprintf("error serializing page token: %v", err))
+			return nil, serviceerror.NewInternalf("error serializing page token: %v", err)
 		}
 		resp.NextPageToken = nextPageToken
 	}
@@ -90,7 +63,7 @@ func (s *sqlClusterMetadataManager) GetClusterMetadata(
 	ctx context.Context,
 	request *p.InternalGetClusterMetadataRequest,
 ) (*p.InternalGetClusterMetadataResponse, error) {
-	row, err := s.Db.GetClusterMetadata(ctx, &sqlplugin.ClusterMetadataFilter{ClusterName: request.ClusterName})
+	row, err := s.DB.GetClusterMetadata(ctx, &sqlplugin.ClusterMetadataFilter{ClusterName: request.ClusterName})
 
 	if err != nil {
 		return nil, convertCommonErrors("GetClusterMetadata", err)
@@ -113,14 +86,14 @@ func (s *sqlClusterMetadataManager) SaveClusterMetadata(
 		var lastVersion int64
 		if err != nil {
 			if err != sql.ErrNoRows {
-				return serviceerror.NewUnavailable(fmt.Sprintf("SaveClusterMetadata operation failed. Error %v", err))
+				return serviceerror.NewUnavailablef("SaveClusterMetadata operation failed. Error %v", err)
 			}
 		} else {
 			lastVersion = oldClusterMetadata.Version
 		}
 		if request.Version != lastVersion {
-			return serviceerror.NewUnavailable(fmt.Sprintf("SaveClusterMetadata encountered version mismatch, expected %v but got %v.",
-				request.Version, oldClusterMetadata.Version))
+			return serviceerror.NewUnavailablef("SaveClusterMetadata encountered version mismatch, expected %v but got %v.",
+				request.Version, oldClusterMetadata.Version)
 		}
 		_, err = tx.SaveClusterMetadata(ctx, &sqlplugin.ClusterMetadataRow{
 			ClusterName:  request.ClusterName,
@@ -144,7 +117,7 @@ func (s *sqlClusterMetadataManager) DeleteClusterMetadata(
 	ctx context.Context,
 	request *p.InternalDeleteClusterMetadataRequest,
 ) error {
-	_, err := s.Db.DeleteClusterMetadata(ctx, &sqlplugin.ClusterMetadataFilter{ClusterName: request.ClusterName})
+	_, err := s.DB.DeleteClusterMetadata(ctx, &sqlplugin.ClusterMetadataFilter{ClusterName: request.ClusterName})
 
 	if err != nil {
 		return convertCommonErrors("DeleteClusterMetadata", err)
@@ -184,7 +157,7 @@ func (s *sqlClusterMetadataManager) GetClusterMembers(
 		filter.RPCAddressEquals = request.RPCAddressEquals.String()
 	}
 
-	rows, err := s.Db.GetClusterMembers(ctx, filter)
+	rows, err := s.DB.GetClusterMembers(ctx, filter)
 
 	if err != nil {
 		return nil, convertCommonErrors("GetClusterMembers", err)
@@ -218,7 +191,7 @@ func (s *sqlClusterMetadataManager) UpsertClusterMembership(
 ) error {
 	now := time.Now().UTC()
 	recordExpiry := now.Add(request.RecordExpiry)
-	_, err := s.Db.UpsertClusterMembership(ctx, &sqlplugin.ClusterMembershipRow{
+	_, err := s.DB.UpsertClusterMembership(ctx, &sqlplugin.ClusterMembershipRow{
 		Role:          request.Role,
 		HostID:        request.HostID,
 		RPCAddress:    request.RPCAddress.String(),
@@ -238,7 +211,7 @@ func (s *sqlClusterMetadataManager) PruneClusterMembership(
 	ctx context.Context,
 	request *p.PruneClusterMembershipRequest,
 ) error {
-	_, err := s.Db.PruneClusterMembership(
+	_, err := s.DB.PruneClusterMembership(
 		ctx,
 		&sqlplugin.PruneClusterMembershipFilter{
 			PruneRecordsBefore: time.Now().UTC(),
@@ -255,8 +228,9 @@ func (s *sqlClusterMetadataManager) PruneClusterMembership(
 func newClusterMetadataPersistence(
 	db sqlplugin.DB,
 	logger log.Logger,
+	serializer serialization.Serializer,
 ) (p.ClusterMetadataStore, error) {
 	return &sqlClusterMetadataManager{
-		SqlStore: NewSqlStore(db, logger),
+		SqlStore: NewSQLStore(db, logger, serializer),
 	}, nil
 }

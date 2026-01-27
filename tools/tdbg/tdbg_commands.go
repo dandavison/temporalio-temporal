@@ -1,27 +1,3 @@
-// The MIT License
-//
-// Copyright (c) 2020 Temporal Technologies Inc.  All rights reserved.
-//
-// Copyright (c) 2020 Uber Technologies, Inc.
-//
-// Permission is hereby granted, free of charge, to any person obtaining a copy
-// of this software and associated documentation files (the "Software"), to deal
-// in the Software without restriction, including without limitation the rights
-// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-// copies of the Software, and to permit persons to whom the Software is
-// furnished to do so, subject to the following conditions:
-//
-// The above copyright notice and this permission notice shall be included in
-// all copies or substantial portions of the Software.
-//
-// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
-// THE SOFTWARE.
-
 package tdbg
 
 import (
@@ -33,6 +9,7 @@ import (
 	"github.com/urfave/cli/v2"
 	commonpb "go.temporal.io/api/common/v1"
 	enumspb "go.temporal.io/api/enums/v1"
+	"go.temporal.io/server/chasm"
 	"go.temporal.io/server/service/history/tasks"
 	"go.uber.org/multierr"
 )
@@ -46,10 +23,10 @@ func getCommands(
 ) []*cli.Command {
 	return []*cli.Command{
 		{
-			Name:        "workflow",
-			Aliases:     []string{"w"},
-			Usage:       "Run admin operation on workflow",
-			Subcommands: newAdminWorkflowCommands(clientFactory, prompterFactory),
+			Name:        "execution",
+			Aliases:     []string{"e", "w", "workflow"},
+			Usage:       "Run admin operation on an execution (workflow)",
+			Subcommands: newAdminExecutionCommands(clientFactory, prompterFactory),
 		},
 		{
 			Name:        "shard",
@@ -59,7 +36,7 @@ func getCommands(
 		},
 		{
 			Name:        "history-host",
-			Aliases:     []string{"h"},
+			Aliases:     []string{"hh"},
 			Usage:       "Run admin operation on history host",
 			Subcommands: newAdminHistoryHostCommands(clientFactory),
 		},
@@ -95,7 +72,7 @@ func getCommands(
 	}
 }
 
-func newAdminWorkflowCommands(clientFactory ClientFactory, prompterFactory PrompterFactory) []*cli.Command {
+func newAdminExecutionCommands(clientFactory ClientFactory, prompterFactory PrompterFactory) []*cli.Command {
 	return []*cli.Command{
 		{
 			Name:  "import",
@@ -161,21 +138,26 @@ func newAdminWorkflowCommands(clientFactory ClientFactory, prompterFactory Promp
 		{
 			Name:    "describe",
 			Aliases: []string{"d"},
-			Usage:   "Describe internal information of workflow execution",
+			Usage:   "Describe internal information of Temporal execution",
 			Flags: []cli.Flag{
 				&cli.StringFlag{
-					Name:    FlagWorkflowID,
-					Aliases: FlagWorkflowIDAlias,
-					Usage:   "Workflow ID",
+					Name:    FlagBusinessID,
+					Aliases: FlagBusinessIDAlias,
+					Usage:   "Business ID (Workflow ID)",
 				},
 				&cli.StringFlag{
 					Name:    FlagRunID,
 					Aliases: FlagRunIDAlias,
-					Usage:   "Run ID",
+					Usage:   "Run ID (optional, uses latest if not specified)",
+				},
+				&cli.StringFlag{
+					Name:        FlagArchetype,
+					Usage:       "Fully qualified archetype name of the execution",
+					DefaultText: chasm.WorkflowArchetype,
 				},
 			},
 			Action: func(c *cli.Context) error {
-				return AdminDescribeWorkflow(c, clientFactory)
+				return AdminDescribeExecution(c, clientFactory)
 			},
 		},
 		{
@@ -193,9 +175,26 @@ func newAdminWorkflowCommands(clientFactory ClientFactory, prompterFactory Promp
 					Aliases: FlagRunIDAlias,
 					Usage:   "Run ID",
 				},
+				&cli.StringFlag{
+					Name:        FlagArchetype,
+					Usage:       "Fully qualified archetype name of the execution",
+					DefaultText: chasm.WorkflowArchetype,
+				},
+				&cli.StringFlag{
+					Name:  FlagVisibilityQuery,
+					Usage: "Visibility query to select workflows",
+				},
+				&cli.StringFlag{
+					Name:  FlagReason,
+					Usage: "Reason for starting the batch job",
+				},
+				&cli.StringFlag{
+					Name:  FlagJobID,
+					Usage: "Optional job ID (auto-generated if not provided)",
+				},
 			},
 			Action: func(c *cli.Context) error {
-				return AdminRefreshWorkflowTasks(c, clientFactory)
+				return adminRefreshWorkflowTasks(c, clientFactory, prompterFactory(c))
 			},
 		},
 		{
@@ -233,6 +232,11 @@ func newAdminWorkflowCommands(clientFactory ClientFactory, prompterFactory Promp
 					Aliases: FlagRunIDAlias,
 					Usage:   "Run ID",
 				},
+				&cli.StringFlag{
+					Name:        FlagArchetype,
+					Usage:       "Fully qualified archetype name of the execution",
+					DefaultText: chasm.WorkflowArchetype,
+				},
 			},
 			Action: func(c *cli.Context) error {
 				return AdminReplicateWorkflow(c, clientFactory)
@@ -253,6 +257,11 @@ func newAdminWorkflowCommands(clientFactory ClientFactory, prompterFactory Promp
 					Aliases: FlagRunIDAlias,
 					Usage:   "Run ID",
 				},
+				&cli.StringFlag{
+					Name:        FlagArchetype,
+					Usage:       "Fully qualified archetype name of the execution",
+					DefaultText: chasm.WorkflowArchetype,
+				},
 			},
 			Action: func(c *cli.Context) error {
 				return AdminDeleteWorkflow(c, clientFactory, prompterFactory(c))
@@ -267,11 +276,6 @@ func newAdminShardManagementCommands(clientFactory ClientFactory, taskCategoryRe
 	// which is required and does not have a default. The second is the task category
 	// for the remove-task command, which is optional and defaults to transfer.
 	taskCategoryFlag := getTaskCategoryFlag(taskCategoryRegistry)
-	listTasksCategory := *taskCategoryFlag
-	listTasksCategory.Required = true
-	removeTaskCategory := *taskCategoryFlag
-	removeTaskCategory.Value = tasks.CategoryTransfer.Name()
-
 	return []*cli.Command{
 		{
 			Name:    "describe",
@@ -305,7 +309,7 @@ func newAdminShardManagementCommands(clientFactory ClientFactory, taskCategoryRe
 					Usage:    "The ID of the shard",
 					Required: true,
 				},
-				&listTasksCategory,
+				taskCategoryFlag,
 				&cli.Int64Flag{
 					Name:  FlagMinTaskID,
 					Usage: "Inclusive min taskID. Optional for transfer, replication, visibility tasks. Can't be specified for timer task",
@@ -357,14 +361,16 @@ func newAdminShardManagementCommands(clientFactory ClientFactory, taskCategoryRe
 			Usage:   "remove a task based on shardId, task category, taskId, and task visibility timestamp",
 			Flags: []cli.Flag{
 				&cli.IntFlag{
-					Name:  FlagShardID,
-					Usage: "shardId",
+					Name:     FlagShardID,
+					Usage:    "shardId",
+					Required: true,
 				},
 				&cli.Int64Flag{
-					Name:  FlagTaskID,
-					Usage: "taskId",
+					Name:     FlagTaskID,
+					Usage:    "taskId",
+					Required: true,
 				},
-				&removeTaskCategory,
+				taskCategoryFlag,
 				&cli.Int64Flag{
 					Name:  FlagTaskVisibilityTimestamp,
 					Usage: "task visibility timestamp in nano (required for removing timer task)",
@@ -384,8 +390,9 @@ func getTaskCategoryFlag(taskCategoryRegistry tasks.TaskCategoryRegistry) *cli.S
 		options = append(options, category.Name())
 	}
 	flag := &cli.StringFlag{
-		Name:  FlagTaskCategory,
-		Usage: "Task category: " + strings.Join(options, ", "),
+		Name:     FlagTaskCategory,
+		Usage:    "Task category: " + strings.Join(options, ", "),
+		Required: true,
 	}
 	return flag
 }
@@ -488,7 +495,7 @@ func newAdminTaskQueueCommands(clientFactory ClientFactory) []*cli.Command {
 	return []*cli.Command{
 		{
 			Name:  "list-tasks",
-			Usage: "List tasks of a task queue",
+			Usage: "List tasks of a task queue. Use --fair to list fairness tasks.",
 			Flags: []cli.Flag{
 				&cli.BoolFlag{
 					Name:  FlagMore,
@@ -517,9 +524,23 @@ func newAdminTaskQueueCommands(clientFactory ClientFactory) []*cli.Command {
 					Name:  FlagMaxTaskID,
 					Usage: "Maximum task ID",
 				},
+				&cli.IntFlag{
+					Name:  FlagSubqueue,
+					Usage: "Subqueue to query",
+					Value: 0,
+				},
 				&cli.BoolFlag{
 					Name:  FlagPrintJSON,
 					Usage: "Print in raw json format",
+				},
+				&cli.BoolFlag{
+					Name:  FlagFair,
+					Usage: "Query fairness tasks",
+				},
+				&cli.Int64Flag{
+					Name:  FlagMinPass,
+					Usage: "Minimum pass (fairness task only)",
+					Value: 1,
 				},
 			},
 			Action: func(c *cli.Context) error {

@@ -1,27 +1,3 @@
-// The MIT License
-//
-// Copyright (c) 2020 Temporal Technologies Inc.  All rights reserved.
-//
-// Copyright (c) 2020 Uber Technologies, Inc.
-//
-// Permission is hereby granted, free of charge, to any person obtaining a copy
-// of this software and associated documentation files (the "Software"), to deal
-// in the Software without restriction, including without limitation the rights
-// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-// copies of the Software, and to permit persons to whom the Software is
-// furnished to do so, subject to the following conditions:
-//
-// The above copyright notice and this permission notice shall be included in
-// all copies or substantial portions of the Software.
-//
-// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
-// THE SOFTWARE.
-
 package cassandra
 
 import (
@@ -72,6 +48,7 @@ func newConflictRecord() map[string]interface{} {
 func convertErrors(
 	conflictRecord map[string]interface{},
 	conflictIter gocql.Iter,
+	currentRecordRunID string,
 	requestShardID int32,
 	requestRangeID int64,
 	requestCurrentRunID string,
@@ -81,6 +58,7 @@ func convertErrors(
 	conflictRecords := []map[string]interface{}{conflictRecord}
 	errors := extractErrors(
 		conflictRecord,
+		currentRecordRunID,
 		requestShardID,
 		requestRangeID,
 		requestCurrentRunID,
@@ -97,6 +75,7 @@ func convertErrors(
 		conflictRecords = append(conflictRecords, conflictRecord)
 		errors = append(errors, extractErrors(
 			conflictRecord,
+			currentRecordRunID,
 			requestShardID,
 			requestRangeID,
 			requestCurrentRunID,
@@ -126,6 +105,7 @@ func convertErrors(
 
 func extractErrors(
 	conflictRecord map[string]interface{},
+	currentRecordRunID string,
 	requestShardID int32,
 	requestRangeID int64,
 	requestCurrentRunID string,
@@ -143,6 +123,7 @@ func extractErrors(
 
 	if err := extractCurrentWorkflowConflictError(
 		conflictRecord,
+		currentRecordRunID,
 		requestCurrentRunID,
 	); err != nil {
 		errors = append(errors, err)
@@ -208,6 +189,7 @@ func extractShardOwnershipLostError(
 
 func extractCurrentWorkflowConflictError(
 	conflictRecord map[string]interface{},
+	currentRecordRunID string,
 	requestCurrentRunID string,
 ) error {
 	rowType, ok := conflictRecord["type"].(*int)
@@ -218,7 +200,7 @@ func extractCurrentWorkflowConflictError(
 	if *rowType != rowTypeExecution {
 		return nil
 	}
-	if runID := gocql.UUIDToString(conflictRecord["run_id"]); runID != permanentRunID {
+	if runID := gocql.UUIDToString(conflictRecord["run_id"]); runID != currentRecordRunID {
 		return nil
 	}
 
@@ -227,10 +209,7 @@ func extractCurrentWorkflowConflictError(
 		binary, _ := conflictRecord["execution_state"].([]byte)
 		encoding, _ := conflictRecord["execution_state_encoding"].(string)
 		executionState := &persistencespb.WorkflowExecutionState{}
-		if state, err := serialization.WorkflowExecutionStateFromBlob(
-			binary,
-			encoding,
-		); err == nil {
+		if state, err := serialization.DefaultDecoder.WorkflowExecutionStateFromBlob(p.NewDataBlob(binary, encoding)); err == nil {
 			executionState = state
 		}
 		// if err != nil, this means execution state cannot be parsed, just use default values
@@ -244,7 +223,7 @@ func extractCurrentWorkflowConflictError(
 				requestCurrentRunID,
 				actualCurrentRunID,
 			),
-			RequestID:        executionState.CreateRequestId,
+			RequestIDs:       executionState.RequestIds,
 			RunID:            executionState.RunId,
 			State:            executionState.State,
 			Status:           executionState.Status,

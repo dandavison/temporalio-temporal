@@ -1,27 +1,3 @@
-// The MIT License
-//
-// Copyright (c) 2020 Temporal Technologies Inc.  All rights reserved.
-//
-// Copyright (c) 2020 Uber Technologies, Inc.
-//
-// Permission is hereby granted, free of charge, to any person obtaining a copy
-// of this software and associated documentation files (the "Software"), to deal
-// in the Software without restriction, including without limitation the rights
-// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-// copies of the Software, and to permit persons to whom the Software is
-// furnished to do so, subject to the following conditions:
-//
-// The above copyright notice and this permission notice shall be included in
-// all copies or substantial portions of the Software.
-//
-// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
-// THE SOFTWARE.
-
 package util
 
 import (
@@ -68,6 +44,58 @@ func TestRepeatSlice(t *testing.T) {
 		_ = RepeatSlice(xs, 5)
 		require.Len(t, xs, 5, "Repeat slice changed the original slice: expected {1, 2, 3, 4, 5}, got %v", xs)
 	})
+}
+
+func TestGetOrSetNew_ReturnsExisting(t *testing.T) {
+	val := 42
+	m := map[string]*int{"key": &val}
+
+	result := GetOrSetNew(m, "key")
+	require.Equal(t, &val, result)
+	require.Equal(t, 42, *result)
+}
+
+func TestGetOrSetNew_CreatesNew(t *testing.T) {
+	m := make(map[string]*int)
+
+	result := GetOrSetNew(m, "newkey")
+	require.NotNil(t, result)
+	require.Equal(t, 0, *result) // zero value for int
+	require.Contains(t, m, "newkey")
+	require.Equal(t, result, m["newkey"])
+}
+
+func TestGetOrSetNew_ReturnsSame(t *testing.T) {
+	m := make(map[string]*int)
+
+	*GetOrSetNew(m, "key") = 123
+	require.Equal(t, 123, *GetOrSetNew(m, "key"))
+}
+
+func TestGetOrSetMap_ReturnsExisting(t *testing.T) {
+	inner := map[int]string{1: "one"}
+	m := map[string]map[int]string{"key": inner}
+
+	result := GetOrSetMap(m, "key")
+	require.Equal(t, inner, result)
+	require.Equal(t, "one", result[1])
+}
+
+func TestGetOrSetMap_CreatesNew(t *testing.T) {
+	m := make(map[string]map[int]string)
+
+	result := GetOrSetMap(m, "newkey")
+	require.NotNil(t, result)
+	require.Empty(t, result)
+	require.Contains(t, m, "newkey")
+	require.Equal(t, result, m["newkey"])
+}
+
+func TestGetOrSetMap_ReturnsSame(t *testing.T) {
+	m := make(map[string]map[int]string)
+
+	GetOrSetMap(m, "key")[1] = "value"
+	require.Equal(t, "value", m["key"][1])
 }
 
 func TestMapSlice(t *testing.T) {

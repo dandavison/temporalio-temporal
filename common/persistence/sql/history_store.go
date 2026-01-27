@@ -1,27 +1,3 @@
-// The MIT License
-//
-// Copyright (c) 2020 Temporal Technologies Inc.  All rights reserved.
-//
-// Copyright (c) 2020 Uber Technologies, Inc.
-//
-// Permission is hereby granted, free of charge, to any person obtaining a copy
-// of this software and associated documentation files (the "Software"), to deal
-// in the Software without restriction, including without limitation the rights
-// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-// copies of the Software, and to permit persons to whom the Software is
-// furnished to do so, subject to the following conditions:
-//
-// The above copyright notice and this permission notice shall be included in
-// all copies or substantial portions of the Software.
-//
-// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
-// THE SOFTWARE.
-
 package sql
 
 import (
@@ -73,7 +49,7 @@ func (m *sqlExecutionStore) AppendHistoryNodes(
 	}
 
 	if !request.IsNewBranch {
-		_, err = m.Db.InsertIntoHistoryNode(ctx, nodeRow)
+		_, err = m.DB.InsertIntoHistoryNode(ctx, nodeRow)
 		switch err {
 		case nil:
 			return nil
@@ -82,10 +58,10 @@ func (m *sqlExecutionStore) AppendHistoryNodes(
 				Msg: err.Error(),
 			}
 		default:
-			if m.Db.IsDupEntryError(err) {
+			if m.DB.IsDupEntryError(err) {
 				return &p.ConditionFailedError{Msg: fmt.Sprintf("AppendHistoryNodes: row already exist: %v", err)}
 			}
-			return serviceerror.NewUnavailable(fmt.Sprintf("AppendHistoryNodes: %v", err))
+			return serviceerror.NewUnavailablef("AppendHistoryNodes: %v", err)
 		}
 	}
 
@@ -127,7 +103,7 @@ func (m *sqlExecutionStore) AppendHistoryNodes(
 				Msg: err.Error(),
 			}
 		default:
-			return serviceerror.NewUnavailable(fmt.Sprintf("AppendHistoryNodes: %v", err))
+			return serviceerror.NewUnavailablef("AppendHistoryNodes: %v", err)
 		}
 	})
 }
@@ -164,9 +140,9 @@ func (m *sqlExecutionStore) DeleteHistoryNodes(
 		ShardID:  shardID,
 	}
 
-	_, err = m.Db.DeleteFromHistoryNode(ctx, nodeRow)
+	_, err = m.DB.DeleteFromHistoryNode(ctx, nodeRow)
 	if err != nil {
-		return serviceerror.NewUnavailable(fmt.Sprintf("DeleteHistoryNodes: %v", err))
+		return serviceerror.NewUnavailablef("DeleteHistoryNodes: %v", err)
 	}
 	return nil
 }
@@ -181,7 +157,7 @@ func (m *sqlExecutionStore) ReadHistoryBranch(
 	ctx context.Context,
 	request *p.InternalReadHistoryBranchRequest,
 ) (*p.InternalReadHistoryBranchResponse, error) {
-	branch, err := m.GetHistoryBranchUtil().ParseHistoryBranchInfo(request.BranchToken)
+	branch, err := m.ParseHistoryBranchInfo(request.BranchToken)
 	if err != nil {
 		return nil, err
 	}
@@ -218,7 +194,7 @@ func (m *sqlExecutionStore) ReadHistoryBranch(
 		minTxnId = token.LastTxnID
 	}
 
-	rows, err := m.Db.RangeSelectFromHistoryNode(ctx, sqlplugin.HistoryNodeSelectFilter{
+	rows, err := m.DB.RangeSelectFromHistoryNode(ctx, sqlplugin.HistoryNodeSelectFilter{
 		ShardID:      request.ShardID,
 		TreeID:       treeIDBytes,
 		BranchID:     branchIDBytes,
@@ -339,7 +315,7 @@ func (m *sqlExecutionStore) ForkHistoryBranch(
 		DataEncoding: treeInfoBlob.EncodingType.String(),
 	}
 
-	result, err := m.Db.InsertIntoHistoryTree(ctx, row)
+	result, err := m.DB.InsertIntoHistoryTree(ctx, row)
 	if err != nil {
 		return err
 	}
@@ -430,7 +406,7 @@ func (m *sqlExecutionStore) GetAllHistoryTreeBranches(
 		page.BranchID = token.BranchID
 	}
 
-	rows, err := m.Db.PaginateBranchesFromHistoryTree(ctx, page)
+	rows, err := m.DB.PaginateBranchesFromHistoryTree(ctx, page)
 	if err != nil {
 		return nil, err
 	}
@@ -473,7 +449,7 @@ func (m *sqlExecutionStore) GetHistoryTreeContainingBranch(
 	ctx context.Context,
 	request *p.InternalGetHistoryTreeContainingBranchRequest,
 ) (*p.InternalGetHistoryTreeContainingBranchResponse, error) {
-	branch, err := m.GetHistoryBranchUtil().ParseHistoryBranchInfo(request.BranchToken)
+	branch, err := m.ParseHistoryBranchInfo(request.BranchToken)
 	if err != nil {
 		return nil, err
 	}
@@ -483,7 +459,7 @@ func (m *sqlExecutionStore) GetHistoryTreeContainingBranch(
 		return nil, err
 	}
 
-	rows, err := m.Db.SelectFromHistoryTree(ctx, sqlplugin.HistoryTreeSelectFilter{
+	rows, err := m.DB.SelectFromHistoryTree(ctx, sqlplugin.HistoryTreeSelectFilter{
 		TreeID:  treeID,
 		ShardID: request.ShardID,
 	})

@@ -1,34 +1,12 @@
-// The MIT License
-//
-// Copyright (c) 2020 Temporal Technologies Inc.  All rights reserved.
-//
-// Copyright (c) 2020 Uber Technologies, Inc.
-//
-// Permission is hereby granted, free of charge, to any person obtaining a copy
-// of this software and associated documentation files (the "Software"), to deal
-// in the Software without restriction, including without limitation the rights
-// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-// copies of the Software, and to permit persons to whom the Software is
-// furnished to do so, subject to the following conditions:
-//
-// The above copyright notice and this permission notice shall be included in
-// all copies or substantial portions of the Software.
-//
-// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
-// THE SOFTWARE.
-
 package searchattribute
 
 import (
 	"fmt"
+	"maps"
 
 	enumspb "go.temporal.io/api/enums/v1"
 	persistencespb "go.temporal.io/server/api/persistence/v1"
+	"go.temporal.io/server/common/searchattribute/sadefs"
 )
 
 type (
@@ -46,6 +24,11 @@ const (
 	customCategory
 )
 
+var (
+	system     = sadefs.System()
+	predefined = sadefs.Predefined()
+)
+
 func buildIndexNameTypeMap(indexSearchAttributes map[string]*persistencespb.IndexSearchAttributes) map[string]NameTypeMap {
 	indexNameTypeMap := make(map[string]NameTypeMap, len(indexSearchAttributes))
 	for indexName, customSearchAttributes := range indexSearchAttributes {
@@ -56,14 +39,17 @@ func buildIndexNameTypeMap(indexSearchAttributes map[string]*persistencespb.Inde
 	return indexNameTypeMap
 }
 
+// NewNameTypeMap creates a new NameTypeMap with the given custom search attributes.
+func NewNameTypeMap(customSearchAttributes map[string]enumspb.IndexedValueType) NameTypeMap {
+	return NameTypeMap{
+		customSearchAttributes: customSearchAttributes,
+	}
+}
+
 func (m NameTypeMap) System() map[string]enumspb.IndexedValueType {
 	allSystem := make(map[string]enumspb.IndexedValueType, len(system)+len(predefined))
-	for saName, saType := range system {
-		allSystem[saName] = saType
-	}
-	for saName, saType := range predefined {
-		allSystem[saName] = saType
-	}
+	maps.Copy(allSystem, system)
+	maps.Copy(allSystem, predefined)
 	return allSystem
 }
 
@@ -73,15 +59,9 @@ func (m NameTypeMap) Custom() map[string]enumspb.IndexedValueType {
 
 func (m NameTypeMap) All() map[string]enumspb.IndexedValueType {
 	allSearchAttributes := make(map[string]enumspb.IndexedValueType, len(system)+len(m.customSearchAttributes)+len(predefined))
-	for saName, saType := range system {
-		allSearchAttributes[saName] = saType
-	}
-	for saName, saType := range predefined {
-		allSearchAttributes[saName] = saType
-	}
-	for saName, saType := range m.customSearchAttributes {
-		allSearchAttributes[saName] = saType
-	}
+	maps.Copy(allSearchAttributes, system)
+	maps.Copy(allSearchAttributes, predefined)
+	maps.Copy(allSearchAttributes, m.customSearchAttributes)
 	return allSearchAttributes
 }
 
@@ -98,6 +78,7 @@ func (m NameTypeMap) getType(name string, cat category) (enumspb.IndexedValueTyp
 		}
 	}
 	if cat|predefinedCategory == cat {
+		predefined := sadefs.Predefined()
 		if t, isPredefined := predefined[name]; isPredefined {
 			return t, nil
 		}

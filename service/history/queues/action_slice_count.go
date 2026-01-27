@@ -1,27 +1,3 @@
-// The MIT License
-//
-// Copyright (c) 2020 Temporal Technologies Inc.  All rights reserved.
-//
-// Copyright (c) 2020 Uber Technologies, Inc.
-//
-// Permission is hereby granted, free of charge, to any person obtaining a copy
-// of this software and associated documentation files (the "Software"), to deal
-// in the Software without restriction, including without limitation the rights
-// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-// copies of the Software, and to permit persons to whom the Software is
-// furnished to do so, subject to the following conditions:
-//
-// The above copyright notice and this permission notice shall be included in
-// all copies or substantial portions of the Software.
-//
-// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
-// THE SOFTWARE.
-
 package queues
 
 import (
@@ -58,10 +34,10 @@ func (a *actionSliceCount) Name() string {
 	return "slice-count"
 }
 
-func (a *actionSliceCount) Run(readerGroup *ReaderGroup) {
+func (a *actionSliceCount) Run(readerGroup *ReaderGroup) (actionTaken bool) {
 	// first check if the alert is still valid
 	if a.monitor.GetTotalSliceCount() <= a.attributes.CriticalSliceCount {
-		return
+		return false
 	}
 
 	// then try to shrink existing slices, which may reduce slice count
@@ -71,7 +47,7 @@ func (a *actionSliceCount) Run(readerGroup *ReaderGroup) {
 	}
 	currentSliceCount := a.monitor.GetTotalSliceCount()
 	if currentSliceCount <= a.attributes.CriticalSliceCount {
-		return
+		return false
 	}
 
 	// have to compact (force merge) slices to reduce slice count
@@ -96,42 +72,44 @@ func (a *actionSliceCount) Run(readerGroup *ReaderGroup) {
 	// So compact slices with non-univerisal predicate first to minimize the impact
 	// on other namespaces upon shard reload.
 
-	if a.findAndCompactCandidates(
+	actionTaken = true
+	if a.findAndCompactLowSliceCount(
 		readers,
 		isNotDefaultReader,
 		isNotUniversalPredicate,
 		preferredSliceCount,
 	) {
-		return
+		return actionTaken
 	}
 
-	if a.findAndCompactCandidates(
+	if a.findAndCompactLowSliceCount(
 		readers,
 		isDefaultReader,
 		isNotUniversalPredicate,
 		preferredSliceCount,
 	) {
-		return
+		return actionTaken
 	}
 
-	if a.findAndCompactCandidates(
+	if a.findAndCompactLowSliceCount(
 		readers,
 		isNotDefaultReader,
 		isUniversalPredicate,
 		a.attributes.CriticalSliceCount,
 	) {
-		return
+		return actionTaken
 	}
 
-	a.findAndCompactCandidates(
+	_ = a.findAndCompactLowSliceCount(
 		readers,
 		isDefaultReader,
 		isUniversalPredicate,
 		a.attributes.CriticalSliceCount,
 	)
+	return actionTaken
 }
 
-func (a *actionSliceCount) findAndCompactCandidates(
+func (a *actionSliceCount) findAndCompactLowSliceCount(
 	readers map[int64]Reader,
 	readerPredicate func(int64) bool,
 	slicePredicate SlicePredicate,

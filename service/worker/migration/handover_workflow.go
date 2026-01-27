@@ -1,27 +1,3 @@
-// The MIT License
-//
-// Copyright (c) 2020 Temporal Technologies Inc.  All rights reserved.
-//
-// Copyright (c) 2020 Uber Technologies, Inc.
-//
-// Permission is hereby granted, free of charge, to any person obtaining a copy
-// of this software and associated documentation files (the "Software"), to deal
-// in the Software without restriction, including without limitation the rights
-// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-// copies of the Software, and to permit persons to whom the Software is
-// furnished to do so, subject to the following conditions:
-//
-// The above copyright notice and this permission notice shall be included in
-// all copies or substantial portions of the Software.
-//
-// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
-// THE SOFTWARE.
-
 package migration
 
 import (
@@ -30,14 +6,15 @@ import (
 	enumspb "go.temporal.io/api/enums/v1"
 	"go.temporal.io/sdk/temporal"
 	"go.temporal.io/sdk/workflow"
-	"go.temporal.io/server/common/primitives"
 )
 
 const (
-	namespaceHandoverWorkflowName = "namespace-handover"
+	namespaceHandoverWorkflowName   = "namespace-handover"
+	namespaceHandoverWorkflowV2Name = "namespace-handover-v2"
 
 	minimumAllowedLaggingSeconds  = 5
-	minimumHandoverTimeoutSeconds = 30
+	maximumAllowedLaggingSeconds  = 120
+	maximumHandoverTimeoutSeconds = 30
 )
 
 type (
@@ -82,13 +59,22 @@ type (
 	}
 )
 
+func NamespaceHandoverWorkflowV2(ctx workflow.Context, params NamespaceHandoverParams) (retErr error) {
+	workflowInfo := workflow.GetInfo(ctx)
+	if workflowInfo.WorkflowRunTimeout > 0 {
+		return temporal.NewNonRetryableApplicationError(
+			"Workflow run timeout should not be set for handover workflow",
+			"InvalidTimeout",
+			nil,
+		)
+	}
+	return NamespaceHandoverWorkflow(ctx, params)
+}
+
 func NamespaceHandoverWorkflow(ctx workflow.Context, params NamespaceHandoverParams) (retErr error) {
 	if err := validateAndSetNamespaceHandoverParams(&params); err != nil {
 		return err
 	}
-
-	ctx = workflow.WithTaskQueue(ctx, primitives.MigrationActivityTQ)
-
 	retryPolicy := &temporal.RetryPolicy{
 		InitialInterval:    time.Second,
 		MaximumInterval:    time.Second,
@@ -100,11 +86,10 @@ func NamespaceHandoverWorkflow(ctx workflow.Context, params NamespaceHandoverPar
 	}
 	ctx = workflow.WithActivityOptions(ctx, ao)
 
-	var a *activities
-
 	// ** Step 1: Get Cluster Metadata **
 	var metadataResp metadataResponse
 	metadataRequest := metadataRequest{Namespace: params.Namespace}
+	var a *activities
 	err := workflow.ExecuteActivity(ctx, a.GetMetadata, metadataRequest).Get(ctx, &metadataResp)
 	if err != nil {
 		return err
@@ -136,7 +121,7 @@ func NamespaceHandoverWorkflow(ctx workflow.Context, params NamespaceHandoverPar
 		return err
 	}
 
-	// ** Step 4: Initiate Handover (WARNING: Namespace cannot serve traffic while in this state)
+	// ** Step 4: RecoverOrInitialize Handover (WARNING: Namespace cannot serve traffic while in this state)
 	handoverRequest := updateStateRequest{
 		Namespace: params.Namespace,
 		NewState:  enumspb.REPLICATION_STATE_HANDOVER,
@@ -154,7 +139,16 @@ func NamespaceHandoverWorkflow(ctx workflow.Context, params NamespaceHandoverPar
 			Namespace: params.Namespace,
 			NewState:  enumspb.REPLICATION_STATE_NORMAL,
 		}
-		err := workflow.ExecuteActivity(ctx, a.UpdateNamespaceState, resetStateRequest).Get(ctx, nil)
+		var err error
+		if workflow.GetVersion(ctx, "detach-handover-ctx-20250829", workflow.DefaultVersion, 1) > workflow.DefaultVersion {
+			infiniteRetryOption := workflow.ActivityOptions{StartToCloseTimeout: time.Second * 10}
+			detachCtx, cancel := workflow.NewDisconnectedContext(ctx)
+			resetStateCtx := workflow.WithActivityOptions(detachCtx, infiniteRetryOption)
+			err = workflow.ExecuteActivity(resetStateCtx, a.UpdateNamespaceState, resetStateRequest).Get(resetStateCtx, nil)
+			cancel()
+		} else {
+			err = workflow.ExecuteActivity(ctx, a.UpdateNamespaceState, resetStateRequest).Get(ctx, nil)
+		}
 		if err != nil {
 			retErr = err
 			return
@@ -163,12 +157,12 @@ func NamespaceHandoverWorkflow(ctx workflow.Context, params NamespaceHandoverPar
 
 	// ** Step 5: Wait for Remote Cluster to completely drain its Replication Tasks
 	ao3 := workflow.ActivityOptions{
-		StartToCloseTimeout:    time.Second * 30,
-		HeartbeatTimeout:       time.Second * 10,
-		ScheduleToCloseTimeout: time.Second * time.Duration(params.HandoverTimeoutSeconds),
-		RetryPolicy:            retryPolicy,
+		StartToCloseTimeout: time.Second * time.Duration(params.HandoverTimeoutSeconds),
+		HeartbeatTimeout:    time.Second * 10,
+		RetryPolicy: &temporal.RetryPolicy{
+			MaximumAttempts: 1,
+		},
 	}
-
 	ctx3 := workflow.WithActivityOptions(ctx, ao3)
 	waitHandover := waitHandoverRequest{
 		ShardCount:    metadataResp.ShardCount,
@@ -203,8 +197,11 @@ func validateAndSetNamespaceHandoverParams(params *NamespaceHandoverParams) erro
 	if params.AllowedLaggingSeconds <= minimumAllowedLaggingSeconds {
 		params.AllowedLaggingSeconds = minimumAllowedLaggingSeconds
 	}
-	if params.HandoverTimeoutSeconds <= minimumHandoverTimeoutSeconds {
-		params.HandoverTimeoutSeconds = minimumHandoverTimeoutSeconds
+	if params.AllowedLaggingSeconds >= maximumAllowedLaggingSeconds {
+		params.AllowedLaggingSeconds = maximumAllowedLaggingSeconds
+	}
+	if params.HandoverTimeoutSeconds >= maximumHandoverTimeoutSeconds {
+		params.HandoverTimeoutSeconds = maximumHandoverTimeoutSeconds
 	}
 
 	return nil

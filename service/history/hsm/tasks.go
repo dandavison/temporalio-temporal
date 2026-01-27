@@ -1,25 +1,3 @@
-// The MIT License
-//
-// Copyright (c) 2024 Temporal Technologies Inc.  All rights reserved.
-//
-// Permission is hereby granted, free of charge, to any person obtaining a copy
-// of this software and associated documentation files (the "Software"), to deal
-// in the Software without restriction, including without limitation the rights
-// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-// copies of the Software, and to permit persons to whom the Software is
-// furnished to do so, subject to the following conditions:
-//
-// The above copyright notice and this permission notice shall be included in
-// all copies or substantial portions of the Software.
-//
-// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
-// THE SOFTWARE.
-
 package hsm
 
 import (
@@ -78,7 +56,26 @@ type TaskSerializer interface {
 // generated.
 func ValidateNotTransitioned(ref *persistencespb.StateMachineRef, node *Node) error {
 	if ref.MachineTransitionCount != node.InternalRepr().TransitionCount {
-		return fmt.Errorf("%w: state machine transitions != ref transitions", consts.ErrStaleReference)
+		return fmt.Errorf("%w: state machine transitions (%d) != ref transitions (%d)", consts.ErrStaleReference, node.InternalRepr().TransitionCount, ref.MachineTransitionCount)
+	}
+	return nil
+}
+
+// ValidateState returns a [consts.ErrStaleReference] if the machine is not in the expected state.
+func ValidateState[S comparable, T StateMachine[S]](node *Node, expected S) error {
+	cb, err := MachineData[T](node)
+	if err != nil {
+		return err
+	}
+	if cb.State() != expected {
+		return fmt.Errorf(
+			"%w: %w: expected a %s machine in %v state, got %v",
+			consts.ErrStaleReference,
+			ErrInvalidTransition,
+			node.Key.ID,
+			expected,
+			cb.State(),
+		)
 	}
 	return nil
 }

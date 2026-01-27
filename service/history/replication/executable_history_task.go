@@ -1,42 +1,19 @@
-// The MIT License
-//
-// Copyright (c) 2020 Temporal Technologies Inc.  All rights reserved.
-//
-// Copyright (c) 2020 Uber Technologies, Inc.
-//
-// Permission is hereby granted, free of charge, to any person obtaining a copy
-// of this software and associated documentation files (the "Software"), to deal
-// in the Software without restriction, including without limitation the rights
-// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-// copies of the Software, and to permit persons to whom the Software is
-// furnished to do so, subject to the following conditions:
-//
-// The above copyright notice and this permission notice shall be included in
-// all copies or substantial portions of the Software.
-//
-// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
-// THE SOFTWARE.
-
 package replication
 
 import (
 	"context"
+	"errors"
 	"sync"
 	"time"
 
-	"go.temporal.io/api/common/v1"
+	commonpb "go.temporal.io/api/common/v1"
 	historypb "go.temporal.io/api/history/v1"
 	"go.temporal.io/api/serviceerror"
 	enumsspb "go.temporal.io/server/api/enums/v1"
 	historyspb "go.temporal.io/server/api/history/v1"
 	persistencespb "go.temporal.io/server/api/persistence/v1"
 	replicationspb "go.temporal.io/server/api/replication/v1"
-	workflowpb "go.temporal.io/server/api/workflow/v1"
+	workflowspb "go.temporal.io/server/api/workflow/v1"
 	"go.temporal.io/server/common/definition"
 	"go.temporal.io/server/common/headers"
 	"go.temporal.io/server/common/log/tag"
@@ -45,6 +22,7 @@ import (
 	"go.temporal.io/server/common/persistence/versionhistory"
 	serviceerrors "go.temporal.io/server/common/serviceerror"
 	ctasks "go.temporal.io/server/common/tasks"
+	"go.temporal.io/server/service/history/consts"
 )
 
 type (
@@ -53,10 +31,10 @@ type (
 
 		definition.WorkflowKey
 		ExecutableTask
-		baseExecutionInfo   *workflowpb.BaseExecutionInfo
+		baseExecutionInfo   *workflowspb.BaseExecutionInfo
 		versionHistoryItems []*historyspb.VersionHistoryItem
-		eventsBlobs         []*common.DataBlob
-		newRunEventsBlob    *common.DataBlob
+		eventsBlobs         []*commonpb.DataBlob
+		newRunEventsBlob    *commonpb.DataBlob
 		newRunID            string
 
 		deserializeLock   sync.Mutex
@@ -82,12 +60,11 @@ func NewExecutableHistoryTask(
 	task *replicationspb.HistoryTaskAttributes,
 	sourceClusterName string,
 	sourceShardKey ClusterShardKey,
-	priority enumsspb.TaskPriority,
 	replicationTask *replicationspb.ReplicationTask,
 ) *ExecutableHistoryTask {
 	eventBatches := task.GetEventsBatches()
 	if eventBatches == nil {
-		eventBatches = []*common.DataBlob{task.GetEvents()}
+		eventBatches = []*commonpb.DataBlob{task.GetEvents()}
 	}
 	return &ExecutableHistoryTask{
 		ProcessToolBox: processToolBox,
@@ -101,7 +78,6 @@ func NewExecutableHistoryTask(
 			time.Now().UTC(),
 			sourceClusterName,
 			sourceShardKey,
-			priority,
 			replicationTask,
 		),
 
@@ -122,10 +98,13 @@ func (e *ExecutableHistoryTask) Execute() error {
 	if e.TerminalState() {
 		return nil
 	}
+	e.MarkExecutionStart()
+
+	callerInfo := getReplicaitonCallerInfo(e.GetPriority())
 	namespaceName, apply, nsError := e.GetNamespaceInfo(headers.SetCallerInfo(
 		context.Background(),
-		headers.SystemPreemptableCallerInfo,
-	), e.NamespaceID)
+		callerInfo,
+	), e.NamespaceID, e.WorkflowID)
 	if nsError != nil {
 		return nsError
 	} else if !apply {
@@ -142,35 +121,12 @@ func (e *ExecutableHistoryTask) Execute() error {
 		)
 		return nil
 	}
-	ctx, cancel := newTaskContext(namespaceName, e.Config.ReplicationTaskApplyTimeout())
+	ctx, cancel := newTaskContext(namespaceName, e.Config.ReplicationTaskApplyTimeout(), callerInfo)
 	defer cancel()
 
-	shardContext, err := e.ShardController.GetShardByNamespaceWorkflow(
-		namespace.ID(e.NamespaceID),
-		e.WorkflowID,
-	)
-	if err != nil {
-		return err
-	}
-	engine, err := shardContext.GetEngine(ctx)
-	if err != nil {
-		return err
-	}
 	events, newRunEvents, err := e.getDeserializedEvents()
 	if err != nil {
 		return err
-	}
-
-	if !e.Config.EnableReplicateLocalGeneratedEvent() {
-		return engine.ReplicateHistoryEvents(
-			ctx,
-			e.WorkflowKey,
-			e.baseExecutionInfo,
-			e.versionHistoryItems,
-			events,
-			newRunEvents,
-			e.newRunID,
-		)
 	}
 
 	return e.HistoryEventsHandler.HandleHistoryEvents(
@@ -186,18 +142,29 @@ func (e *ExecutableHistoryTask) Execute() error {
 }
 
 func (e *ExecutableHistoryTask) HandleErr(err error) error {
+	metrics.ReplicationTasksErrorByType.With(e.MetricsHandler).Record(
+		1,
+		metrics.OperationTag(metrics.HistoryReplicationTaskScope),
+		metrics.NamespaceTag(e.NamespaceName()),
+		metrics.ServiceErrorTypeTag(err),
+	)
+	if errors.Is(err, consts.ErrDuplicate) {
+		e.MarkTaskDuplicated()
+		return nil
+	}
 	switch retryErr := err.(type) {
 	case nil, *serviceerror.NotFound:
 		return nil
 	case *serviceerrors.RetryReplication:
+		callerInfo := getReplicaitonCallerInfo(e.GetPriority())
 		namespaceName, _, nsError := e.GetNamespaceInfo(headers.SetCallerInfo(
 			context.Background(),
-			headers.SystemPreemptableCallerInfo,
-		), e.NamespaceID)
+			callerInfo,
+		), e.NamespaceID, e.WorkflowID)
 		if nsError != nil {
 			return err
 		}
-		ctx, cancel := newTaskContext(namespaceName, e.Config.ReplicationTaskApplyTimeout())
+		ctx, cancel := newTaskContext(namespaceName, e.Config.ReplicationTaskApplyTimeout(), callerInfo)
 		defer cancel()
 
 		if doContinue, resendErr := e.Resend(
@@ -233,7 +200,7 @@ func (e *ExecutableHistoryTask) MarkPoisonPill() error {
 	if e.ReplicationTask().GetRawTaskInfo() == nil {
 		eventBatches := [][]*historypb.HistoryEvent{}
 		for _, eventsBlob := range e.eventsBlobs {
-			events, err := e.EventSerializer.DeserializeEvents(eventsBlob)
+			events, err := e.Serializer.DeserializeEvents(eventsBlob)
 			if err != nil {
 				e.Logger.Error("unable to enqueue history replication task to DLQ, ser/de error",
 					tag.ShardID(shardContext.GetShardID()),
@@ -297,7 +264,7 @@ func (e *ExecutableHistoryTask) getDeserializedEvents() (_ [][]*historypb.Histor
 
 	eventBatches := [][]*historypb.HistoryEvent{}
 	for _, eventsBlob := range e.eventsBlobs {
-		events, err := e.EventSerializer.DeserializeEvents(eventsBlob)
+		events, err := e.Serializer.DeserializeEvents(eventsBlob)
 		if err != nil {
 			e.Logger.Error("unable to deserialize history events",
 				tag.WorkflowNamespaceID(e.NamespaceID),
@@ -311,7 +278,7 @@ func (e *ExecutableHistoryTask) getDeserializedEvents() (_ [][]*historypb.Histor
 		eventBatches = append(eventBatches, events)
 	}
 
-	newRunEvents, err := e.EventSerializer.DeserializeEvents(e.newRunEventsBlob)
+	newRunEvents, err := e.Serializer.DeserializeEvents(e.newRunEventsBlob)
 	if err != nil {
 		e.Logger.Error("unable to deserialize new run history events",
 			tag.WorkflowNamespaceID(e.NamespaceID),
@@ -435,7 +402,7 @@ func (e *ExecutableHistoryTask) checkWorkflowKey(incomingWorkflowKey definition.
 	return nil
 }
 
-func (e *ExecutableHistoryTask) checkBaseExecutionInfo(incomingTaskExecutionInfo *workflowpb.BaseExecutionInfo) error {
+func (e *ExecutableHistoryTask) checkBaseExecutionInfo(incomingTaskExecutionInfo *workflowspb.BaseExecutionInfo) error {
 	if e.baseExecutionInfo == nil && incomingTaskExecutionInfo == nil {
 		return nil
 	}
@@ -485,4 +452,9 @@ func (e *ExecutableHistoryTask) CanBatch() bool {
 
 func (e *ExecutableHistoryTask) MarkUnbatchable() {
 	e.batchable = false
+}
+
+func (e *ExecutableHistoryTask) Cancel() {
+	e.MarkUnbatchable()
+	e.ExecutableTask.Cancel()
 }

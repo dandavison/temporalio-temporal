@@ -1,48 +1,26 @@
-// The MIT License
-//
-// Copyright (c) 2020 Temporal Technologies Inc.  All rights reserved.
-//
-// Copyright (c) 2020 Uber Technologies, Inc.
-//
-// Permission is hereby granted, free of charge, to any person obtaining a copy
-// of this software and associated documentation files (the "Software"), to deal
-// in the Software without restriction, including without limitation the rights
-// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-// copies of the Software, and to permit persons to whom the Software is
-// furnished to do so, subject to the following conditions:
-//
-// The above copyright notice and this permission notice shall be included in
-// all copies or substantial portions of the Software.
-//
-// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
-// THE SOFTWARE.
-
 package dynamicconfig
 
 import (
 	"context"
 	"errors"
 	"fmt"
+	"math"
 	"reflect"
+	"runtime"
 	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
+	"weak"
 
 	"github.com/mitchellh/mapstructure"
-	"go.temporal.io/server/common/clock"
+	"go.temporal.io/server/common/goro"
 	"go.temporal.io/server/common/log"
 	"go.temporal.io/server/common/log/tag"
 	"go.temporal.io/server/common/pingable"
 	"go.temporal.io/server/common/primitives/timestamp"
 	"go.temporal.io/server/common/util"
-	"go.temporal.io/server/internal/goro"
 	"google.golang.org/protobuf/reflect/protoreflect"
 )
 
@@ -57,12 +35,19 @@ type (
 
 		cancelClientSubscription func()
 
-		subscriptionLock sync.Mutex          // protects subscriptions, subscriptionIdx, and callbackPool
+		subscriptionLock sync.Mutex          // protects subscriptions and subscriptionIdx
 		subscriptions    map[Key]map[int]any // final "any" is *subscription[T]
 		subscriptionIdx  int
-		callbackPool     *goro.AdaptivePool
 
 		poller goro.Group
+
+		// cache converted values. use weak pointers to avoid holding on to values in the cache
+		// that are no longer in use. this must be a pointer since the cleanup closures need to
+		// reference this without referencing Collection.
+		convertCache *sync.Map // map[weak.Pointer[ConstrainedValue]]any
+
+		// index by constraints
+		indexCache *sync.Map // map[weak.Pointer[ConstrainedValue]]map[Constraints]int32
 	}
 
 	subscription[T any] struct {
@@ -70,9 +55,9 @@ type (
 		prec []Constraints
 		f    func(T)
 		def  T
-		cdef *[]TypedConstrainedValue[T]
+		cdef []TypedConstrainedValue[T] // nil for regular settings, populated for constrained default settings
 		// protected by subscriptionLock in Collection:
-		prev T
+		raw any // raw value that last sent value was converted from
 	}
 
 	subscriptionCallbackSettings struct {
@@ -81,6 +66,9 @@ type (
 		TargetDelay  time.Duration
 		ShrinkFactor float64
 	}
+
+	// sentinel type that doesn't compare equal to anything else
+	defaultValue struct{}
 
 	// These function types follow a similar pattern:
 	//   {X}PropertyFn - returns a value of type X that is global (no filters)
@@ -102,33 +90,43 @@ type (
 
 const (
 	errCountLogThreshold = 1000
+	// After this many constraints, switch to a cached lookup. This value was determined
+	// empirically on my machine using BenchmarkCollectionIndexed.
+	constraintsCacheThreshold = 32
 )
 
 var (
 	errKeyNotPresent        = errors.New("key not present")
 	errNoMatchingConstraint = errors.New("no matching constraint in key")
 
-	protoEnumType = reflect.TypeOf((*protoreflect.Enum)(nil)).Elem()
-	durationType  = reflect.TypeOf(time.Duration(0))
-	stringType    = reflect.TypeOf("")
+	protoEnumType = reflect.TypeFor[protoreflect.Enum]()
+	errorType     = reflect.TypeFor[error]()
+	durationType  = reflect.TypeFor[time.Duration]()
+	timeType      = reflect.TypeFor[time.Time]()
+	stringType    = reflect.TypeFor[string]()
+
+	usingDefaultValue any = defaultValue{}
 )
 
 // NewCollection creates a new collection. For subscriptions to work, you must call Start/Stop.
 // Get will work without Start/Stop.
 func NewCollection(client Client, logger log.Logger) *Collection {
+	// Do this at the first convenient place we have a logger:
+	logSharedStructureWarnings(logger)
+
 	return &Collection{
 		client:        client,
 		logger:        logger,
 		errCount:      -1,
 		subscriptions: make(map[Key]map[int]any),
+		convertCache:  new(sync.Map),
+		indexCache:    new(sync.Map),
 	}
 }
 
 func (c *Collection) Start() {
-	s := DynamicConfigSubscriptionCallback.Get(c)()
 	c.subscriptionLock.Lock()
 	defer c.subscriptionLock.Unlock()
-	c.callbackPool = goro.NewAdaptivePool(clock.NewRealTimeSource(), s.MinWorkers, s.MaxWorkers, s.TargetDelay, s.ShrinkFactor)
 	if notifyingClient, ok := c.client.(NotifyingClient); ok {
 		c.cancelClientSubscription = notifyingClient.Subscribe(c.keysChanged)
 	} else {
@@ -142,10 +140,6 @@ func (c *Collection) Stop() {
 	if c.cancelClientSubscription != nil {
 		c.cancelClientSubscription()
 	}
-	c.subscriptionLock.Lock()
-	defer c.subscriptionLock.Unlock()
-	c.callbackPool.Stop()
-	c.callbackPool = nil
 }
 
 // Implement pingable.Pingable
@@ -156,14 +150,8 @@ func (c *Collection) GetPingChecks() []pingable.Check {
 			Timeout: 5 * time.Second,
 			Ping: func() []pingable.Pingable {
 				c.subscriptionLock.Lock()
-				defer c.subscriptionLock.Unlock()
-				if c.callbackPool == nil {
-					return nil
-				}
-				var wg sync.WaitGroup
-				wg.Add(1)
-				c.callbackPool.Do(wg.Done)
-				wg.Wait()
+				//nolint:staticcheck // SA2001 just checking if we can acquire the lock
+				c.subscriptionLock.Unlock()
 				return nil
 			},
 		},
@@ -182,9 +170,6 @@ func (c *Collection) pollForChanges(ctx context.Context) error {
 func (c *Collection) pollOnce() {
 	c.subscriptionLock.Lock()
 	defer c.subscriptionLock.Unlock()
-	if c.callbackPool == nil {
-		return
-	}
 
 	for key, subs := range c.subscriptions {
 		setting := queryRegistry(key)
@@ -201,9 +186,6 @@ func (c *Collection) pollOnce() {
 func (c *Collection) keysChanged(changed map[Key][]ConstrainedValue) {
 	c.subscriptionLock.Lock()
 	defer c.subscriptionLock.Unlock()
-	if c.callbackPool == nil {
-		return
-	}
 
 	for key, cvs := range changed {
 		setting := queryRegistry(key)
@@ -225,20 +207,63 @@ func (c *Collection) throttleLog() bool {
 	return errCount < errCountLogThreshold || errCount%errCountLogThreshold == 0
 }
 
-func findMatch[T any](cvs []ConstrainedValue, defaultCVs []TypedConstrainedValue[T], precedence []Constraints) (any, error) {
-	if len(cvs)+len(defaultCVs) == 0 {
+func findMatch(
+	cache *sync.Map,
+	cvs []ConstrainedValue,
+	precedence []Constraints,
+) (*ConstrainedValue, error) {
+	if len(cvs) == 0 {
 		return nil, errKeyNotPresent
+	} else if len(cvs) > constraintsCacheThreshold && len(cvs) <= math.MaxInt32 {
+		return findMatchWithCache(cache, cvs, precedence)
 	}
+
 	for _, m := range precedence {
-		for _, cv := range cvs {
+		for idx, cv := range cvs {
 			if m == cv.Constraints {
-				return cv.Value, nil
+				// Note: cvs here is the slice returned by Client.GetValue. We want to return a
+				// pointer into that slice so that the converted value is cached as long as the
+				// Client keeps the []ConstrainedValue alive. See the comment on
+				// Client.GetValue.
+				return &cvs[idx], nil
 			}
 		}
-		for _, cv := range defaultCVs {
-			if m == cv.Constraints {
-				return cv.Value, nil
+	}
+	// key is present but no constraint section matches
+	return nil, errNoMatchingConstraint
+}
+
+func findMatchWithCache(
+	cache *sync.Map,
+	cvs []ConstrainedValue,
+	precedence []Constraints,
+) (*ConstrainedValue, error) {
+	var cached map[Constraints]int32
+	weakcvp := weak.Make(&cvs[0])
+	if v, ok := cache.Load(weakcvp); ok {
+		cached = v.(map[Constraints]int32) // nolint:revive // unchecked-type-assertion
+	} else {
+		cached = make(map[Constraints]int32, len(cvs))
+		for i := range cvs {
+			// pick first one to match behavior if multiple match
+			if _, ok := cached[cvs[i].Constraints]; !ok {
+				cached[cvs[i].Constraints] = int32(i)
 			}
+		}
+		if _, loaded := cache.LoadOrStore(weakcvp, cached); !loaded {
+			runtime.AddCleanup(&cvs[0], func(w weak.Pointer[ConstrainedValue]) {
+				cache.Delete(w)
+			}, weakcvp)
+		}
+	}
+
+	for _, m := range precedence {
+		if i, ok := cached[m]; ok {
+			// Note: cvs here is the slice returned by Client.GetValue. We want to return a
+			// pointer into that slice so that the converted value is cached as long as the
+			// Client keeps the []ConstrainedValue alive. See the comment on
+			// Client.GetValue.
+			return &cvs[i], nil
 		}
 	}
 	// key is present but no constraint section matches
@@ -251,61 +276,123 @@ func matchAndConvert[T any](
 	c *Collection,
 	key Key,
 	def T,
-	cdef *[]TypedConstrainedValue[T],
 	convert func(value any) (T, error),
 	precedence []Constraints,
 ) T {
 	cvs := c.client.GetValue(key)
-	return matchAndConvertCvs(c, key, def, cdef, convert, precedence, cvs)
+	v, _ := matchAndConvertCvs(c, key, def, convert, precedence, cvs)
+	return v
 }
 
 func matchAndConvertCvs[T any](
 	c *Collection,
 	key Key,
 	def T,
-	cdef *[]TypedConstrainedValue[T],
 	convert func(value any) (T, error),
 	precedence []Constraints,
 	cvs []ConstrainedValue,
-) T {
-	var defaultCVs []TypedConstrainedValue[T]
-	if cdef != nil {
-		defaultCVs = *cdef
-	} else {
-		defaultCVs = []TypedConstrainedValue[T]{{Value: def}}
-	}
-
-	val, matchErr := findMatch(cvs, defaultCVs, precedence)
-	if matchErr != nil {
-		if c.throttleLog() {
-			c.logger.Debug("No such key in dynamic config, using default", tag.Key(key.String()), tag.Error(matchErr))
-		}
+) (T, any) {
+	cvp, err := findMatch(c.indexCache, cvs, precedence)
+	if err != nil {
 		// couldn't find a constrained match, use default
-		val = def
+		return def, usingDefaultValue
 	}
 
-	typedVal, convertErr := convert(val)
-	if convertErr != nil && matchErr == nil {
-		// We failed to convert the value to the desired type. Try converting the default. note
-		// that if matchErr != nil then val _is_ defaultValue and we don't have to try this again.
+	typedVal, err := convertWithCache(c, key, convert, cvp)
+	if err != nil {
+		// We failed to convert the value to the desired type. Use the default.
 		if c.throttleLog() {
-			c.logger.Warn("Failed to convert value, using default", tag.Key(key.String()), tag.IgnoredValue(val), tag.Error(convertErr))
+			c.logger.Warn("Failed to convert value, using default", tag.Key(key.String()), tag.IgnoredValue(cvp), tag.Error(err))
 		}
-		typedVal, convertErr = convert(def)
+		return def, usingDefaultValue
 	}
-	if convertErr != nil {
-		// If we can't convert the default, that's a bug in our code, use Warn level.
-		c.logger.Warn("Can't convert default value (this is a bug; fix server code)", tag.Key(key.String()), tag.IgnoredValue(def), tag.Error(convertErr))
-		// Return typedVal anyway since we have to return something.
+	return typedVal, cvp.Value
+}
+
+// Returns matched value out of cvs, matched default out of defaultCVs, and also the priorities
+// of each of the matches (lower matched first). For no match, order will be 0.
+func findMatchWithConstrainedDefaults[T any](cvs []ConstrainedValue, defaultCVs []TypedConstrainedValue[T], precedence []Constraints) (
+	matchedValue *ConstrainedValue,
+	matchedDefault T,
+	valueOrder int,
+	defaultOrder int,
+) {
+	order := 0
+	for _, m := range precedence {
+		for idx, cv := range cvs {
+			order++
+			if m == cv.Constraints {
+				if valueOrder == 0 {
+					valueOrder = order
+					// Note: cvs here is the slice returned by Client.GetValue. We want to
+					// return a pointer into that slice instead of copying the ConstrainedValue.
+					// See findMatch.
+					matchedValue = &cvs[idx]
+				}
+			}
+		}
+		for _, cv := range defaultCVs {
+			order++
+			if m == cv.Constraints {
+				if defaultOrder == 0 {
+					defaultOrder = order
+					matchedDefault = cv.Value
+				}
+			}
+		}
 	}
-	return typedVal
+	return
+}
+
+func findAndResolveWithConstrainedDefaults[T any](
+	c *Collection,
+	key Key,
+	convert func(value any) (T, error),
+	cvs []ConstrainedValue,
+	defaultCVs []TypedConstrainedValue[T],
+	precedence []Constraints,
+) (value T, raw any) {
+	cvp, defVal, valOrder, defOrder := findMatchWithConstrainedDefaults(cvs, defaultCVs, precedence)
+
+	if defOrder == 0 {
+		// This is a server bug: all precedence lists must end with no-constraints, and all
+		// constrained defaults must have a no-constraints value, so we should have gotten a match.
+		c.logger.Warn("Constrained defaults had no match (this is a bug; fix server code)", tag.Key(key.String()))
+		// leave value as the zero value, that's the best we can do
+		return value, usingDefaultValue
+	} else if valOrder == 0 {
+		return defVal, usingDefaultValue
+	} else if defOrder < valOrder {
+		// value was present but constrained default took precedence
+		return defVal, usingDefaultValue // use sentinel since we're using default
+	}
+	typedVal, err := convertWithCache(c, key, convert, cvp)
+	if err != nil {
+		// We failed to convert the value to the desired type. Use the default.
+		if c.throttleLog() {
+			c.logger.Warn("Failed to convert value, using default", tag.Key(key.String()), tag.IgnoredValue(cvp), tag.Error(err))
+		}
+		return defVal, usingDefaultValue
+	}
+	return typedVal, cvp.Value
+}
+
+func matchAndConvertWithConstrainedDefault[T any](
+	c *Collection,
+	key Key,
+	cdef []TypedConstrainedValue[T],
+	convert func(value any) (T, error),
+	precedence []Constraints,
+) T {
+	cvs := c.client.GetValue(key)
+	value, _ := findAndResolveWithConstrainedDefaults(c, key, convert, cvs, cdef, precedence)
+	return value
 }
 
 func subscribe[T any](
 	c *Collection,
 	key Key,
 	def T,
-	cdef *[]TypedConstrainedValue[T],
 	convert func(value any) (T, error),
 	prec []Constraints,
 	callback func(T),
@@ -315,7 +402,8 @@ func subscribe[T any](
 
 	// get one value immediately (note that subscriptionLock is held here so we can't race with
 	// an update)
-	init := matchAndConvert(c, key, def, cdef, convert, prec)
+	cvs := c.client.GetValue(key)
+	init, raw := matchAndConvertCvs(c, key, def, convert, prec, cvs)
 
 	// As a convenience (and for efficiency), you can pass in a nil callback; we just return the
 	// current value and skip the subscription.  The cancellation func returned is also nil.
@@ -334,8 +422,50 @@ func subscribe[T any](
 		prec: prec,
 		f:    callback,
 		def:  def,
+		raw:  raw,
+	}
+
+	return init, func() {
+		c.subscriptionLock.Lock()
+		defer c.subscriptionLock.Unlock()
+		delete(c.subscriptions[key], id)
+	}
+}
+
+func subscribeWithConstrainedDefault[T any](
+	c *Collection,
+	key Key,
+	cdef []TypedConstrainedValue[T],
+	convert func(value any) (T, error),
+	prec []Constraints,
+	callback func(T),
+) (T, func()) {
+	c.subscriptionLock.Lock()
+	defer c.subscriptionLock.Unlock()
+
+	// get one value immediately (note that subscriptionLock is held here so we can't race with
+	// an update)
+	cvs := c.client.GetValue(key)
+	init, raw := findAndResolveWithConstrainedDefaults(c, key, convert, cvs, cdef, prec)
+
+	// As a convenience (and for efficiency), you can pass in a nil callback; we just return the
+	// current value and skip the subscription. The cancellation func returned is also nil.
+	if callback == nil {
+		return init, nil
+	}
+
+	c.subscriptionIdx++
+	id := c.subscriptionIdx
+
+	if c.subscriptions[key] == nil {
+		c.subscriptions[key] = make(map[int]any)
+	}
+
+	c.subscriptions[key][id] = &subscription[T]{
+		prec: prec,
+		f:    callback,
 		cdef: cdef,
-		prev: init,
+		raw:  raw,
 	}
 
 	return init, func() {
@@ -353,15 +483,95 @@ func dispatchUpdate[T any](
 	sub *subscription[T],
 	cvs []ConstrainedValue,
 ) {
-	newVal := matchAndConvertCvs(c, key, sub.def, sub.cdef, convert, sub.prec, cvs)
-	// Unfortunately we have to use reflect.DeepEqual instead of just == because T is not comparable.
-	// We can't make T comparable because maps and slices are not comparable, and we want to support
-	// those directly. We could have two versions of this, one for comparable types and one for
-	// non-comparable, but it's not worth it.
-	if !reflect.DeepEqual(sub.prev, newVal) {
-		sub.prev = newVal
-		c.callbackPool.Do(func() { sub.f(newVal) })
+	var raw any
+	cvp, err := findMatch(c.indexCache, cvs, sub.prec)
+	if err != nil {
+		raw = usingDefaultValue
+	} else {
+		raw = cvp.Value
 	}
+
+	// compare raw (pre-conversion) values, if unchanged, skip this update. note that
+	// `usingDefaultValue` is equal to itself but nothing else.
+	if reflect.DeepEqual(sub.raw, raw) {
+		// make raw field point to new one, not old one, so that old loaded files can get
+		// garbage collected.
+		sub.raw = raw
+		return
+	}
+
+	// raw value changed, need to dispatch default or converted value
+	var newVal T
+	if cvp == nil {
+		newVal = sub.def
+	} else {
+		newVal, err = convertWithCache(c, key, convert, cvp)
+		if err != nil {
+			// We failed to convert the value to the desired type. Use the default.
+			if c.throttleLog() {
+				c.logger.Warn("Failed to convert value, using default", tag.Key(key.String()), tag.IgnoredValue(cvp), tag.Error(err))
+			}
+			newVal, raw = sub.def, usingDefaultValue
+		}
+	}
+
+	sub.raw = raw
+	go sub.f(newVal)
+}
+
+// called with subscriptionLock
+func dispatchUpdateWithConstrainedDefault[T any](
+	c *Collection,
+	key Key,
+	convert func(value any) (T, error),
+	sub *subscription[T],
+	cvs []ConstrainedValue,
+) {
+	// Note: This performs the conversion even if the raw value is unchanged. This isn't ideal,
+	// but so far constrained default settings are only used for primitive values so it's okay.
+	// If we have a constrained default value with a complex conversion function, this could be
+	// optimized to delay conversion until after we check DeepEqual.
+	newVal, raw := findAndResolveWithConstrainedDefaults(c, key, convert, cvs, sub.cdef, sub.prec)
+
+	// compare raw (pre-conversion) values, if unchanged, skip this update. note that
+	// `usingDefaultValue` is equal to itself but nothing else.
+	if reflect.DeepEqual(sub.raw, raw) {
+		// make raw field point to new one, not old one, so that old loaded files can get
+		// garbage collected.
+		sub.raw = raw
+		return
+	}
+
+	sub.raw = raw
+	go sub.f(newVal)
+}
+
+func convertWithCache[T any](c *Collection, key Key, convert func(any) (T, error), cvp *ConstrainedValue) (T, error) {
+	weakcvp := weak.Make(cvp)
+
+	if converted, ok := c.convertCache.Load(weakcvp); ok {
+		if t, ok := converted.(T); ok {
+			return t, nil
+		}
+		// Each key can only be used with a single type, so this shouldn't happen
+		c.logger.Warn("Cached converted value has wrong type", tag.Key(key.String()))
+		// Fall through to regular conversion
+	}
+
+	t, err := convert(cvp.Value)
+	if err != nil {
+		var zero T
+		return zero, err
+	}
+
+	if _, loaded := c.convertCache.LoadOrStore(weakcvp, t); !loaded {
+		cc := c.convertCache // capture only this pointer, not the whole Collection
+		runtime.AddCleanup(cvp, func(w weak.Pointer[ConstrainedValue]) {
+			cc.Delete(w)
+		}, weakcvp)
+	}
+
+	return t, nil
 }
 
 func convertInt(val any) (int, error) {
@@ -457,9 +667,9 @@ func convertMap(val any) (map[string]any, error) {
 // Note that any failure in conversion of _any_ field will result in the overall default being used,
 // ignoring the fields that successfully converted.
 //
-// Note that the default value will be shallow-copied, so it should not have any deep structure.
-// Scalar types and values are fine, and slice and map types are fine too as long as they're set to
-// nil in the default.
+// Note that the default value will be deep-copied and then passed to mapstructure with the
+// ZeroFields setting false, so the config value will be _merged_ on top of it. Be very careful
+// when using non-empty maps or slices, the result may not be what you want.
 //
 // To avoid confusion, the default passed to ConvertStructure should be either the same as the
 // overall default for the setting (if you want any value set to be merged over the default, i.e.
@@ -472,12 +682,17 @@ func ConvertStructure[T any](def T) func(v any) (T, error) {
 			return typedV, nil
 		}
 
-		out := def
+		// Deep-copy the default and decode over it. This allows using e.g. a struct with some
+		// default fields filled in and a config that only set some fields.
+		out := deepCopyForMapstructure(def)
+
 		dec, err := mapstructure.NewDecoder(&mapstructure.DecoderConfig{
 			Result: &out,
 			DecodeHook: mapstructure.ComposeDecodeHookFunc(
 				mapstructureHookDuration,
+				mapstructureHookTimestamp,
 				mapstructureHookProtoEnum,
+				mapstructureHookGeneric,
 			),
 		})
 		if err != nil {
@@ -497,6 +712,31 @@ func mapstructureHookDuration(f, t reflect.Type, data any) (any, error) {
 	return convertDuration(data)
 }
 
+// Parses string or int into time.Time.
+func mapstructureHookTimestamp(f, t reflect.Type, data any) (any, error) {
+	if t != timeType {
+		return data, nil
+	}
+	switch v := data.(type) {
+	case time.Time:
+		return v, nil
+	case string:
+		ts, err := time.Parse(time.RFC3339, v)
+		if err != nil {
+			return time.Time{}, fmt.Errorf("failed to parse time: %v", err)
+		}
+		return ts, nil
+	}
+	// treat numeric values as seconds
+	if ival, err := convertInt(data); err == nil {
+		return time.Unix(int64(ival), 0), nil
+	} else if fval, err := convertFloat(data); err == nil {
+		ipart, fpart := math.Modf(fval)
+		return time.Unix(int64(ipart), int64(fpart*float64(time.Second))), nil
+	}
+	return time.Time{}, errors.New("value not convertible to Time")
+}
+
 // Parses proto enum values from strings.
 func mapstructureHookProtoEnum(f, t reflect.Type, data any) (any, error) {
 	if f != stringType || !t.Implements(protoEnumType) {
@@ -511,4 +751,29 @@ func mapstructureHookProtoEnum(f, t reflect.Type, data any) (any, error) {
 		}
 	}
 	return nil, fmt.Errorf("name %q not found in enum %s", data, t.Name())
+}
+
+// Parses generic values. See GenericParseHook.
+func mapstructureHookGeneric(f, t reflect.Type, data any) (any, error) {
+	if mth, ok := t.MethodByName("DynamicConfigParseHook"); ok &&
+		mth.Func.IsValid() &&
+		mth.Type != nil &&
+		mth.Type.NumIn() == 2 &&
+		mth.Type.In(1) == f &&
+		mth.Type.NumOut() == 2 &&
+		mth.Type.Out(0) == t &&
+		mth.Type.Out(1) == errorType {
+
+		out := mth.Func.Call([]reflect.Value{reflect.Zero(t), reflect.ValueOf(data)})
+		if !out[1].IsNil() {
+			if err, ok := out[1].Interface().(error); ok {
+				return nil, err
+			}
+			return nil, errors.New("failed to convert DynamicConfigParseHook error")
+		}
+		return out[0].Interface(), nil
+	}
+
+	// pass through
+	return data, nil
 }

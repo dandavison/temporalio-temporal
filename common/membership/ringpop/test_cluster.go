@@ -1,27 +1,3 @@
-// The MIT License
-//
-// Copyright (c) 2020 Temporal Technologies Inc.  All rights reserved.
-//
-// Copyright (c) 2020 Uber Technologies, Inc.
-//
-// Permission is hereby granted, free of charge, to any person obtaining a copy
-// of this software and associated documentation files (the "Software"), to deal
-// in the Software without restriction, including without limitation the rights
-// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-// copies of the Software, and to permit persons to whom the Software is
-// furnished to do so, subject to the following conditions:
-//
-// The above copyright notice and this permission notice shall be included in
-// all copies or substantial portions of the Software.
-//
-// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
-// THE SOFTWARE.
-
 package ringpop
 
 import (
@@ -29,7 +5,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/pborman/uuid"
+	"github.com/google/uuid"
 	"github.com/temporalio/ringpop-go"
 	"github.com/temporalio/tchannel-go"
 	"go.temporal.io/server/common/config"
@@ -95,7 +71,7 @@ func newTestCluster(
 			logger.Error("tchannel listen failed", tag.Error(err))
 			return nil
 		}
-		cluster.hostUUIDs[i] = uuid.New()
+		cluster.hostUUIDs[i] = uuid.NewString()
 		cluster.hostAddrs[i], err = buildBroadcastHostPort(cluster.channels[i].PeerInfo(), broadcastAddress)
 		if err != nil {
 			logger.Error("Failed to build broadcast hostport", tag.Error(err))
@@ -115,8 +91,11 @@ func newTestCluster(
 		logger.Error("unable to split host port", tag.Error(err))
 		return nil
 	}
+	// MarshalBinary never fails for UUIDs
+	hostID, _ := uuid.New().MarshalBinary()
+
 	seedMember := &persistence.ClusterMember{
-		HostID:        uuid.NewUUID(),
+		HostID:        hostID,
 		RPCAddress:    seedAddress,
 		RPCPort:       seedPort,
 		SessionStart:  time.Now().UTC(),
@@ -128,12 +107,13 @@ func newTestCluster(
 		func(_ context.Context, _ *persistence.GetClusterMembersRequest) (*persistence.GetClusterMembersResponse, error) {
 			res := &persistence.GetClusterMembersResponse{ActiveMembers: []*persistence.ClusterMember{seedMember}}
 
+			hostID, _ := uuid.New().MarshalBinary()
 			if firstGetClusterMemberCall {
 				// The first time GetClusterMembers is invoked, we simulate returning a stale/bad heartbeat.
 				// All subsequent calls only return the single "good" seed member
 				// This ensures that we exercise the retry path in bootstrap properly.
 				badSeedMember := &persistence.ClusterMember{
-					HostID:        uuid.NewUUID(),
+					HostID:        hostID,
 					RPCAddress:    seedAddress,
 					RPCPort:       seedPort + 1,
 					SessionStart:  time.Now().UTC(),

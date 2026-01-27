@@ -42,6 +42,8 @@ CREATE TABLE executions (
   signal_map                     map<bigint, blob>,
   signal_map_encoding            text,
   signal_requested               set<uuid>,
+  chasm_node_map                 map<text, blob>, -- Map from path to CHASM node blob
+  chasm_node_map_encoding        text,
   buffered_events_list           list<frozen<serialized_event_batch>>,
   workflow_last_write_version    bigint,
   workflow_state                 int,
@@ -82,7 +84,7 @@ CREATE TABLE tasks (
   namespace_id        uuid,
   task_queue_name     text,
   task_queue_type     int, -- enum TaskQueueType {ActivityTask, WorkflowTask}
-  type                int, -- enum rowType {Task, TaskQueue}
+  type                int, -- enum rowType {Task, TaskQueue} and subqueue id
   task_id             bigint,  -- unique identifier for tasks, monotonically increasing
   range_id            bigint, -- Used to ensure that only one process can write to the table
   task                blob,
@@ -93,6 +95,26 @@ CREATE TABLE tasks (
 ) WITH COMPACTION = {
     'class': 'org.apache.cassandra.db.compaction.LeveledCompactionStrategy'
   };
+
+-- Stores activity or workflow tasks
+-- Used for fairness scheduling. (pass, task_id) are monotonically increasing.
+CREATE TABLE tasks_v2 (
+  namespace_id        uuid,
+  task_queue_name     text,
+  task_queue_type     int, -- enum TaskQueueType {ActivityTask, WorkflowTask}
+  type                int, -- enum rowType {Task, TaskQueue} and subqueue id
+  pass                bigint, -- pass for tasks (see stride scheduling algorithm for fairness)
+  task_id             bigint, -- unique identifier for tasks
+  range_id            bigint, -- used to ensure that only one process can write to the table
+  ack_level           bigint, -- ack level for the task queue
+  task                blob,
+  task_encoding       text,
+  task_queue          blob,
+  task_queue_encoding text,
+PRIMARY KEY ((namespace_id, task_queue_name, task_queue_type), type, pass, task_id)
+) WITH COMPACTION = {
+    'class': 'org.apache.cassandra.db.compaction.LeveledCompactionStrategy'
+};
 
 -- Stores task queue information such as user provided versioning data
 -- OR

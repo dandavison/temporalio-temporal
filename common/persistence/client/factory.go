@@ -1,27 +1,3 @@
-// The MIT License
-//
-// Copyright (c) 2020 Temporal Technologies Inc.  All rights reserved.
-//
-// Copyright (c) 2020 Uber Technologies, Inc.
-//
-// Permission is hereby granted, free of charge, to any person obtaining a copy
-// of this software and associated documentation files (the "Software"), to deal
-// in the Software without restriction, including without limitation the rights
-// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-// copies of the Software, and to permit persons to whom the Software is
-// furnished to do so, subject to the following conditions:
-//
-// The above copyright notice and this permission notice shall be included in
-// all copies or substantial portions of the Software.
-//
-// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
-// THE SOFTWARE.
-
 package client
 
 import (
@@ -31,6 +7,7 @@ import (
 	"go.temporal.io/server/common"
 	"go.temporal.io/server/common/backoff"
 	"go.temporal.io/server/common/config"
+	"go.temporal.io/server/common/dynamicconfig"
 	"go.temporal.io/server/common/log"
 	"go.temporal.io/server/common/metrics"
 	"go.temporal.io/server/common/persistence"
@@ -52,6 +29,8 @@ type (
 		Close()
 		// NewTaskManager returns a new task manager
 		NewTaskManager() (persistence.TaskManager, error)
+		// NewFairTaskManager returns a new fair task manager
+		NewFairTaskManager() (persistence.FairTaskManager, error)
 		// NewShardManager returns a new shard manager
 		NewShardManager() (persistence.ShardManager, error)
 		// NewMetadataManager returns a new metadata manager
@@ -69,17 +48,19 @@ type (
 	}
 
 	factoryImpl struct {
-		dataStoreFactory     persistence.DataStoreFactory
-		config               *config.Persistence
-		serializer           serialization.Serializer
-		eventBlobCache       persistence.XDCCache
-		metricsHandler       metrics.Handler
-		logger               log.Logger
-		clusterName          string
-		systemRateLimiter    quotas.RequestRateLimiter
-		namespaceRateLimiter quotas.RequestRateLimiter
-		shardRateLimiter     quotas.RequestRateLimiter
-		healthSignals        persistence.HealthSignalAggregator
+		dataStoreFactory                            persistence.DataStoreFactory
+		config                                      *config.Persistence
+		serializer                                  serialization.Serializer
+		eventBlobCache                              persistence.XDCCache
+		metricsHandler                              metrics.Handler
+		logger                                      log.Logger
+		clusterName                                 string
+		systemRateLimiter                           quotas.RequestRateLimiter
+		namespaceRateLimiter                        quotas.RequestRateLimiter
+		shardRateLimiter                            quotas.RequestRateLimiter
+		healthSignals                               persistence.HealthSignalAggregator
+		enableDataLossMetrics                       dynamicconfig.BoolPropertyFn
+		enableBestEffortDeleteTasksOnWorkflowUpdate dynamicconfig.BoolPropertyFn
 	}
 )
 
@@ -102,19 +83,23 @@ func NewFactory(
 	metricsHandler metrics.Handler,
 	logger log.Logger,
 	healthSignals persistence.HealthSignalAggregator,
+	enableDataLossMetrics EnableDataLossMetrics,
+	enableBestEffortDeleteTasksOnWorkflowUpdate EnableBestEffortDeleteTasksOnWorkflowUpdate,
 ) Factory {
 	factory := &factoryImpl{
-		dataStoreFactory:     dataStoreFactory,
-		config:               cfg,
-		serializer:           serializer,
-		eventBlobCache:       eventBlobCache,
-		metricsHandler:       metricsHandler,
-		logger:               logger,
-		clusterName:          clusterName,
-		systemRateLimiter:    systemRateLimiter,
-		namespaceRateLimiter: namespaceRateLimiter,
-		shardRateLimiter:     shardRateLimiter,
-		healthSignals:        healthSignals,
+		dataStoreFactory:      dataStoreFactory,
+		config:                cfg,
+		serializer:            serializer,
+		eventBlobCache:        eventBlobCache,
+		metricsHandler:        metricsHandler,
+		logger:                logger,
+		clusterName:           clusterName,
+		systemRateLimiter:     systemRateLimiter,
+		namespaceRateLimiter:  namespaceRateLimiter,
+		shardRateLimiter:      shardRateLimiter,
+		healthSignals:         healthSignals,
+		enableDataLossMetrics: dynamicconfig.BoolPropertyFn(enableDataLossMetrics),
+		enableBestEffortDeleteTasksOnWorkflowUpdate: dynamicconfig.BoolPropertyFn(enableBestEffortDeleteTasksOnWorkflowUpdate),
 	}
 	factory.initDependencies()
 	return factory
@@ -126,13 +111,29 @@ func (f *factoryImpl) NewTaskManager() (persistence.TaskManager, error) {
 	if err != nil {
 		return nil, err
 	}
-
 	result := persistence.NewTaskManager(taskStore, f.serializer)
 	if f.systemRateLimiter != nil && f.namespaceRateLimiter != nil {
 		result = persistence.NewTaskPersistenceRateLimitedClient(result, f.systemRateLimiter, f.namespaceRateLimiter, f.shardRateLimiter, f.logger)
 	}
 	if f.metricsHandler != nil && f.healthSignals != nil {
-		result = persistence.NewTaskPersistenceMetricsClient(result, f.metricsHandler, f.healthSignals, f.logger)
+		result = persistence.NewTaskPersistenceMetricsClient(result, f.metricsHandler, f.healthSignals, f.logger, f.enableDataLossMetrics)
+	}
+	result = persistence.NewTaskPersistenceRetryableClient(result, retryPolicy, IsPersistenceTransientError)
+	return result, nil
+}
+
+// NewFairTaskManager returns a new task fairness manager
+func (f *factoryImpl) NewFairTaskManager() (persistence.FairTaskManager, error) {
+	taskStore, err := f.dataStoreFactory.NewFairTaskStore()
+	if err != nil {
+		return nil, err
+	}
+	result := persistence.NewTaskManager(taskStore, f.serializer)
+	if f.systemRateLimiter != nil && f.namespaceRateLimiter != nil {
+		result = persistence.NewTaskPersistenceRateLimitedClient(result, f.systemRateLimiter, f.namespaceRateLimiter, f.shardRateLimiter, f.logger)
+	}
+	if f.metricsHandler != nil && f.healthSignals != nil {
+		result = persistence.NewTaskPersistenceMetricsClient(result, f.metricsHandler, f.healthSignals, f.logger, f.enableDataLossMetrics)
 	}
 	result = persistence.NewTaskPersistenceRetryableClient(result, retryPolicy, IsPersistenceTransientError)
 	return result, nil
@@ -150,7 +151,7 @@ func (f *factoryImpl) NewShardManager() (persistence.ShardManager, error) {
 		result = persistence.NewShardPersistenceRateLimitedClient(result, f.systemRateLimiter, f.namespaceRateLimiter, f.shardRateLimiter, f.logger)
 	}
 	if f.metricsHandler != nil && f.healthSignals != nil {
-		result = persistence.NewShardPersistenceMetricsClient(result, f.metricsHandler, f.healthSignals, f.logger)
+		result = persistence.NewShardPersistenceMetricsClient(result, f.metricsHandler, f.healthSignals, f.logger, f.enableDataLossMetrics)
 	}
 	result = persistence.NewShardPersistenceRetryableClient(result, retryPolicy, IsPersistenceTransientError)
 	return result, nil
@@ -168,7 +169,7 @@ func (f *factoryImpl) NewMetadataManager() (persistence.MetadataManager, error) 
 		result = persistence.NewMetadataPersistenceRateLimitedClient(result, f.systemRateLimiter, f.namespaceRateLimiter, f.shardRateLimiter, f.logger)
 	}
 	if f.metricsHandler != nil && f.healthSignals != nil {
-		result = persistence.NewMetadataPersistenceMetricsClient(result, f.metricsHandler, f.healthSignals, f.logger)
+		result = persistence.NewMetadataPersistenceMetricsClient(result, f.metricsHandler, f.healthSignals, f.logger, f.enableDataLossMetrics)
 	}
 	result = persistence.NewMetadataPersistenceRetryableClient(result, retryPolicy, IsPersistenceTransientError)
 	return result, nil
@@ -186,7 +187,7 @@ func (f *factoryImpl) NewClusterMetadataManager() (persistence.ClusterMetadataMa
 		result = persistence.NewClusterMetadataPersistenceRateLimitedClient(result, f.systemRateLimiter, f.namespaceRateLimiter, f.shardRateLimiter, f.logger)
 	}
 	if f.metricsHandler != nil && f.healthSignals != nil {
-		result = persistence.NewClusterMetadataPersistenceMetricsClient(result, f.metricsHandler, f.healthSignals, f.logger)
+		result = persistence.NewClusterMetadataPersistenceMetricsClient(result, f.metricsHandler, f.healthSignals, f.logger, f.enableDataLossMetrics)
 	}
 	result = persistence.NewClusterMetadataPersistenceRetryableClient(result, retryPolicy, IsPersistenceTransientError)
 	return result, nil
@@ -199,12 +200,19 @@ func (f *factoryImpl) NewExecutionManager() (persistence.ExecutionManager, error
 		return nil, err
 	}
 
-	result := persistence.NewExecutionManager(store, f.serializer, f.eventBlobCache, f.logger, f.config.TransactionSizeLimit)
+	result := persistence.NewExecutionManager(
+		store,
+		f.serializer,
+		f.eventBlobCache,
+		f.logger,
+		f.config.TransactionSizeLimit,
+		f.enableBestEffortDeleteTasksOnWorkflowUpdate,
+	)
 	if f.systemRateLimiter != nil && f.namespaceRateLimiter != nil {
 		result = persistence.NewExecutionPersistenceRateLimitedClient(result, f.systemRateLimiter, f.namespaceRateLimiter, f.shardRateLimiter, f.logger)
 	}
 	if f.metricsHandler != nil && f.healthSignals != nil {
-		result = persistence.NewExecutionPersistenceMetricsClient(result, f.metricsHandler, f.healthSignals, f.logger)
+		result = persistence.NewExecutionPersistenceMetricsClient(result, f.metricsHandler, f.healthSignals, f.logger, f.enableDataLossMetrics)
 	}
 	result = persistence.NewExecutionPersistenceRetryableClient(result, retryPolicy, IsPersistenceTransientError)
 	return result, nil
@@ -220,7 +228,7 @@ func (f *factoryImpl) NewNamespaceReplicationQueue() (persistence.NamespaceRepli
 		result = persistence.NewQueuePersistenceRateLimitedClient(result, f.systemRateLimiter, f.namespaceRateLimiter, f.shardRateLimiter, f.logger)
 	}
 	if f.metricsHandler != nil && f.healthSignals != nil {
-		result = persistence.NewQueuePersistenceMetricsClient(result, f.metricsHandler, f.healthSignals, f.logger)
+		result = persistence.NewQueuePersistenceMetricsClient(result, f.metricsHandler, f.healthSignals, f.logger, f.enableDataLossMetrics)
 	}
 	result = persistence.NewQueuePersistenceRetryableClient(result, namespaceQueueRetryPolicy, IsNamespaceQueueTransientError)
 	return persistence.NewNamespaceReplicationQueue(result, f.serializer, f.clusterName, f.metricsHandler, f.logger)
@@ -231,7 +239,7 @@ func (f *factoryImpl) NewHistoryTaskQueueManager() (persistence.HistoryTaskQueue
 	if err != nil {
 		return nil, err
 	}
-	return persistence.NewHistoryTaskQueueManager(q, serialization.NewSerializer()), nil
+	return persistence.NewHistoryTaskQueueManager(q, f.serializer), nil
 }
 
 func (f *factoryImpl) NewNexusEndpointManager() (persistence.NexusEndpointManager, error) {
@@ -245,7 +253,7 @@ func (f *factoryImpl) NewNexusEndpointManager() (persistence.NexusEndpointManage
 		result = persistence.NewNexusEndpointPersistenceRateLimitedClient(result, f.systemRateLimiter, f.namespaceRateLimiter, f.shardRateLimiter, f.logger)
 	}
 	if f.metricsHandler != nil && f.healthSignals != nil {
-		result = persistence.NewNexusEndpointPersistenceMetricsClient(result, f.metricsHandler, f.healthSignals, f.logger)
+		result = persistence.NewNexusEndpointPersistenceMetricsClient(result, f.metricsHandler, f.healthSignals, f.logger, f.enableDataLossMetrics)
 	}
 	result = persistence.NewNexusEndpointPersistenceRetryableClient(result, retryPolicy, IsPersistenceTransientError)
 	return result, nil
@@ -261,7 +269,8 @@ func (f *factoryImpl) Close() {
 
 func IsPersistenceTransientError(err error) bool {
 	switch err.(type) {
-	case *serviceerror.Unavailable:
+	// we retry on DataLoss errors because persistence layer is sometimes unreliable when we immediately read-after-write
+	case *serviceerror.Unavailable, *serviceerror.DataLoss:
 		return true
 	}
 

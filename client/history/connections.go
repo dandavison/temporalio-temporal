@@ -1,82 +1,58 @@
-// The MIT License
-//
-// Copyright (c) 2020 Temporal Technologies Inc.  All rights reserved.
-//
-// Copyright (c) 2020 Uber Technologies, Inc.
-//
-// Permission is hereby granted, free of charge, to any person obtaining a copy
-// of this software and associated documentation files (the "Software"), to deal
-// in the Software without restriction, including without limitation the rights
-// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-// copies of the Software, and to permit persons to whom the Software is
-// furnished to do so, subject to the following conditions:
-//
-// The above copyright notice and this permission notice shall be included in
-// all copies or substantial portions of the Software.
-//
-// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
-// THE SOFTWARE.
-
-//go:generate mockgen -copyright_file ../../LICENSE -package $GOPACKAGE -source $GOFILE -destination connections_mock.go
-
 package history
 
 import (
 	"sync"
 
-	"go.temporal.io/server/api/historyservice/v1"
 	"go.temporal.io/server/common/membership"
 	"google.golang.org/grpc"
 )
 
 type (
-	clientConnection struct {
-		historyClient historyservice.HistoryServiceClient
-		grpcConn      *grpc.ClientConn
+	clientConnection[C any] struct {
+		grpcClient C
+		grpcConn   *grpc.ClientConn
 	}
 
 	rpcAddress string
 
-	connectionPoolImpl struct {
+	connectionPoolImpl[C any] struct {
 		mu struct {
 			sync.RWMutex
-			conns map[rpcAddress]clientConnection
+			conns map[rpcAddress]clientConnection[C]
 		}
 
 		historyServiceResolver membership.ServiceResolver
 		rpcFactory             RPCFactory
+		clientCtor             func(grpc.ClientConnInterface) C
 	}
 
 	// RPCFactory is a subset of the [go.temporal.io/server/common/rpc.RPCFactory] interface to make testing easier.
 	RPCFactory interface {
-		CreateInternodeGRPCConnection(rpcAddress string) *grpc.ClientConn
+		CreateHistoryGRPCConnection(rpcAddress string) *grpc.ClientConn
 	}
 
-	connectionPool interface {
-		getOrCreateClientConn(addr rpcAddress) clientConnection
-		getAllClientConns() []clientConnection
-		resetConnectBackoff(clientConnection)
+	connectionPool[C any] interface {
+		getOrCreateClientConn(addr rpcAddress) clientConnection[C]
+		getAllClientConns() []clientConnection[C]
+		resetConnectBackoff(clientConnection[C])
 	}
 )
 
-func newConnectionPool(
+func NewConnectionPool[C any](
 	historyServiceResolver membership.ServiceResolver,
 	rpcFactory RPCFactory,
-) *connectionPoolImpl {
-	c := &connectionPoolImpl{
+	clientCtor func(grpc.ClientConnInterface) C,
+) *connectionPoolImpl[C] {
+	c := &connectionPoolImpl[C]{
 		historyServiceResolver: historyServiceResolver,
 		rpcFactory:             rpcFactory,
+		clientCtor:             clientCtor,
 	}
-	c.mu.conns = make(map[rpcAddress]clientConnection)
+	c.mu.conns = make(map[rpcAddress]clientConnection[C])
 	return c
 }
 
-func (c *connectionPoolImpl) getOrCreateClientConn(addr rpcAddress) clientConnection {
+func (c *connectionPoolImpl[C]) getOrCreateClientConn(addr rpcAddress) clientConnection[C] {
 	c.mu.RLock()
 	cc, ok := c.mu.conns[addr]
 	c.mu.RUnlock()
@@ -90,21 +66,20 @@ func (c *connectionPoolImpl) getOrCreateClientConn(addr rpcAddress) clientConnec
 	if cc, ok = c.mu.conns[addr]; ok {
 		return cc
 	}
-
-	grpcConn := c.rpcFactory.CreateInternodeGRPCConnection(string(addr))
-	cc = clientConnection{
-		historyClient: historyservice.NewHistoryServiceClient(grpcConn),
-		grpcConn:      grpcConn,
+	grpcConn := c.rpcFactory.CreateHistoryGRPCConnection(string(addr))
+	cc = clientConnection[C]{
+		grpcClient: c.clientCtor(grpcConn),
+		grpcConn:   grpcConn,
 	}
 
 	c.mu.conns[addr] = cc
 	return cc
 }
 
-func (c *connectionPoolImpl) getAllClientConns() []clientConnection {
+func (c *connectionPoolImpl[C]) getAllClientConns() []clientConnection[C] {
 	hostInfos := c.historyServiceResolver.Members()
 
-	var clientConns []clientConnection
+	var clientConns []clientConnection[C]
 	for _, hostInfo := range hostInfos {
 		cc := c.getOrCreateClientConn(rpcAddress(hostInfo.GetAddress()))
 		clientConns = append(clientConns, cc)
@@ -113,6 +88,6 @@ func (c *connectionPoolImpl) getAllClientConns() []clientConnection {
 	return clientConns
 }
 
-func (c *connectionPoolImpl) resetConnectBackoff(cc clientConnection) {
+func (c *connectionPoolImpl[C]) resetConnectBackoff(cc clientConnection[C]) {
 	cc.grpcConn.ResetConnectBackoff()
 }

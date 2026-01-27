@@ -1,30 +1,9 @@
-// The MIT License
-//
-// Copyright (c) 2020 Temporal Technologies Inc.  All rights reserved.
-//
-// Copyright (c) 2020 Uber Technologies, Inc.
-//
-// Permission is hereby granted, free of charge, to any person obtaining a copy
-// of this software and associated documentation files (the "Software"), to deal
-// in the Software without restriction, including without limitation the rights
-// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-// copies of the Software, and to permit persons to whom the Software is
-// furnished to do so, subject to the following conditions:
-//
-// The above copyright notice and this permission notice shall be included in
-// all copies or substantial portions of the Software.
-//
-// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
-// THE SOFTWARE.
-
 package queues
 
 import (
+	"fmt"
+
+	"go.temporal.io/server/chasm"
 	"go.temporal.io/server/common/metrics"
 	"go.temporal.io/server/service/history/tasks"
 )
@@ -36,10 +15,23 @@ import (
 // 3. Update all metrics dashboards & alerts to use new tag name & values
 // 4. In release X+1, remove old tag name & values
 
+func getCHASMTaskTypeTagValue(
+	t *tasks.ChasmTask,
+	chasmRegistry *chasm.Registry,
+) string {
+	taskFqn, ok := chasmRegistry.TaskFqnByID(t.Info.TypeId)
+	if !ok {
+		taskFqn = fmt.Sprintf("UnknownChasmTaskType: %d", t.Info.TypeId)
+	}
+	return taskFqn
+}
+
 func GetActiveTransferTaskTypeTagValue(
 	task tasks.Task,
+	chasmRegistry *chasm.Registry,
 ) string {
-	switch task.(type) {
+	prefix := "TransferActive"
+	switch t := task.(type) {
 	case *tasks.ActivityTask:
 		return metrics.TaskTypeTransferActiveTaskActivity
 	case *tasks.WorkflowTask:
@@ -56,15 +48,19 @@ func GetActiveTransferTaskTypeTagValue(
 		return metrics.TaskTypeTransferActiveTaskResetWorkflow
 	case *tasks.DeleteExecutionTask:
 		return metrics.TaskTypeTransferActiveTaskDeleteExecution
+	case *tasks.ChasmTask:
+		return prefix + "." + getCHASMTaskTypeTagValue(t, chasmRegistry)
 	default:
-		return "TransferActive" + task.GetType().String()
+		return prefix + task.GetType().String()
 	}
 }
 
 func GetStandbyTransferTaskTypeTagValue(
 	task tasks.Task,
+	chasmRegistry *chasm.Registry,
 ) string {
-	switch task.(type) {
+	prefix := "TransferStandby"
+	switch t := task.(type) {
 	case *tasks.ActivityTask:
 		return metrics.TaskTypeTransferStandbyTaskActivity
 	case *tasks.WorkflowTask:
@@ -81,14 +77,18 @@ func GetStandbyTransferTaskTypeTagValue(
 		return metrics.TaskTypeTransferStandbyTaskResetWorkflow
 	case *tasks.DeleteExecutionTask:
 		return metrics.TaskTypeTransferStandbyTaskDeleteExecution
+	case *tasks.ChasmTask:
+		return prefix + "." + getCHASMTaskTypeTagValue(t, chasmRegistry)
 	default:
-		return "TransferStandby" + task.GetType().String()
+		return prefix + task.GetType().String()
 	}
 }
 
 func GetActiveTimerTaskTypeTagValue(
 	task tasks.Task,
+	chasmRegistry *chasm.Registry,
 ) string {
+	prefix := "TimerActive"
 	switch t := task.(type) {
 	case *tasks.WorkflowTaskTimeoutTask:
 		if t.InMemory {
@@ -109,15 +109,21 @@ func GetActiveTimerTaskTypeTagValue(
 		return metrics.TaskTypeTimerActiveTaskActivityRetryTimer
 	case *tasks.WorkflowBackoffTimerTask:
 		return metrics.TaskTypeTimerActiveTaskWorkflowBackoffTimer
+	case *tasks.ChasmTask:
+		return prefix + "." + getCHASMTaskTypeTagValue(t, chasmRegistry)
+	case *tasks.ChasmTaskPure:
+		return metrics.TaskTypeTimerActiveTaskChasmPureTask
 	default:
-		return "TimerActive" + task.GetType().String()
+		return prefix + task.GetType().String()
 	}
 }
 
 func GetStandbyTimerTaskTypeTagValue(
 	task tasks.Task,
+	chasmRegistry *chasm.Registry,
 ) string {
-	switch task.(type) {
+	prefix := "TimerStandby"
+	switch t := task.(type) {
 	case *tasks.WorkflowTaskTimeoutTask:
 		return metrics.TaskTypeTimerStandbyTaskWorkflowTaskTimeout
 	case *tasks.ActivityTimeoutTask:
@@ -134,8 +140,12 @@ func GetStandbyTimerTaskTypeTagValue(
 		return metrics.TaskTypeTimerStandbyTaskActivityRetryTimer
 	case *tasks.WorkflowBackoffTimerTask:
 		return metrics.TaskTypeTimerStandbyTaskWorkflowBackoffTimer
+	case *tasks.ChasmTask:
+		return prefix + "." + getCHASMTaskTypeTagValue(t, chasmRegistry)
+	case *tasks.ChasmTaskPure:
+		return metrics.TaskTypeTimerStandbyTaskChasmPureTask
 	default:
-		return "TimerStandby" + task.GetType().String()
+		return prefix + task.GetType().String()
 	}
 }
 
@@ -151,6 +161,8 @@ func GetVisibilityTaskTypeTagValue(
 		return metrics.TaskTypeVisibilityTaskCloseExecution
 	case *tasks.DeleteExecutionVisibilityTask:
 		return metrics.TaskTypeVisibilityTaskDeleteExecution
+	case *tasks.ChasmTask:
+		return metrics.TaskTypeVisibilityTaskUpsertChasmExecution
 	default:
 		return task.GetType().String()
 	}
@@ -167,7 +179,11 @@ func GetArchivalTaskTypeTagValue(
 	}
 }
 
-func GetOutboundTaskTypeTagValue(task tasks.Task, isActive bool) string {
+func GetOutboundTaskTypeTagValue(
+	task tasks.Task,
+	isActive bool,
+	chasmRegistry *chasm.Registry,
+) string {
 	var prefix string
 	if isActive {
 		prefix = "OutboundActive"
@@ -175,11 +191,14 @@ func GetOutboundTaskTypeTagValue(task tasks.Task, isActive bool) string {
 		prefix = "OutboundStandby"
 	}
 
-	outbound, ok := task.(*tasks.StateMachineOutboundTask)
-	if !ok {
+	switch task := task.(type) {
+	case *tasks.StateMachineOutboundTask:
+		return prefix + "." + task.StateMachineTaskType()
+	case *tasks.ChasmTask:
+		return prefix + "." + getCHASMTaskTypeTagValue(task, chasmRegistry)
+	default:
 		return prefix + "Unknown"
 	}
-	return prefix + "." + outbound.StateMachineTaskType()
 }
 
 func GetTimerStateMachineTaskTypeTagValue(taskType string, isActive bool) string {
@@ -193,28 +212,28 @@ func GetTimerStateMachineTaskTypeTagValue(taskType string, isActive bool) string
 	return prefix + "." + taskType
 }
 
-func getTaskTypeTagValue(
-	executable Executable,
+func GetTaskTypeTagValue(
+	task tasks.Task,
 	isActive bool,
+	chasmRegistry *chasm.Registry,
 ) string {
-	task := executable.GetTask()
 	switch task.GetCategory() {
 	case tasks.CategoryTransfer:
 		if isActive {
-			return GetActiveTransferTaskTypeTagValue(task)
+			return GetActiveTransferTaskTypeTagValue(task, chasmRegistry)
 		}
-		return GetStandbyTransferTaskTypeTagValue(task)
+		return GetStandbyTransferTaskTypeTagValue(task, chasmRegistry)
 	case tasks.CategoryTimer:
 		if isActive {
-			return GetActiveTimerTaskTypeTagValue(task)
+			return GetActiveTimerTaskTypeTagValue(task, chasmRegistry)
 		}
-		return GetStandbyTimerTaskTypeTagValue(task)
+		return GetStandbyTimerTaskTypeTagValue(task, chasmRegistry)
 	case tasks.CategoryVisibility:
 		return GetVisibilityTaskTypeTagValue(task)
 	case tasks.CategoryArchival:
 		return GetArchivalTaskTypeTagValue(task)
 	case tasks.CategoryOutbound:
-		return GetOutboundTaskTypeTagValue(task, isActive)
+		return GetOutboundTaskTypeTagValue(task, isActive, chasmRegistry)
 	default:
 		return task.GetType().String()
 	}

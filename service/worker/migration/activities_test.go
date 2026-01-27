@@ -1,27 +1,3 @@
-// The MIT License
-//
-// Copyright (c) 2020 Temporal Technologies Inc.  All rights reserved.
-//
-// Copyright (c) 2020 Uber Technologies, Inc.
-//
-// Permission is hereby granted, free of charge, to any person obtaining a copy
-// of this software and associated documentation files (the "Software"), to deal
-// in the Software without restriction, including without limitation the rights
-// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-// copies of the Software, and to permit persons to whom the Software is
-// furnished to do so, subject to the following conditions:
-//
-// The above copyright notice and this permission notice shall be included in
-// all copies or substantial portions of the Software.
-//
-// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
-// THE SOFTWARE.
-
 package migration
 
 import (
@@ -29,9 +5,12 @@ import (
 	"testing"
 	"time"
 
+	"github.com/stretchr/testify/require"
 	"github.com/stretchr/testify/suite"
 	commonpb "go.temporal.io/api/common/v1"
+	replicationpb "go.temporal.io/api/replication/v1"
 	"go.temporal.io/api/serviceerror"
+	"go.temporal.io/api/workflowservice/v1"
 	"go.temporal.io/sdk/interceptor"
 	"go.temporal.io/sdk/testsuite"
 	"go.temporal.io/sdk/worker"
@@ -40,8 +19,11 @@ import (
 	enumsspb "go.temporal.io/server/api/enums/v1"
 	"go.temporal.io/server/api/historyservice/v1"
 	"go.temporal.io/server/api/historyservicemock/v1"
-	persistencepb "go.temporal.io/server/api/persistence/v1"
+	persistencespb "go.temporal.io/server/api/persistence/v1"
+	"go.temporal.io/server/chasm"
+	chasmworkflow "go.temporal.io/server/chasm/lib/workflow"
 	"go.temporal.io/server/client"
+	"go.temporal.io/server/common/dynamicconfig"
 	"go.temporal.io/server/common/log"
 	"go.temporal.io/server/common/metrics"
 	"go.temporal.io/server/common/namespace"
@@ -56,6 +38,7 @@ import (
 
 type activitiesSuite struct {
 	suite.Suite
+	*require.Assertions
 	protoassert.ProtoAssertions
 	testsuite.WorkflowTestSuite
 
@@ -67,6 +50,7 @@ type activitiesSuite struct {
 	mockClientBean                *client.MockBean
 
 	mockFrontendClient    *workflowservicemock.MockWorkflowServiceClient
+	mockAdminClient       *adminservicemock.MockAdminServiceClient
 	mockHistoryClient     *historyservicemock.MockHistoryServiceClient
 	mockRemoteAdminClient *adminservicemock.MockAdminServiceClient
 
@@ -83,34 +67,33 @@ const (
 )
 
 var (
-	emptyExecutions = commonpb.WorkflowExecution{}
-
-	execution1 = commonpb.WorkflowExecution{
-		WorkflowId: "workflow1",
-		RunId:      "run1",
+	execution1 = &ExecutionInfo{
+		executionInfoNewJSON: executionInfoNewJSON{
+			BusinessID:  "workflow1",
+			RunID:       "run1",
+			ArchetypeID: chasm.WorkflowArchetypeID,
+		},
 	}
 
-	execution2 = commonpb.WorkflowExecution{
-		WorkflowId: "workflow2",
-		RunId:      "run2",
+	execution2 = &ExecutionInfo{
+		executionInfoNewJSON: executionInfoNewJSON{
+			BusinessID:  "workflow2",
+			RunID:       "run2",
+			ArchetypeID: chasm.UnspecifiedArchetypeID,
+		},
 	}
 
-	execution3 = commonpb.WorkflowExecution{
-		WorkflowId: "workflow3",
-		RunId:      "run3",
-	}
-
-	completeState = historyservice.DescribeMutableStateResponse{
-		DatabaseMutableState: &persistencepb.WorkflowMutableState{
-			ExecutionState: &persistencepb.WorkflowExecutionState{
+	completeState = &historyservice.DescribeMutableStateResponse{
+		DatabaseMutableState: &persistencespb.WorkflowMutableState{
+			ExecutionState: &persistencespb.WorkflowExecutionState{
 				State: enumsspb.WORKFLOW_EXECUTION_STATE_COMPLETED,
 			},
 		},
 	}
 
-	zombieState = historyservice.DescribeMutableStateResponse{
-		DatabaseMutableState: &persistencepb.WorkflowMutableState{
-			ExecutionState: &persistencepb.WorkflowExecutionState{
+	zombieState = &historyservice.DescribeMutableStateResponse{
+		DatabaseMutableState: &persistencespb.WorkflowMutableState{
+			ExecutionState: &persistencespb.WorkflowExecutionState{
 				State: enumsspb.WORKFLOW_EXECUTION_STATE_ZOMBIE,
 			},
 		},
@@ -124,6 +107,7 @@ func TestActivitiesSuite(t *testing.T) {
 }
 
 func (s *activitiesSuite) SetupTest() {
+	s.Assertions = require.New(s.T())
 	s.ProtoAssertions = protoassert.New(s.T())
 	s.controller = gomock.NewController(s.T())
 	s.mockTaskManager = persistence.NewMockTaskManager(s.controller)
@@ -132,6 +116,7 @@ func (s *activitiesSuite) SetupTest() {
 	s.mockClientBean = client.NewMockBean(s.controller)
 
 	s.mockFrontendClient = workflowservicemock.NewMockWorkflowServiceClient(s.controller)
+	s.mockAdminClient = adminservicemock.NewMockAdminServiceClient(s.controller)
 	s.mockHistoryClient = historyservicemock.NewMockHistoryServiceClient(s.controller)
 	s.mockRemoteAdminClient = adminservicemock.NewMockAdminServiceClient(s.controller)
 
@@ -146,17 +131,26 @@ func (s *activitiesSuite) SetupTest() {
 	s.mockNamespaceRegistry.EXPECT().GetNamespace(gomock.Any()).
 		Return(&testNamespace, nil).AnyTimes()
 
+	chasmRegistry := chasm.NewRegistry(s.logger)
+	err := chasmRegistry.Register(chasmworkflow.NewLibrary())
+	s.NoError(err)
+
 	s.a = &activities{
-		namespaceRegistry:              s.mockNamespaceRegistry,
-		namespaceReplicationQueue:      s.mockNamespaceReplicationQueue,
-		clientFactory:                  s.mockClientFactory,
-		clientBean:                     s.mockClientBean,
-		taskManager:                    s.mockTaskManager,
-		frontendClient:                 s.mockFrontendClient,
-		historyClient:                  s.mockHistoryClient,
-		logger:                         log.NewCLILogger(),
-		metricsHandler:                 s.mockMetricsHandler,
-		forceReplicationMetricsHandler: s.mockMetricsHandler,
+		namespaceRegistry:                s.mockNamespaceRegistry,
+		namespaceReplicationQueue:        s.mockNamespaceReplicationQueue,
+		clientFactory:                    s.mockClientFactory,
+		clientBean:                       s.mockClientBean,
+		taskManager:                      s.mockTaskManager,
+		frontendClient:                   s.mockFrontendClient,
+		adminClient:                      s.mockAdminClient,
+		historyClient:                    s.mockHistoryClient,
+		logger:                           s.logger,
+		metricsHandler:                   s.mockMetricsHandler,
+		forceReplicationMetricsHandler:   s.mockMetricsHandler,
+		generateMigrationTaskViaFrontend: dynamicconfig.GetBoolPropertyFn(false),
+		enableHistoryRateLimiter:         dynamicconfig.GetBoolPropertyFn(false),
+		workflowVerifier:                 workflowVerifierProvider(),
+		chasmRegistry:                    chasmRegistry,
 	}
 }
 
@@ -180,13 +174,18 @@ func (s *activitiesSuite) TestVerifyReplicationTasks_Success() {
 		Namespace:         mockedNamespace,
 		NamespaceID:       mockedNamespaceID,
 		TargetClusterName: remoteCluster,
-		Executions:        []*commonpb.WorkflowExecution{&execution1, &execution2},
+		Executions:        []*ExecutionInfo{execution1, execution2},
 	}
 
 	// Immediately replicated
 	s.mockRemoteAdminClient.EXPECT().DescribeMutableState(gomock.Any(), protomock.Eq(&adminservice.DescribeMutableStateRequest{
 		Namespace: mockedNamespace,
-		Execution: &execution1,
+		Execution: &commonpb.WorkflowExecution{
+			WorkflowId: execution1.BusinessID,
+			RunId:      execution1.RunID,
+		},
+		Archetype:       chasm.WorkflowArchetype,
+		SkipForceReload: true,
 	})).Return(&adminservice.DescribeMutableStateResponse{}, nil).Times(1)
 
 	// Slowly replicated
@@ -202,22 +201,36 @@ func (s *activitiesSuite) TestVerifyReplicationTasks_Success() {
 	for _, r := range replicationSlowReponses {
 		s.mockRemoteAdminClient.EXPECT().DescribeMutableState(gomock.Any(), protomock.Eq(&adminservice.DescribeMutableStateRequest{
 			Namespace: mockedNamespace,
-			Execution: &execution2,
+			Execution: &commonpb.WorkflowExecution{
+				WorkflowId: execution2.BusinessID,
+				RunId:      execution2.RunID,
+			},
+			Archetype:       chasm.WorkflowArchetype,
+			SkipForceReload: true,
 		})).Return(r.resp, r.err).Times(1)
 	}
 
 	s.mockHistoryClient.EXPECT().DescribeMutableState(gomock.Any(), protomock.Eq(&historyservice.DescribeMutableStateRequest{
 		NamespaceId: mockedNamespaceID,
-		Execution:   &execution2,
-	})).Return(&completeState, nil).Times(2)
+		Execution: &commonpb.WorkflowExecution{
+			WorkflowId: execution2.BusinessID,
+			RunId:      execution2.RunID,
+		},
+		ArchetypeId:     execution2.ArchetypeID,
+		SkipForceReload: true,
+	})).Return(completeState, nil).Times(2)
 
-	_, err := env.ExecuteActivity(s.a.VerifyReplicationTasks, &request)
+	f, err := env.ExecuteActivity(s.a.VerifyReplicationTasks, &request)
 	s.NoError(err)
+	var output verifyReplicationTasksResponse
+	err = f.Get(&output)
+	s.NoError(err)
+	s.Equal(len(request.Executions), int(output.VerifiedWorkflowCount))
 
 	s.Greater(len(iceptor.replicationRecordedHeartbeats), 0)
 	lastHeartBeat := iceptor.replicationRecordedHeartbeats[len(iceptor.replicationRecordedHeartbeats)-1]
 	s.Equal(len(request.Executions), lastHeartBeat.NextIndex)
-	s.ProtoEqual(&execution2, lastHeartBeat.LastNotVerifiedWorkflowExecution)
+	s.Equal(execution2, lastHeartBeat.LastNotVerifiedWorkflowExecution)
 }
 
 func (s *activitiesSuite) TestVerifyReplicationTasks_SkipWorkflowExecution() {
@@ -229,7 +242,7 @@ func (s *activitiesSuite) TestVerifyReplicationTasks_SkipWorkflowExecution() {
 		expectedErr    error
 	}{
 		{
-			&zombieState,
+			zombieState,
 			nil,
 			reasonZombieWorkflow,
 			nil,
@@ -250,21 +263,30 @@ func (s *activitiesSuite) TestVerifyReplicationTasks_SkipWorkflowExecution() {
 		Namespace:         mockedNamespace,
 		NamespaceID:       mockedNamespaceID,
 		TargetClusterName: remoteCluster,
-		Executions:        []*commonpb.WorkflowExecution{&execution1},
+		Executions:        []*ExecutionInfo{execution1},
 	}
 
 	start := time.Now()
 	for _, t := range testcases {
 		env, iceptor := s.initEnv()
-
 		s.mockRemoteAdminClient.EXPECT().DescribeMutableState(gomock.Any(), protomock.Eq(&adminservice.DescribeMutableStateRequest{
 			Namespace: mockedNamespace,
-			Execution: &execution1,
+			Execution: &commonpb.WorkflowExecution{
+				WorkflowId: execution1.BusinessID,
+				RunId:      execution1.RunID,
+			},
+			Archetype:       chasm.WorkflowArchetype,
+			SkipForceReload: true,
 		})).Return(nil, serviceerror.NewNotFound("")).Times(1)
 
 		s.mockHistoryClient.EXPECT().DescribeMutableState(gomock.Any(), protomock.Eq(&historyservice.DescribeMutableStateRequest{
 			NamespaceId: mockedNamespaceID,
-			Execution:   &execution1,
+			Execution: &commonpb.WorkflowExecution{
+				WorkflowId: execution1.BusinessID,
+				RunId:      execution1.RunID,
+			},
+			ArchetypeId:     execution1.ArchetypeID,
+			SkipForceReload: true,
 		})).Return(t.resp, t.err).Times(1)
 
 		_, err := env.ExecuteActivity(s.a.VerifyReplicationTasks, &request)
@@ -289,18 +311,28 @@ func (s *activitiesSuite) TestVerifyReplicationTasks_FailedNotFound() {
 		Namespace:         mockedNamespace,
 		NamespaceID:       mockedNamespaceID,
 		TargetClusterName: remoteCluster,
-		Executions:        []*commonpb.WorkflowExecution{&execution1},
+		Executions:        []*ExecutionInfo{execution1},
 	}
 
 	s.mockHistoryClient.EXPECT().DescribeMutableState(gomock.Any(), protomock.Eq(&historyservice.DescribeMutableStateRequest{
 		NamespaceId: mockedNamespaceID,
-		Execution:   &execution1,
-	})).Return(&completeState, nil)
+		Execution: &commonpb.WorkflowExecution{
+			WorkflowId: execution1.BusinessID,
+			RunId:      execution1.RunID,
+		},
+		ArchetypeId:     execution1.ArchetypeID,
+		SkipForceReload: true,
+	})).Return(completeState, nil)
 
 	// Workflow not found at target cluster.
 	s.mockRemoteAdminClient.EXPECT().DescribeMutableState(gomock.Any(), protomock.Eq(&adminservice.DescribeMutableStateRequest{
 		Namespace: mockedNamespace,
-		Execution: &execution1,
+		Execution: &commonpb.WorkflowExecution{
+			WorkflowId: execution1.BusinessID,
+			RunId:      execution1.RunID,
+		},
+		Archetype:       chasm.WorkflowArchetype,
+		SkipForceReload: true,
 	})).Return(nil, serviceerror.NewNotFound("")).AnyTimes()
 
 	// Set CheckPoint to an early to trigger failure.
@@ -316,7 +348,7 @@ func (s *activitiesSuite) TestVerifyReplicationTasks_FailedNotFound() {
 	s.Greater(len(iceptor.replicationRecordedHeartbeats), 0)
 	lastHeartBeat := iceptor.replicationRecordedHeartbeats[len(iceptor.replicationRecordedHeartbeats)-1]
 	s.Equal(0, lastHeartBeat.NextIndex)
-	s.ProtoEqual(&execution1, lastHeartBeat.LastNotVerifiedWorkflowExecution)
+	s.Equal(execution1, lastHeartBeat.LastNotVerifiedWorkflowExecution)
 }
 
 func (s *activitiesSuite) TestVerifyReplicationTasks_AlreadyVerified() {
@@ -325,7 +357,7 @@ func (s *activitiesSuite) TestVerifyReplicationTasks_AlreadyVerified() {
 		Namespace:         mockedNamespace,
 		NamespaceID:       mockedNamespaceID,
 		TargetClusterName: remoteCluster,
-		Executions:        []*commonpb.WorkflowExecution{&execution1, &execution2},
+		Executions:        []*ExecutionInfo{execution1, execution2},
 	}
 
 	// Set NextIndex to indicate all executions have been verified. No additional mock is needed.
@@ -345,31 +377,45 @@ func (s *activitiesSuite) Test_verifySingleReplicationTask() {
 		Namespace:         mockedNamespace,
 		NamespaceID:       mockedNamespaceID,
 		TargetClusterName: remoteCluster,
-		Executions:        []*commonpb.WorkflowExecution{&execution1, &execution2},
+		Executions:        []*ExecutionInfo{execution1, execution2},
 	}
 	ctx := context.TODO()
 
-	mockRemoteAdminClient := adminservicemock.NewMockAdminServiceClient(s.controller)
-	mockRemoteAdminClient.EXPECT().DescribeMutableState(gomock.Any(), protomock.Eq(&adminservice.DescribeMutableStateRequest{
+	s.mockRemoteAdminClient.EXPECT().DescribeMutableState(gomock.Any(), protomock.Eq(&adminservice.DescribeMutableStateRequest{
 		Namespace: mockedNamespace,
-		Execution: &execution1,
+		Execution: &commonpb.WorkflowExecution{
+			WorkflowId: execution1.BusinessID,
+			RunId:      execution1.RunID,
+		},
+		Archetype:       chasm.WorkflowArchetype,
+		SkipForceReload: true,
 	})).Return(&adminservice.DescribeMutableStateResponse{}, nil).Times(1)
-	result, err := s.a.verifySingleReplicationTask(ctx, &request, mockRemoteAdminClient, &testNamespace, request.Executions[0])
+	result, err := s.a.verifySingleReplicationTask(ctx, &request, s.mockRemoteAdminClient, &testNamespace, request.Executions[0])
 	s.NoError(err)
 	s.True(result.isVerified())
 
 	// Test not verified workflow
-	mockRemoteAdminClient.EXPECT().DescribeMutableState(gomock.Any(), protomock.Eq(&adminservice.DescribeMutableStateRequest{
+	s.mockRemoteAdminClient.EXPECT().DescribeMutableState(gomock.Any(), protomock.Eq(&adminservice.DescribeMutableStateRequest{
 		Namespace: mockedNamespace,
-		Execution: &execution2,
+		Execution: &commonpb.WorkflowExecution{
+			WorkflowId: execution2.BusinessID,
+			RunId:      execution2.RunID,
+		},
+		Archetype:       chasm.WorkflowArchetype,
+		SkipForceReload: true,
 	})).Return(&adminservice.DescribeMutableStateResponse{}, serviceerror.NewNotFound("")).Times(1)
 
 	s.mockHistoryClient.EXPECT().DescribeMutableState(gomock.Any(), protomock.Eq(&historyservice.DescribeMutableStateRequest{
 		NamespaceId: mockedNamespaceID,
-		Execution:   &execution2,
-	})).Return(&completeState, nil).AnyTimes()
+		Execution: &commonpb.WorkflowExecution{
+			WorkflowId: execution2.BusinessID,
+			RunId:      execution2.RunID,
+		},
+		ArchetypeId:     execution2.ArchetypeID,
+		SkipForceReload: true,
+	})).Return(completeState, nil).AnyTimes()
 
-	result, err = s.a.verifySingleReplicationTask(ctx, &request, mockRemoteAdminClient, &testNamespace, request.Executions[1])
+	result, err = s.a.verifySingleReplicationTask(ctx, &request, s.mockRemoteAdminClient, &testNamespace, request.Executions[1])
 	s.NoError(err)
 	s.False(result.isVerified())
 }
@@ -382,31 +428,50 @@ const (
 	executionErr      executionState = 2
 )
 
-func createExecutions(mockClient *adminservicemock.MockAdminServiceClient, states []executionState, nextIndex int) []*commonpb.WorkflowExecution {
-	var executions []*commonpb.WorkflowExecution
+func createExecutions(
+	mockAdminCliednt *adminservicemock.MockAdminServiceClient,
+	states []executionState,
+	nextIndex int,
+) []*ExecutionInfo {
+	var executions []*ExecutionInfo
 
 	for i := 0; i < len(states); i++ {
-		executions = append(executions, &execution1)
+		executions = append(executions, execution1)
 	}
 
 Loop:
 	for i := nextIndex; i < len(states); i++ {
 		switch states[i] {
 		case executionFound:
-			mockClient.EXPECT().DescribeMutableState(gomock.Any(), protomock.Eq(&adminservice.DescribeMutableStateRequest{
+			mockAdminCliednt.EXPECT().DescribeMutableState(gomock.Any(), protomock.Eq(&adminservice.DescribeMutableStateRequest{
 				Namespace: mockedNamespace,
-				Execution: &execution1,
+				Execution: &commonpb.WorkflowExecution{
+					WorkflowId: execution1.BusinessID,
+					RunId:      execution1.RunID,
+				},
+				Archetype:       chasm.WorkflowArchetype,
+				SkipForceReload: true,
 			})).Return(&adminservice.DescribeMutableStateResponse{}, nil).Times(1)
 		case executionNotfound:
-			mockClient.EXPECT().DescribeMutableState(gomock.Any(), protomock.Eq(&adminservice.DescribeMutableStateRequest{
+			mockAdminCliednt.EXPECT().DescribeMutableState(gomock.Any(), protomock.Eq(&adminservice.DescribeMutableStateRequest{
 				Namespace: mockedNamespace,
-				Execution: &execution1,
+				Execution: &commonpb.WorkflowExecution{
+					WorkflowId: execution1.BusinessID,
+					RunId:      execution1.RunID,
+				},
+				Archetype:       chasm.WorkflowArchetype,
+				SkipForceReload: true,
 			})).Return(nil, serviceerror.NewNotFound("")).Times(1)
 			break Loop
 		case executionErr:
-			mockClient.EXPECT().DescribeMutableState(gomock.Any(), protomock.Eq(&adminservice.DescribeMutableStateRequest{
+			mockAdminCliednt.EXPECT().DescribeMutableState(gomock.Any(), protomock.Eq(&adminservice.DescribeMutableStateRequest{
 				Namespace: mockedNamespace,
-				Execution: &execution1,
+				Execution: &commonpb.WorkflowExecution{
+					WorkflowId: execution1.BusinessID,
+					RunId:      execution1.RunID,
+				},
+				Archetype:       chasm.WorkflowArchetype,
+				SkipForceReload: true,
 			})).Return(nil, serviceerror.NewInternal("")).Times(1)
 		}
 	}
@@ -474,20 +539,25 @@ func (s *activitiesSuite) Test_verifyReplicationTasks() {
 
 	s.mockHistoryClient.EXPECT().DescribeMutableState(gomock.Any(), protomock.Eq(&historyservice.DescribeMutableStateRequest{
 		NamespaceId: mockedNamespaceID,
-		Execution:   &execution1,
-	})).Return(&completeState, nil).AnyTimes()
+		Execution: &commonpb.WorkflowExecution{
+			WorkflowId: execution1.BusinessID,
+			RunId:      execution1.RunID,
+		},
+		ArchetypeId:     execution1.ArchetypeID,
+		SkipForceReload: true,
+	})).Return(completeState, nil).AnyTimes()
 
 	checkPointTime := time.Now()
 	for _, tc := range tests {
 		var recorder mockHeartBeatRecorder
-		mockRemoteAdminClient := adminservicemock.NewMockAdminServiceClient(s.controller)
-		request.Executions = createExecutions(mockRemoteAdminClient, tc.remoteExecutionStates, tc.nextIndex)
+		// mockRemoteClient := workflowservicemock.NewMockWorkflowServiceClient(s.controller)
+		request.Executions = createExecutions(s.mockRemoteAdminClient, tc.remoteExecutionStates, tc.nextIndex)
 		details := replicationTasksHeartbeatDetails{
 			NextIndex:  tc.nextIndex,
 			CheckPoint: checkPointTime,
 		}
 
-		verified, err := s.a.verifyReplicationTasks(ctx, &request, &details, mockRemoteAdminClient, &testNamespace, recorder.hearbeat)
+		verified, err := s.a.verifyReplicationTasks(ctx, &request, &details, s.mockRemoteAdminClient, &testNamespace, recorder.hearbeat)
 		if tc.expectedErr == nil {
 			s.NoError(err)
 		}
@@ -496,7 +566,7 @@ func (s *activitiesSuite) Test_verifyReplicationTasks() {
 		s.GreaterOrEqual(len(tc.remoteExecutionStates), details.NextIndex)
 		s.Equal(recorder.lastHeartBeat, details)
 		if details.NextIndex < len(tc.remoteExecutionStates) && tc.remoteExecutionStates[details.NextIndex] == executionNotfound {
-			s.ProtoEqual(&execution1, details.LastNotVerifiedWorkflowExecution)
+			s.Equal(execution1, details.LastNotVerifiedWorkflowExecution)
 		}
 
 		if len(request.Executions) > 0 {
@@ -508,19 +578,23 @@ func (s *activitiesSuite) Test_verifyReplicationTasks() {
 
 func (s *activitiesSuite) Test_verifyReplicationTasksNoProgress() {
 	var recorder mockHeartBeatRecorder
-	mockRemoteAdminClient := adminservicemock.NewMockAdminServiceClient(s.controller)
 
 	request := verifyReplicationTasksRequest{
 		Namespace:         mockedNamespace,
 		NamespaceID:       mockedNamespaceID,
 		TargetClusterName: remoteCluster,
-		Executions:        createExecutions(mockRemoteAdminClient, []executionState{executionFound, executionFound, executionNotfound, executionFound}, 0),
+		Executions:        createExecutions(s.mockRemoteAdminClient, []executionState{executionFound, executionFound, executionNotfound, executionFound}, 0),
 	}
 
 	s.mockHistoryClient.EXPECT().DescribeMutableState(gomock.Any(), protomock.Eq(&historyservice.DescribeMutableStateRequest{
 		NamespaceId: mockedNamespaceID,
-		Execution:   &execution1,
-	})).Return(&completeState, nil).AnyTimes()
+		Execution: &commonpb.WorkflowExecution{
+			WorkflowId: execution1.BusinessID,
+			RunId:      execution1.RunID,
+		},
+		ArchetypeId:     execution1.ArchetypeID,
+		SkipForceReload: true,
+	})).Return(completeState, nil).AnyTimes()
 
 	checkPointTime := time.Now()
 	details := replicationTasksHeartbeatDetails{
@@ -529,7 +603,7 @@ func (s *activitiesSuite) Test_verifyReplicationTasksNoProgress() {
 	}
 
 	ctx := context.TODO()
-	verified, err := s.a.verifyReplicationTasks(ctx, &request, &details, mockRemoteAdminClient, &testNamespace, recorder.hearbeat)
+	verified, err := s.a.verifyReplicationTasks(ctx, &request, &details, s.mockRemoteAdminClient, &testNamespace, recorder.hearbeat)
 	s.NoError(err)
 	s.False(verified)
 	// Verify has made progress.
@@ -539,13 +613,18 @@ func (s *activitiesSuite) Test_verifyReplicationTasksNoProgress() {
 	prevDetails := details
 
 	// Mock for one more NotFound call
-	mockRemoteAdminClient.EXPECT().DescribeMutableState(gomock.Any(), &adminservice.DescribeMutableStateRequest{
+	s.mockRemoteAdminClient.EXPECT().DescribeMutableState(gomock.Any(), protomock.Eq(&adminservice.DescribeMutableStateRequest{
 		Namespace: mockedNamespace,
-		Execution: &execution1,
-	}).Return(nil, serviceerror.NewNotFound("")).Times(1)
+		Execution: &commonpb.WorkflowExecution{
+			WorkflowId: execution1.BusinessID,
+			RunId:      execution1.RunID,
+		},
+		Archetype:       chasm.WorkflowArchetype,
+		SkipForceReload: true,
+	})).Return(nil, serviceerror.NewNotFound("")).Times(1)
 
 	// All results should be either NotFound or cached and no progress should be made.
-	verified, err = s.a.verifyReplicationTasks(ctx, &request, &details, mockRemoteAdminClient, &testNamespace, recorder.hearbeat)
+	verified, err = s.a.verifyReplicationTasks(ctx, &request, &details, s.mockRemoteAdminClient, &testNamespace, recorder.hearbeat)
 	s.NoError(err)
 	s.False(verified)
 	s.Equal(prevDetails, details)
@@ -556,7 +635,7 @@ func (s *activitiesSuite) Test_verifyReplicationTasksSkipRetention() {
 		Namespace:         mockedNamespace,
 		NamespaceID:       mockedNamespaceID,
 		TargetClusterName: remoteCluster,
-		Executions:        []*commonpb.WorkflowExecution{&execution1},
+		Executions:        []*ExecutionInfo{execution1},
 	}
 
 	var tests = []struct {
@@ -579,66 +658,74 @@ func (s *activitiesSuite) Test_verifyReplicationTasksSkipRetention() {
 		retention := time.Hour
 		closeTime := deleteTime.Add(-retention)
 
-		mockRemoteAdminClient := adminservicemock.NewMockAdminServiceClient(s.controller)
-		mockRemoteAdminClient.EXPECT().DescribeMutableState(gomock.Any(), protomock.Eq(&adminservice.DescribeMutableStateRequest{
+		s.mockRemoteAdminClient.EXPECT().DescribeMutableState(gomock.Any(), protomock.Eq(&adminservice.DescribeMutableStateRequest{
 			Namespace: mockedNamespace,
-			Execution: &execution1,
+			Execution: &commonpb.WorkflowExecution{
+				WorkflowId: execution1.BusinessID,
+				RunId:      execution1.RunID,
+			},
+			Archetype:       chasm.WorkflowArchetype,
+			SkipForceReload: true,
 		})).Return(nil, serviceerror.NewNotFound("")).Times(1)
 
 		s.mockHistoryClient.EXPECT().DescribeMutableState(gomock.Any(), protomock.Eq(&historyservice.DescribeMutableStateRequest{
 			NamespaceId: mockedNamespaceID,
-			Execution:   &execution1,
+			Execution: &commonpb.WorkflowExecution{
+				WorkflowId: execution1.BusinessID,
+				RunId:      execution1.RunID,
+			},
+			ArchetypeId:     execution1.ArchetypeID,
+			SkipForceReload: true,
 		})).Return(&historyservice.DescribeMutableStateResponse{
-			DatabaseMutableState: &persistencepb.WorkflowMutableState{
-				ExecutionState: &persistencepb.WorkflowExecutionState{
+			DatabaseMutableState: &persistencespb.WorkflowMutableState{
+				ExecutionState: &persistencespb.WorkflowExecutionState{
 					State: enumsspb.WORKFLOW_EXECUTION_STATE_COMPLETED,
 				},
-				ExecutionInfo: &persistencepb.WorkflowExecutionInfo{
+				ExecutionInfo: &persistencespb.WorkflowExecutionInfo{
 					CloseTime: timestamppb.New(closeTime),
 				},
 			},
 		}, nil).Times(1)
 
-		ns := namespace.FromPersistentState(&persistence.GetNamespaceResponse{
-			Namespace: &persistencepb.NamespaceDetail{
-				Info: &persistencepb.NamespaceInfo{},
-				Config: &persistencepb.NamespaceConfig{
-					Retention: durationpb.New(retention),
-				},
-				ReplicationConfig: &persistencepb.NamespaceReplicationConfig{},
+		factory := namespace.NewDefaultReplicationResolverFactory()
+		detail := &persistencespb.NamespaceDetail{
+			Info: &persistencespb.NamespaceInfo{},
+			Config: &persistencespb.NamespaceConfig{
+				Retention: durationpb.New(retention),
 			},
-		})
+			ReplicationConfig: &persistencespb.NamespaceReplicationConfig{},
+		}
+		ns, nsErr := namespace.FromPersistentState(detail, factory(detail))
+		s.Require().NoError(nsErr)
 
 		details := replicationTasksHeartbeatDetails{}
 		ctx := context.TODO()
-		verified, err := s.a.verifyReplicationTasks(ctx, &request, &details, mockRemoteAdminClient, ns, recorder.hearbeat)
+		verified, err := s.a.verifyReplicationTasks(ctx, &request, &details, s.mockRemoteAdminClient, ns, recorder.hearbeat)
 		s.NoError(err)
 		s.Equal(tc.verified, verified)
 		s.Equal(recorder.lastHeartBeat, details)
 	}
 }
 
-func (s *activitiesSuite) Test_isNotFoundServiceError() {
-	s.True(isNotFoundServiceError(serviceerror.NewNotFound("")))
-	var err error
-	s.False(isNotFoundServiceError(err))
-	s.False(isNotFoundServiceError(serviceerror.NewInternal("")))
-}
-
 func (s *activitiesSuite) TestGenerateReplicationTasks_Success() {
 	env, iceptor := s.initEnv()
 
 	request := generateReplicationTasksRequest{
-		NamespaceID: mockedNamespaceID,
-		RPS:         10,
-		Executions:  []*commonpb.WorkflowExecution{&execution1, &execution2},
+		NamespaceID:      mockedNamespaceID,
+		RPS:              10,
+		GetParentInfoRPS: 10,
+		Executions:       []*ExecutionInfo{execution1, execution2},
 	}
 
 	for i := 0; i < len(request.Executions); i++ {
-		we := request.Executions[i]
+		execution := request.Executions[i]
 		s.mockHistoryClient.EXPECT().GenerateLastHistoryReplicationTasks(gomock.Any(), protomock.Eq(&historyservice.GenerateLastHistoryReplicationTasksRequest{
 			NamespaceId: mockedNamespaceID,
-			Execution:   we,
+			Execution: &commonpb.WorkflowExecution{
+				WorkflowId: execution.BusinessID,
+				RunId:      execution.RunID,
+			},
+			ArchetypeId: execution.ArchetypeID,
 		})).Return(&historyservice.GenerateLastHistoryReplicationTasksResponse{}, nil).Times(1)
 	}
 
@@ -651,47 +738,33 @@ func (s *activitiesSuite) TestGenerateReplicationTasks_Success() {
 	s.Equal(lastIdx, lastHeartBeat)
 }
 
-func (s *activitiesSuite) TestGenerateReplicationTasks_NotFound() {
-	env, iceptor := s.initEnv()
-
-	request := generateReplicationTasksRequest{
-		NamespaceID: mockedNamespaceID,
-		RPS:         10,
-		Executions:  []*commonpb.WorkflowExecution{&execution1},
-	}
-
-	s.mockHistoryClient.EXPECT().GenerateLastHistoryReplicationTasks(gomock.Any(), protomock.Eq(&historyservice.GenerateLastHistoryReplicationTasksRequest{
-		NamespaceId: mockedNamespaceID,
-		Execution:   &execution1,
-	})).Return(nil, serviceerror.NewNotFound("")).Times(1)
-
-	_, err := env.ExecuteActivity(s.a.GenerateReplicationTasks, &request)
-	s.NoError(err)
-
-	s.Greater(len(iceptor.generateReplicationRecordedHeartbeats), 0)
-	lastIdx := len(iceptor.generateReplicationRecordedHeartbeats) - 1
-	lastHeartBeat := iceptor.generateReplicationRecordedHeartbeats[lastIdx]
-	s.Equal(0, lastHeartBeat)
-}
-
 func (s *activitiesSuite) TestGenerateReplicationTasks_Failed() {
 	env, iceptor := s.initEnv()
 
 	request := generateReplicationTasksRequest{
-		NamespaceID: mockedNamespaceID,
-		RPS:         10,
-		Executions:  []*commonpb.WorkflowExecution{&execution1, &execution2},
+		NamespaceID:      mockedNamespaceID,
+		RPS:              10,
+		GetParentInfoRPS: 10,
+		Executions:       []*ExecutionInfo{execution1, execution2},
 	}
 
 	s.mockHistoryClient.EXPECT().GenerateLastHistoryReplicationTasks(gomock.Any(), protomock.Eq(&historyservice.GenerateLastHistoryReplicationTasksRequest{
 		NamespaceId: mockedNamespaceID,
-		Execution:   &execution1,
+		Execution: &commonpb.WorkflowExecution{
+			WorkflowId: execution1.BusinessID,
+			RunId:      execution1.RunID,
+		},
+		ArchetypeId: execution1.ArchetypeID,
 	})).Return(&historyservice.GenerateLastHistoryReplicationTasksResponse{}, nil).Times(1)
 
 	s.mockHistoryClient.EXPECT().GenerateLastHistoryReplicationTasks(gomock.Any(), protomock.Eq(&historyservice.GenerateLastHistoryReplicationTasksRequest{
 		NamespaceId: mockedNamespaceID,
-		Execution:   &execution2,
-	})).Return(nil, serviceerror.NewInternal(""))
+		Execution: &commonpb.WorkflowExecution{
+			WorkflowId: execution2.BusinessID,
+			RunId:      execution2.RunID,
+		},
+		ArchetypeId: execution2.ArchetypeID,
+	})).Return(nil, serviceerror.NewInternal("")).Times(1)
 
 	_, err := env.ExecuteActivity(s.a.GenerateReplicationTasks, &request)
 	s.Error(err)
@@ -701,4 +774,114 @@ func (s *activitiesSuite) TestGenerateReplicationTasks_Failed() {
 	lastHeartBeat := iceptor.generateReplicationRecordedHeartbeats[lastIdx]
 	// Only the generation of 1st execution suceeded.
 	s.Equal(0, lastHeartBeat)
+}
+
+func (s *activitiesSuite) TestGenerateReplicationTasks_Success_ViaFrontend() {
+	env, iceptor := s.initEnv()
+	s.a.generateMigrationTaskViaFrontend = dynamicconfig.GetBoolPropertyFn(true)
+
+	request := generateReplicationTasksRequest{
+		NamespaceID:      mockedNamespaceID,
+		RPS:              10,
+		GetParentInfoRPS: 10,
+		Executions:       []*ExecutionInfo{execution1, execution2},
+		TargetClusters:   []string{remoteCluster},
+	}
+
+	// Test startIndex logic, and it should be 1 when running the activity.
+	env.SetHeartbeatDetails(0)
+
+	s.mockAdminClient.EXPECT().GenerateLastHistoryReplicationTasks(gomock.Any(), protomock.Eq(&adminservice.GenerateLastHistoryReplicationTasksRequest{
+		Namespace: mockedNamespace,
+		Execution: &commonpb.WorkflowExecution{
+			WorkflowId: execution2.BusinessID,
+			RunId:      execution2.RunID,
+		},
+		Archetype:      chasm.WorkflowArchetype,
+		TargetClusters: []string{remoteCluster},
+	})).Return(&adminservice.GenerateLastHistoryReplicationTasksResponse{}, nil).Times(1)
+
+	_, err := env.ExecuteActivity(s.a.GenerateReplicationTasks, &request)
+	s.NoError(err)
+
+	s.Len(iceptor.generateReplicationRecordedHeartbeats, 1)
+	lastIdx := len(iceptor.generateReplicationRecordedHeartbeats) - 1
+	lastHeartBeat := iceptor.generateReplicationRecordedHeartbeats[lastIdx]
+	s.Equal(1, lastHeartBeat)
+}
+
+func (s *activitiesSuite) TestCountWorkflows() {
+	env, _ := s.initEnv()
+
+	request := &workflowservice.CountWorkflowExecutionsRequest{
+		Namespace: mockedNamespace,
+		Query:     "abc",
+	}
+
+	s.mockFrontendClient.EXPECT().CountWorkflowExecutions(gomock.Any(), protomock.Eq(request)).Return(&workflowservice.CountWorkflowExecutionsResponse{
+		Count: 100,
+	}, nil).Times(1)
+
+	f, err := env.ExecuteActivity(s.a.CountWorkflow, request)
+	s.NoError(err)
+	var output *countWorkflowResponse
+	err = f.Get(&output)
+	s.NoError(err)
+	s.Equal(int64(100), output.WorkflowCount)
+}
+
+func (s *activitiesSuite) TestWaitCatchUp() {
+	env, _ := s.initEnv()
+
+	describeNamespaceRequest := &workflowservice.DescribeNamespaceRequest{
+		Namespace: mockedNamespace,
+	}
+
+	getReplicationStatusRequestFromRemote := &historyservice.GetReplicationStatusRequest{
+		RemoteClusters: []string{remoteCluster},
+	}
+
+	getReplicationStatusRequestFromActive := &historyservice.GetReplicationStatusRequest{
+		RemoteClusters: []string{"test_cluster"},
+	}
+
+	request := CatchUpParams{
+		Namespace:      mockedNamespace,
+		CatchupCluster: remoteCluster,
+	}
+
+	s.mockFrontendClient.EXPECT().DescribeNamespace(gomock.Any(), protomock.Eq(describeNamespaceRequest)).Return(&workflowservice.DescribeNamespaceResponse{
+		ReplicationConfig: &replicationpb.NamespaceReplicationConfig{
+			ActiveClusterName: "test_cluster",
+		},
+	}, nil).Times(1)
+
+	s.mockHistoryClient.EXPECT().GetReplicationStatus(gomock.Any(), protomock.Eq(getReplicationStatusRequestFromRemote)).Return(&historyservice.GetReplicationStatusResponse{
+		Shards: []*historyservice.ShardReplicationStatus{
+			{
+				ShardId: 1,
+				RemoteClusters: map[string]*historyservice.ShardReplicationStatusPerCluster{
+					remoteCluster: {
+						AckedTaskId: 123,
+					},
+				},
+			},
+		},
+	}, nil).AnyTimes()
+
+	s.mockHistoryClient.EXPECT().GetReplicationStatus(gomock.Any(), protomock.Eq(getReplicationStatusRequestFromActive)).Return(&historyservice.GetReplicationStatusResponse{
+		Shards: []*historyservice.ShardReplicationStatus{
+			{
+				ShardId: 1,
+				RemoteClusters: map[string]*historyservice.ShardReplicationStatusPerCluster{
+					"test_cluster": {
+						AckedTaskId: 111,
+					},
+				},
+			},
+		},
+	}, nil).AnyTimes()
+
+	_, err := env.ExecuteActivity(s.a.WaitCatchup, request)
+	s.NoError(err)
 }

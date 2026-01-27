@@ -1,33 +1,10 @@
-// The MIT License
-//
-// Copyright (c) 2020 Temporal Technologies Inc.  All rights reserved.
-//
-// Copyright (c) 2020 Uber Technologies, Inc.
-//
-// Permission is hereby granted, free of charge, to any person obtaining a copy
-// of this software and associated documentation files (the "Software"), to deal
-// in the Software without restriction, including without limitation the rights
-// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-// copies of the Software, and to permit persons to whom the Software is
-// furnished to do so, subject to the following conditions:
-//
-// The above copyright notice and this permission notice shall be included in
-// all copies or substantial portions of the Software.
-//
-// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
-// THE SOFTWARE.
-
-//go:generate mockgen -copyright_file ../../../LICENSE -package $GOPACKAGE -source $GOFILE -destination task_executor_mock.go
+//go:generate mockgen -package $GOPACKAGE -source $GOFILE -destination task_executor_mock.go
 
 package replication
 
 import (
 	"context"
+	"errors"
 	"time"
 
 	commonpb "go.temporal.io/api/common/v1"
@@ -42,9 +19,10 @@ import (
 	"go.temporal.io/server/common/metrics"
 	"go.temporal.io/server/common/namespace"
 	serviceerrors "go.temporal.io/server/common/serviceerror"
-	"go.temporal.io/server/common/xdc"
+	"go.temporal.io/server/service/history/consts"
 	"go.temporal.io/server/service/history/deletemanager"
-	"go.temporal.io/server/service/history/shard"
+	historyi "go.temporal.io/server/service/history/interfaces"
+	"go.temporal.io/server/service/history/replication/eventhandler"
 	wcache "go.temporal.io/server/service/history/workflow/cache"
 )
 
@@ -54,25 +32,25 @@ type (
 	}
 
 	TaskExecutorParams struct {
-		RemoteCluster   string // TODO: Remove this remote cluster from executor then it can use singleton.
-		Shard           shard.Context
-		HistoryResender xdc.NDCHistoryResender
-		DeleteManager   deletemanager.DeleteManager
-		WorkflowCache   wcache.Cache
+		RemoteCluster        string // TODO: Remove this remote cluster from executor then it can use singleton.
+		Shard                historyi.ShardContext
+		RemoteHistoryFetcher eventhandler.HistoryPaginatedFetcher
+		DeleteManager        deletemanager.DeleteManager
+		WorkflowCache        wcache.Cache
 	}
 
 	TaskExecutorProvider func(params TaskExecutorParams) TaskExecutor
 
 	taskExecutorImpl struct {
-		currentCluster     string
-		remoteCluster      string
-		shardContext       shard.Context
-		namespaceRegistry  namespace.Registry
-		nDCHistoryResender xdc.NDCHistoryResender
-		deleteManager      deletemanager.DeleteManager
-		workflowCache      wcache.Cache
-		metricsHandler     metrics.Handler
-		logger             log.Logger
+		currentCluster       string
+		remoteCluster        string
+		shardContext         historyi.ShardContext
+		namespaceRegistry    namespace.Registry
+		remoteHistoryFetcher eventhandler.HistoryPaginatedFetcher
+		deleteManager        deletemanager.DeleteManager
+		workflowCache        wcache.Cache
+		metricsHandler       metrics.Handler
+		logger               log.Logger
 	}
 )
 
@@ -80,21 +58,21 @@ type (
 // The executor uses by 1) DLQ replication task handler 2) history replication task processor
 func NewTaskExecutor(
 	remoteCluster string,
-	shardContext shard.Context,
-	nDCHistoryResender xdc.NDCHistoryResender,
+	shardContext historyi.ShardContext,
+	remoteHistoryFetcher eventhandler.HistoryPaginatedFetcher,
 	deleteManager deletemanager.DeleteManager,
 	workflowCache wcache.Cache,
 ) TaskExecutor {
 	return &taskExecutorImpl{
-		currentCluster:     shardContext.GetClusterMetadata().GetCurrentClusterName(),
-		remoteCluster:      remoteCluster,
-		shardContext:       shardContext,
-		namespaceRegistry:  shardContext.GetNamespaceRegistry(),
-		nDCHistoryResender: nDCHistoryResender,
-		deleteManager:      deleteManager,
-		workflowCache:      workflowCache,
-		metricsHandler:     shardContext.GetMetricsHandler(),
-		logger:             shardContext.GetLogger(),
+		currentCluster:       shardContext.GetClusterMetadata().GetCurrentClusterName(),
+		remoteCluster:        remoteCluster,
+		shardContext:         shardContext,
+		namespaceRegistry:    shardContext.GetNamespaceRegistry(),
+		remoteHistoryFetcher: remoteHistoryFetcher,
+		deleteManager:        deleteManager,
+		workflowCache:        workflowCache,
+		metricsHandler:       shardContext.GetMetricsHandler(),
+		logger:               shardContext.GetLogger(),
 	}
 }
 
@@ -131,7 +109,7 @@ func (e *taskExecutorImpl) handleActivityTask(
 ) error {
 
 	attr := task.GetSyncActivityTaskAttributes()
-	doContinue, err := e.filterTask(namespace.ID(attr.GetNamespaceId()), forceApply)
+	doContinue, err := e.filterTask(namespace.ID(attr.GetNamespaceId()), attr.WorkflowId, forceApply)
 	if err != nil || !doContinue {
 		return err
 	}
@@ -141,6 +119,7 @@ func (e *taskExecutorImpl) handleActivityTask(
 		metrics.ServiceLatency.With(e.metricsHandler).Record(
 			time.Since(startTime),
 			metrics.OperationTag(metrics.SyncActivityTaskScope),
+			metrics.NamespaceTag(attr.GetNamespaceId()),
 		)
 	}()
 
@@ -152,6 +131,7 @@ func (e *taskExecutorImpl) handleActivityTask(
 		ScheduledEventId:           attr.ScheduledEventId,
 		ScheduledTime:              attr.ScheduledTime,
 		StartedEventId:             attr.StartedEventId,
+		StartVersion:               attr.StartVersion,
 		StartedTime:                attr.StartedTime,
 		LastHeartbeatTime:          attr.LastHeartbeatTime,
 		Details:                    attr.Details,
@@ -190,7 +170,7 @@ func (e *taskExecutorImpl) handleActivityTask(
 			)
 		}()
 
-		resendErr := e.nDCHistoryResender.SendSingleWorkflowHistory(
+		resendErr := e.resend(
 			ctx,
 			e.remoteCluster,
 			namespace.ID(retryErr.NamespaceId),
@@ -217,6 +197,9 @@ func (e *taskExecutorImpl) handleActivityTask(
 		return err
 
 	default:
+		if errors.Is(err, consts.ErrDuplicate) {
+			return nil
+		}
 		return err
 	}
 }
@@ -228,7 +211,7 @@ func (e *taskExecutorImpl) handleHistoryReplicationTask(
 ) error {
 
 	attr := task.GetHistoryTaskAttributes()
-	doContinue, err := e.filterTask(namespace.ID(attr.GetNamespaceId()), forceApply)
+	doContinue, err := e.filterTask(namespace.ID(attr.GetNamespaceId()), attr.WorkflowId, forceApply)
 	if err != nil || !doContinue {
 		return err
 	}
@@ -238,6 +221,7 @@ func (e *taskExecutorImpl) handleHistoryReplicationTask(
 		metrics.ServiceLatency.With(e.metricsHandler).Record(
 			time.Since(startTime),
 			metrics.OperationTag(metrics.HistoryReplicationTaskScope),
+			metrics.NamespaceTag(attr.GetNamespaceId()),
 		)
 	}()
 
@@ -280,8 +264,7 @@ func (e *taskExecutorImpl) handleHistoryReplicationTask(
 				metrics.ServiceRoleTag(metrics.HistoryRoleTagValue),
 			)
 		}()
-
-		resendErr := e.nDCHistoryResender.SendSingleWorkflowHistory(
+		resendErr := e.resend(
 			ctx,
 			e.remoteCluster,
 			namespace.ID(retryErr.NamespaceId),
@@ -307,8 +290,10 @@ func (e *taskExecutorImpl) handleHistoryReplicationTask(
 		// Add a wrapper of the history client to call history engine directly if it becomes an issue.
 		_, err = e.shardContext.GetHistoryClient().ReplicateEventsV2(ctx, request)
 		return err
-
 	default:
+		if errors.Is(err, consts.ErrDuplicate) {
+			return nil
+		}
 		return err
 	}
 }
@@ -323,7 +308,7 @@ func (e *taskExecutorImpl) handleSyncWorkflowStateTask(
 	executionInfo := attr.GetWorkflowState().GetExecutionInfo()
 	namespaceID := namespace.ID(executionInfo.GetNamespaceId())
 
-	doContinue, err := e.filterTask(namespaceID, forceApply)
+	doContinue, err := e.filterTask(namespaceID, executionInfo.GetWorkflowId(), forceApply)
 	if err != nil || !doContinue {
 		return err
 	}
@@ -344,7 +329,7 @@ func (e *taskExecutorImpl) handleSyncWorkflowStateTask(
 	case nil:
 		return nil
 	case *serviceerrors.RetryReplication:
-		resendErr := e.nDCHistoryResender.SendSingleWorkflowHistory(
+		resendErr := e.resend(
 			ctx,
 			e.remoteCluster,
 			namespace.ID(retryErr.NamespaceId),
@@ -367,12 +352,16 @@ func (e *taskExecutorImpl) handleSyncWorkflowStateTask(
 			return err
 		}
 	default:
+		if errors.Is(err, consts.ErrDuplicate) {
+			return nil
+		}
 		return err
 	}
 }
 
 func (e *taskExecutorImpl) filterTask(
 	namespaceID namespace.ID,
+	workflowID string,
 	forceApply bool,
 ) (bool, error) {
 
@@ -391,7 +380,7 @@ func (e *taskExecutorImpl) filterTask(
 
 	shouldProcessTask := false
 FilterLoop:
-	for _, targetCluster := range namespaceEntry.ClusterNames() {
+	for _, targetCluster := range namespaceEntry.ClusterNames(workflowID) {
 		if e.currentCluster == targetCluster {
 			shouldProcessTask = true
 			break FilterLoop
@@ -406,6 +395,8 @@ func (e *taskExecutorImpl) cleanupWorkflowExecution(ctx context.Context, namespa
 		WorkflowId: workflowID,
 		RunId:      runID,
 	}
+	// CHASM runs only uses state based replication logic and should never reach here.
+	// Can continue to use GetOrCreateWorkflowExecution.
 	wfCtx, releaseFn, err := e.workflowCache.GetOrCreateWorkflowExecution(ctx, e.shardContext, nsID, &ex, locks.PriorityLow)
 	if err != nil {
 		return err
@@ -422,7 +413,6 @@ func (e *taskExecutorImpl) cleanupWorkflowExecution(ctx context.Context, namespa
 		&ex,
 		wfCtx,
 		mutableState,
-		false,
 		nil, // stage is not stored during cleanup process.
 	)
 }
@@ -435,4 +425,47 @@ func (e *taskExecutorImpl) newTaskContext(
 	ctx = headers.SetCallerName(ctx, namespaceName.String())
 
 	return ctx, cancel
+}
+
+func (e *taskExecutorImpl) resend(
+	ctx context.Context,
+	remoteClusterName string,
+	namespaceID namespace.ID,
+	workflowID string,
+	runID string,
+	startEventID int64,
+	startEventVersion int64,
+	endEventID int64,
+	endEventVersion int64) error {
+	iterator := e.remoteHistoryFetcher.GetSingleWorkflowHistoryPaginatedIteratorExclusive(
+		ctx,
+		remoteClusterName,
+		namespaceID,
+		workflowID,
+		runID,
+		startEventID,
+		startEventVersion,
+		endEventID,
+		endEventVersion,
+	)
+	for iterator.HasNext() {
+		historyBatch, err := iterator.Next()
+		if err != nil {
+			return err
+		}
+		replicateRequest := &historyservice.ReplicateEventsV2Request{
+			NamespaceId: namespaceID.String(),
+			WorkflowExecution: &commonpb.WorkflowExecution{
+				WorkflowId: workflowID,
+				RunId:      runID,
+			},
+			Events:              historyBatch.RawEventBatch,
+			VersionHistoryItems: historyBatch.VersionHistory.GetItems(),
+		}
+		_, err = e.shardContext.GetHistoryClient().ReplicateEventsV2(ctx, replicateRequest)
+		if err != nil {
+			return err
+		}
+	}
+	return nil
 }

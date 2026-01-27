@@ -1,50 +1,40 @@
-// The MIT License
-//
-// Copyright (c) 2024 Temporal Technologies Inc.  All rights reserved.
-//
-// Permission is hereby granted, free of charge, to any person obtaining a copy
-// of this software and associated documentation files (the "Software"), to deal
-// in the Software without restriction, including without limitation the rights
-// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-// copies of the Software, and to permit persons to whom the Software is
-// furnished to do so, subject to the following conditions:
-//
-// The above copyright notice and this permission notice shall be included in
-// all copies or substantial portions of the Software.
-//
-// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
-// THE SOFTWARE.
-
 package history
 
 import (
 	"context"
+	"fmt"
+	"time"
 
 	enumspb "go.temporal.io/api/enums/v1"
+	"go.temporal.io/server/chasm"
+	"go.temporal.io/server/common/debug"
 	"go.temporal.io/server/common/log"
 	"go.temporal.io/server/common/metrics"
 	"go.temporal.io/server/service/history/consts"
+	historyi "go.temporal.io/server/service/history/interfaces"
 	"go.temporal.io/server/service/history/queues"
-	"go.temporal.io/server/service/history/shard"
+	queueserrors "go.temporal.io/server/service/history/queues/errors"
+	"go.temporal.io/server/service/history/tasks"
 	wcache "go.temporal.io/server/service/history/workflow/cache"
+)
+
+const (
+	outboundTaskTimeout = time.Second * 10 * debug.TimeoutMultiplier
 )
 
 type outboundQueueActiveTaskExecutor struct {
 	stateMachineEnvironment
+	chasmEngine chasm.Engine
 }
 
 var _ queues.Executor = &outboundQueueActiveTaskExecutor{}
 
 func newOutboundQueueActiveTaskExecutor(
-	shardCtx shard.Context,
+	shardCtx historyi.ShardContext,
 	workflowCache wcache.Cache,
 	logger log.Logger,
 	metricsHandler metrics.Handler,
+	chasmEngine chasm.Engine,
 ) *outboundQueueActiveTaskExecutor {
 	return &outboundQueueActiveTaskExecutor{
 		stateMachineEnvironment: stateMachineEnvironment{
@@ -55,6 +45,7 @@ func newOutboundQueueActiveTaskExecutor(
 				metrics.OperationTag(metrics.OperationOutboundQueueProcessorScope),
 			),
 		},
+		chasmEngine: chasmEngine,
 	}
 }
 
@@ -67,7 +58,7 @@ func (e *outboundQueueActiveTaskExecutor) Execute(
 		e.shardContext.GetNamespaceRegistry(),
 		task.GetNamespaceID(),
 	)
-	taskType := queues.GetOutboundTaskTypeTagValue(task, true)
+	taskType := queues.GetOutboundTaskTypeTagValue(task, true, e.shardContext.ChasmRegistry())
 	respond := func(err error) queues.ExecuteResponse {
 		metricsTags := []metrics.Tag{
 			namespaceTag,
@@ -79,11 +70,6 @@ func (e *outboundQueueActiveTaskExecutor) Execute(
 			ExecutedAsActive:    true,
 			ExecutionErr:        err,
 		}
-	}
-
-	ref, smt, err := stateMachineTask(e.shardContext, task)
-	if err != nil {
-		return respond(err)
 	}
 
 	// We don't want to execute outbound tasks when handing over a namespace to avoid starting work that may not be
@@ -101,7 +87,61 @@ func (e *outboundQueueActiveTaskExecutor) Execute(
 		return respond(err)
 	}
 
+	switch task := task.(type) {
+	case *tasks.StateMachineOutboundTask:
+		return respond(e.executeStateMachineTask(ctx, task))
+	case *tasks.ChasmTask:
+		return respond(e.executeChasmSideEffectTask(ctx, task))
+	}
+
+	return respond(queueserrors.NewUnprocessableTaskError(fmt.Sprintf("unknown task type '%T'", task)))
+}
+
+func (e *outboundQueueActiveTaskExecutor) executeChasmSideEffectTask(
+	ctx context.Context,
+	task *tasks.ChasmTask,
+) error {
+	ctx, cancel := context.WithTimeout(ctx, outboundTaskTimeout)
+	defer cancel()
+
+	weContext, release, err := getWorkflowExecutionContextForTask(ctx, e.shardContext, e.cache, task)
+	if err != nil {
+		return err
+	}
+	defer func() { release(err) }()
+
+	ms, err := loadMutableStateForTransferTask(ctx, e.shardContext, weContext, task, e.metricsHandler, e.logger)
+	if err != nil {
+		return err
+	}
+	tree := ms.ChasmTree()
+
+	// Now that we've loaded the CHASM tree, we can release the lock before task
+	// execution. The task's executor must do its own locking as needed, and additional
+	// mutable state validations will run at access time.
+	release(nil)
+
+	err = executeChasmSideEffectTask(
+		ctx,
+		e.chasmEngine,
+		e.shardContext.ChasmRegistry(),
+		tree,
+		task,
+	)
+	return err
+}
+
+func (e *outboundQueueActiveTaskExecutor) executeStateMachineTask(
+	ctx context.Context,
+	task tasks.Task,
+) error {
+	// Timeout for hsm outbound tasks are determined by each component's task executor
+
+	ref, smt, err := StateMachineTask(e.shardContext.StateMachineRegistry(), task)
+	if err != nil {
+		return err
+	}
+
 	smRegistry := e.shardContext.StateMachineRegistry()
-	err = smRegistry.ExecuteImmediateTask(ctx, e, ref, smt)
-	return respond(err)
+	return smRegistry.ExecuteImmediateTask(ctx, e, ref, smt)
 }

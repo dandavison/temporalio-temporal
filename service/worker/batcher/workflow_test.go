@@ -1,37 +1,17 @@
-// The MIT License
-//
-// Copyright (c) 2020 Temporal Technologies Inc.  All rights reserved.
-//
-// Copyright (c) 2020 Uber Technologies, Inc.
-//
-// Permission is hereby granted, free of charge, to any person obtaining a copy
-// of this software and associated documentation files (the "Software"), to deal
-// in the Software without restriction, including without limitation the rights
-// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-// copies of the Software, and to permit persons to whom the Software is
-// furnished to do so, subject to the following conditions:
-//
-// The above copyright notice and this permission notice shall be included in
-// all copies or substantial portions of the Software.
-//
-// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
-// THE SOFTWARE.
-
 package batcher
 
 import (
 	"testing"
 
-	"github.com/pborman/uuid"
+	"github.com/google/uuid"
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/suite"
+	batchpb "go.temporal.io/api/batch/v1"
 	commonpb "go.temporal.io/api/common/v1"
+	enumspb "go.temporal.io/api/enums/v1"
+	"go.temporal.io/api/workflowservice/v1"
 	"go.temporal.io/sdk/testsuite"
+	batchspb "go.temporal.io/server/api/batch/v1"
 	"go.uber.org/mock/gomock"
 )
 
@@ -49,7 +29,7 @@ func TestBatcherSuite(t *testing.T) {
 func (s *batcherSuite) SetupTest() {
 	s.controller = gomock.NewController(s.T())
 	s.env = s.WorkflowTestSuite.NewTestWorkflowEnvironment()
-	s.env.RegisterWorkflow(BatchWorkflow)
+	s.env.RegisterWorkflow(BatchWorkflowProtobuf)
 }
 
 func (s *batcherSuite) TearDownTest() {
@@ -57,16 +37,9 @@ func (s *batcherSuite) TearDownTest() {
 	s.env.AssertExpectations(s.T())
 }
 
-func (s *batcherSuite) TestBatchWorkflow_MissingParams() {
-	s.env.ExecuteWorkflow(BatchWorkflow, BatchParams{})
-	err := s.env.GetWorkflowError()
-	s.Require().Error(err)
-	s.Contains(err.Error(), "must provide required parameters")
-}
-
-func (s *batcherSuite) TestBatchWorkflow_ValidParams_Query() {
+func (s *batcherSuite) TestBatchWorkflow_ValidParams_Query_Protobuf() {
 	var ac *activities
-	s.env.OnActivity(ac.BatchActivity, mock.Anything, mock.Anything).Return(HeartBeatDetails{
+	s.env.OnActivity(ac.BatchActivityWithProtobuf, mock.Anything, mock.Anything).Return(HeartBeatDetails{
 		SuccessCount: 42,
 		ErrorCount:   27,
 	}, nil)
@@ -80,19 +53,25 @@ func (s *batcherSuite) TestBatchWorkflow_ValidParams_Query() {
 			},
 		}, memo)
 	}).Once()
-	s.env.ExecuteWorkflow(BatchWorkflow, BatchParams{
-		BatchType: BatchTypeTerminate,
-		Reason:    "test-reason",
-		Namespace: "test-namespace",
-		Query:     "test-query",
+	s.env.ExecuteWorkflow(BatchWorkflowProtobuf, &batchspb.BatchOperationInput{
+		Request: &workflowservice.StartBatchOperationRequest{
+			JobId: uuid.NewString(),
+			Operation: &workflowservice.StartBatchOperationRequest_TerminationOperation{
+				TerminationOperation: &batchpb.BatchOperationTermination{},
+			},
+			Namespace:       "test-namespace",
+			Reason:          "test-reason",
+			VisibilityQuery: "test-query",
+		},
+		BatchType: enumspb.BATCH_OPERATION_TYPE_TERMINATE,
 	})
 	err := s.env.GetWorkflowError()
 	s.Require().NoError(err)
 }
 
-func (s *batcherSuite) TestBatchWorkflow_ValidParams_Executions() {
+func (s *batcherSuite) TestBatchWorkflow_ValidParams_Executions_Protobuf() {
 	var ac *activities
-	s.env.OnActivity(ac.BatchActivity, mock.Anything, mock.Anything).Return(HeartBeatDetails{
+	s.env.OnActivity(ac.BatchActivityWithProtobuf, mock.Anything, mock.Anything).Return(HeartBeatDetails{
 		SuccessCount: 42,
 		ErrorCount:   27,
 	}, nil)
@@ -106,16 +85,22 @@ func (s *batcherSuite) TestBatchWorkflow_ValidParams_Executions() {
 			},
 		}, memo)
 	}).Once()
-	s.env.ExecuteWorkflow(BatchWorkflow, BatchParams{
-		BatchType: BatchTypeTerminate,
-		Reason:    "test-reason",
-		Namespace: "test-namespace",
-		Executions: []*commonpb.WorkflowExecution{
-			{
-				WorkflowId: uuid.New(),
-				RunId:      uuid.New(),
+	s.env.ExecuteWorkflow(BatchWorkflowProtobuf, &batchspb.BatchOperationInput{
+		Request: &workflowservice.StartBatchOperationRequest{
+			JobId: uuid.NewString(),
+			Operation: &workflowservice.StartBatchOperationRequest_TerminationOperation{
+				TerminationOperation: &batchpb.BatchOperationTermination{},
 			},
+			Executions: []*commonpb.WorkflowExecution{
+				{
+					WorkflowId: uuid.NewString(),
+					RunId:      uuid.NewString(),
+				},
+			},
+			Reason:    "test-reason",
+			Namespace: "test-namespace",
 		},
+		BatchType: enumspb.BATCH_OPERATION_TYPE_TERMINATE,
 	})
 	err := s.env.GetWorkflowError()
 	s.Require().NoError(err)

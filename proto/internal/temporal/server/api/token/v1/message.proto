@@ -1,25 +1,3 @@
-// The MIT License
-//
-// Copyright (c) 2020 Temporal Technologies, Inc.
-//
-// Permission is hereby granted, free of charge, to any person obtaining a copy
-// of this software and associated documentation files (the "Software"), to deal
-// in the Software without restriction, including without limitation the rights
-// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-// copies of the Software, and to permit persons to whom the Software is
-// furnished to do so, subject to the following conditions:
-//
-// The above copyright notice and this permission notice shall be included in
-// all copies or substantial portions of the Software.
-//
-// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
-// THE SOFTWARE.
-
 syntax = "proto3";
 
 package temporal.server.api.token.v1;
@@ -41,6 +19,7 @@ message HistoryContinuation {
     bytes branch_token = 8;
     reserved 9;
     temporal.server.api.history.v1.VersionHistoryItem version_history_item = 10;
+    temporal.server.api.persistence.v1.VersionedTransition versioned_transition = 11;
 }
 
 message RawHistoryContinuation{
@@ -69,6 +48,9 @@ message Task {
     int64 started_event_id = 10;
     int64 version = 11;
     google.protobuf.Timestamp started_time = 12;
+    int64 start_version = 13;
+    // Reference to the associated Chasm component, if provided.
+    bytes component_ref = 14;
 }
 
 message QueryTask {
@@ -93,16 +75,18 @@ message HistoryEventRef {
 
 // A completion token for a Nexus operation started from a workflow.
 message NexusOperationCompletion {
-    // Namespace UUID.
+    // Namespace UUID. (Deprecated)
     string namespace_id = 1;
-    // Workflow ID.
+    // Workflow ID. (Deprecated)
     string workflow_id = 2;
-    // Run ID at the time this token was generated.
+    // Run ID at the time this token was generated. (Deprecated)
     string run_id = 3;
     // Reference including the path to the backing Operation state machine and a version + transition count for
-    // staleness checks.
+    // staleness checks. (Deprecated)
     temporal.server.api.persistence.v1.StateMachineRef ref = 4;
     // Request ID embedded in the NexusOperationScheduledEvent.
     // Allows completing a started operation after a workflow has been reset.
     string request_id = 5;
+    // Reference to the CHASM component to be informed of the completion.
+    bytes component_ref = 6;
 }

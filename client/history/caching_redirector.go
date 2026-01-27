@@ -1,37 +1,17 @@
-// The MIT License
-//
-// Copyright (c) 2020 Temporal Technologies Inc.  All rights reserved.
-//
-// Copyright (c) 2020 Uber Technologies, Inc.
-//
-// Permission is hereby granted, free of charge, to any person obtaining a copy
-// of this software and associated documentation files (the "Software"), to deal
-// in the Software without restriction, including without limitation the rights
-// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-// copies of the Software, and to permit persons to whom the Software is
-// furnished to do so, subject to the following conditions:
-//
-// The above copyright notice and this permission notice shall be included in
-// all copies or substantial portions of the Software.
-//
-// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
-// THE SOFTWARE.
-
 package history
 
 import (
 	"context"
 	"errors"
+	"fmt"
 	"sync"
+	"time"
 
+	"github.com/google/uuid"
 	"go.temporal.io/api/serviceerror"
-	"go.temporal.io/server/api/historyservice/v1"
 	"go.temporal.io/server/common"
+	"go.temporal.io/server/common/dynamicconfig"
+	"go.temporal.io/server/common/goro"
 	"go.temporal.io/server/common/log"
 	"go.temporal.io/server/common/log/tag"
 	"go.temporal.io/server/common/membership"
@@ -39,55 +19,73 @@ import (
 )
 
 type (
-	cacheEntry struct {
+	cacheEntry[C any] struct {
 		shardID    int32
 		address    rpcAddress
-		connection clientConnection
+		connection clientConnection[C]
+		staleAt    time.Time
 	}
 
-	// A cachingRedirector is a redirector that maintains a cache of shard
+	// A CachingRedirector is a redirector that maintains a cache of shard
 	// owners, and uses that cache instead of querying membership for each
 	// operation. Cache entries are evicted either for shard ownership lost
 	// errors, or for any error that might indicate the history instance
 	// is no longer available, including timeouts.
-	cachingRedirector struct {
+	CachingRedirector[C any] struct {
 		mu struct {
 			sync.RWMutex
-			cache map[int32]cacheEntry
+			cache map[int32]cacheEntry[C]
 		}
 
-		connections            connectionPool
+		connections            connectionPool[C]
+		goros                  goro.Group
 		historyServiceResolver membership.ServiceResolver
 		logger                 log.Logger
+		membershipUpdateCh     chan *membership.ChangedEvent
+		staleTTL               dynamicconfig.DurationPropertyFn
+		listenerName           string
 	}
 )
 
-func newCachingRedirector(
-	connections connectionPool,
+func NewCachingRedirector[C any](
+	connections connectionPool[C],
 	historyServiceResolver membership.ServiceResolver,
 	logger log.Logger,
-) *cachingRedirector {
-	r := &cachingRedirector{
+	staleTTL dynamicconfig.DurationPropertyFn,
+) *CachingRedirector[C] {
+	r := &CachingRedirector[C]{
 		connections:            connections,
 		historyServiceResolver: historyServiceResolver,
 		logger:                 logger,
+		membershipUpdateCh:     make(chan *membership.ChangedEvent, 1),
+		staleTTL:               staleTTL,
+		listenerName:           fmt.Sprintf("cachingRedirectorListener-%s", uuid.New().String()),
 	}
-	r.mu.cache = make(map[int32]cacheEntry)
+	r.mu.cache = make(map[int32]cacheEntry[C])
+
+	r.goros.Go(r.eventLoop)
+
 	return r
 }
 
-func (r *cachingRedirector) clientForShardID(shardID int32) (historyservice.HistoryServiceClient, error) {
+func (r *CachingRedirector[C]) stop() {
+	r.goros.Cancel()
+	r.goros.Wait()
+}
+
+func (r *CachingRedirector[C]) clientForShardID(shardID int32) (C, error) {
+	var zero C
 	if err := checkShardID(shardID); err != nil {
-		return nil, err
+		return zero, err
 	}
 	entry, err := r.getOrCreateEntry(shardID)
 	if err != nil {
-		return nil, err
+		return zero, err
 	}
-	return entry.connection.historyClient, nil
+	return entry.connection.grpcClient, nil
 }
 
-func (r *cachingRedirector) execute(ctx context.Context, shardID int32, op clientOperation) error {
+func (r *CachingRedirector[C]) Execute(ctx context.Context, shardID int32, op ClientOperation[C]) error {
 	if err := checkShardID(shardID); err != nil {
 		return err
 	}
@@ -98,12 +96,12 @@ func (r *cachingRedirector) execute(ctx context.Context, shardID int32, op clien
 	return r.redirectLoop(ctx, opEntry, op)
 }
 
-func (r *cachingRedirector) redirectLoop(ctx context.Context, opEntry cacheEntry, op clientOperation) error {
+func (r *CachingRedirector[C]) redirectLoop(ctx context.Context, opEntry cacheEntry[C], op ClientOperation[C]) error {
 	for {
 		if err := common.IsValidContext(ctx); err != nil {
 			return err
 		}
-		opErr := op(ctx, opEntry.connection.historyClient)
+		opErr := op(ctx, opEntry.connection.grpcClient)
 		if opErr == nil {
 			return opErr
 		}
@@ -123,12 +121,15 @@ func (r *cachingRedirector) redirectLoop(ctx context.Context, opEntry cacheEntry
 	}
 }
 
-func (r *cachingRedirector) getOrCreateEntry(shardID int32) (cacheEntry, error) {
+func (r *CachingRedirector[C]) getOrCreateEntry(shardID int32) (cacheEntry[C], error) {
 	r.mu.RLock()
 	entry, ok := r.mu.cache[shardID]
 	r.mu.RUnlock()
 	if ok {
-		return entry, nil
+		if entry.staleAt.IsZero() || time.Now().Before(entry.staleAt) {
+			return entry, nil
+		}
+		// Otherwise, check below under write lock.
 	}
 
 	r.mu.Lock()
@@ -137,18 +138,22 @@ func (r *cachingRedirector) getOrCreateEntry(shardID int32) (cacheEntry, error) 
 	// Recheck under write lock.
 	entry, ok = r.mu.cache[shardID]
 	if ok {
-		return entry, nil
+		if entry.staleAt.IsZero() || time.Now().Before(entry.staleAt) {
+			return entry, nil
+		}
+		// Delete and fallthrough below to re-check ownership.
+		delete(r.mu.cache, shardID)
 	}
 
 	address, err := shardLookup(r.historyServiceResolver, shardID)
 	if err != nil {
-		return cacheEntry{}, err
+		return cacheEntry[C]{}, err
 	}
 
 	return r.cacheAddLocked(shardID, address), nil
 }
 
-func (r *cachingRedirector) cacheAddLocked(shardID int32, addr rpcAddress) cacheEntry {
+func (r *CachingRedirector[C]) cacheAddLocked(shardID int32, addr rpcAddress) cacheEntry[C] {
 	// New history instances might reuse the address of a previously live history
 	// instance. Since we don't currently close GRPC connections when they become
 	// unused or idle, we might have a GRPC connection that has gone into its
@@ -162,17 +167,20 @@ func (r *cachingRedirector) cacheAddLocked(shardID int32, addr rpcAddress) cache
 	connection := r.connections.getOrCreateClientConn(addr)
 	r.connections.resetConnectBackoff(connection)
 
-	entry := cacheEntry{
+	entry := cacheEntry[C]{
 		shardID:    shardID,
 		address:    addr,
 		connection: connection,
+		// staleAt is left at zero; it's only set when r.staleTTL is set,
+		// and after a membership update informs us that this address is no
+		// longer the shard owner.
 	}
 	r.mu.cache[shardID] = entry
 
 	return entry
 }
 
-func (r *cachingRedirector) cacheDeleteByAddress(address rpcAddress) {
+func (r *CachingRedirector[C]) cacheDeleteByAddress(address rpcAddress) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
@@ -183,7 +191,7 @@ func (r *cachingRedirector) cacheDeleteByAddress(address rpcAddress) {
 	}
 }
 
-func (r *cachingRedirector) handleSolError(opEntry cacheEntry, solErr *serviceerrors.ShardOwnershipLost) (cacheEntry, bool) {
+func (r *CachingRedirector[C]) handleSolError(opEntry cacheEntry[C], solErr *serviceerrors.ShardOwnershipLost) (cacheEntry[C], bool) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
@@ -202,7 +210,7 @@ func (r *cachingRedirector) handleSolError(opEntry cacheEntry, solErr *serviceer
 		return r.cacheAddLocked(opEntry.shardID, solErrNewOwner), true
 	}
 
-	return cacheEntry{}, false
+	return cacheEntry[C]{}, false
 }
 
 func maybeHostDownError(opErr error) bool {
@@ -211,4 +219,48 @@ func maybeHostDownError(opErr error) bool {
 		return true
 	}
 	return common.IsContextDeadlineExceededErr(opErr)
+}
+
+func (r *CachingRedirector[C]) eventLoop(ctx context.Context) error {
+	if err := r.historyServiceResolver.AddListener(r.listenerName, r.membershipUpdateCh); err != nil {
+		r.logger.Fatal("Error adding listener", tag.Error(err))
+	}
+	defer func() {
+		if err := r.historyServiceResolver.RemoveListener(r.listenerName); err != nil {
+			r.logger.Warn("Error removing listener", tag.Error(err))
+		}
+	}()
+
+	for {
+		select {
+		case <-ctx.Done():
+			return nil
+		case <-r.membershipUpdateCh:
+			r.staleCheck()
+		}
+	}
+}
+
+func (r *CachingRedirector[C]) staleCheck() {
+	staleTTL := r.staleTTL()
+
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	now := time.Now()
+	for shardID, entry := range r.mu.cache {
+		if !entry.staleAt.IsZero() {
+			if now.After(entry.staleAt) {
+				delete(r.mu.cache, shardID)
+			}
+			continue
+		}
+		if staleTTL > 0 {
+			addr, err := shardLookup(r.historyServiceResolver, shardID)
+			if err != nil || addr != entry.address {
+				entry.staleAt = now.Add(staleTTL)
+				r.mu.cache[shardID] = entry
+			}
+		}
+	}
 }

@@ -1,27 +1,3 @@
-// The MIT License
-//
-// Copyright (c) 2020 Temporal Technologies Inc.  All rights reserved.
-//
-// Copyright (c) 2020 Uber Technologies, Inc.
-//
-// Permission is hereby granted, free of charge, to any person obtaining a copy
-// of this software and associated documentation files (the "Software"), to deal
-// in the Software without restriction, including without limitation the rights
-// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-// copies of the Software, and to permit persons to whom the Software is
-// furnished to do so, subject to the following conditions:
-//
-// The above copyright notice and this permission notice shall be included in
-// all copies or substantial portions of the Software.
-//
-// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
-// THE SOFTWARE.
-
 package tests
 
 import (
@@ -33,16 +9,13 @@ import (
 
 	"github.com/stretchr/testify/suite"
 	"go.temporal.io/api/workflowservice/v1"
-	sdkclient "go.temporal.io/sdk/client"
 	"go.temporal.io/server/common/authorization"
-	"go.temporal.io/server/common/log/tag"
 	"go.temporal.io/server/common/rpc"
 	"go.temporal.io/server/tests/testcore"
 )
 
 type TLSFunctionalSuite struct {
 	testcore.FunctionalTestBase
-	sdkClient sdkclient.Client
 }
 
 func TestTLSFunctionalSuite(t *testing.T) {
@@ -51,33 +24,11 @@ func TestTLSFunctionalSuite(t *testing.T) {
 }
 
 func (s *TLSFunctionalSuite) SetupSuite() {
-	s.FunctionalTestBase.SetupSuite("testdata/tls_cluster.yaml")
+	s.FunctionalTestBase.SetupSuiteWithCluster(testcore.WithMTLS())
 }
 
 func (s *TLSFunctionalSuite) TearDownSuite() {
-	s.FunctionalTestBase.TearDownSuite()
-}
-
-func (s *TLSFunctionalSuite) SetupTest() {
-	s.FunctionalTestBase.SetupTest()
-
-	var err error
-	s.sdkClient, err = sdkclient.Dial(sdkclient.Options{
-		HostPort:  s.FrontendGRPCAddress(),
-		Namespace: s.Namespace(),
-		ConnectionOptions: sdkclient.ConnectionOptions{
-			TLS: s.GetTestCluster().Host().TlsConfigProvider().FrontendClientConfig,
-		},
-	})
-	if err != nil {
-		s.Logger.Fatal("Error when creating SDK client", tag.Error(err))
-	}
-}
-
-func (s *TLSFunctionalSuite) TearDownTest() {
-	if s.sdkClient != nil {
-		s.sdkClient.Close()
-	}
+	s.FunctionalTestBase.TearDownCluster()
 }
 
 func (s *TLSFunctionalSuite) TestGRPCMTLS() {
@@ -88,7 +39,7 @@ func (s *TLSFunctionalSuite) TestGRPCMTLS() {
 	calls := s.trackAuthInfoByCall()
 
 	// Make a list-open call
-	_, _ = s.sdkClient.ListOpenWorkflow(ctx, &workflowservice.ListOpenWorkflowExecutionsRequest{})
+	_, _ = s.SdkClient().ListOpenWorkflow(ctx, &workflowservice.ListOpenWorkflowExecutionsRequest{})
 
 	// Confirm auth info as expected
 	authInfo, ok := calls.Load("/temporal.api.workflowservice.v1.WorkflowService/ListOpenWorkflowExecutions")
@@ -104,7 +55,7 @@ func (s *TLSFunctionalSuite) TestHTTPMTLS() {
 	calls := s.trackAuthInfoByCall()
 
 	// Confirm non-HTTPS call is rejected with 400
-	resp, err := http.Get("http://" + s.HttpAPIAddress() + "/namespaces/" + s.Namespace() + "/workflows")
+	resp, err := http.Get("http://" + s.HttpAPIAddress() + "/namespaces/" + s.Namespace().String() + "/workflows")
 	s.Require().NoError(err)
 	s.Require().Equal(http.StatusBadRequest, resp.StatusCode)
 
@@ -116,7 +67,7 @@ func (s *TLSFunctionalSuite) TestHTTPMTLS() {
 	}
 
 	// Make a list call
-	req, err := http.NewRequest("GET", "https://"+s.HttpAPIAddress()+"/namespaces/"+s.Namespace()+"/workflows", nil)
+	req, err := http.NewRequest("GET", "https://"+s.HttpAPIAddress()+"/namespaces/"+s.Namespace().String()+"/workflows", nil)
 	s.Require().NoError(err)
 	resp, err = httpClient.Do(req)
 	s.Require().NoError(err)

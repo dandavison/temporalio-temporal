@@ -1,31 +1,8 @@
-// The MIT License
-//
-// Copyright (c) 2020 Temporal Technologies Inc.  All rights reserved.
-//
-// Copyright (c) 2020 Uber Technologies, Inc.
-//
-// Permission is hereby granted, free of charge, to any person obtaining a copy
-// of this software and associated documentation files (the "Software"), to deal
-// in the Software without restriction, including without limitation the rights
-// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-// copies of the Software, and to permit persons to whom the Software is
-// furnished to do so, subject to the following conditions:
-//
-// The above copyright notice and this permission notice shall be included in
-// all copies or substantial portions of the Software.
-//
-// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
-// THE SOFTWARE.
-
 package metricstest
 
 import (
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"go.temporal.io/server/common/log"
@@ -69,6 +46,7 @@ type CaptureHandler struct {
 	tags         []metrics.Tag
 	captures     map[*Capture]struct{}
 	capturesLock *sync.RWMutex
+	captureCount *atomic.Int32
 }
 
 var _ metrics.Handler = (*CaptureHandler)(nil)
@@ -78,6 +56,7 @@ func NewCaptureHandler() *CaptureHandler {
 	return &CaptureHandler{
 		captures:     map[*Capture]struct{}{},
 		capturesLock: &sync.RWMutex{},
+		captureCount: &atomic.Int32{},
 	}
 }
 
@@ -87,7 +66,9 @@ func (c *CaptureHandler) StartCapture() *Capture {
 	capture := &Capture{recordings: map[string][]*CapturedRecording{}}
 	c.capturesLock.Lock()
 	defer c.capturesLock.Unlock()
+
 	c.captures[capture] = struct{}{}
+	c.captureCount.Add(1)
 	return capture
 }
 
@@ -95,7 +76,9 @@ func (c *CaptureHandler) StartCapture() *Capture {
 func (c *CaptureHandler) StopCapture(capture *Capture) {
 	c.capturesLock.Lock()
 	defer c.capturesLock.Unlock()
+
 	delete(c.captures, capture)
+	c.captureCount.Add(-1)
 }
 
 // WithTags implements [metrics.Handler.WithTags].
@@ -104,21 +87,27 @@ func (c *CaptureHandler) WithTags(tags ...metrics.Tag) metrics.Handler {
 		tags:         append(append(make([]metrics.Tag, 0, len(c.tags)+len(tags)), c.tags...), tags...),
 		captures:     c.captures,
 		capturesLock: c.capturesLock,
+		captureCount: c.captureCount,
 	}
 }
 
 func (c *CaptureHandler) record(name string, v any, unit metrics.MetricUnit, tags ...metrics.Tag) {
+	// If no captures are active, discard the metric to save memory.
+	if c.captureCount.Load() == 0 {
+		return
+	}
+
 	rec := &CapturedRecording{Value: v, Tags: make(map[string]string, len(c.tags)+len(tags)), Unit: unit}
 	for _, tag := range c.tags {
-		rec.Tags[tag.Key()] = tag.Value()
+		rec.Tags[tag.Key] = tag.Value
 	}
 	for _, tag := range tags {
-		rec.Tags[tag.Key()] = tag.Value()
+		rec.Tags[tag.Key] = tag.Value
 	}
 	c.capturesLock.RLock()
 	defer c.capturesLock.RUnlock()
-	for c := range c.captures {
-		c.record(name, rec)
+	for cap := range c.captures {
+		cap.record(name, rec)
 	}
 }
 

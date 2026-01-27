@@ -1,28 +1,4 @@
-// The MIT License
-//
-// Copyright (c) 2020 Temporal Technologies Inc.  All rights reserved.
-//
-// Copyright (c) 2020 Uber Technologies, Inc.
-//
-// Permission is hereby granted, free of charge, to any person obtaining a copy
-// of this software and associated documentation files (the "Software"), to deal
-// in the Software without restriction, including without limitation the rights
-// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-// copies of the Software, and to permit persons to whom the Software is
-// furnished to do so, subject to the following conditions:
-//
-// The above copyright notice and this permission notice shall be included in
-// all copies or substantial portions of the Software.
-//
-// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
-// THE SOFTWARE.
-
-//go:generate mockgen -copyright_file ../../LICENSE -package $GOPACKAGE -source $GOFILE -destination workflow_rebuilder_mock.go
+//go:generate mockgen -package $GOPACKAGE -source $GOFILE -destination workflow_rebuilder_mock.go
 
 package history
 
@@ -32,6 +8,8 @@ import (
 
 	commonpb "go.temporal.io/api/common/v1"
 	"go.temporal.io/api/serviceerror"
+	persistencespb "go.temporal.io/server/api/persistence/v1"
+	"go.temporal.io/server/chasm"
 	"go.temporal.io/server/common/definition"
 	"go.temporal.io/server/common/locks"
 	"go.temporal.io/server/common/log"
@@ -39,8 +17,8 @@ import (
 	"go.temporal.io/server/common/persistence"
 	"go.temporal.io/server/common/persistence/versionhistory"
 	"go.temporal.io/server/service/history/api"
+	historyi "go.temporal.io/server/service/history/interfaces"
 	"go.temporal.io/server/service/history/ndc"
-	"go.temporal.io/server/service/history/shard"
 	"go.temporal.io/server/service/history/workflow"
 	wcache "go.temporal.io/server/service/history/workflow/cache"
 )
@@ -51,6 +29,7 @@ type (
 		stateTransitionCount int64
 		dbRecordVersion      int64
 		requestID            string
+		mutableState         *persistencespb.WorkflowMutableState
 	}
 	workflowRebuilder interface {
 		// rebuild rebuilds a workflow, in case of any kind of corruption
@@ -61,7 +40,7 @@ type (
 	}
 
 	workflowRebuilderImpl struct {
-		shard                      shard.Context
+		shard                      historyi.ShardContext
 		workflowConsistencyChecker api.WorkflowConsistencyChecker
 		transaction                workflow.Transaction
 		logger                     log.Logger
@@ -71,7 +50,7 @@ type (
 var _ workflowRebuilder = (*workflowRebuilderImpl)(nil)
 
 func NewWorkflowRebuilder(
-	shard shard.Context,
+	shard historyi.ShardContext,
 	workflowCache wcache.Cache,
 	logger log.Logger,
 ) *workflowRebuilderImpl {
@@ -89,10 +68,6 @@ func (r *workflowRebuilderImpl) rebuild(
 ) (retError error) {
 
 	wfCache := r.workflowConsistencyChecker.GetWorkflowCache()
-	rebuildSpec, err := r.getRebuildSpecFromMutableState(ctx, &workflowKey)
-	if err != nil {
-		return err
-	}
 	wfContext, releaseFn, err := wfCache.GetOrCreateWorkflowExecution(
 		ctx,
 		r.shard,
@@ -107,10 +82,14 @@ func (r *workflowRebuilderImpl) rebuild(
 		return err
 	}
 	defer func() {
-		releaseFn(retError)
 		wfContext.Clear()
+		releaseFn(retError)
 	}()
 
+	rebuildSpec, err := r.getRebuildSpecFromMutableState(ctx, &workflowKey)
+	if err != nil {
+		return err
+	}
 	rebuildMutableState, err := r.replayResetWorkflow(
 		ctx,
 		workflowKey,
@@ -118,11 +97,55 @@ func (r *workflowRebuilderImpl) rebuild(
 		rebuildSpec.stateTransitionCount,
 		rebuildSpec.dbRecordVersion,
 		rebuildSpec.requestID,
+		rebuildSpec.mutableState,
 	)
 	if err != nil {
 		return err
 	}
 	return r.overwriteToDB(ctx, rebuildMutableState)
+}
+
+// rebuildableCheck checks if the mutable state is rebuildable
+// error:
+//   - serviceerror.NewInvalidArgument: if the mutable state is not rebuildable
+//   - other errors: e.g. internal error that fails to get the current version history
+func (r *workflowRebuilderImpl) rebuildableCheck(
+	mutableState *persistencespb.WorkflowMutableState,
+) error {
+	// check1: only workflow archetype is supported
+	checkErr := serviceerror.NewInvalidArgument("Rebuild only supports workflow executions, not other archetype types")
+	if len(mutableState.ChasmNodes) == 0 {
+		checkErr = nil
+	} else {
+		if rootNode, ok := mutableState.ChasmNodes[""]; ok {
+			if componentAttrs := rootNode.GetMetadata().GetComponentAttributes(); componentAttrs != nil {
+				archetypeID := chasm.ArchetypeID(componentAttrs.TypeId)
+				if archetypeID == chasm.WorkflowArchetypeID {
+					r.logger.Info("rebuild: workflow archetype found")
+					checkErr = nil
+				}
+			}
+		}
+	}
+	if checkErr != nil {
+		return checkErr
+	}
+
+	// check2: check if the current version history is empty
+	checkErr = serviceerror.NewInvalidArgument("version histories is nil, cannot be rebuilt")
+	if mutableState.ExecutionInfo == nil || mutableState.ExecutionInfo.VersionHistories == nil {
+		return checkErr
+	}
+	isEmpty, err := versionhistory.IsCurrentVersionHistoryEmpty(mutableState.ExecutionInfo.VersionHistories)
+	if err != nil {
+		return err
+	}
+	if isEmpty {
+		return checkErr
+	}
+
+	// passing all the checks, return nil
+	return nil
 }
 
 func (r *workflowRebuilderImpl) getRebuildSpecFromMutableState(
@@ -136,6 +159,7 @@ func (r *workflowRebuilderImpl) getRebuildSpecFromMutableState(
 				ShardID:     r.shard.GetShardID(),
 				NamespaceID: workflowKey.NamespaceID,
 				WorkflowID:  workflowKey.WorkflowID,
+				ArchetypeID: chasm.WorkflowArchetypeID,
 			},
 		)
 		if err != nil && resp == nil {
@@ -150,6 +174,7 @@ func (r *workflowRebuilderImpl) getRebuildSpecFromMutableState(
 			NamespaceID: workflowKey.NamespaceID,
 			WorkflowID:  workflowKey.WorkflowID,
 			RunID:       workflowKey.RunID,
+			ArchetypeID: chasm.WorkflowArchetypeID,
 		},
 	)
 	if err != nil && resp == nil {
@@ -157,6 +182,11 @@ func (r *workflowRebuilderImpl) getRebuildSpecFromMutableState(
 	}
 
 	mutableState := resp.State
+	err = r.rebuildableCheck(mutableState)
+	if err != nil {
+		return nil, err
+	}
+
 	versionHistories := mutableState.ExecutionInfo.VersionHistories
 	currentVersionHistory, err := versionhistory.GetCurrentVersionHistory(versionHistories)
 	if err != nil {
@@ -167,6 +197,7 @@ func (r *workflowRebuilderImpl) getRebuildSpecFromMutableState(
 		stateTransitionCount: mutableState.ExecutionInfo.StateTransitionCount,
 		dbRecordVersion:      resp.DBRecordVersion,
 		requestID:            mutableState.ExecutionState.CreateRequestId,
+		mutableState:         resp.State,
 	}, nil
 }
 
@@ -177,9 +208,9 @@ func (r *workflowRebuilderImpl) replayResetWorkflow(
 	stateTransitionCount int64,
 	dbRecordVersion int64,
 	requestID string,
-) (workflow.MutableState, error) {
-
-	rebuildMutableState, rebuildHistorySize, err := ndc.NewStateRebuilder(r.shard, r.logger).Rebuild(
+	mutableState *persistencespb.WorkflowMutableState,
+) (historyi.MutableState, error) {
+	rebuildMutableState, rebuildStats, err := ndc.NewStateRebuilder(r.shard, r.logger).RebuildWithCurrentMutableState(
 		ctx,
 		r.shard.GetTimeSource().Now(),
 		workflowKey,
@@ -189,6 +220,7 @@ func (r *workflowRebuilderImpl) replayResetWorkflow(
 		workflowKey,
 		branchToken,
 		requestID,
+		mutableState,
 	)
 	if err != nil {
 		return nil, err
@@ -197,17 +229,20 @@ func (r *workflowRebuilderImpl) replayResetWorkflow(
 	// note: this is an admin API, for operator to recover a corrupted mutable state, so state transition count
 	// should remain the same, the -= 1 exists here since later CloseTransactionAsSnapshot will += 1 to state transition count
 	rebuildMutableState.GetExecutionInfo().StateTransitionCount = stateTransitionCount - 1
-	rebuildMutableState.AddHistorySize(rebuildHistorySize)
+	rebuildMutableState.AddHistorySize(rebuildStats.HistorySize)
+	rebuildMutableState.AddExternalPayloadSize(rebuildStats.ExternalPayloadSize)
+	rebuildMutableState.AddExternalPayloadCount(rebuildStats.ExternalPayloadCount)
 	rebuildMutableState.SetUpdateCondition(rebuildMutableState.GetNextEventID(), dbRecordVersion)
 	return rebuildMutableState, nil
 }
 
 func (r *workflowRebuilderImpl) overwriteToDB(
 	ctx context.Context,
-	mutableState workflow.MutableState,
+	mutableState historyi.MutableState,
 ) error {
 	resetWorkflowSnapshot, resetWorkflowEventsSeq, err := mutableState.CloseTransactionAsSnapshot(
-		workflow.TransactionPolicyPassive,
+		ctx,
+		historyi.TransactionPolicyPassive,
 	)
 	if err != nil {
 		return err
@@ -218,6 +253,7 @@ func (r *workflowRebuilderImpl) overwriteToDB(
 
 	return r.transaction.SetWorkflowExecution(
 		ctx,
+		chasm.WorkflowArchetypeID,
 		resetWorkflowSnapshot,
 	)
 }

@@ -1,30 +1,7 @@
-// The MIT License
-//
-// Copyright (c) 2020 Temporal Technologies Inc.  All rights reserved.
-//
-// Copyright (c) 2020 Uber Technologies, Inc.
-//
-// Permission is hereby granted, free of charge, to any person obtaining a copy
-// of this software and associated documentation files (the "Software"), to deal
-// in the Software without restriction, including without limitation the rights
-// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-// copies of the Software, and to permit persons to whom the Software is
-// furnished to do so, subject to the following conditions:
-//
-// The above copyright notice and this permission notice shall be included in
-// all copies or substantial portions of the Software.
-//
-// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
-// THE SOFTWARE.
-
 package searchattribute
 
 import (
+	"fmt"
 	"testing"
 
 	"github.com/stretchr/testify/suite"
@@ -32,6 +9,7 @@ import (
 	"go.temporal.io/server/common/dynamicconfig"
 	"go.temporal.io/server/common/payload"
 	"go.temporal.io/server/common/persistence/visibility/manager"
+	"go.temporal.io/server/common/searchattribute/sadefs"
 	"go.uber.org/mock/gomock"
 )
 
@@ -83,7 +61,7 @@ func (s *searchAttributesValidatorSuite) TestSearchAttributesValidate() {
 	intPayload, err := payload.Encode(1)
 	s.NoError(err)
 	fields := map[string]*commonpb.Payload{
-		"CustomIntField": intPayload,
+		"Int01": intPayload,
 	}
 	attr = &commonpb.SearchAttributes{
 		IndexedFields: fields,
@@ -92,9 +70,9 @@ func (s *searchAttributesValidatorSuite) TestSearchAttributesValidate() {
 	s.NoError(err)
 
 	fields = map[string]*commonpb.Payload{
-		"CustomIntField":     intPayload,
-		"CustomKeywordField": payload.EncodeString("keyword"),
-		"CustomBoolField":    payload.EncodeString("true"),
+		"Int01":     intPayload,
+		"Keyword01": payload.EncodeString("keyword"),
+		"Bool01":    payload.EncodeString("true"),
 	}
 	attr.IndexedFields = fields
 	err = saValidator.Validate(attr, namespace)
@@ -110,18 +88,18 @@ func (s *searchAttributesValidatorSuite) TestSearchAttributesValidate() {
 	s.Equal("search attribute InvalidKey is not defined", err.Error())
 
 	fields = map[string]*commonpb.Payload{
-		"CustomTextField": payload.EncodeString("1"),
-		"CustomBoolField": payload.EncodeString("123"),
+		"Text01": payload.EncodeString("1"),
+		"Bool01": payload.EncodeString("123"),
 	}
 	attr.IndexedFields = fields
 	err = saValidator.Validate(attr, namespace)
 	s.Error(err)
-	s.Equal("invalid value for search attribute CustomBoolField of type Bool: 123", err.Error())
+	s.Equal("invalid value for search attribute Bool01 of type Bool: 123", err.Error())
 
 	intArrayPayload, err := payload.Encode([]int{1, 2})
 	s.NoError(err)
 	fields = map[string]*commonpb.Payload{
-		"CustomIntField": intArrayPayload,
+		"Int01": intArrayPayload,
 	}
 	attr.IndexedFields = fields
 	err = saValidator.Validate(attr, namespace)
@@ -134,6 +112,23 @@ func (s *searchAttributesValidatorSuite) TestSearchAttributesValidate() {
 	err = saValidator.Validate(attr, namespace)
 	s.Error(err)
 	s.Equal("StartTime attribute can't be set in SearchAttributes", err.Error())
+
+	// Validate Deployment related search attributes
+	deploymentRestrictedAttributes := []string{
+		sadefs.TemporalWorkerDeploymentVersion,
+		sadefs.TemporalWorkerDeployment,
+		sadefs.TemporalWorkflowVersioningBehavior,
+	}
+
+	for _, restrictedAttr := range deploymentRestrictedAttributes {
+		fields = map[string]*commonpb.Payload{
+			restrictedAttr: payload.EncodeString("1.0.0"),
+		}
+		attr.IndexedFields = fields
+		err = saValidator.Validate(attr, namespace)
+		s.Error(err)
+		s.Equal(fmt.Sprintf("%s attribute can't be set in SearchAttributes", restrictedAttr), err.Error())
+	}
 }
 
 func (s *searchAttributesValidatorSuite) TestSearchAttributesValidate_SuppressError() {
@@ -188,7 +183,7 @@ func (s *searchAttributesValidatorSuite) TestSearchAttributesValidate_Mapper() {
 	intPayload, err := payload.Encode(1)
 	s.NoError(err)
 	fields := map[string]*commonpb.Payload{
-		"CustomIntField": intPayload,
+		"Int01": intPayload,
 	}
 	attr = &commonpb.SearchAttributes{
 		IndexedFields: fields,
@@ -197,7 +192,7 @@ func (s *searchAttributesValidatorSuite) TestSearchAttributesValidate_Mapper() {
 	s.NoError(err)
 
 	fields = map[string]*commonpb.Payload{
-		"CustomIntField": intPayload,
+		"Int01": intPayload,
 	}
 	attr = &commonpb.SearchAttributes{
 		IndexedFields: fields,
@@ -215,16 +210,16 @@ func (s *searchAttributesValidatorSuite) TestSearchAttributesValidate_Mapper() {
 
 	err = saValidator.Validate(attr, "error-namespace")
 	s.Error(err)
-	s.EqualError(err, "mapper error")
+	s.Require().EqualError(err, "Namespace error-namespace has no mapping defined for field name InvalidKey")
 
 	fields = map[string]*commonpb.Payload{
-		"CustomTextField": payload.EncodeString("1"),
-		"CustomBoolField": payload.EncodeString("123"),
+		"Text01": payload.EncodeString("1"),
+		"Bool01": payload.EncodeString("123"),
 	}
 	attr.IndexedFields = fields
 	err = saValidator.Validate(attr, namespace)
 	s.Error(err)
-	s.Equal("invalid value for search attribute AliasForCustomBoolField of type Bool: 123", err.Error())
+	s.Equal("invalid value for search attribute AliasForBool01 of type Bool: 123", err.Error())
 }
 
 func (s *searchAttributesValidatorSuite) TestSearchAttributesValidateSize() {
@@ -246,7 +241,7 @@ func (s *searchAttributesValidatorSuite) TestSearchAttributesValidateSize() {
 	namespace := "namespace"
 
 	fields := map[string]*commonpb.Payload{
-		"CustomKeywordField": payload.EncodeString("123456"),
+		"Keyword01": payload.EncodeString("123456"),
 	}
 	attr := &commonpb.SearchAttributes{
 		IndexedFields: fields,
@@ -255,16 +250,16 @@ func (s *searchAttributesValidatorSuite) TestSearchAttributesValidateSize() {
 	attr.IndexedFields = fields
 	err := saValidator.ValidateSize(attr, namespace)
 	s.Error(err)
-	s.Equal("search attribute CustomKeywordField value size 8 exceeds size limit 5", err.Error())
+	s.Equal("search attribute Keyword01 value size 8 exceeds size limit 5", err.Error())
 
 	fields = map[string]*commonpb.Payload{
-		"CustomKeywordField": payload.EncodeString("123"),
-		"CustomTextField":    payload.EncodeString("12"),
+		"Keyword01": payload.EncodeString("123"),
+		"Text01":    payload.EncodeString("12"),
 	}
 	attr.IndexedFields = fields
 	err = saValidator.ValidateSize(attr, namespace)
 	s.Error(err)
-	s.Equal("total size of search attributes 106 exceeds size limit 20", err.Error())
+	s.Equal("total size of search attributes 88 exceeds size limit 20", err.Error())
 }
 
 func (s *searchAttributesValidatorSuite) TestSearchAttributesValidateSize_Mapper() {
@@ -286,7 +281,7 @@ func (s *searchAttributesValidatorSuite) TestSearchAttributesValidateSize_Mapper
 	namespace := "test-namespace"
 
 	fields := map[string]*commonpb.Payload{
-		"CustomKeywordField": payload.EncodeString("123456"),
+		"Keyword01": payload.EncodeString("123456"),
 	}
 	attr := &commonpb.SearchAttributes{
 		IndexedFields: fields,
@@ -295,14 +290,14 @@ func (s *searchAttributesValidatorSuite) TestSearchAttributesValidateSize_Mapper
 	attr.IndexedFields = fields
 	err := saValidator.ValidateSize(attr, namespace)
 	s.Error(err)
-	s.Equal("search attribute AliasForCustomKeywordField value size 8 exceeds size limit 5", err.Error())
+	s.Equal("search attribute AliasForKeyword01 value size 8 exceeds size limit 5", err.Error())
 
 	fields = map[string]*commonpb.Payload{
-		"CustomKeywordField": payload.EncodeString("123"),
-		"CustomTextField":    payload.EncodeString("12"),
+		"Keyword01": payload.EncodeString("123"),
+		"Text01":    payload.EncodeString("12"),
 	}
 	attr.IndexedFields = fields
 	err = saValidator.ValidateSize(attr, namespace)
 	s.Error(err)
-	s.Equal("total size of search attributes 106 exceeds size limit 20", err.Error())
+	s.Equal("total size of search attributes 88 exceeds size limit 20", err.Error())
 }

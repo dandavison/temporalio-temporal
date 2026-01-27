@@ -1,32 +1,11 @@
-// The MIT License
-//
-// Copyright (c) 2020 Temporal Technologies Inc.  All rights reserved.
-//
-// Copyright (c) 2020 Uber Technologies, Inc.
-//
-// Permission is hereby granted, free of charge, to any person obtaining a copy
-// of this software and associated documentation files (the "Software"), to deal
-// in the Software without restriction, including without limitation the rights
-// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-// copies of the Software, and to permit persons to whom the Software is
-// furnished to do so, subject to the following conditions:
-//
-// The above copyright notice and this permission notice shall be included in
-// all copies or substantial portions of the Software.
-//
-// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
-// THE SOFTWARE.
-
 package client
 
 import (
+	"errors"
 	"time"
 
+	"go.opentelemetry.io/otel/trace"
+	"go.temporal.io/api/serviceerror"
 	"go.temporal.io/server/common/cluster"
 	"go.temporal.io/server/common/config"
 	"go.temporal.io/server/common/dynamicconfig"
@@ -37,9 +16,11 @@ import (
 	"go.temporal.io/server/common/persistence/faultinjection"
 	"go.temporal.io/server/common/persistence/serialization"
 	"go.temporal.io/server/common/persistence/sql"
+	"go.temporal.io/server/common/persistence/telemetry"
 	"go.temporal.io/server/common/primitives"
 	"go.temporal.io/server/common/quotas"
 	"go.temporal.io/server/common/resolver"
+	otel "go.temporal.io/server/common/telemetry"
 	"go.uber.org/fx"
 )
 
@@ -52,25 +33,31 @@ type (
 
 	DynamicRateLimitingParams dynamicconfig.TypedPropertyFn[dynamicconfig.DynamicRateLimitingParams]
 
+	EnableDataLossMetrics                       dynamicconfig.BoolPropertyFn
+	EnableBestEffortDeleteTasksOnWorkflowUpdate dynamicconfig.BoolPropertyFn
+
 	ClusterName string
 
 	NewFactoryParams struct {
 		fx.In
 
-		DataStoreFactory                   persistence.DataStoreFactory
-		EventBlobCache                     persistence.XDCCache
-		Cfg                                *config.Persistence
-		PersistenceMaxQPS                  PersistenceMaxQps
-		PersistenceNamespaceMaxQPS         PersistenceNamespaceMaxQps
-		PersistencePerShardNamespaceMaxQPS PersistencePerShardNamespaceMaxQPS
-		OperatorRPSRatio                   OperatorRPSRatio
-		PersistenceBurstRatio              PersistenceBurstRatio
-		ClusterName                        ClusterName
-		ServiceName                        primitives.ServiceName
-		MetricsHandler                     metrics.Handler
-		Logger                             log.Logger
-		HealthSignals                      persistence.HealthSignalAggregator
-		DynamicRateLimitingParams          DynamicRateLimitingParams
+		DataStoreFactory                            persistence.DataStoreFactory
+		EventBlobCache                              persistence.XDCCache
+		Cfg                                         *config.Persistence
+		PersistenceMaxQPS                           PersistenceMaxQps
+		PersistenceNamespaceMaxQPS                  PersistenceNamespaceMaxQps
+		PersistencePerShardNamespaceMaxQPS          PersistencePerShardNamespaceMaxQPS
+		OperatorRPSRatio                            OperatorRPSRatio
+		PersistenceBurstRatio                       PersistenceBurstRatio
+		ClusterName                                 ClusterName
+		ServiceName                                 primitives.ServiceName
+		MetricsHandler                              metrics.Handler
+		Logger                                      log.Logger
+		HealthSignals                               persistence.HealthSignalAggregator
+		DynamicRateLimitingParams                   DynamicRateLimitingParams
+		EnableDataLossMetrics                       EnableDataLossMetrics
+		EnableBestEffortDeleteTasksOnWorkflowUpdate EnableBestEffortDeleteTasksOnWorkflowUpdate
+		Serializer                                  serialization.Serializer
 	}
 
 	FactoryProviderFn func(NewFactoryParams) Factory
@@ -82,6 +69,7 @@ var Module = fx.Options(
 	fx.Provide(managerProvider(Factory.NewClusterMetadataManager)),
 	fx.Provide(managerProvider(Factory.NewMetadataManager)),
 	fx.Provide(managerProvider(Factory.NewTaskManager)),
+	fx.Provide(managerProvider(Factory.NewFairTaskManager)),
 	fx.Provide(managerProvider(Factory.NewNamespaceReplicationQueue)),
 	fx.Provide(managerProvider(Factory.NewShardManager)),
 	fx.Provide(managerProvider(Factory.NewExecutionManager)),
@@ -92,6 +80,8 @@ var Module = fx.Options(
 	fx.Provide(HealthSignalAggregatorProvider),
 	fx.Provide(persistence.NewDLQMetricsEmitter),
 	fx.Provide(EventBlobCacheProvider),
+	fx.Provide(EnableDataLossMetricsProvider),
+	fx.Provide(EnableBestEffortDeleteTasksOnWorkflowUpdateProvider),
 )
 
 func ClusterNameProvider(config *cluster.Config) ClusterName {
@@ -101,12 +91,25 @@ func ClusterNameProvider(config *cluster.Config) ClusterName {
 func EventBlobCacheProvider(
 	dc *dynamicconfig.Collection,
 	logger log.Logger,
+	serializer serialization.Serializer,
 ) persistence.XDCCache {
 	return persistence.NewEventsBlobCache(
 		dynamicconfig.XDCCacheMaxSizeBytes.Get(dc)(),
 		20*time.Second,
 		logger,
 	)
+}
+
+func EnableDataLossMetricsProvider(
+	dc *dynamicconfig.Collection,
+) EnableDataLossMetrics {
+	return EnableDataLossMetrics(dynamicconfig.EnableDataLossMetrics.Get(dc))
+}
+
+func EnableBestEffortDeleteTasksOnWorkflowUpdateProvider(
+	dc *dynamicconfig.Collection,
+) EnableBestEffortDeleteTasksOnWorkflowUpdate {
+	return EnableBestEffortDeleteTasksOnWorkflowUpdate(dynamicconfig.EnableBestEffortDeleteTasksOnWorkflowUpdate.Get(dc))
 }
 
 func FactoryProvider(
@@ -146,12 +149,14 @@ func FactoryProvider(
 		systemRequestRateLimiter,
 		namespaceRequestRateLimiter,
 		shardRequestRateLimiter,
-		serialization.NewSerializer(),
+		params.Serializer,
 		params.EventBlobCache,
 		string(params.ClusterName),
 		params.MetricsHandler,
 		params.Logger,
 		params.HealthSignals,
+		params.EnableDataLossMetrics,
+		params.EnableBestEffortDeleteTasksOnWorkflowUpdate,
 	)
 }
 
@@ -161,13 +166,11 @@ func HealthSignalAggregatorProvider(
 	logger log.ThrottledLogger,
 ) persistence.HealthSignalAggregator {
 	if dynamicconfig.PersistenceHealthSignalMetricsEnabled.Get(dynamicCollection)() {
-		return persistence.NewHealthSignalAggregatorImpl(
+		return persistence.NewHealthSignalAggregator(
 			dynamicconfig.PersistenceHealthSignalAggregationEnabled.Get(dynamicCollection)(),
 			dynamicconfig.PersistenceHealthSignalWindowSize.Get(dynamicCollection)(),
 			dynamicconfig.PersistenceHealthSignalBufferSize.Get(dynamicCollection)(),
 			metricsHandler,
-			dynamicconfig.ShardRPSWarnLimit.Get(dynamicCollection),
-			dynamicconfig.ShardPerNsRPSWarnPercent.Get(dynamicCollection),
 			logger,
 		)
 	}
@@ -182,23 +185,29 @@ func DataStoreFactoryProvider(
 	abstractDataStoreFactory AbstractDataStoreFactory,
 	logger log.Logger,
 	metricsHandler metrics.Handler,
+	tracerProvider trace.TracerProvider,
+	serializer serialization.Serializer,
 ) persistence.DataStoreFactory {
-
 	var dataStoreFactory persistence.DataStoreFactory
 	defaultStoreCfg := cfg.DataStores[cfg.DefaultStore]
 	switch {
 	case defaultStoreCfg.Cassandra != nil:
-		dataStoreFactory = cassandra.NewFactory(*defaultStoreCfg.Cassandra, r, string(clusterName), logger, metricsHandler)
+		dataStoreFactory = cassandra.NewFactory(*defaultStoreCfg.Cassandra, r, string(clusterName), logger, metricsHandler, serializer)
 	case defaultStoreCfg.SQL != nil:
-		dataStoreFactory = sql.NewFactory(*defaultStoreCfg.SQL, r, string(clusterName), logger, metricsHandler)
+		dataStoreFactory = sql.NewFactory(*defaultStoreCfg.SQL, r, string(clusterName), logger, metricsHandler, serializer)
 	case defaultStoreCfg.CustomDataStoreConfig != nil:
-		dataStoreFactory = abstractDataStoreFactory.NewFactory(*defaultStoreCfg.CustomDataStoreConfig, r, string(clusterName), logger, metricsHandler)
+		dataStoreFactory = abstractDataStoreFactory.NewFactory(*defaultStoreCfg.CustomDataStoreConfig, r, string(clusterName), logger, metricsHandler, serializer)
 	default:
-		logger.Fatal("invalid config: one of cassandra or sql params must be specified for default data store")
+		logger.Fatal("invalid config: one of cassandra, sql, or custom datastore params must be specified")
 	}
 
 	if defaultStoreCfg.FaultInjection != nil {
 		dataStoreFactory = faultinjection.NewFaultInjectionDatastoreFactory(defaultStoreCfg.FaultInjection, dataStoreFactory)
+	}
+
+	tracer := tracerProvider.Tracer(otel.ComponentPersistence)
+	if otel.IsEnabled(tracer) {
+		dataStoreFactory = telemetry.NewTelemetryDataStoreFactory(dataStoreFactory, logger, tracer)
 	}
 
 	return dataStoreFactory
@@ -212,6 +221,11 @@ func managerProvider[T persistence.Closeable](newManagerFn func(Factory) (T, err
 	return func(f Factory, lc fx.Lifecycle) (T, error) {
 		manager, err := newManagerFn(f) // passing receiver (Factory) as first argument.
 		if err != nil {
+			var unimpl *serviceerror.Unimplemented
+			if errors.As(err, &unimpl) {
+				// allow factories to return Unimplemented, and turn into nil so that fx init doesn't fail.
+				err = nil
+			}
 			var nilT T
 			return nilT, err
 		}

@@ -1,27 +1,3 @@
-// The MIT License
-//
-// Copyright (c) 2020 Temporal Technologies Inc.  All rights reserved.
-//
-// Copyright (c) 2020 Uber Technologies, Inc.
-//
-// Permission is hereby granted, free of charge, to any person obtaining a copy
-// of this software and associated documentation files (the "Software"), to deal
-// in the Software without restriction, including without limitation the rights
-// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-// copies of the Software, and to permit persons to whom the Software is
-// furnished to do so, subject to the following conditions:
-//
-// The above copyright notice and this permission notice shall be included in
-// all copies or substantial portions of the Software.
-//
-// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
-// THE SOFTWARE.
-
 package interceptor
 
 import (
@@ -43,7 +19,7 @@ import (
 	"go.temporal.io/server/common/api"
 	"go.temporal.io/server/common/dynamicconfig"
 	"go.temporal.io/server/common/namespace"
-	"go.temporal.io/server/common/persistence"
+	"go.temporal.io/server/common/tasktoken"
 	"go.uber.org/mock/gomock"
 	"google.golang.org/grpc"
 )
@@ -80,7 +56,7 @@ func (s *namespaceValidatorSuite) TearDownTest() {
 }
 
 func (s *namespaceValidatorSuite) Test_StateValidationIntercept_NamespaceNotSet() {
-	taskToken, _ := common.NewProtoTaskTokenSerializer().Serialize(&tokenspb.Task{
+	taskToken, _ := tasktoken.NewSerializer().Serialize(&tokenspb.Task{
 		NamespaceId: "",
 		WorkflowId:  "wid",
 	})
@@ -156,7 +132,7 @@ func (s *namespaceValidatorSuite) Test_StateValidationIntercept_NamespaceNotFoun
 	s.False(handlerCalled)
 
 	s.mockRegistry.EXPECT().GetNamespaceByID(namespace.ID("not-found-namespace-id")).Return(nil, serviceerror.NewNamespaceNotFound("missing-namespace"))
-	taskToken, _ := common.NewProtoTaskTokenSerializer().Serialize(&tokenspb.Task{
+	taskToken, _ := tasktoken.NewSerializer().Serialize(&tokenspb.Task{
 		NamespaceId: "not-found-namespace-id",
 	})
 	tokenReq := &workflowservice.RespondWorkflowTaskCompletedRequest{
@@ -396,18 +372,19 @@ func (s *namespaceValidatorSuite) Test_StateValidationIntercept_StatusFromNamesp
 			_, isDescribeNamespace := testCase.req.(*workflowservice.DescribeNamespaceRequest)
 			_, isRegisterNamespace := testCase.req.(*workflowservice.RegisterNamespaceRequest)
 			if !isDescribeNamespace && !isRegisterNamespace {
-				s.mockRegistry.EXPECT().GetNamespace(namespace.Name("test-namespace")).Return(namespace.FromPersistentState(
-					&persistence.GetNamespaceResponse{
-						Namespace: &persistencespb.NamespaceDetail{
-							Config: &persistencespb.NamespaceConfig{},
-							ReplicationConfig: &persistencespb.NamespaceReplicationConfig{
-								State: testCase.replicationState,
-							},
-							Info: &persistencespb.NamespaceInfo{
-								State: testCase.state,
-							},
-						},
-					}), nil)
+				factory := namespace.NewDefaultReplicationResolverFactory()
+				detail := &persistencespb.NamespaceDetail{
+					Config: &persistencespb.NamespaceConfig{},
+					ReplicationConfig: &persistencespb.NamespaceReplicationConfig{
+						State: testCase.replicationState,
+					},
+					Info: &persistencespb.NamespaceInfo{
+						State: testCase.state,
+					},
+				}
+				ns, err := namespace.FromPersistentState(detail, factory(detail))
+				s.Require().NoError(err)
+				s.mockRegistry.EXPECT().GetNamespace(namespace.Name("test-namespace")).Return(ns, nil)
 			}
 
 			nvi := NewNamespaceValidatorInterceptor(
@@ -436,7 +413,7 @@ func (s *namespaceValidatorSuite) Test_StateValidationIntercept_StatusFromNamesp
 }
 
 func (s *namespaceValidatorSuite) Test_StateValidationIntercept_StatusFromToken() {
-	taskToken, _ := common.NewProtoTaskTokenSerializer().Serialize(&tokenspb.Task{
+	taskToken, _ := tasktoken.NewSerializer().Serialize(&tokenspb.Task{
 		NamespaceId: "test-namespace-id",
 	})
 
@@ -474,16 +451,17 @@ func (s *namespaceValidatorSuite) Test_StateValidationIntercept_StatusFromToken(
 	}
 
 	for _, testCase := range testCases {
-		s.mockRegistry.EXPECT().GetNamespaceByID(namespace.ID("test-namespace-id")).Return(namespace.FromPersistentState(
-			&persistence.GetNamespaceResponse{
-				Namespace: &persistencespb.NamespaceDetail{
-					Config:            &persistencespb.NamespaceConfig{},
-					ReplicationConfig: &persistencespb.NamespaceReplicationConfig{},
-					Info: &persistencespb.NamespaceInfo{
-						State: testCase.state,
-					},
-				},
-			}), nil)
+		factory := namespace.NewDefaultReplicationResolverFactory()
+		detail := &persistencespb.NamespaceDetail{
+			Config:            &persistencespb.NamespaceConfig{},
+			ReplicationConfig: &persistencespb.NamespaceReplicationConfig{},
+			Info: &persistencespb.NamespaceInfo{
+				State: testCase.state,
+			},
+		}
+		ns, nsErr := namespace.FromPersistentState(detail, factory(detail))
+		s.Require().NoError(nsErr)
+		s.mockRegistry.EXPECT().GetNamespaceByID(namespace.ID("test-namespace-id")).Return(ns, nil)
 
 		nvi := NewNamespaceValidatorInterceptor(
 			s.mockRegistry,
@@ -634,21 +612,21 @@ func (s *namespaceValidatorSuite) Test_StateValidationIntercept_TokenNamespaceEn
 	}
 
 	for _, testCase := range testCases {
-		taskToken, _ := common.NewProtoTaskTokenSerializer().Serialize(&tokenspb.Task{
+		taskToken, _ := tasktoken.NewSerializer().Serialize(&tokenspb.Task{
 			NamespaceId: testCase.tokenNamespaceID.String(),
 		})
-		tokenNamespace := namespace.FromPersistentState(
-			&persistence.GetNamespaceResponse{
-				Namespace: &persistencespb.NamespaceDetail{
-					Config:            &persistencespb.NamespaceConfig{},
-					ReplicationConfig: &persistencespb.NamespaceReplicationConfig{},
-					Info: &persistencespb.NamespaceInfo{
-						Id:    testCase.tokenNamespaceID.String(),
-						Name:  testCase.tokenNamespaceName.String(),
-						State: enumspb.NAMESPACE_STATE_REGISTERED,
-					},
-				},
-			})
+		factory := namespace.NewDefaultReplicationResolverFactory()
+		tokenDetail := &persistencespb.NamespaceDetail{
+			Config:            &persistencespb.NamespaceConfig{},
+			ReplicationConfig: &persistencespb.NamespaceReplicationConfig{},
+			Info: &persistencespb.NamespaceInfo{
+				Id:    testCase.tokenNamespaceID.String(),
+				Name:  testCase.tokenNamespaceName.String(),
+				State: enumspb.NAMESPACE_STATE_REGISTERED,
+			},
+		}
+		tokenNamespace, err := namespace.FromPersistentState(tokenDetail, factory(tokenDetail))
+		s.Require().NoError(err)
 
 		req := &workflowservice.RespondWorkflowTaskCompletedRequest{
 			Namespace: testCase.requestNamespaceName.String(),
@@ -658,18 +636,17 @@ func (s *namespaceValidatorSuite) Test_StateValidationIntercept_TokenNamespaceEn
 			Namespace: testCase.requestNamespaceName.String(),
 			TaskToken: taskToken,
 		}
-		requestNamespace := namespace.FromPersistentState(
-			&persistence.GetNamespaceResponse{
-				Namespace: &persistencespb.NamespaceDetail{
-					Config:            &persistencespb.NamespaceConfig{},
-					ReplicationConfig: &persistencespb.NamespaceReplicationConfig{},
-					Info: &persistencespb.NamespaceInfo{
-						Id:    testCase.requestNamespaceID.String(),
-						Name:  testCase.requestNamespaceName.String(),
-						State: enumspb.NAMESPACE_STATE_REGISTERED,
-					},
-				},
-			})
+		requestDetail := &persistencespb.NamespaceDetail{
+			Config:            &persistencespb.NamespaceConfig{},
+			ReplicationConfig: &persistencespb.NamespaceReplicationConfig{},
+			Info: &persistencespb.NamespaceInfo{
+				Id:    testCase.requestNamespaceID.String(),
+				Name:  testCase.requestNamespaceName.String(),
+				State: enumspb.NAMESPACE_STATE_REGISTERED,
+			},
+		}
+		requestNamespace, reqErr := namespace.FromPersistentState(requestDetail, factory(requestDetail))
+		s.Require().NoError(reqErr)
 
 		// 2 times because of RespondQueryTaskCompleted.
 		s.mockRegistry.EXPECT().GetNamespace(testCase.requestNamespaceName).Return(requestNamespace, nil).Times(2)
@@ -684,7 +661,7 @@ func (s *namespaceValidatorSuite) Test_StateValidationIntercept_TokenNamespaceEn
 		}
 
 		handlerCalled := false
-		_, err := nvi.StateValidationIntercept(context.Background(), req, serverInfo, func(ctx context.Context, req interface{}) (interface{}, error) {
+		_, err = nvi.StateValidationIntercept(context.Background(), req, serverInfo, func(ctx context.Context, req interface{}) (interface{}, error) {
 			handlerCalled = true
 			return &workflowservice.RespondWorkflowTaskCompletedResponse{}, nil
 		})
@@ -836,36 +813,35 @@ func (s *namespaceValidatorSuite) Test_NamespaceValidateIntercept() {
 	serverInfo := &grpc.UnaryServerInfo{
 		FullMethod: api.WorkflowServicePrefix + "random",
 	}
-	requestNamespace := namespace.FromPersistentState(
-		&persistence.GetNamespaceResponse{
-			Namespace: &persistencespb.NamespaceDetail{
-				Config:            &persistencespb.NamespaceConfig{},
-				ReplicationConfig: &persistencespb.NamespaceReplicationConfig{},
-				Info: &persistencespb.NamespaceInfo{
-					Id:    uuid.New().String(),
-					Name:  "namespace",
-					State: enumspb.NAMESPACE_STATE_REGISTERED,
-				},
-			},
-		})
-	requestNamespaceTooLong := namespace.FromPersistentState(
-		&persistence.GetNamespaceResponse{
-			Namespace: &persistencespb.NamespaceDetail{
-				Config:            &persistencespb.NamespaceConfig{},
-				ReplicationConfig: &persistencespb.NamespaceReplicationConfig{},
-				Info: &persistencespb.NamespaceInfo{
-					Id:    uuid.New().String(),
-					Name:  "namespaceTooLong",
-					State: enumspb.NAMESPACE_STATE_REGISTERED,
-				},
-			},
-		})
+	factory := namespace.NewDefaultReplicationResolverFactory()
+	detail1 := &persistencespb.NamespaceDetail{
+		Config:            &persistencespb.NamespaceConfig{},
+		ReplicationConfig: &persistencespb.NamespaceReplicationConfig{},
+		Info: &persistencespb.NamespaceInfo{
+			Id:    uuid.New().String(),
+			Name:  "namespace",
+			State: enumspb.NAMESPACE_STATE_REGISTERED,
+		},
+	}
+	requestNamespace, err := namespace.FromPersistentState(detail1, factory(detail1))
+	s.NoError(err)
+	detail2 := &persistencespb.NamespaceDetail{
+		Config:            &persistencespb.NamespaceConfig{},
+		ReplicationConfig: &persistencespb.NamespaceReplicationConfig{},
+		Info: &persistencespb.NamespaceInfo{
+			Id:    uuid.New().String(),
+			Name:  "namespaceTooLong",
+			State: enumspb.NAMESPACE_STATE_REGISTERED,
+		},
+	}
+	requestNamespaceTooLong, err2 := namespace.FromPersistentState(detail2, factory(detail2))
+	s.NoError(err2)
 	s.mockRegistry.EXPECT().GetNamespace(namespace.Name("namespace")).Return(requestNamespace, nil).AnyTimes()
 	s.mockRegistry.EXPECT().GetNamespace(namespace.Name("namespaceTooLong")).Return(requestNamespaceTooLong, nil).AnyTimes()
 
 	req := &workflowservice.StartWorkflowExecutionRequest{Namespace: "namespace"}
 	handlerCalled := false
-	_, err := nvi.NamespaceValidateIntercept(context.Background(), req, serverInfo, func(ctx context.Context, req interface{}) (interface{}, error) {
+	_, err = nvi.NamespaceValidateIntercept(context.Background(), req, serverInfo, func(ctx context.Context, req interface{}) (interface{}, error) {
 		handlerCalled = true
 		return &workflowservice.StartWorkflowExecutionResponse{}, nil
 	})
@@ -885,18 +861,18 @@ func (s *namespaceValidatorSuite) Test_NamespaceValidateIntercept() {
 func (s *namespaceValidatorSuite) TestSetNamespace() {
 	namespaceRequestName := uuid.New().String()
 	namespaceEntryName := uuid.New().String()
-	namespaceEntry := namespace.FromPersistentState(
-		&persistence.GetNamespaceResponse{
-			Namespace: &persistencespb.NamespaceDetail{
-				Config:            &persistencespb.NamespaceConfig{},
-				ReplicationConfig: &persistencespb.NamespaceReplicationConfig{},
-				Info: &persistencespb.NamespaceInfo{
-					Id:    uuid.New().String(),
-					Name:  namespaceEntryName,
-					State: enumspb.NAMESPACE_STATE_REGISTERED,
-				},
-			},
-		})
+	factory := namespace.NewDefaultReplicationResolverFactory()
+	detail := &persistencespb.NamespaceDetail{
+		Config:            &persistencespb.NamespaceConfig{},
+		ReplicationConfig: &persistencespb.NamespaceReplicationConfig{},
+		Info: &persistencespb.NamespaceInfo{
+			Id:    uuid.New().String(),
+			Name:  namespaceEntryName,
+			State: enumspb.NAMESPACE_STATE_REGISTERED,
+		},
+	}
+	namespaceEntry, err := namespace.FromPersistentState(detail, factory(detail))
+	s.NoError(err)
 
 	nvi := NewNamespaceValidatorInterceptor(
 		s.mockRegistry,

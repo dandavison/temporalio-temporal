@@ -1,33 +1,9 @@
-// The MIT License
-//
-// Copyright (c) 2020 Temporal Technologies Inc.  All rights reserved.
-//
-// Copyright (c) 2020 Uber Technologies, Inc.
-//
-// Permission is hereby granted, free of charge, to any person obtaining a copy
-// of this software and associated documentation files (the "Software"), to deal
-// in the Software without restriction, including without limitation the rights
-// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-// copies of the Software, and to permit persons to whom the Software is
-// furnished to do so, subject to the following conditions:
-//
-// The above copyright notice and this permission notice shall be included in
-// all copies or substantial portions of the Software.
-//
-// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
-// THE SOFTWARE.
-
 package testing
 
 import (
 	"time"
 
-	"github.com/pborman/uuid"
+	"github.com/google/uuid"
 	commonpb "go.temporal.io/api/common/v1"
 	enumspb "go.temporal.io/api/enums/v1"
 	failurepb "go.temporal.io/api/failure/v1"
@@ -166,7 +142,7 @@ func InitializeHistoryEventGenerator(
 		historyEvent.Attributes = &historypb.HistoryEvent_WorkflowTaskStartedEventAttributes{WorkflowTaskStartedEventAttributes: &historypb.WorkflowTaskStartedEventAttributes{
 			ScheduledEventId: lastEvent.EventId,
 			Identity:         identity,
-			RequestId:        uuid.New(),
+			RequestId:        uuid.NewString(),
 		}}
 		return historyEvent
 	})
@@ -250,7 +226,7 @@ func InitializeHistoryEventGenerator(
 			WorkflowRunTimeout:       durationpb.New(timeout),
 			WorkflowTaskTimeout:      durationpb.New(timeout),
 			Identity:                 identity,
-			FirstExecutionRunId:      uuid.New(),
+			FirstExecutionRunId:      uuid.NewString(),
 			Attempt:                  1,
 		}}
 		return historyEvent
@@ -288,7 +264,7 @@ func InitializeHistoryEventGenerator(
 		historyEvent := getDefaultHistoryEvent(eventID, version)
 		historyEvent.EventType = enumspb.EVENT_TYPE_WORKFLOW_EXECUTION_CONTINUED_AS_NEW
 		historyEvent.Attributes = &historypb.HistoryEvent_WorkflowExecutionContinuedAsNewEventAttributes{WorkflowExecutionContinuedAsNewEventAttributes: &historypb.WorkflowExecutionContinuedAsNewEventAttributes{
-			NewExecutionRunId: uuid.New(),
+			NewExecutionRunId: uuid.NewString(),
 			WorkflowType: &commonpb.WorkflowType{
 				Name: workflowType,
 			},
@@ -340,7 +316,7 @@ func InitializeHistoryEventGenerator(
 			ExternalInitiatedEventId: 1,
 			ExternalWorkflowExecution: &commonpb.WorkflowExecution{
 				WorkflowId: externalWorkflowID,
-				RunId:      uuid.New(),
+				RunId:      uuid.NewString(),
 			},
 			Identity: identity,
 		}}
@@ -397,7 +373,7 @@ func InitializeHistoryEventGenerator(
 		historyEvent := getDefaultHistoryEvent(eventID, version)
 		historyEvent.EventType = enumspb.EVENT_TYPE_ACTIVITY_TASK_SCHEDULED
 		historyEvent.Attributes = &historypb.HistoryEvent_ActivityTaskScheduledEventAttributes{ActivityTaskScheduledEventAttributes: &historypb.ActivityTaskScheduledEventAttributes{
-			ActivityId:   uuid.New(),
+			ActivityId:   uuid.NewString(),
 			ActivityType: &commonpb.ActivityType{Name: "activity"},
 			TaskQueue: &taskqueuepb.TaskQueue{
 				Name: taskQueue,
@@ -421,7 +397,7 @@ func InitializeHistoryEventGenerator(
 		historyEvent.Attributes = &historypb.HistoryEvent_ActivityTaskStartedEventAttributes{ActivityTaskStartedEventAttributes: &historypb.ActivityTaskStartedEventAttributes{
 			ScheduledEventId: lastEvent.EventId,
 			Identity:         identity,
-			RequestId:        uuid.New(),
+			RequestId:        uuid.NewString(),
 			Attempt:          1,
 		}}
 		return historyEvent
@@ -551,7 +527,7 @@ func InitializeHistoryEventGenerator(
 		historyEvent := getDefaultHistoryEvent(eventID, version)
 		historyEvent.EventType = enumspb.EVENT_TYPE_TIMER_STARTED
 		historyEvent.Attributes = &historypb.HistoryEvent_TimerStartedEventAttributes{TimerStartedEventAttributes: &historypb.TimerStartedEventAttributes{
-			TimerId:                      uuid.New(),
+			TimerId:                      uuid.NewString(),
 			StartToFireTimeout:           durationpb.New(10 * time.Second),
 			WorkflowTaskCompletedEventId: lastEvent.EventId,
 		}}
@@ -658,7 +634,7 @@ func InitializeHistoryEventGenerator(
 			InitiatedEventId: lastEvent.EventId,
 			WorkflowExecution: &commonpb.WorkflowExecution{
 				WorkflowId: childWorkflowID,
-				RunId:      uuid.New(),
+				RunId:      uuid.NewString(),
 			},
 		}}
 		return historyEvent
@@ -811,7 +787,7 @@ func InitializeHistoryEventGenerator(
 			NamespaceId:                  nsID.String(),
 			WorkflowExecution: &commonpb.WorkflowExecution{
 				WorkflowId: externalWorkflowID,
-				RunId:      uuid.New(),
+				RunId:      uuid.NewString(),
 			},
 			SignalName:        "signal",
 			ChildWorkflowOnly: false,
@@ -873,7 +849,7 @@ func InitializeHistoryEventGenerator(
 				NamespaceId:                  nsID.String(),
 				WorkflowExecution: &commonpb.WorkflowExecution{
 					WorkflowId: externalWorkflowID,
-					RunId:      uuid.New(),
+					RunId:      uuid.NewString(),
 				},
 				ChildWorkflowOnly: false,
 			}}

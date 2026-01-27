@@ -1,27 +1,3 @@
-// The MIT License
-//
-// Copyright (c) 2020 Temporal Technologies Inc.  All rights reserved.
-//
-// Copyright (c) 2020 Uber Technologies, Inc.
-//
-// Permission is hereby granted, free of charge, to any person obtaining a copy
-// of this software and associated documentation files (the "Software"), to deal
-// in the Software without restriction, including without limitation the rights
-// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-// copies of the Software, and to permit persons to whom the Software is
-// furnished to do so, subject to the following conditions:
-//
-// The above copyright notice and this permission notice shall be included in
-// all copies or substantial portions of the Software.
-//
-// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
-// THE SOFTWARE.
-
 package frontend
 
 import (
@@ -43,7 +19,7 @@ import (
 	"go.temporal.io/server/common/future"
 	"go.temporal.io/server/common/namespace"
 	"go.temporal.io/server/common/persistence/visibility/manager"
-	"go.temporal.io/server/common/searchattribute"
+	"go.temporal.io/server/common/searchattribute/sadefs"
 	"go.temporal.io/server/common/util"
 	"go.temporal.io/server/common/worker_versioning"
 )
@@ -193,7 +169,7 @@ func (wh *WorkflowHandler) getTaskQueueReachability(ctx context.Context, request
 		}
 
 		// Query workflows that have completed tasks marked with a sentinel "unversioned" search attribute.
-		buildIdsFilter = fmt.Sprintf(`%s = "%s"`, searchattribute.BuildIds, worker_versioning.UnversionedSearchAttribute)
+		buildIdsFilter = fmt.Sprintf(`%s = "%s"`, sadefs.BuildIds, worker_versioning.UnversionedSearchAttribute)
 	} else { // Query for a versioned worker
 		setIdx, buildIdIdx := worker_versioning.FindBuildId(request.versioningData, request.buildId)
 		if setIdx == -1 {
@@ -223,7 +199,7 @@ func (wh *WorkflowHandler) getTaskQueueReachability(ctx context.Context, request
 				escapedBuildIds = append(escapedBuildIds, sqlparser.String(sqlparser.NewStrVal([]byte(worker_versioning.VersionedBuildIdSearchAttribute(buildId.Id)))))
 			}
 		}
-		buildIdsFilter = fmt.Sprintf("%s IN (%s)", searchattribute.BuildIds, strings.Join(escapedBuildIds, ","))
+		buildIdsFilter = fmt.Sprintf("%s IN (%s)", sadefs.BuildIds, strings.Join(escapedBuildIds, ","))
 	}
 
 	if reachableByNewWorkflows {
@@ -235,7 +211,7 @@ func (wh *WorkflowHandler) getTaskQueueReachability(ctx context.Context, request
 	if isDefaultInQueue {
 		// Take into account started workflows that have not yet been processed by any worker.
 		if request.reachabilityType != enumspb.TASK_REACHABILITY_CLOSED_WORKFLOWS {
-			buildIdsFilter = fmt.Sprintf("(%s IS NULL OR %s)", searchattribute.BuildIds, buildIdsFilter)
+			buildIdsFilter = fmt.Sprintf("(%s IS NULL OR %s)", sadefs.BuildIds, buildIdsFilter)
 		}
 	}
 
@@ -257,9 +233,9 @@ func (wh *WorkflowHandler) queryVisibilityForExistingWorkflowsReachability(
 	statusFilter := ""
 	switch reachabilityType {
 	case enumspb.TASK_REACHABILITY_OPEN_WORKFLOWS:
-		statusFilter = fmt.Sprintf(` AND %s = "Running"`, searchattribute.ExecutionStatus)
+		statusFilter = fmt.Sprintf(` AND %s = "Running"`, sadefs.ExecutionStatus)
 	case enumspb.TASK_REACHABILITY_CLOSED_WORKFLOWS:
-		statusFilter = fmt.Sprintf(` AND %s != "Running"`, searchattribute.ExecutionStatus)
+		statusFilter = fmt.Sprintf(` AND %s != "Running"`, sadefs.ExecutionStatus)
 	case enumspb.TASK_REACHABILITY_UNSPECIFIED:
 		reachabilityType = enumspb.TASK_REACHABILITY_EXISTING_WORKFLOWS
 		statusFilter = ""
@@ -268,7 +244,7 @@ func (wh *WorkflowHandler) queryVisibilityForExistingWorkflowsReachability(
 	case enumspb.TASK_REACHABILITY_NEW_WORKFLOWS:
 		return nil, nil
 	default:
-		return nil, serviceerror.NewInvalidArgument(fmt.Sprintf("Unsupported reachability type: %v", reachabilityType))
+		return nil, serviceerror.NewInvalidArgumentf("Unsupported reachability type: %v", reachabilityType)
 	}
 
 	escapedTaskQueue := sqlparser.String(sqlparser.NewStrVal([]byte(taskQueue)))
@@ -276,7 +252,7 @@ func (wh *WorkflowHandler) queryVisibilityForExistingWorkflowsReachability(
 	req := manager.CountWorkflowExecutionsRequest{
 		NamespaceID: ns.ID(),
 		Namespace:   ns.Name(),
-		Query:       fmt.Sprintf("%s = %s AND %s%s", searchattribute.TaskQueue, escapedTaskQueue, buildIdsFilter, statusFilter),
+		Query:       fmt.Sprintf("%s = %s AND %s%s", sadefs.TaskQueue, escapedTaskQueue, buildIdsFilter, statusFilter),
 	}
 
 	// TODO(bergundy): is count more efficient than select with page size of 1?

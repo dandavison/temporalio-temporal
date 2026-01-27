@@ -1,37 +1,13 @@
-// The MIT License
-//
-// Copyright (c) 2020 Temporal Technologies Inc.  All rights reserved.
-//
-// Copyright (c) 2020 Uber Technologies, Inc.
-//
-// Permission is hereby granted, free of charge, to any person obtaining a copy
-// of this software and associated documentation files (the "Software"), to deal
-// in the Software without restriction, including without limitation the rights
-// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-// copies of the Software, and to permit persons to whom the Software is
-// furnished to do so, subject to the following conditions:
-//
-// The above copyright notice and this permission notice shall be included in
-// all copies or substantial portions of the Software.
-//
-// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
-// THE SOFTWARE.
-
 package shard
 
 import (
 	"fmt"
 	"time"
 
+	"go.temporal.io/server/common"
 	"go.temporal.io/server/common/clock"
 	"go.temporal.io/server/common/log"
 	"go.temporal.io/server/common/log/tag"
-	"go.temporal.io/server/common/persistence"
 	"go.temporal.io/server/common/util"
 	"go.temporal.io/server/service/history/tasks"
 )
@@ -79,7 +55,7 @@ func (a *taskKeyGenerator) setTaskKeys(
 	now := a.timeSource.Now()
 	// TODO: Truncation here is just to make sure task scheduled time has the same precision as the old logic.
 	// Remove this truncation once we validate the rest of the code can worker correctly with higher precision.
-	a.setTaskMinScheduledTime(now.Truncate(persistence.ScheduledTaskMinPrecision))
+	a.setTaskMinScheduledTime(now.Truncate(common.ScheduledTaskMinPrecision))
 
 	for _, taskMap := range taskMaps {
 		for category, tasksByCategory := range taskMap {
@@ -98,21 +74,23 @@ func (a *taskKeyGenerator) setTaskKeys(
 					// so that if the comparsion in the next step passes, it's guaranteed
 					// the task can be retrieved from DB by queue processor.
 					taskScheduledTime = task.GetVisibilityTime().
-						Add(persistence.ScheduledTaskMinPrecision).
-						Truncate(persistence.ScheduledTaskMinPrecision)
+						Add(common.ScheduledTaskMinPrecision).
+						Truncate(common.ScheduledTaskMinPrecision)
 
 					if taskScheduledTime.Before(a.taskMinScheduledTime) {
 						a.logger.Debug("New timer generated is less than min scheduled time",
 							tag.WorkflowNamespaceID(task.GetNamespaceID()),
 							tag.WorkflowID(task.GetWorkflowID()),
 							tag.WorkflowRunID(task.GetRunID()),
+							tag.TaskType(task.GetType()),
+							tag.TaskID(id),
 							tag.Timestamp(taskScheduledTime),
 							tag.CursorTimestamp(a.taskMinScheduledTime),
 							tag.ValueShardAllocateTimerBeforeRead,
 						)
 						// Theoritically we don't need to add the extra 1ms.
 						// Guess it's just to be extra safe here.
-						taskScheduledTime = a.taskMinScheduledTime.Add(persistence.ScheduledTaskMinPrecision)
+						taskScheduledTime = a.taskMinScheduledTime.Add(common.ScheduledTaskMinPrecision)
 					}
 				}
 				task.SetVisibilityTime(taskScheduledTime)

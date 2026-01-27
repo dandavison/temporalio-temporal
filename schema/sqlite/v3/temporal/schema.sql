@@ -54,7 +54,28 @@ CREATE TABLE current_executions(
 	status INT NOT NULL,
 	start_time TIMESTAMP NULL,
 	last_write_version BIGINT NOT NULL,
+	-- `data` contains the WorkflowExecutionState (same as in `executions.state` above)
+	data MEDIUMBLOB NOT NULL,
+	data_encoding VARCHAR(16) NOT NULL DEFAULT '',
 	PRIMARY KEY (shard_id, namespace_id, workflow_id)
+);
+
+CREATE TABLE current_chasm_executions(
+	shard_id INT NOT NULL,
+	namespace_id BINARY(16) NOT NULL,
+	business_id VARCHAR(255) NOT NULL,
+	archetype_id BIGINT NOT NULL,
+	--
+	run_id BINARY(16) NOT NULL,
+	create_request_id VARCHAR(255) NOT NULL,
+	state INT NOT NULL,
+	status INT NOT NULL,
+	start_time TIMESTAMP NULL,
+	last_write_version BIGINT NOT NULL,
+	-- `data` contains the ExecutionState (same as in `executions.state` above)
+	data MEDIUMBLOB NOT NULL,
+	data_encoding VARCHAR(16) NOT NULL DEFAULT '',
+	PRIMARY KEY (shard_id, namespace_id, business_id, archetype_id)
 );
 
 CREATE TABLE buffered_events (
@@ -81,6 +102,30 @@ CREATE TABLE tasks (
 
 -- Stores ephemeral task queue information such as ack levels and expiry times
 CREATE TABLE task_queues (
+	range_hash INT UNSIGNED NOT NULL,
+	task_queue_id VARBINARY(272) NOT NULL,
+	--
+	range_id BIGINT NOT NULL,
+	data MEDIUMBLOB NOT NULL,
+	data_encoding VARCHAR(16) NOT NULL,
+	PRIMARY KEY (range_hash, task_queue_id)
+);
+
+-- Stores activity or workflow tasks
+-- Used for fairness scheduling. (pass, task_id) are monotonically increasing.
+CREATE TABLE tasks_v2 (
+	range_hash INT UNSIGNED NOT NULL,
+	task_queue_id VARBINARY(272) NOT NULL,
+	pass BIGINT NOT NULL, -- pass for tasks (see stride scheduling algorithm for fairness)
+	task_id BIGINT NOT NULL,
+	--
+	data MEDIUMBLOB NOT NULL,
+	data_encoding VARCHAR(16) NOT NULL,
+	PRIMARY KEY (range_hash, task_queue_id, pass, task_id)
+);
+
+-- Stores ephemeral task queue information such as ack levels and expiry times
+CREATE TABLE task_queues_v2 (
 	range_hash INT UNSIGNED NOT NULL,
 	task_queue_id VARBINARY(272) NOT NULL,
 	--
@@ -245,6 +290,20 @@ CREATE TABLE signals_requested_sets (
 	signal_id VARCHAR(255) NOT NULL,
 	--
 	PRIMARY KEY (shard_id, namespace_id, workflow_id, run_id, signal_id)
+);
+
+CREATE TABLE chasm_node_maps (
+  shard_id INT NOT NULL,
+  namespace_id BINARY(16) NOT NULL,
+  workflow_id VARCHAR(255) NOT NULL,
+  run_id BINARY(16) NOT NULL,
+  chasm_path BINARY(1536) NOT NULL,
+--
+  metadata MEDIUMBLOB NOT NULL,
+  metadata_encoding VARCHAR(16),
+  data MEDIUMBLOB,
+  data_encoding VARCHAR(16),
+  PRIMARY KEY (shard_id, namespace_id, workflow_id, run_id, chasm_path)
 );
 
 -- history eventsV2: history_node stores history event data

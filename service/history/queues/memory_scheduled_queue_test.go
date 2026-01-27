@@ -1,27 +1,3 @@
-// The MIT License
-//
-// Copyright (c) 2020 Temporal Technologies Inc.  All rights reserved.
-//
-// Copyright (c) 2020 Uber Technologies, Inc.
-//
-// Permission is hereby granted, free of charge, to any person obtaining a copy
-// of this software and associated documentation files (the "Software"), to deal
-// in the Software without restriction, including without limitation the rights
-// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-// copies of the Software, and to permit persons to whom the Software is
-// furnished to do so, subject to the following conditions:
-//
-// The above copyright notice and this permission notice shall be included in
-// all copies or substantial portions of the Software.
-//
-// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
-// THE SOFTWARE.
-
 package queues
 
 import (
@@ -32,11 +8,16 @@ import (
 
 	"github.com/stretchr/testify/require"
 	"github.com/stretchr/testify/suite"
+	"go.temporal.io/server/chasm"
 	"go.temporal.io/server/common/clock"
+	"go.temporal.io/server/common/cluster"
 	"go.temporal.io/server/common/log"
 	"go.temporal.io/server/common/metrics"
+	"go.temporal.io/server/common/namespace"
 	ctasks "go.temporal.io/server/common/tasks"
+	"go.temporal.io/server/common/telemetry"
 	"go.temporal.io/server/service/history/tasks"
+	"go.temporal.io/server/service/history/tests"
 	"go.uber.org/mock/gomock"
 )
 
@@ -45,9 +26,11 @@ type (
 		suite.Suite
 		*require.Assertions
 
-		controller     *gomock.Controller
-		mockTimeSource *clock.EventTimeSource
-		mockScheduler  *ctasks.MockScheduler[ctasks.Task]
+		controller            *gomock.Controller
+		mockTimeSource        *clock.EventTimeSource
+		mockScheduler         *ctasks.MockScheduler[ctasks.Task]
+		mockClusterMetadata   *cluster.MockMetadata
+		mockNamespaceRegistry *namespace.MockRegistry
 
 		scheduledQueue *memoryScheduledQueue
 	}
@@ -64,6 +47,10 @@ func (s *memoryScheduledQueueSuite) SetupTest() {
 	s.controller = gomock.NewController(s.T())
 	s.mockTimeSource = clock.NewEventTimeSource()
 	s.mockTimeSource.Update(time.Now().UTC())
+	s.mockClusterMetadata = cluster.NewMockMetadata(s.controller)
+	s.mockClusterMetadata.EXPECT().GetCurrentClusterName().Return(cluster.TestCurrentClusterName).AnyTimes()
+	s.mockNamespaceRegistry = namespace.NewMockRegistry(s.controller)
+	s.mockNamespaceRegistry.EXPECT().GetNamespaceByID(gomock.Any()).Return(tests.LocalNamespaceEntry, nil).AnyTimes()
 
 	s.mockScheduler = ctasks.NewMockScheduler[ctasks.Task](s.controller)
 	s.mockScheduler.EXPECT().Start().AnyTimes()
@@ -179,10 +166,13 @@ func (s *memoryScheduledQueueSuite) newSpeculativeWorkflowTaskTimeoutTestExecuta
 			nil,
 			NewNoopPriorityAssigner(),
 			s.mockTimeSource,
+			s.mockNamespaceRegistry,
+			s.mockClusterMetadata,
+			chasm.NewRegistry(log.NewTestLogger()),
+			GetTaskTypeTagValue,
 			nil,
-			nil,
-			nil,
-			nil,
+			metrics.NoopMetricsHandler,
+			telemetry.NoopTracer,
 		),
 		wttt,
 	)

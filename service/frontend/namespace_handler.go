@@ -1,40 +1,16 @@
-// The MIT License
-//
-// Copyright (c) 2020 Temporal Technologies Inc.  All rights reserved.
-//
-// Copyright (c) 2020 Uber Technologies, Inc.
-//
-// Permission is hereby granted, free of charge, to any person obtaining a copy
-// of this software and associated documentation files (the "Software"), to deal
-// in the Software without restriction, including without limitation the rights
-// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-// copies of the Software, and to permit persons to whom the Software is
-// furnished to do so, subject to the following conditions:
-//
-// The above copyright notice and this permission notice shall be included in
-// all copies or substantial portions of the Software.
-//
-// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
-// THE SOFTWARE.
-
-//go:generate mockgen -copyright_file ../../LICENSE -package $GOPACKAGE -source $GOFILE -destination namespace_handler_mock.go
+//go:generate mockgen -package $GOPACKAGE -source $GOFILE -destination namespace_handler_mock.go
 
 package frontend
 
 import (
 	"context"
-	"fmt"
 	"time"
 
-	"github.com/pborman/uuid"
+	"github.com/google/uuid"
 	enumspb "go.temporal.io/api/enums/v1"
 	namespacepb "go.temporal.io/api/namespace/v1"
 	replicationpb "go.temporal.io/api/replication/v1"
+	rulespb "go.temporal.io/api/rules/v1"
 	"go.temporal.io/api/serviceerror"
 	"go.temporal.io/api/workflowservice/v1"
 	enumsspb "go.temporal.io/server/api/enums/v1"
@@ -47,8 +23,9 @@ import (
 	"go.temporal.io/server/common/log"
 	"go.temporal.io/server/common/log/tag"
 	"go.temporal.io/server/common/namespace"
+	"go.temporal.io/server/common/namespace/nsmanager"
+	"go.temporal.io/server/common/namespace/nsreplication"
 	"go.temporal.io/server/common/persistence"
-	"go.temporal.io/server/common/primitives"
 	"go.temporal.io/server/common/primitives/timestamp"
 	"go.temporal.io/server/common/util"
 	"google.golang.org/protobuf/types/known/durationpb"
@@ -62,8 +39,8 @@ type (
 		logger                 log.Logger
 		metadataMgr            persistence.MetadataManager
 		clusterMetadata        cluster.Metadata
-		namespaceReplicator    namespace.Replicator
-		namespaceAttrValidator *namespace.AttrValidatorImpl
+		namespaceReplicator    nsreplication.Replicator
+		namespaceAttrValidator *nsmanager.Validator
 		archivalMetadata       archiver.ArchivalMetadata
 		archiverProvider       provider.ArchiverProvider
 		timeSource             clock.TimeSource
@@ -90,7 +67,7 @@ func newNamespaceHandler(
 	logger log.Logger,
 	metadataMgr persistence.MetadataManager,
 	clusterMetadata cluster.Metadata,
-	namespaceReplicator namespace.Replicator,
+	namespaceReplicator nsreplication.Replicator,
 	archivalMetadata archiver.ArchivalMetadata,
 	archiverProvider provider.ArchiverProvider,
 	timeSource clock.TimeSource,
@@ -101,7 +78,7 @@ func newNamespaceHandler(
 		metadataMgr:            metadataMgr,
 		clusterMetadata:        clusterMetadata,
 		namespaceReplicator:    namespaceReplicator,
-		namespaceAttrValidator: namespace.NewAttrValidator(clusterMetadata),
+		namespaceAttrValidator: nsmanager.NewValidator(clusterMetadata),
 		archivalMetadata:       archivalMetadata,
 		archiverProvider:       archiverProvider,
 		timeSource:             timeSource,
@@ -130,7 +107,7 @@ func (d *namespaceHandler) RegisterNamespace(
 		}
 	}
 
-	if err := validateRetentionDuration(
+	if err := d.validateRetentionDuration(
 		registerRequest.WorkflowExecutionRetentionPeriod,
 		registerRequest.IsGlobalNamespace,
 	); err != nil {
@@ -142,7 +119,7 @@ func (d *namespaceHandler) RegisterNamespace(
 	switch err.(type) {
 	case nil:
 		// namespace already exists, cannot proceed
-		return nil, serviceerror.NewNamespaceAlreadyExists("Namespace already exists.")
+		return nil, serviceerror.NewNamespaceAlreadyExistsf("Namespace %q already exists", registerRequest.GetNamespace())
 	case *serviceerror.NamespaceNotFound:
 		// namespace does not exists, proceeds
 	default:
@@ -205,7 +182,7 @@ func (d *namespaceHandler) RegisterNamespace(
 	}
 
 	info := &persistencespb.NamespaceInfo{
-		Id:          uuid.New(),
+		Id:          uuid.NewString(),
 		Name:        registerRequest.GetNamespace(),
 		State:       enumspb.NAMESPACE_STATE_REGISTERED,
 		Owner:       registerRequest.GetOwnerEmail(),
@@ -464,7 +441,7 @@ func (d *namespaceHandler) UpdateNamespace(
 			configurationChanged = true
 
 			config.Retention = updatedConfig.GetWorkflowExecutionRetentionTtl()
-			if err := validateRetentionDuration(
+			if err := d.validateRetentionDuration(
 				config.Retention,
 				isGlobalNamespace,
 			); err != nil {
@@ -487,7 +464,7 @@ func (d *namespaceHandler) UpdateNamespace(
 			bb := d.mergeBadBinaries(config.BadBinaries.Binaries, updatedConfig.BadBinaries.Binaries, time.Now().UTC())
 			config.BadBinaries = &bb
 			if len(config.BadBinaries.Binaries) > maxLength {
-				return nil, serviceerror.NewInvalidArgument(fmt.Sprintf("Total resetBinaries cannot exceed the max limit: %v", maxLength))
+				return nil, serviceerror.NewInvalidArgumentf("Total resetBinaries cannot exceed the max limit: %v", maxLength)
 			}
 		}
 		if len(updatedConfig.CustomSearchAttributeAliases) > 0 {
@@ -507,7 +484,7 @@ func (d *namespaceHandler) UpdateNamespace(
 		binChecksum := updateRequest.GetDeleteBadBinary()
 		_, ok := config.BadBinaries.Binaries[binChecksum]
 		if !ok {
-			return nil, serviceerror.NewInvalidArgument(fmt.Sprintf("Bad binary checksum %v doesn't exists.", binChecksum))
+			return nil, serviceerror.NewInvalidArgumentf("Bad binary checksum %v doesn't exists.", binChecksum)
 		}
 		configurationChanged = true
 		delete(config.BadBinaries.Binaries, binChecksum)
@@ -536,6 +513,7 @@ func (d *namespaceHandler) UpdateNamespace(
 		if updateReplicationConfig.GetActiveClusterName() != "" {
 			activeClusterChanged = true
 			replicationConfig.ActiveClusterName = updateReplicationConfig.GetActiveClusterName()
+			replicationConfig.State = enumspb.REPLICATION_STATE_NORMAL
 		}
 	}
 
@@ -549,8 +527,8 @@ func (d *namespaceHandler) UpdateNamespace(
 			return nil, err
 		}
 		if !d.clusterMetadata.IsGlobalNamespaceEnabled() {
-			return nil, serviceerror.NewInvalidArgument(fmt.Sprintf("global namespace is not enabled on this "+
-				"cluster, cannot update global namespace or promote local namespace: %v", updateRequest.Namespace))
+			return nil, serviceerror.NewInvalidArgumentf("global namespace is not enabled on this "+
+				"cluster, cannot update global namespace or promote local namespace: %v", updateRequest.Namespace)
 		}
 	} else {
 		if err := d.namespaceAttrValidator.ValidateNamespaceReplicationConfigForLocalNamespace(
@@ -682,11 +660,193 @@ func (d *namespaceHandler) DeprecateNamespace(
 	return nil, nil
 }
 
+func (d *namespaceHandler) CreateWorkflowRule(
+	ctx context.Context,
+	ruleSpec *rulespb.WorkflowRuleSpec,
+	createdByIdentity string,
+	description string,
+	nsName string,
+) (*rulespb.WorkflowRule, error) {
+
+	if ruleSpec.GetId() == "" {
+		return nil, serviceerror.NewInvalidArgument("Workflow Rule ID is not set.")
+	}
+
+	metadata, err := d.metadataMgr.GetMetadata(ctx)
+	if err != nil {
+		return nil, err
+	}
+	getNamespaceResponse, err := d.metadataMgr.GetNamespace(ctx, &persistence.GetNamespaceRequest{Name: nsName})
+	if err != nil {
+		return nil, err
+	}
+
+	existingNamespace := getNamespaceResponse.Namespace
+	config := getNamespaceResponse.Namespace.Config
+
+	if config.WorkflowRules == nil {
+		config.WorkflowRules = make(map[string]*rulespb.WorkflowRule)
+	} else {
+		maxRules := d.config.MaxWorkflowRulesPerNamespace(nsName)
+		if len(config.WorkflowRules) >= maxRules {
+			d.removeOldestExpiredWorkflowRule(nsName, config.WorkflowRules)
+		}
+		if len(config.WorkflowRules) >= maxRules {
+			return nil, serviceerror.NewInvalidArgumentf("Workflow Rule limit exceeded. Max: %v", maxRules)
+		}
+	}
+
+	_, ok := config.WorkflowRules[ruleSpec.GetId()]
+	if ok {
+		return nil, serviceerror.NewInvalidArgument("Workflow Rule with this ID already exists.")
+	}
+
+	workflowRule := &rulespb.WorkflowRule{
+		Spec:              ruleSpec,
+		CreateTime:        timestamppb.New(d.timeSource.Now()),
+		CreatedByIdentity: createdByIdentity,
+		Description:       description,
+	}
+	config.WorkflowRules[ruleSpec.GetId()] = workflowRule
+
+	updateReq := &persistence.UpdateNamespaceRequest{
+		Namespace: &persistencespb.NamespaceDetail{
+			Info:                        existingNamespace.Info,
+			Config:                      config,
+			ReplicationConfig:           existingNamespace.ReplicationConfig,
+			ConfigVersion:               existingNamespace.ConfigVersion + 1,
+			FailoverVersion:             existingNamespace.FailoverVersion,
+			FailoverNotificationVersion: existingNamespace.FailoverNotificationVersion,
+		},
+		IsGlobalNamespace:   getNamespaceResponse.IsGlobalNamespace,
+		NotificationVersion: metadata.NotificationVersion,
+	}
+	err = d.metadataMgr.UpdateNamespace(ctx, updateReq)
+	if err != nil {
+		return nil, err
+	}
+
+	return workflowRule, nil
+}
+
+func (d *namespaceHandler) removeOldestExpiredWorkflowRule(nsName string, rules map[string]*rulespb.WorkflowRule) {
+	oldestTime := d.timeSource.Now()
+	var oldestKey string
+	found := false
+
+	for key, rule := range rules {
+		expirationTime := rule.GetSpec().GetExpirationTime()
+		if expirationTime == nil {
+			continue
+		}
+		if !found || expirationTime.AsTime().Before(oldestTime) {
+			oldestTime = expirationTime.AsTime()
+			oldestKey = key
+			found = true
+		}
+	}
+
+	if found {
+		d.logger.Info(
+			"Removed expired workflow rule",
+			tag.WorkflowRuleID(oldestKey),
+			tag.WorkflowNamespace(nsName),
+		)
+		delete(rules, oldestKey)
+	}
+}
+
+func (d *namespaceHandler) DescribeWorkflowRule(
+	ctx context.Context, ruleID string, nsName string,
+) (*rulespb.WorkflowRule, error) {
+	getNamespaceResponse, err := d.metadataMgr.GetNamespace(ctx, &persistence.GetNamespaceRequest{Name: nsName})
+	if err != nil {
+		return nil, err
+	}
+
+	if getNamespaceResponse.Namespace.Config.WorkflowRules == nil {
+		return nil, serviceerror.NewInvalidArgument("Workflow Rule with this ID not Found.")
+	}
+
+	rule, ok := getNamespaceResponse.Namespace.Config.WorkflowRules[ruleID]
+	if !ok {
+		return nil, serviceerror.NewInvalidArgument("Workflow Rule with this ID not Found.")
+	}
+
+	return rule, nil
+}
+
+func (d *namespaceHandler) DeleteWorkflowRule(
+	ctx context.Context, ruleID string, nsName string,
+) error {
+	if ruleID == "" {
+		return serviceerror.NewInvalidArgument("Workflow Rule ID is not set.")
+	}
+
+	metadata, err := d.metadataMgr.GetMetadata(ctx)
+	if err != nil {
+		return err
+	}
+
+	getNamespaceResponse, err := d.metadataMgr.GetNamespace(ctx, &persistence.GetNamespaceRequest{Name: nsName})
+	if err != nil {
+		return err
+	}
+
+	existingNamespace := getNamespaceResponse.Namespace
+	config := getNamespaceResponse.Namespace.Config
+	if config.WorkflowRules == nil {
+		return serviceerror.NewInvalidArgument("Workflow Rule with this ID not Found.")
+	}
+	_, ok := config.WorkflowRules[ruleID]
+	if !ok {
+		return serviceerror.NewInvalidArgument("Workflow Rule with this ID not Found.")
+	}
+
+	delete(config.WorkflowRules, ruleID)
+
+	updateReq := &persistence.UpdateNamespaceRequest{
+		Namespace: &persistencespb.NamespaceDetail{
+			Info:                        existingNamespace.Info,
+			Config:                      config,
+			ReplicationConfig:           existingNamespace.ReplicationConfig,
+			ConfigVersion:               existingNamespace.ConfigVersion + 1,
+			FailoverVersion:             existingNamespace.FailoverVersion,
+			FailoverNotificationVersion: existingNamespace.FailoverNotificationVersion,
+		},
+		IsGlobalNamespace:   getNamespaceResponse.IsGlobalNamespace,
+		NotificationVersion: metadata.NotificationVersion,
+	}
+	return d.metadataMgr.UpdateNamespace(ctx, updateReq)
+}
+
+func (d *namespaceHandler) ListWorkflowRules(
+	ctx context.Context, nsName string,
+) ([]*rulespb.WorkflowRule, error) {
+	getNamespaceResponse, err := d.metadataMgr.GetNamespace(ctx, &persistence.GetNamespaceRequest{Name: nsName})
+	if err != nil {
+		return nil, err
+	}
+
+	workflowRulesMap := getNamespaceResponse.Namespace.Config.WorkflowRules
+	if workflowRulesMap == nil {
+		return []*rulespb.WorkflowRule{}, nil
+	}
+
+	workflowRules := make([]*rulespb.WorkflowRule, 0, len(workflowRulesMap))
+	for _, rule := range workflowRulesMap {
+		workflowRules = append(workflowRules, rule)
+	}
+	return workflowRules, nil
+}
+
 func (d *namespaceHandler) createResponse(
 	info *persistencespb.NamespaceInfo,
 	config *persistencespb.NamespaceConfig,
 	replicationConfig *persistencespb.NamespaceReplicationConfig,
 ) (*namespacepb.NamespaceInfo, *namespacepb.NamespaceConfig, *replicationpb.NamespaceReplicationConfig, []*replicationpb.FailoverStatus) {
+
+	numConsecutiveWorkflowTaskProblemsToTriggerSearchAttribute := d.config.NumConsecutiveWorkflowTaskProblemsToTriggerSearchAttribute(info.Name)
 
 	infoResult := &namespacepb.NamespaceInfo{
 		Name:        info.Name,
@@ -697,9 +857,17 @@ func (d *namespaceHandler) createResponse(
 		Id:          info.Id,
 
 		Capabilities: &namespacepb.NamespaceInfo_Capabilities{
-			EagerWorkflowStart: d.config.EnableEagerWorkflowStart(info.Name),
-			SyncUpdate:         d.config.EnableUpdateWorkflowExecution(info.Name),
-			AsyncUpdate:        d.config.EnableUpdateWorkflowExecutionAsyncAccepted(info.Name),
+			EagerWorkflowStart:              d.config.EnableEagerWorkflowStart(info.Name),
+			SyncUpdate:                      d.config.EnableUpdateWorkflowExecution(info.Name),
+			AsyncUpdate:                     d.config.EnableUpdateWorkflowExecutionAsyncAccepted(info.Name),
+			ReportedProblemsSearchAttribute: numConsecutiveWorkflowTaskProblemsToTriggerSearchAttribute > 0,
+			WorkerHeartbeats:                d.config.WorkerHeartbeatsEnabled(info.Name),
+			WorkflowPause:                   d.config.WorkflowPauseEnabled(info.Name),
+			StandaloneActivities:            d.config.Activity.Enabled(info.Name),
+		},
+		Limits: &namespacepb.NamespaceInfo_Limits{
+			BlobSizeLimitError: int64(d.config.BlobSizeLimitError(info.Name)),
+			MemoSizeLimitError: int64(d.config.MemoSizeLimitError(info.Name)),
 		},
 		SupportsSchedules: d.config.EnableSchedules(info.Name),
 	}
@@ -723,6 +891,7 @@ func (d *namespaceHandler) createResponse(
 	replicationConfigResult := &replicationpb.NamespaceReplicationConfig{
 		ActiveClusterName: replicationConfig.ActiveClusterName,
 		Clusters:          clusters,
+		State:             replicationConfig.GetState(),
 	}
 
 	var failoverHistory []*replicationpb.FailoverStatus
@@ -829,12 +998,12 @@ func (d *namespaceHandler) validateHistoryArchivalURI(URIString string) error {
 		return err
 	}
 
-	archiver, err := d.archiverProvider.GetHistoryArchiver(URI.Scheme(), string(primitives.FrontendService))
+	a, err := d.archiverProvider.GetHistoryArchiver(URI.Scheme())
 	if err != nil {
 		return err
 	}
 
-	return archiver.ValidateURI(URI)
+	return a.ValidateURI(URI)
 }
 
 func (d *namespaceHandler) validateVisibilityArchivalURI(URIString string) error {
@@ -843,12 +1012,12 @@ func (d *namespaceHandler) validateVisibilityArchivalURI(URIString string) error
 		return err
 	}
 
-	archiver, err := d.archiverProvider.GetVisibilityArchiver(URI.Scheme(), string(primitives.FrontendService))
+	a, err := d.archiverProvider.GetVisibilityArchiver(URI.Scheme())
 	if err != nil {
 		return err
 	}
 
-	return archiver.ValidateURI(URI)
+	return a.ValidateURI(URI)
 }
 
 // maybeUpdateFailoverHistory adds an entry if the Namespace is becoming active in a new cluster.
@@ -889,16 +1058,19 @@ func (d *namespaceHandler) maybeUpdateFailoverHistory(
 }
 
 // validateRetentionDuration ensures that retention duration can't be set below a sane minimum.
-func validateRetentionDuration(retention *durationpb.Duration, isGlobalNamespace bool) error {
-	if err := timestamp.ValidateProtoDuration(retention); err != nil {
+func (d *namespaceHandler) validateRetentionDuration(retention *durationpb.Duration, isGlobalNamespace bool) error {
+	if err := timestamp.ValidateAndCapProtoDuration(retention); err != nil {
 		return errInvalidRetentionPeriod
 	}
 
-	min := namespace.MinRetentionLocal
+	var minRetention time.Duration
 	if isGlobalNamespace {
-		min = namespace.MinRetentionGlobal
+		minRetention = d.config.NamespaceMinRetentionGlobal()
+	} else {
+		minRetention = d.config.NamespaceMinRetentionLocal()
 	}
-	if timestamp.DurationValue(retention) < min {
+
+	if timestamp.DurationValue(retention) < minRetention {
 		return errInvalidRetentionPeriod
 	}
 	return nil
@@ -912,22 +1084,18 @@ func validateReplicationStateUpdate(existingNamespace *persistence.GetNamespaceR
 	}
 
 	if existingNamespace.Namespace.Info.State != enumspb.NAMESPACE_STATE_REGISTERED {
-		return serviceerror.NewInvalidArgument(
-			fmt.Sprintf(
-				"update ReplicationState is only supported when namespace is in %s state, current state: %s",
-				enumspb.NAMESPACE_STATE_REGISTERED.String(),
-				existingNamespace.Namespace.Info.State.String(),
-			),
+		return serviceerror.NewInvalidArgumentf(
+			"update ReplicationState is only supported when namespace is in %s state, current state: %s",
+			enumspb.NAMESPACE_STATE_REGISTERED,
+			existingNamespace.Namespace.Info.State,
 		)
 	}
 
 	if nsUpdateRequest.ReplicationConfig.State == enumspb.REPLICATION_STATE_HANDOVER {
 		if !existingNamespace.IsGlobalNamespace {
-			return serviceerror.NewInvalidArgument(
-				fmt.Sprintf(
-					"%s can only be set for global namespace",
-					enumspb.REPLICATION_STATE_HANDOVER,
-				),
+			return serviceerror.NewInvalidArgumentf(
+				"%s can only be set for global namespace",
+				enumspb.REPLICATION_STATE_HANDOVER,
 			)
 		}
 		// verify namespace has more than 1 replication clusters
@@ -936,7 +1104,7 @@ func validateReplicationStateUpdate(existingNamespace *persistence.GetNamespaceR
 			replicationClusterCount = len(nsUpdateRequest.ReplicationConfig.Clusters)
 		}
 		if replicationClusterCount < 2 {
-			return serviceerror.NewInvalidArgument(fmt.Sprintf("%s require more than one replication clusters", enumspb.REPLICATION_STATE_HANDOVER))
+			return serviceerror.NewInvalidArgumentf("%s require more than one replication clusters", enumspb.REPLICATION_STATE_HANDOVER)
 		}
 	}
 	return nil

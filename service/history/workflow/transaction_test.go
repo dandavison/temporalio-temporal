@@ -1,27 +1,3 @@
-// The MIT License
-//
-// Copyright (c) 2020 Temporal Technologies Inc.  All rights reserved.
-//
-// Copyright (c) 2020 Uber Technologies, Inc.
-//
-// Permission is hereby granted, free of charge, to any person obtaining a copy
-// of this software and associated documentation files (the "Software"), to deal
-// in the Software without restriction, including without limitation the rights
-// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-// copies of the Software, and to permit persons to whom the Software is
-// furnished to do so, subject to the following conditions:
-//
-// The above copyright notice and this permission notice shall be included in
-// all copies or substantial portions of the Software.
-//
-// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
-// THE SOFTWARE.
-
 package workflow
 
 import (
@@ -31,13 +7,21 @@ import (
 
 	"github.com/stretchr/testify/require"
 	"github.com/stretchr/testify/suite"
+	enumspb "go.temporal.io/api/enums/v1"
 	"go.temporal.io/api/serviceerror"
+	enumsspb "go.temporal.io/server/api/enums/v1"
+	historyspb "go.temporal.io/server/api/history/v1"
 	persistencespb "go.temporal.io/server/api/persistence/v1"
+	"go.temporal.io/server/chasm"
+	"go.temporal.io/server/common/cluster"
+	"go.temporal.io/server/common/cluster/clustertest"
 	"go.temporal.io/server/common/log"
+	"go.temporal.io/server/common/metrics"
+	"go.temporal.io/server/common/metrics/metricstest"
 	"go.temporal.io/server/common/namespace"
 	"go.temporal.io/server/common/persistence"
 	"go.temporal.io/server/common/util"
-	"go.temporal.io/server/service/history/shard"
+	historyi "go.temporal.io/server/service/history/interfaces"
 	"go.temporal.io/server/service/history/tests"
 	"go.uber.org/mock/gomock"
 )
@@ -48,8 +32,8 @@ type (
 		*require.Assertions
 
 		controller         *gomock.Controller
-		mockShard          *shard.MockContext
-		mockEngine         *shard.MockEngine
+		mockShard          *historyi.MockShardContext
+		mockEngine         *historyi.MockEngine
 		mockNamespaceCache *namespace.MockRegistry
 
 		logger log.Logger
@@ -67,8 +51,8 @@ func (s *transactionSuite) SetupTest() {
 	s.Assertions = require.New(s.T())
 
 	s.controller = gomock.NewController(s.T())
-	s.mockShard = shard.NewMockContext(s.controller)
-	s.mockEngine = shard.NewMockEngine(s.controller)
+	s.mockShard = historyi.NewMockShardContext(s.controller)
+	s.mockEngine = historyi.NewMockEngine(s.controller)
 	s.mockNamespaceCache = namespace.NewMockRegistry(s.controller)
 	s.logger = log.NewTestLogger()
 
@@ -106,13 +90,13 @@ func (s *transactionSuite) TestOperationMayApplied() {
 	}
 
 	for _, tc := range testCases {
-		s.Equal(tc.mayApplied, shard.OperationPossiblySucceeded(tc.err))
+		s.Equal(tc.mayApplied, persistence.OperationPossiblySucceeded(tc.err))
 	}
 }
 
 func (s *transactionSuite) TestCreateWorkflowExecution_NotifyTaskWhenFailed() {
 	timeoutErr := &persistence.TimeoutError{}
-	s.True(shard.OperationPossiblySucceeded(timeoutErr))
+	s.True(persistence.OperationPossiblySucceeded(timeoutErr))
 
 	s.mockShard.EXPECT().CreateWorkflowExecution(gomock.Any(), gomock.Any()).Return(nil, timeoutErr)
 	s.setupMockForTaskNotification()
@@ -120,6 +104,7 @@ func (s *transactionSuite) TestCreateWorkflowExecution_NotifyTaskWhenFailed() {
 	_, err := s.transaction.CreateWorkflowExecution(
 		context.Background(),
 		persistence.CreateWorkflowModeBrandNew,
+		chasm.WorkflowArchetypeID,
 		0,
 		&persistence.WorkflowSnapshot{
 			ExecutionInfo: &persistencespb.WorkflowExecutionInfo{
@@ -131,13 +116,14 @@ func (s *transactionSuite) TestCreateWorkflowExecution_NotifyTaskWhenFailed() {
 			},
 		},
 		[]*persistence.WorkflowEvents{},
+		true, // isWorkflow
 	)
 	s.Equal(timeoutErr, err)
 }
 
 func (s *transactionSuite) TestUpdateWorkflowExecution_NotifyTaskWhenFailed() {
 	timeoutErr := &persistence.TimeoutError{}
-	s.True(shard.OperationPossiblySucceeded(timeoutErr))
+	s.True(persistence.OperationPossiblySucceeded(timeoutErr))
 
 	s.mockShard.EXPECT().UpdateWorkflowExecution(gomock.Any(), gomock.Any()).Return(nil, timeoutErr)
 	s.setupMockForTaskNotification() // for current workflow mutation
@@ -146,6 +132,7 @@ func (s *transactionSuite) TestUpdateWorkflowExecution_NotifyTaskWhenFailed() {
 	_, _, err := s.transaction.UpdateWorkflowExecution(
 		context.Background(),
 		persistence.UpdateWorkflowModeUpdateCurrent,
+		chasm.WorkflowArchetypeID,
 		0,
 		&persistence.WorkflowMutation{
 			ExecutionInfo: &persistencespb.WorkflowExecutionInfo{
@@ -160,13 +147,91 @@ func (s *transactionSuite) TestUpdateWorkflowExecution_NotifyTaskWhenFailed() {
 		util.Ptr(int64(0)),
 		&persistence.WorkflowSnapshot{},
 		[]*persistence.WorkflowEvents{},
+		true, // isWorkflow
 	)
 	s.Equal(timeoutErr, err)
 }
 
+func (s *transactionSuite) TestUpdateWorkflowExecution_CompletionMetrics() {
+	metricsHandler := metricstest.NewCaptureHandler()
+	s.mockShard.EXPECT().GetMetricsHandler().Return(metricsHandler).AnyTimes()
+	s.mockShard.EXPECT().GetClusterMetadata().Return(clustertest.NewMetadataForTest(cluster.NewTestClusterMetadataConfig(true, true))).AnyTimes()
+	s.mockShard.EXPECT().GetConfig().Return(tests.NewDynamicConfig()).AnyTimes()
+
+	s.mockShard.EXPECT().UpdateWorkflowExecution(gomock.Any(), gomock.Any()).Return(tests.UpdateWorkflowExecutionResponse, nil).AnyTimes()
+	s.mockEngine.EXPECT().NotifyNewTasks(gomock.Any()).AnyTimes()
+	s.mockEngine.EXPECT().NotifyNewHistoryEvent(gomock.Any()).AnyTimes()
+
+	cases := []struct {
+		name                   string
+		updateMode             persistence.UpdateWorkflowMode
+		expectCompletionMetric bool
+	}{
+		{
+			name:                   "UpdateCurrent",
+			updateMode:             persistence.UpdateWorkflowModeUpdateCurrent,
+			expectCompletionMetric: true,
+		},
+		{
+			name:                   "BypassCurrent",
+			updateMode:             persistence.UpdateWorkflowModeBypassCurrent,
+			expectCompletionMetric: true,
+		},
+		{
+			name:                   "IgnoreCurrent",
+			updateMode:             persistence.UpdateWorkflowModeIgnoreCurrent,
+			expectCompletionMetric: false,
+		},
+	}
+
+	for _, tc := range cases {
+		s.T().Run(tc.name, func(t *testing.T) {
+
+			capture := metricsHandler.StartCapture()
+
+			_, _, err := s.transaction.UpdateWorkflowExecution(
+				context.Background(),
+				tc.updateMode,
+				chasm.WorkflowArchetypeID,
+				0,
+				&persistence.WorkflowMutation{
+					ExecutionInfo: &persistencespb.WorkflowExecutionInfo{
+						NamespaceId:      tests.NamespaceID.String(),
+						WorkflowId:       tests.WorkflowID,
+						VersionHistories: &historyspb.VersionHistories{},
+					},
+					ExecutionState: &persistencespb.WorkflowExecutionState{
+						RunId:  tests.RunID,
+						Status: enumspb.WORKFLOW_EXECUTION_STATUS_COMPLETED,
+						State:  enumsspb.WORKFLOW_EXECUTION_STATE_COMPLETED,
+					},
+				},
+				[]*persistence.WorkflowEvents{},
+				nil,
+				nil,
+				nil,
+				true, // isWorkflow
+			)
+			s.NoError(err)
+
+			snapshot := capture.Snapshot()
+			completionMetric := snapshot[metrics.WorkflowSuccessCount.Name()]
+
+			if tc.expectCompletionMetric {
+				s.Len(completionMetric, 1)
+			} else {
+				s.Empty(completionMetric)
+			}
+
+			metricsHandler.StopCapture(capture)
+		})
+	}
+
+}
+
 func (s *transactionSuite) TestConflictResolveWorkflowExecution_NotifyTaskWhenFailed() {
 	timeoutErr := &persistence.TimeoutError{}
-	s.True(shard.OperationPossiblySucceeded(timeoutErr))
+	s.True(persistence.OperationPossiblySucceeded(timeoutErr))
 
 	s.mockShard.EXPECT().ConflictResolveWorkflowExecution(gomock.Any(), gomock.Any()).Return(nil, timeoutErr)
 	s.setupMockForTaskNotification() // for reset workflow snapshot
@@ -176,6 +241,7 @@ func (s *transactionSuite) TestConflictResolveWorkflowExecution_NotifyTaskWhenFa
 	_, _, _, err := s.transaction.ConflictResolveWorkflowExecution(
 		context.Background(),
 		persistence.ConflictResolveWorkflowModeUpdateCurrent,
+		chasm.WorkflowArchetypeID,
 		0,
 		&persistence.WorkflowSnapshot{
 			ExecutionInfo: &persistencespb.WorkflowExecutionInfo{
@@ -193,6 +259,88 @@ func (s *transactionSuite) TestConflictResolveWorkflowExecution_NotifyTaskWhenFa
 		util.Ptr(int64(0)),
 		&persistence.WorkflowMutation{},
 		[]*persistence.WorkflowEvents{},
+		true, // isWorkflow
+	)
+	s.Equal(timeoutErr, err)
+}
+
+func (s *transactionSuite) TestConflictResolveWorkflowExecution_NotifyChasmExecution() {
+	timeoutErr := &persistence.TimeoutError{}
+	s.True(persistence.OperationPossiblySucceeded(timeoutErr))
+
+	resetWorkflowSnapshot := &persistence.WorkflowSnapshot{
+		ExecutionInfo: &persistencespb.WorkflowExecutionInfo{
+			NamespaceId: tests.NamespaceID.String(),
+			WorkflowId:  tests.WorkflowID,
+		},
+		ExecutionState: &persistencespb.WorkflowExecutionState{
+			RunId: tests.RunID,
+		},
+		ChasmNodes: map[string]*persistencespb.ChasmNode{
+			"path1": {},
+		},
+	}
+	newWorkflowSnapshot := &persistence.WorkflowSnapshot{
+		ExecutionInfo: &persistencespb.WorkflowExecutionInfo{
+			NamespaceId: tests.NamespaceID.String(),
+			WorkflowId:  tests.WorkflowID,
+		},
+		ExecutionState: &persistencespb.WorkflowExecutionState{
+			RunId: "new-run-id",
+		},
+		ChasmNodes: map[string]*persistencespb.ChasmNode{
+			"path2": {},
+		},
+	}
+	currentWorkflowMutation := &persistence.WorkflowMutation{
+		ExecutionInfo: &persistencespb.WorkflowExecutionInfo{
+			NamespaceId: tests.NamespaceID.String(),
+			WorkflowId:  tests.WorkflowID,
+		},
+		ExecutionState: &persistencespb.WorkflowExecutionState{
+			RunId: "current-run-id",
+		},
+		UpsertChasmNodes: map[string]*persistencespb.ChasmNode{
+			"path3": {},
+		},
+	}
+
+	s.mockShard.EXPECT().ConflictResolveWorkflowExecution(gomock.Any(), gomock.Any()).Return(nil, timeoutErr)
+	s.setupMockForTaskNotification() // for reset workflow snapshot
+	s.setupMockForTaskNotification() // for new workflow snapshot
+	s.setupMockForTaskNotification() // for current workflow mutation
+
+	// Expect CHASM notifications for all three workflows
+	s.mockEngine.EXPECT().NotifyChasmExecution(chasm.ExecutionKey{
+		NamespaceID: tests.NamespaceID.String(),
+		BusinessID:  tests.WorkflowID,
+		RunID:       tests.RunID,
+	}, gomock.Any()).Times(1)
+	s.mockEngine.EXPECT().NotifyChasmExecution(chasm.ExecutionKey{
+		NamespaceID: tests.NamespaceID.String(),
+		BusinessID:  tests.WorkflowID,
+		RunID:       "new-run-id",
+	}, gomock.Any()).Times(1)
+	s.mockEngine.EXPECT().NotifyChasmExecution(chasm.ExecutionKey{
+		NamespaceID: tests.NamespaceID.String(),
+		BusinessID:  tests.WorkflowID,
+		RunID:       "current-run-id",
+	}, gomock.Any()).Times(1)
+
+	_, _, _, err := s.transaction.ConflictResolveWorkflowExecution(
+		context.Background(),
+		persistence.ConflictResolveWorkflowModeUpdateCurrent,
+		chasm.WorkflowArchetypeID,
+		0,
+		resetWorkflowSnapshot,
+		[]*persistence.WorkflowEvents{},
+		util.Ptr(int64(0)),
+		newWorkflowSnapshot,
+		[]*persistence.WorkflowEvents{},
+		util.Ptr(int64(0)),
+		currentWorkflowMutation,
+		[]*persistence.WorkflowEvents{},
+		true, // isWorkflow
 	)
 	s.Equal(timeoutErr, err)
 }

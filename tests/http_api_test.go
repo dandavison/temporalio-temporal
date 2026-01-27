@@ -1,27 +1,3 @@
-// The MIT License
-//
-// Copyright (c) 2020 Temporal Technologies Inc.  All rights reserved.
-//
-// Copyright (c) 2020 Uber Technologies, Inc.
-//
-// Permission is hereby granted, free of charge, to any person obtaining a copy
-// of this software and associated documentation files (the "Software"), to deal
-// in the Software without restriction, including without limitation the rights
-// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-// copies of the Software, and to permit persons to whom the Software is
-// furnished to do so, subject to the following conditions:
-//
-// The above copyright notice and this permission notice shall be included in
-// all copies or substantial portions of the Software.
-//
-// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
-// THE SOFTWARE.
-
 package tests
 
 import (
@@ -34,14 +10,15 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/suite"
-	"go.temporal.io/api/common/v1"
+	commonpb "go.temporal.io/api/common/v1"
 	enumspb "go.temporal.io/api/enums/v1"
-	"go.temporal.io/api/query/v1"
-	"go.temporal.io/api/taskqueue/v1"
+	querypb "go.temporal.io/api/query/v1"
+	taskqueuepb "go.temporal.io/api/taskqueue/v1"
 	"go.temporal.io/api/workflowservice/v1"
 	"go.temporal.io/sdk/converter"
 	"go.temporal.io/sdk/workflow"
 	"go.temporal.io/server/common/authorization"
+	"go.temporal.io/server/common/dynamicconfig"
 	"go.temporal.io/server/common/headers"
 	"go.temporal.io/server/common/metrics"
 	"go.temporal.io/server/tests/testcore"
@@ -54,9 +31,9 @@ type SomeJSONStruct struct {
 	SomeField string `json:"someField"`
 }
 
-func jsonPayload(data string) *common.Payloads {
-	return &common.Payloads{
-		Payloads: []*common.Payload{{
+func jsonPayload(data string) *commonpb.Payloads {
+	return &commonpb.Payloads{
+		Payloads: []*commonpb.Payload{{
 			Metadata: map[string][]byte{
 				converter.MetadataEncoding: []byte(converter.MetadataEncodingJSON),
 			},
@@ -66,7 +43,7 @@ func jsonPayload(data string) *common.Payloads {
 }
 
 type HttpApiTestSuite struct {
-	testcore.ClientFunctionalSuite
+	testcore.FunctionalTestBase
 }
 
 func TestHttpApiTestSuite(t *testing.T) {
@@ -112,7 +89,7 @@ func (s *HttpApiTestSuite) runHTTPAPIBasicsTest(
 
 	// Start
 	workflowID := testcore.RandomizeStr("wf")
-	_, respBody := s.httpPost(http.StatusOK, "/namespaces/"+s.Namespace()+"/workflows/"+workflowID, contentType, startWFRequestBody())
+	_, respBody := s.httpPost(http.StatusOK, "/namespaces/"+s.Namespace().String()+"/workflows/"+workflowID, contentType, startWFRequestBody())
 	var startResp struct {
 		RunID string `json:"runId"`
 	}
@@ -125,7 +102,7 @@ func (s *HttpApiTestSuite) runHTTPAPIBasicsTest(
 	for _, metric := range capture.Snapshot()[metrics.HTTPServiceRequests.Name()] {
 		found =
 			metric.Tags[metrics.OperationTagName] == "/temporal.api.workflowservice.v1.WorkflowService/StartWorkflowExecution" &&
-				metric.Tags["namespace"] == s.Namespace() &&
+				metric.Tags["namespace"] == s.Namespace().String() &&
 				metric.Value == int64(1)
 		if found {
 			break
@@ -134,7 +111,7 @@ func (s *HttpApiTestSuite) runHTTPAPIBasicsTest(
 	s.Require().True(found)
 
 	// Confirm already exists error with details and proper code
-	_, respBody = s.httpPost(http.StatusConflict, "/namespaces/"+s.Namespace()+"/workflows/"+workflowID, contentType, startWFRequestBody())
+	_, respBody = s.httpPost(http.StatusConflict, "/namespaces/"+s.Namespace().String()+"/workflows/"+workflowID, contentType, startWFRequestBody())
 	var errResp struct {
 		Message string `json:"message"`
 		Details []struct {
@@ -148,7 +125,7 @@ func (s *HttpApiTestSuite) runHTTPAPIBasicsTest(
 	// Query
 	_, respBody = s.httpPost(
 		http.StatusOK,
-		"/namespaces/"+s.Namespace()+"/workflows/"+workflowID+"/query/some-query",
+		"/namespaces/"+s.Namespace().String()+"/workflows/"+workflowID+"/query/some-query",
 		contentType,
 		queryBody(),
 	)
@@ -157,7 +134,7 @@ func (s *HttpApiTestSuite) runHTTPAPIBasicsTest(
 	// Signal which also completes the workflow
 	s.httpPost(
 		http.StatusOK,
-		"/namespaces/"+s.Namespace()+"/workflows/"+workflowID+"/signal/some-signal",
+		"/namespaces/"+s.Namespace().String()+"/workflows/"+workflowID+"/signal/some-signal",
 		contentType,
 		signalBody(),
 	)
@@ -166,7 +143,7 @@ func (s *HttpApiTestSuite) runHTTPAPIBasicsTest(
 	_, respBody = s.httpGet(
 		http.StatusOK,
 		// Our version of gRPC gateway only supports integer enums in queries :-(
-		"/namespaces/"+s.Namespace()+"/workflows/"+workflowID+"/history?historyEventFilterType=2",
+		"/namespaces/"+s.Namespace().String()+"/workflows/"+workflowID+"/history?historyEventFilterType=2",
 		contentType,
 	)
 	verifyHistory(s, respBody)
@@ -195,8 +172,8 @@ func (s *HttpApiTestSuite) runHTTPAPIBasicsTest_Protojson(contentType string, pr
 	// These are callbacks because the worker needs to be initialized so we can get the task queue
 	reqBody := func() string {
 		requestBody, err := protojson.Marshal(&workflowservice.StartWorkflowExecutionRequest{
-			WorkflowType: &common.WorkflowType{Name: "http-basic-workflow"},
-			TaskQueue:    &taskqueue.TaskQueue{Name: s.TaskQueue()},
+			WorkflowType: &commonpb.WorkflowType{Name: "http-basic-workflow"},
+			TaskQueue:    &taskqueuepb.TaskQueue{Name: s.TaskQueue()},
 			Input:        jsonPayload(`{ "someField": "workflow-arg" }`),
 		})
 		s.Require().NoError(err)
@@ -204,7 +181,7 @@ func (s *HttpApiTestSuite) runHTTPAPIBasicsTest_Protojson(contentType string, pr
 	}
 	queryBody := func() string {
 		queryBody, err := protojson.Marshal(&workflowservice.QueryWorkflowRequest{
-			Query: &query.WorkflowQuery{
+			Query: &querypb.WorkflowQuery{
 				QueryArgs: jsonPayload(`{ "someField": "query-arg" }`),
 			},
 		})
@@ -307,6 +284,26 @@ func (s *HttpApiTestSuite) runHTTPAPIBasicsTest_Shorthand(contentType string, pr
 	s.runHTTPAPIBasicsTest(contentType, reqBody, queryBody, signalBody, verifyQueryResult, verifyHistory)
 }
 
+func (s *HttpApiTestSuite) TestHTTPHostValidation() {
+	s.OverrideDynamicConfig(dynamicconfig.FrontendHTTPAllowedHosts, []string{"allowed"})
+	{
+		req, err := http.NewRequest("GET", "/system-info", nil)
+		s.Require().NoError(err)
+		req.Host = "allowed"
+		req.Header.Add("Accept", "application/json")
+		req.Header.Add("Content-Type", "application/json")
+		s.httpRequest(http.StatusOK, req)
+	}
+	{
+		req, err := http.NewRequest("GET", "/system-info", nil)
+		s.Require().NoError(err)
+		req.Host = "not-allowed"
+		req.Header.Add("Accept", "application/json")
+		req.Header.Add("Content-Type", "application/json")
+		s.httpRequest(http.StatusForbidden, req)
+	}
+}
+
 func (s *HttpApiTestSuite) TestHTTPAPIHeaders() {
 	if s.HttpAPIAddress() == "" {
 		s.T().Skip("HTTP API server not enabled")
@@ -337,7 +334,7 @@ func (s *HttpApiTestSuite) TestHTTPAPIHeaders() {
 	})
 
 	// Make a simple list call that we don't care about the result
-	req, err := http.NewRequest("GET", "/namespaces/"+s.Namespace()+"/workflows", nil)
+	req, err := http.NewRequest("GET", "/namespaces/"+s.Namespace().String()+"/workflows", nil)
 	s.Require().NoError(err)
 	req.Header.Set("Authorization", "my-auth-token")
 	req.Header.Set("X-Forwarded-For", "1.2.3.4:5678")
@@ -415,7 +412,7 @@ func (s *HttpApiTestSuite) httpRequest(expectedStatus int, req *http.Request) (*
 func (s *HttpApiTestSuite) TestHTTPAPI_OperatorService_ListSearchAttributes() {
 	_, respBody := s.httpGet(
 		http.StatusOK,
-		"/cluster/namespaces/"+s.Namespace()+"/search-attributes",
+		"/cluster/namespaces/"+s.Namespace().String()+"/search-attributes",
 		"application/json",
 	)
 	s.T().Log(string(respBody))

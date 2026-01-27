@@ -1,37 +1,15 @@
-// The MIT License
-//
-// Copyright (c) 2022 Temporal Technologies Inc.  All rights reserved.
-//
-// Copyright (c) 2020 Uber Technologies, Inc.
-//
-// Permission is hereby granted, free of charge, to any person obtaining a copy
-// of this software and associated documentation files (the "Software"), to deal
-// in the Software without restriction, including without limitation the rights
-// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-// copies of the Software, and to permit persons to whom the Software is
-// furnished to do so, subject to the following conditions:
-//
-// The above copyright notice and this permission notice shall be included in
-// all copies or substantial portions of the Software.
-//
-// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
-// THE SOFTWARE.
-
 package batcher
 
 import (
 	"go.temporal.io/api/workflowservice/v1"
 	sdkworker "go.temporal.io/sdk/worker"
 	"go.temporal.io/sdk/workflow"
+	"go.temporal.io/server/api/adminservice/v1"
 	"go.temporal.io/server/common/dynamicconfig"
 	"go.temporal.io/server/common/log"
 	"go.temporal.io/server/common/metrics"
 	"go.temporal.io/server/common/namespace"
+	"go.temporal.io/server/common/resource"
 	"go.temporal.io/server/common/sdk"
 	workercommon "go.temporal.io/server/service/worker/common"
 	"go.uber.org/fx"
@@ -39,8 +17,10 @@ import (
 
 const (
 	// BatchWFTypeName is the workflow type
-	BatchWFTypeName   = "temporal-sys-batch-workflow"
-	NamespaceDivision = "TemporalBatcher"
+	BatchWFTypeName         = "temporal-sys-batch-workflow"
+	BatchWFTypeProtobufName = "temporal-sys-batch-workflow-protobuf"
+	NamespaceDivision       = "TemporalBatcher"
+	AdminNamespaceDivision  = "TemporalAdminBatcher"
 )
 
 type (
@@ -56,6 +36,8 @@ type (
 		Logger         log.Logger
 		ClientFactory  sdk.ClientFactory
 		FrontendClient workflowservice.WorkflowServiceClient
+		AdminClient    adminservice.AdminServiceClient
+		HistoryClient  resource.HistoryClient
 	}
 
 	fxResult struct {
@@ -90,7 +72,11 @@ func (s *workerComponent) DedicatedWorkerOptions(ns *namespace.Namespace) *worke
 }
 
 func (s *workerComponent) Register(registry sdkworker.Registry, ns *namespace.Namespace, _ workercommon.RegistrationDetails) func() {
-	registry.RegisterWorkflowWithOptions(BatchWorkflow, workflow.RegisterOptions{Name: BatchWFTypeName})
+	// Register the batch workflow with both the proto-qualified and unqualified types.
+	// TODO(spkane31): Remove the proto-qualified type and call the unqualified type from the frontend after the 1.30 release.
+	registry.RegisterWorkflowWithOptions(BatchWorkflowProtobuf, workflow.RegisterOptions{Name: BatchWFTypeName})
+	// Newer version of the batch workflow which was rewritten to accept a proto struct as input.
+	registry.RegisterWorkflowWithOptions(BatchWorkflowProtobuf, workflow.RegisterOptions{Name: BatchWFTypeProtobufName})
 	registry.RegisterActivity(s.activities(ns.Name(), ns.ID()))
 	return nil
 }

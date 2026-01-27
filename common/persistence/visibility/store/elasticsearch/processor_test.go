@@ -1,27 +1,3 @@
-// The MIT License
-//
-// Copyright (c) 2020 Temporal Technologies Inc.  All rights reserved.
-//
-// Copyright (c) 2020 Uber Technologies, Inc.
-//
-// Permission is hereby granted, free of charge, to any person obtaining a copy
-// of this software and associated documentation files (the "Software"), to deal
-// in the Software without restriction, including without limitation the rights
-// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-// copies of the Software, and to permit persons to whom the Software is
-// furnished to do so, subject to the following conditions:
-//
-// The above copyright notice and this permission notice shall be included in
-// all copies or substantial portions of the Software.
-//
-// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
-// THE SOFTWARE.
-
 package elasticsearch
 
 import (
@@ -41,7 +17,7 @@ import (
 	"go.temporal.io/server/common/log"
 	"go.temporal.io/server/common/metrics"
 	"go.temporal.io/server/common/persistence/visibility/store/elasticsearch/client"
-	"go.temporal.io/server/common/searchattribute"
+	"go.temporal.io/server/common/searchattribute/sadefs"
 	"go.uber.org/mock/gomock"
 )
 
@@ -264,7 +240,7 @@ func (s *processorSuite) TestBulkAfterAction_Ack() {
 		Index(testIndex).
 		Id(testID).
 		Version(version).
-		Doc(map[string]interface{}{searchattribute.VisibilityTaskKey: testKey})
+		Doc(map[string]interface{}{sadefs.VisibilityTaskKey: testKey})
 	requests := []elastic.BulkableRequest{request}
 
 	mSuccess := map[string]*elastic.BulkResponseItem{
@@ -310,10 +286,10 @@ func (s *processorSuite) TestBulkAfterAction_Nack() {
 		Id(testID).
 		Version(version).
 		Doc(map[string]interface{}{
-			searchattribute.VisibilityTaskKey: testKey,
-			searchattribute.NamespaceID:       namespaceID,
-			searchattribute.WorkflowID:        wid,
-			searchattribute.RunID:             rid,
+			sadefs.VisibilityTaskKey: testKey,
+			sadefs.NamespaceID:       namespaceID,
+			sadefs.WorkflowID:        wid,
+			sadefs.RunID:             rid,
 		})
 	requests := []elastic.BulkableRequest{request}
 
@@ -354,7 +330,7 @@ func (s *processorSuite) TestBulkAfterAction_Nack() {
 func (s *processorSuite) TestBulkAfterAction_Error() {
 	version := int64(3)
 	doc := map[string]interface{}{
-		searchattribute.VisibilityTaskKey: "str",
+		sadefs.VisibilityTaskKey: "str",
 	}
 
 	request := elastic.NewBulkIndexRequest().
@@ -391,7 +367,7 @@ func (s *processorSuite) TestBulkBeforeAction() {
 		Index(testIndex).
 		Id(testID).
 		Version(version).
-		Doc(map[string]interface{}{searchattribute.VisibilityTaskKey: testKey})
+		Doc(map[string]interface{}{sadefs.VisibilityTaskKey: testKey})
 	requests := []elastic.BulkableRequest{request}
 
 	counterMetric := metrics.NewMockCounterIface(s.controller)
@@ -463,13 +439,13 @@ func (s *processorSuite) TestExtractVisibilityTaskKey() {
 	s.Equal("", visibilityTaskKey)
 
 	m := map[string]interface{}{
-		searchattribute.VisibilityTaskKey: 1,
+		sadefs.VisibilityTaskKey: 1,
 	}
 	request.Doc(m)
 	s.Panics(func() { s.esProcessor.extractVisibilityTaskKey(request) })
 
 	testKey := "test-key"
-	m[searchattribute.VisibilityTaskKey] = testKey
+	m[sadefs.VisibilityTaskKey] = testKey
 	request.Doc(m)
 	s.Equal(testKey, s.esProcessor.extractVisibilityTaskKey(request))
 }
@@ -558,7 +534,7 @@ func (s *processorSuite) Test_End2End() {
 					Index(testIndex).
 					Id(docId).
 					Version(version).
-					Doc(map[string]interface{}{searchattribute.VisibilityTaskKey: testKey})
+					Doc(map[string]interface{}{sadefs.VisibilityTaskKey: testKey})
 
 				mSuccess := map[string]*elastic.BulkResponseItem{
 					"index": {

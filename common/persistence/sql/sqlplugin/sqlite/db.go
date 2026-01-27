@@ -1,29 +1,3 @@
-// The MIT License
-//
-// Copyright (c) 2021 Datadog, Inc.
-//
-// Copyright (c) 2020 Temporal Technologies Inc.  All rights reserved.
-//
-// Copyright (c) 2020 Uber Technologies, Inc.
-//
-// Permission is hereby granted, free of charge, to any person obtaining a copy
-// of this software and associated documentation files (the "Software"), to deal
-// in the Software without restriction, including without limitation the rights
-// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-// copies of the Software, and to permit persons to whom the Software is
-// furnished to do so, subject to the following conditions:
-//
-// The above copyright notice and this permission notice shall be included in
-// all copies or substantial portions of the Software.
-//
-// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
-// THE SOFTWARE.
-
 package sqlite
 
 import (
@@ -32,6 +6,7 @@ import (
 	"sync"
 
 	"github.com/jmoiron/sqlx"
+	"go.temporal.io/server/common/log"
 	"go.temporal.io/server/common/persistence/sql/sqlplugin"
 	sqliteschema "go.temporal.io/server/schema/sqlite"
 )
@@ -48,6 +23,7 @@ type db struct {
 	tx        *sqlx.Tx
 	conn      sqlplugin.Conn
 	converter DataConverter
+	logger    log.Logger
 }
 
 var _ sqlplugin.AdminDB = (*db)(nil)
@@ -61,6 +37,7 @@ func newDB(
 	dbName string,
 	xdb *sqlx.DB,
 	tx *sqlx.Tx,
+	logger log.Logger,
 ) *db {
 	mdb := &db{
 		dbKind:  dbKind,
@@ -68,6 +45,7 @@ func newDB(
 		onClose: make([]func(), 0),
 		db:      xdb,
 		tx:      tx,
+		logger:  logger,
 	}
 	mdb.conn = xdb
 	if tx != nil {
@@ -83,7 +61,7 @@ func (mdb *db) BeginTx(ctx context.Context) (sqlplugin.Tx, error) {
 	if err != nil {
 		return nil, err
 	}
-	return newDB(mdb.dbKind, mdb.dbName, mdb.db, xtx), nil
+	return newDB(mdb.dbKind, mdb.dbName, mdb.db, xtx, mdb.logger), nil
 }
 
 // Commit commits a previously started transaction

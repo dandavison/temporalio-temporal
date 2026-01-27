@@ -1,27 +1,3 @@
-// The MIT License
-//
-// Copyright (c) 2020 Temporal Technologies Inc.  All rights reserved.
-//
-// Copyright (c) 2020 Uber Technologies, Inc.
-//
-// Permission is hereby granted, free of charge, to any person obtaining a copy
-// of this software and associated documentation files (the "Software"), to deal
-// in the Software without restriction, including without limitation the rights
-// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-// copies of the Software, and to permit persons to whom the Software is
-// furnished to do so, subject to the following conditions:
-//
-// The above copyright notice and this permission notice shall be included in
-// all copies or substantial portions of the Software.
-//
-// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
-// THE SOFTWARE.
-
 package matching
 
 import (
@@ -39,7 +15,7 @@ import (
 )
 
 const (
-	taskReaderOfferTimeout        = 60 * time.Second
+	taskReaderOfferTimeout        = 60 * time.Second // TODO(pri): old matcher cleanup
 	taskReaderValidationThreshold = 600 * time.Second
 )
 
@@ -63,7 +39,7 @@ type (
 	}
 
 	taskValidatorImpl struct {
-		newIOContextFn    func() (context.Context, context.CancelFunc)
+		tqCtx             context.Context
 		clusterMetadata   cluster.Metadata
 		namespaceRegistry namespace.Registry
 		historyClient     historyservice.HistoryServiceClient
@@ -73,13 +49,13 @@ type (
 )
 
 func newTaskValidator(
-	newIOContextFn func() (context.Context, context.CancelFunc),
+	tqCtx context.Context,
 	clusterMetadata cluster.Metadata,
 	namespaceRegistry namespace.Registry,
 	historyClient historyservice.HistoryServiceClient,
 ) *taskValidatorImpl {
 	return &taskValidatorImpl{
-		newIOContextFn:    newIOContextFn,
+		tqCtx:             tqCtx,
 		clusterMetadata:   clusterMetadata,
 		namespaceRegistry: namespaceRegistry,
 		historyClient:     historyClient,
@@ -114,7 +90,7 @@ func (v *taskValidatorImpl) preValidate(
 		// if cannot find the namespace entry, treat task as active
 		return v.preValidateActive(task)
 	}
-	if v.clusterMetadata.GetCurrentClusterName() == namespaceEntry.ActiveClusterName() {
+	if v.clusterMetadata.GetCurrentClusterName() == namespaceEntry.ActiveClusterName(task.Data.WorkflowId) {
 		return v.preValidateActive(task)
 	}
 	return v.preValidatePassive(task)
@@ -181,7 +157,7 @@ func (v *taskValidatorImpl) isTaskValid(
 	task *persistencespb.AllocatedTaskInfo,
 	taskType enumspb.TaskQueueType,
 ) (bool, error) {
-	ctx, cancel := v.newIOContextFn()
+	ctx, cancel := context.WithTimeout(v.tqCtx, ioTimeout)
 	defer cancel()
 
 	namespaceID := task.Data.NamespaceId
@@ -198,6 +174,7 @@ func (v *taskValidatorImpl) isTaskValid(
 			},
 			Clock:            task.Data.Clock,
 			ScheduledEventId: task.Data.ScheduledEventId,
+			Stamp:            task.Data.GetStamp(),
 		})
 		switch err.(type) {
 		case nil:
@@ -216,6 +193,7 @@ func (v *taskValidatorImpl) isTaskValid(
 			},
 			Clock:            task.Data.Clock,
 			ScheduledEventId: task.Data.ScheduledEventId,
+			Stamp:            task.Data.GetStamp(),
 		})
 		switch err.(type) {
 		case nil:

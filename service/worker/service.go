@@ -1,31 +1,8 @@
-// The MIT License
-//
-// Copyright (c) 2020 Temporal Technologies Inc.  All rights reserved.
-//
-// Copyright (c) 2020 Uber Technologies, Inc.
-//
-// Permission is hereby granted, free of charge, to any person obtaining a copy
-// of this software and associated documentation files (the "Software"), to deal
-// in the Software without restriction, including without limitation the rights
-// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-// copies of the Software, and to permit persons to whom the Software is
-// furnished to do so, subject to the following conditions:
-//
-// The above copyright notice and this permission notice shall be included in
-// all copies or substantial portions of the Software.
-//
-// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
-// THE SOFTWARE.
-
 package worker
 
 import (
 	"context"
+	"net"
 
 	"go.temporal.io/api/serviceerror"
 	sdkworker "go.temporal.io/sdk/worker"
@@ -39,17 +16,24 @@ import (
 	"go.temporal.io/server/common/membership"
 	"go.temporal.io/server/common/metrics"
 	"go.temporal.io/server/common/namespace"
+	"go.temporal.io/server/common/namespace/nsreplication"
 	"go.temporal.io/server/common/persistence"
+	"go.temporal.io/server/common/persistence/serialization"
 	"go.temporal.io/server/common/persistence/visibility/manager"
-	esclient "go.temporal.io/server/common/persistence/visibility/store/elasticsearch/client"
 	"go.temporal.io/server/common/primitives"
 	"go.temporal.io/server/common/resource"
 	"go.temporal.io/server/common/sdk"
-	"go.temporal.io/server/service/worker/batcher"
 	"go.temporal.io/server/service/worker/parentclosepolicy"
 	"go.temporal.io/server/service/worker/replicator"
 	"go.temporal.io/server/service/worker/scanner"
+	"google.golang.org/grpc"
+	"google.golang.org/grpc/health"
+	healthpb "google.golang.org/grpc/health/grpc_health_v1"
+	"google.golang.org/grpc/reflection"
 )
+
+// ServiceName is the name used for the worker service health check.
+const ServiceName = "temporal.api.workflowservice.v1.WorkerService"
 
 type (
 	// Service represents the temporal-worker service. This service hosts all background processing needed for temporal cluster:
@@ -75,14 +59,17 @@ type (
 		metricsHandler metrics.Handler
 
 		sdkClientFactory sdk.ClientFactory
-		esClient         esclient.Client
 		config           *Config
 
 		workerManager                    *workerManager
 		perNamespaceWorkerManager        *perNamespaceWorkerManager
 		scanner                          *scanner.Scanner
 		matchingClient                   matchingservice.MatchingServiceClient
-		namespaceReplicationTaskExecutor namespace.ReplicationTaskExecutor
+		namespaceReplicationTaskExecutor nsreplication.TaskExecutor
+
+		server       *grpc.Server
+		grpcListener net.Listener
+		healthServer *health.Server
 	}
 
 	// Config contains all the service config for worker
@@ -106,12 +93,14 @@ type (
 		PerNamespaceWorkerOptions            dynamicconfig.TypedSubscribableWithNamespaceFilter[sdkworker.Options]
 		PerNamespaceWorkerStartRate          dynamicconfig.FloatPropertyFn
 
-		VisibilityPersistenceMaxReadQPS   dynamicconfig.IntPropertyFn
-		VisibilityPersistenceMaxWriteQPS  dynamicconfig.IntPropertyFn
-		EnableReadFromSecondaryVisibility dynamicconfig.BoolPropertyFnWithNamespaceFilter
-		VisibilityEnableShadowReadMode    dynamicconfig.BoolPropertyFn
-		VisibilityDisableOrderByClause    dynamicconfig.BoolPropertyFnWithNamespaceFilter
-		VisibilityEnableManualPagination  dynamicconfig.BoolPropertyFnWithNamespaceFilter
+		VisibilityPersistenceMaxReadQPS         dynamicconfig.IntPropertyFn
+		VisibilityPersistenceMaxWriteQPS        dynamicconfig.IntPropertyFn
+		VisibilityPersistenceSlowQueryThreshold dynamicconfig.DurationPropertyFn
+		EnableReadFromSecondaryVisibility       dynamicconfig.BoolPropertyFnWithNamespaceFilter
+		VisibilityEnableShadowReadMode          dynamicconfig.BoolPropertyFn
+		VisibilityDisableOrderByClause          dynamicconfig.BoolPropertyFnWithNamespaceFilter
+		VisibilityEnableManualPagination        dynamicconfig.BoolPropertyFnWithNamespaceFilter
+		VisibilityEnableUnifiedQueryConverter   dynamicconfig.BoolPropertyFn
 	}
 )
 
@@ -119,7 +108,6 @@ func NewService(
 	logger log.SnTaggedLogger,
 	serviceConfig *Config,
 	sdkClientFactory sdk.ClientFactory,
-	esClient esclient.Client,
 	clusterMetadata cluster.Metadata,
 	clientBean client.Bean,
 	clusterMetadataManager persistence.ClusterMetadataManager,
@@ -136,7 +124,11 @@ func NewService(
 	perNamespaceWorkerManager *perNamespaceWorkerManager,
 	visibilityManager manager.VisibilityManager,
 	matchingClient resource.MatchingClient,
-	namespaceReplicationTaskExecutor namespace.ReplicationTaskExecutor,
+	namespaceReplicationTaskExecutor nsreplication.TaskExecutor,
+	serializer serialization.Serializer,
+	server *grpc.Server,
+	grpcListener net.Listener,
+	healthServer *health.Server,
 ) (*Service, error) {
 	workerServiceResolver, err := membershipMonitor.GetResolver(primitives.WorkerService)
 	if err != nil {
@@ -146,7 +138,6 @@ func NewService(
 	s := &Service{
 		config:                    serviceConfig,
 		sdkClientFactory:          sdkClientFactory,
-		esClient:                  esClient,
 		logger:                    logger,
 		clusterMetadata:           clusterMetadata,
 		clientBean:                clientBean,
@@ -167,8 +158,12 @@ func NewService(
 		perNamespaceWorkerManager:        perNamespaceWorkerManager,
 		matchingClient:                   matchingClient,
 		namespaceReplicationTaskExecutor: namespaceReplicationTaskExecutor,
+
+		server:       server,
+		grpcListener: grpcListener,
+		healthServer: healthServer,
 	}
-	if err := s.initScanner(); err != nil {
+	if err := s.initScanner(serializer); err != nil {
 		return nil, err
 	}
 	return s, nil
@@ -209,7 +204,6 @@ func NewConfig(
 			RemovableBuildIdDurationSinceDefault:    dynamicconfig.RemovableBuildIdDurationSinceDefault.Get(dc),
 			BuildIdScavengerVisibilityRPS:           dynamicconfig.BuildIdScavengerVisibilityRPS.Get(dc),
 		},
-		EnableBatcher:                        dynamicconfig.EnableBatcherGlobal.Get(dc),
 		BatcherRPS:                           dynamicconfig.BatcherRPS.Get(dc),
 		BatcherConcurrency:                   dynamicconfig.BatcherConcurrency.Get(dc),
 		EnableParentClosePolicyWorker:        dynamicconfig.EnableParentClosePolicyWorker.Get(dc),
@@ -226,12 +220,14 @@ func NewConfig(
 		PersistenceQPSBurstRatio:             dynamicconfig.PersistenceQPSBurstRatio.Get(dc),
 		OperatorRPSRatio:                     dynamicconfig.OperatorRPSRatio.Get(dc),
 
-		VisibilityPersistenceMaxReadQPS:   dynamicconfig.VisibilityPersistenceMaxReadQPS.Get(dc),
-		VisibilityPersistenceMaxWriteQPS:  dynamicconfig.VisibilityPersistenceMaxWriteQPS.Get(dc),
-		EnableReadFromSecondaryVisibility: dynamicconfig.EnableReadFromSecondaryVisibility.Get(dc),
-		VisibilityEnableShadowReadMode:    dynamicconfig.VisibilityEnableShadowReadMode.Get(dc),
-		VisibilityDisableOrderByClause:    dynamicconfig.VisibilityDisableOrderByClause.Get(dc),
-		VisibilityEnableManualPagination:  dynamicconfig.VisibilityEnableManualPagination.Get(dc),
+		VisibilityPersistenceMaxReadQPS:         dynamicconfig.VisibilityPersistenceMaxReadQPS.Get(dc),
+		VisibilityPersistenceMaxWriteQPS:        dynamicconfig.VisibilityPersistenceMaxWriteQPS.Get(dc),
+		VisibilityPersistenceSlowQueryThreshold: dynamicconfig.VisibilityPersistenceSlowQueryThreshold.Get(dc),
+		EnableReadFromSecondaryVisibility:       dynamicconfig.EnableReadFromSecondaryVisibility.Get(dc),
+		VisibilityEnableShadowReadMode:          dynamicconfig.VisibilityEnableShadowReadMode.Get(dc),
+		VisibilityDisableOrderByClause:          dynamicconfig.VisibilityDisableOrderByClause.Get(dc),
+		VisibilityEnableManualPagination:        dynamicconfig.VisibilityEnableManualPagination.Get(dc),
+		VisibilityEnableUnifiedQueryConverter:   dynamicconfig.VisibilityEnableUnifiedQueryConverter.Get(dc),
 	}
 	return config
 }
@@ -245,9 +241,6 @@ func (s *Service) Start() {
 
 	metrics.RestartCount.With(s.metricsHandler).Record(1)
 
-	s.clusterMetadata.Start()
-	s.namespaceRegistry.Start()
-
 	s.membershipMonitor.Start()
 
 	s.ensureSystemNamespaceExists(context.TODO())
@@ -259,9 +252,6 @@ func (s *Service) Start() {
 	if s.config.EnableParentClosePolicyWorker() {
 		s.startParentClosePolicyProcessor()
 	}
-	if s.config.EnableBatcher() {
-		s.startBatcher()
-	}
 
 	s.workerManager.Start()
 	s.perNamespaceWorkerManager.Start(
@@ -269,6 +259,18 @@ func (s *Service) Start() {
 		s.hostInfo,
 		s.workerServiceResolver,
 	)
+
+	healthpb.RegisterHealthServer(s.server, s.healthServer)
+	s.healthServer.SetServingStatus(ServiceName, healthpb.HealthCheckResponse_SERVING)
+
+	reflection.Register(s.server)
+
+	go func() {
+		s.logger.Info("Starting to serve on worker listener")
+		if err := s.server.Serve(s.grpcListener); err != nil {
+			s.logger.Fatal("Failed to serve on worker listener", tag.Error(err))
+		}
+	}()
 
 	s.logger.Info(
 		"worker service started",
@@ -279,12 +281,14 @@ func (s *Service) Start() {
 
 // Stop is called to stop the service
 func (s *Service) Stop() {
+	s.healthServer.SetServingStatus(ServiceName, healthpb.HealthCheckResponse_NOT_SERVING)
+
 	s.scanner.Stop()
 	s.perNamespaceWorkerManager.Stop()
 	s.workerManager.Stop()
-	s.namespaceRegistry.Stop()
-	s.clusterMetadata.Stop()
 	s.visibilityManager.Close()
+
+	s.server.GracefulStop()
 
 	s.logger.Info(
 		"worker service stopped",
@@ -312,23 +316,7 @@ func (s *Service) startParentClosePolicyProcessor() {
 	}
 }
 
-func (s *Service) startBatcher() {
-	if err := batcher.New(
-		s.metricsHandler,
-		s.logger,
-		s.hostInfo,
-		s.sdkClientFactory,
-		s.config.BatcherRPS,
-		s.config.BatcherConcurrency,
-	).Start(); err != nil {
-		s.logger.Fatal(
-			"error starting batcher worker",
-			tag.Error(err),
-		)
-	}
-}
-
-func (s *Service) initScanner() error {
+func (s *Service) initScanner(serializer serialization.Serializer) error {
 	currentCluster := s.clusterMetadata.GetCurrentClusterName()
 	adminClient, err := s.clientBean.GetRemoteAdminClient(currentCluster)
 	if err != nil {
@@ -349,6 +337,7 @@ func (s *Service) initScanner() error {
 		s.namespaceRegistry,
 		currentCluster,
 		s.hostInfo,
+		serializer,
 	)
 	return nil
 }

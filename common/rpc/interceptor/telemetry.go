@@ -1,27 +1,3 @@
-// The MIT License
-//
-// Copyright (c) 2020 Temporal Technologies Inc.  All rights reserved.
-//
-// Copyright (c) 2020 Uber Technologies, Inc.
-//
-// Permission is hereby granted, free of charge, to any person obtaining a copy
-// of this software and associated documentation files (the "Software"), to deal
-// in the Software without restriction, including without limitation the rights
-// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-// copies of the Software, and to permit persons to whom the Software is
-// furnished to do so, subject to the following conditions:
-//
-// The above copyright notice and this permission notice shall be included in
-// all copies or substantial portions of the Software.
-//
-// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
-// THE SOFTWARE.
-
 package interceptor
 
 import (
@@ -29,12 +5,10 @@ import (
 	"strings"
 	"time"
 
-	"go.temporal.io/api/enums/v1"
-	"go.temporal.io/api/serviceerror"
+	enumspb "go.temporal.io/api/enums/v1"
 	updatepb "go.temporal.io/api/update/v1"
 	"go.temporal.io/api/workflowservice/v1"
 	"go.temporal.io/server/api/historyservice/v1"
-	"go.temporal.io/server/common"
 	"go.temporal.io/server/common/api"
 	"go.temporal.io/server/common/dynamicconfig"
 	"go.temporal.io/server/common/log"
@@ -42,9 +16,9 @@ import (
 	"go.temporal.io/server/common/metrics"
 	"go.temporal.io/server/common/namespace"
 	"go.temporal.io/server/common/rpc/interceptor/logtags"
-	serviceerrors "go.temporal.io/server/common/serviceerror"
+	"go.temporal.io/server/common/tasktoken"
+	"go.temporal.io/server/service/frontend/configs"
 	"google.golang.org/grpc"
-	"google.golang.org/grpc/codes"
 	"google.golang.org/protobuf/types/known/anypb"
 )
 
@@ -52,11 +26,12 @@ type (
 	metricsContextKey struct{}
 
 	TelemetryInterceptor struct {
-		namespaceRegistry namespace.Registry
-		metricsHandler    metrics.Handler
-		logger            log.Logger
-		workflowTags      *logtags.WorkflowTags
-		logAllReqErrors   dynamicconfig.BoolPropertyFnWithNamespaceFilter
+		namespaceRegistry   namespace.Registry
+		metricsHandler      metrics.Handler
+		logger              log.Logger
+		workflowTags        *logtags.WorkflowTags
+		logAllReqErrors     dynamicconfig.BoolPropertyFnWithNamespaceFilter
+		requestErrorHandler ErrorHandler
 	}
 )
 
@@ -77,16 +52,20 @@ var (
 )
 
 var (
-	respondWorkflowTaskCompleted = "RespondWorkflowTaskCompleted"
-	pollActivityTaskQueue        = "PollActivityTaskQueue"
-	startWorkflowExecution       = "StartWorkflowExecution"
-	queryWorkflow                = "QueryWorkflow"
+	respondWorkflowTaskCompleted   = "RespondWorkflowTaskCompleted"
+	pollActivityTaskQueue          = "PollActivityTaskQueue"
+	startWorkflowExecution         = "StartWorkflowExecution"
+	executeMultiOperation          = "ExecuteMultiOperation"
+	queryWorkflow                  = "QueryWorkflow"
+	updateWorkflowExecutionOptions = "UpdateWorkflowExecutionOptions"
 
 	grpcActions = map[string]struct{}{
 		startWorkflowExecution:             {},
+		executeMultiOperation:              {},
 		respondWorkflowTaskCompleted:       {},
 		pollActivityTaskQueue:              {},
 		queryWorkflow:                      {},
+		updateWorkflowExecutionOptions:     {},
 		"RecordActivityTaskHeartbeat":      {},
 		"RecordActivityTaskHeartbeatById":  {},
 		"ResetWorkflowExecution":           {},
@@ -96,20 +75,22 @@ var (
 		"UpdateSchedule":                   {},
 		"DeleteSchedule":                   {},
 		"PatchSchedule":                    {},
+		"PauseWorkflowExecution":           {},
+		"UnpauseWorkflowExecution":         {},
 	}
 
 	// commandActions is a subset of all the commands that are counted as actions.
-	commandActions = map[enums.CommandType]struct{}{
-		enums.COMMAND_TYPE_RECORD_MARKER:                      {},
-		enums.COMMAND_TYPE_START_TIMER:                        {},
-		enums.COMMAND_TYPE_SCHEDULE_ACTIVITY_TASK:             {},
-		enums.COMMAND_TYPE_START_CHILD_WORKFLOW_EXECUTION:     {},
-		enums.COMMAND_TYPE_SIGNAL_EXTERNAL_WORKFLOW_EXECUTION: {},
-		enums.COMMAND_TYPE_UPSERT_WORKFLOW_SEARCH_ATTRIBUTES:  {},
-		enums.COMMAND_TYPE_MODIFY_WORKFLOW_PROPERTIES:         {},
-		enums.COMMAND_TYPE_CONTINUE_AS_NEW_WORKFLOW_EXECUTION: {},
-		enums.COMMAND_TYPE_SCHEDULE_NEXUS_OPERATION:           {},
-		enums.COMMAND_TYPE_REQUEST_CANCEL_NEXUS_OPERATION:     {},
+	commandActions = map[enumspb.CommandType]struct{}{
+		enumspb.COMMAND_TYPE_RECORD_MARKER:                      {},
+		enumspb.COMMAND_TYPE_START_TIMER:                        {},
+		enumspb.COMMAND_TYPE_SCHEDULE_ACTIVITY_TASK:             {},
+		enumspb.COMMAND_TYPE_START_CHILD_WORKFLOW_EXECUTION:     {},
+		enumspb.COMMAND_TYPE_SIGNAL_EXTERNAL_WORKFLOW_EXECUTION: {},
+		enumspb.COMMAND_TYPE_UPSERT_WORKFLOW_SEARCH_ATTRIBUTES:  {},
+		enumspb.COMMAND_TYPE_MODIFY_WORKFLOW_PROPERTIES:         {},
+		enumspb.COMMAND_TYPE_CONTINUE_AS_NEW_WORKFLOW_EXECUTION: {},
+		enumspb.COMMAND_TYPE_SCHEDULE_NEXUS_OPERATION:           {},
+		enumspb.COMMAND_TYPE_REQUEST_CANCEL_NEXUS_OPERATION:     {},
 	}
 )
 
@@ -118,19 +99,21 @@ func NewTelemetryInterceptor(
 	metricsHandler metrics.Handler,
 	logger log.Logger,
 	logAllReqErrors dynamicconfig.BoolPropertyFnWithNamespaceFilter,
+	requestErrorHandler ErrorHandler,
 ) *TelemetryInterceptor {
 	return &TelemetryInterceptor{
-		namespaceRegistry: namespaceRegistry,
-		metricsHandler:    metricsHandler,
-		logger:            logger,
-		workflowTags:      logtags.NewWorkflowTags(common.NewProtoTaskTokenSerializer(), logger),
-		logAllReqErrors:   logAllReqErrors,
+		namespaceRegistry:   namespaceRegistry,
+		metricsHandler:      metricsHandler,
+		logger:              logger,
+		workflowTags:        logtags.NewWorkflowTags(tasktoken.NewSerializer(), logger),
+		logAllReqErrors:     logAllReqErrors,
+		requestErrorHandler: requestErrorHandler,
 	}
 }
 
-// Use this method to override scope used for reporting a metric.
+// telemetryUnaryOverrideOperationTag is used to override scope used for reporting a metric.
 // Ideally this method should never be used.
-func (ti *TelemetryInterceptor) unaryOverrideOperationTag(fullName, operation string, req any) string {
+func telemetryUnaryOverrideOperationTag(fullName, operation string, req any) string {
 	if strings.HasPrefix(fullName, api.WorkflowServicePrefix) {
 		// GetWorkflowExecutionHistory method handles both long poll and regular calls.
 		// Current plan is to eventually split GetWorkflowExecutionHistory into two APIs,
@@ -155,12 +138,12 @@ func (ti *TelemetryInterceptor) unaryOverrideOperationTag(fullName, operation st
 			}
 		}
 	}
-	return ti.overrideOperationTag(fullName, operation)
+	return telemetryOverrideOperationTag(fullName, operation)
 }
 
-// Use this method to override scope used for reporting a metric.
+// telemetryOverrideOperationTag is used to override scope used for reporting a metric.
 // Ideally this method should never be used.
-func (ti *TelemetryInterceptor) overrideOperationTag(fullName, operation string) string {
+func telemetryOverrideOperationTag(fullName, operation string) string {
 	// prepend Operator prefix to Operator APIs
 	if strings.HasPrefix(fullName, api.OperatorServicePrefix) {
 		return "Operator" + operation
@@ -193,8 +176,15 @@ func (ti *TelemetryInterceptor) UnaryIntercept(
 
 	resp, err := handler(ctx, req)
 
+	if configs.IsAPIOperation(info.FullMethod) {
+		metrics.OperationCounter.With(metricsHandler).Record(
+			1,
+			metrics.TaskTypeTag(""), // Added to make tags consistent with history task executor.
+		)
+	}
+
 	if err != nil {
-		ti.HandleError(req, info.FullMethod, metricsHandler, logTags, err, nsName)
+		ti.requestErrorHandler.HandleError(req, info.FullMethod, metricsHandler, logTags, err, nsName)
 	} else {
 		// emit action metrics only after successful calls
 		ti.emitActionMetric(methodName, info.FullMethod, req, metricsHandler, resp)
@@ -232,7 +222,7 @@ func (ti *TelemetryInterceptor) StreamIntercept(
 
 	err := handler(service, serverStream)
 	if err != nil {
-		ti.HandleError(nil, info.FullMethod, metricsHandler, logTags, err, "")
+		ti.requestErrorHandler.HandleError(nil, info.FullMethod, metricsHandler, logTags, err, "")
 		return err
 	}
 	return nil
@@ -258,6 +248,33 @@ func (ti *TelemetryInterceptor) emitActionMetric(
 		}
 		if resp.Started {
 			metrics.ActionCounter.With(metricsHandler).Record(1, metrics.ActionType("grpc_"+methodName))
+		} else {
+			typedReq, ok := req.(*workflowservice.StartWorkflowExecutionRequest)
+			if ok && typedReq.GetWorkflowIdConflictPolicy() == enumspb.WORKFLOW_ID_CONFLICT_POLICY_USE_EXISTING && typedReq.GetOnConflictOptions() != nil {
+				metrics.ActionCounter.With(metricsHandler).Record(1, metrics.ActionType("grpc_"+methodName+"_UpdateWorkflowExecutionOptions"))
+			}
+		}
+	case executeMultiOperation:
+		resp, ok := result.(*workflowservice.ExecuteMultiOperationResponse)
+		if !ok {
+			return
+		}
+		if len(resp.Responses) > 0 {
+			if startResp := resp.GetResponses()[0].GetStartWorkflow(); startResp != nil {
+				if startResp.Started {
+					metrics.ActionCounter.With(metricsHandler).Record(1, metrics.ActionType("grpc_"+methodName))
+				} else {
+					typedReq, ok := req.(*workflowservice.ExecuteMultiOperationRequest)
+					if !ok || typedReq == nil || len(typedReq.Operations) == 0 {
+						return
+					}
+
+					if typedReq.GetOperations()[0].GetStartWorkflow().GetWorkflowIdConflictPolicy() == enumspb.WORKFLOW_ID_CONFLICT_POLICY_USE_EXISTING &&
+						typedReq.GetOperations()[0].GetStartWorkflow().GetOnConflictOptions() != nil {
+						metrics.ActionCounter.With(metricsHandler).Record(1, metrics.ActionType("grpc_"+methodName+"_UpdateWorkflowExecutionOptions"))
+					}
+				}
+			}
 		}
 	case respondWorkflowTaskCompleted:
 		// handle commands
@@ -273,10 +290,10 @@ func (ti *TelemetryInterceptor) emitActionMetric(
 			}
 
 			switch command.CommandType { // nolint:exhaustive
-			case enums.COMMAND_TYPE_RECORD_MARKER:
+			case enumspb.COMMAND_TYPE_RECORD_MARKER:
 				// handle RecordMarker command, they are used for localActivity, sideEffect, versioning etc.
 				hasMarker = true
-			case enums.COMMAND_TYPE_START_CHILD_WORKFLOW_EXECUTION:
+			case enumspb.COMMAND_TYPE_START_CHILD_WORKFLOW_EXECUTION:
 				// Each child workflow counts as 2 actions. We use separate tags to track them separately.
 				metrics.ActionCounter.With(metricsHandler).Record(1, metrics.ActionType("command_"+command.CommandType.String()))
 				metrics.ActionCounter.With(metricsHandler).Record(1, metrics.ActionType("command_"+command.CommandType.String()+"_Extra"))
@@ -339,135 +356,40 @@ func (ti *TelemetryInterceptor) emitActionMetric(
 	}
 }
 
+// CreateUnaryMetricsHandlerLogTags creates metrics handler and log tags for unary RPC calls
+func CreateUnaryMetricsHandlerLogTags(
+	baseMetricsHandler metrics.Handler,
+	req any,
+	fullMethod string,
+	methodName string,
+	nsName namespace.Name,
+) (metrics.Handler, []tag.Tag) {
+	overridedMethodName := telemetryUnaryOverrideOperationTag(fullMethod, methodName, req)
+
+	if nsName == "" {
+		return baseMetricsHandler.WithTags(metrics.OperationTag(overridedMethodName), metrics.NamespaceUnknownTag()),
+			[]tag.Tag{tag.Operation(overridedMethodName)}
+	}
+	return baseMetricsHandler.WithTags(metrics.OperationTag(overridedMethodName), metrics.NamespaceTag(nsName.String())),
+		[]tag.Tag{tag.Operation(overridedMethodName), tag.WorkflowNamespace(nsName.String())}
+}
+
 func (ti *TelemetryInterceptor) unaryMetricsHandlerLogTags(req any,
 	fullMethod string,
 	methodName string,
 	nsName namespace.Name) (metrics.Handler, []tag.Tag) {
-	overridedMethodName := ti.unaryOverrideOperationTag(fullMethod, methodName, req)
-
-	if nsName == "" {
-		return ti.metricsHandler.WithTags(metrics.OperationTag(overridedMethodName), metrics.NamespaceUnknownTag()),
-			[]tag.Tag{tag.Operation(overridedMethodName)}
-	}
-	return ti.metricsHandler.WithTags(metrics.OperationTag(overridedMethodName), metrics.NamespaceTag(nsName.String())),
-		[]tag.Tag{tag.Operation(overridedMethodName), tag.WorkflowNamespace(nsName.String())}
+	return CreateUnaryMetricsHandlerLogTags(ti.metricsHandler, req, fullMethod, methodName, nsName)
 }
 
 func (ti *TelemetryInterceptor) streamMetricsHandlerLogTags(
 	fullMethod string,
 	methodName string,
 ) (metrics.Handler, []tag.Tag) {
-	overridedMethodName := ti.overrideOperationTag(fullMethod, methodName)
+	overridedMethodName := telemetryOverrideOperationTag(fullMethod, methodName)
 	return ti.metricsHandler.WithTags(
 		metrics.OperationTag(overridedMethodName),
 		metrics.NamespaceUnknownTag(),
 	), []tag.Tag{tag.Operation(overridedMethodName)}
-}
-
-func (ti *TelemetryInterceptor) HandleError(
-	req any,
-	fullMethod string,
-	metricsHandler metrics.Handler,
-	logTags []tag.Tag,
-	err error,
-	nsName namespace.Name) {
-	statusCode := serviceerror.ToStatus(err).Code()
-
-	recordMetrics(metricsHandler, err, statusCode)
-
-	ti.logErrors(req, fullMethod, nsName, err, statusCode, logTags)
-}
-
-func (ti *TelemetryInterceptor) logErrors(
-	req any,
-	fullMethod string,
-	nsName namespace.Name,
-	err error,
-	statusCode codes.Code,
-	logTags []tag.Tag,
-) {
-	logAllErrors := nsName != "" && ti.logAllReqErrors(nsName.String())
-	if !logAllErrors && (common.IsContextDeadlineExceededErr(err) || common.IsContextCanceledErr(err)) {
-		return
-	}
-
-	if !logAllErrors && isUserCaused(statusCode) {
-		return
-	}
-
-	// We mask these two error types in MaskInternalErrorDetailsInterceptor, so we need the hash to find the actual
-	// error message.
-	if statusCode == codes.Internal || statusCode == codes.Unknown {
-		errorHash := common.ErrorHash(err)
-		logTags = append(logTags, tag.NewStringTag("hash", errorHash))
-	}
-
-	logTags = append(logTags, tag.NewStringTag("grpc_code", statusCode.String()))
-	logTags = append(logTags, ti.workflowTags.Extract(req, fullMethod)...)
-
-	ti.logger.Error("service failures", append(logTags, tag.Error(err))...)
-}
-
-func isUserCaused(statusCode codes.Code) bool {
-	switch statusCode {
-	case codes.InvalidArgument,
-		codes.AlreadyExists,
-		codes.FailedPrecondition,
-		codes.OutOfRange,
-		codes.PermissionDenied,
-		codes.Unauthenticated,
-		codes.NotFound:
-		return true
-	case codes.OK,
-		codes.Canceled,
-		codes.Unknown,
-		codes.DeadlineExceeded,
-		codes.ResourceExhausted,
-		codes.Aborted,
-		codes.Unimplemented,
-		codes.Internal,
-		codes.Unavailable,
-		codes.DataLoss:
-		return false
-	}
-
-	return false
-}
-
-func recordMetrics(metricsHandler metrics.Handler, err error, statusCode codes.Code) {
-	metrics.ServiceErrorWithType.With(metricsHandler).Record(1, metrics.ServiceErrorTypeTag(err))
-
-	switch err := err.(type) {
-	case *serviceerror.ResourceExhausted:
-		metrics.ServiceErrResourceExhaustedCounter.With(metricsHandler).Record(
-			1, metrics.ResourceExhaustedCauseTag(err.Cause), metrics.ResourceExhaustedScopeTag(err.Scope))
-		return
-	case *serviceerror.AlreadyExists,
-		*serviceerror.CancellationAlreadyRequested,
-		*serviceerror.FailedPrecondition,
-		*serviceerror.NamespaceInvalidState,
-		*serviceerror.NamespaceNotActive,
-		*serviceerror.NamespaceNotFound,
-		*serviceerror.NamespaceAlreadyExists,
-		*serviceerror.InvalidArgument,
-		*serviceerror.WorkflowExecutionAlreadyStarted,
-		*serviceerror.WorkflowNotReady,
-		*serviceerror.NotFound,
-		*serviceerror.QueryFailed,
-		*serviceerror.ClientVersionNotSupported,
-		*serviceerror.ServerVersionNotSupported,
-		*serviceerror.PermissionDenied,
-		*serviceerror.NewerBuildExists,
-		*serviceerrors.StickyWorkerUnavailable,
-		*serviceerrors.ShardOwnershipLost,
-		*serviceerrors.TaskAlreadyStarted,
-		*serviceerrors.RetryReplication:
-		return
-	}
-
-	if !isUserCaused(statusCode) {
-		metrics.ServiceFailures.With(metricsHandler).Record(1)
-	}
 }
 
 func GetMetricsHandlerFromContext(

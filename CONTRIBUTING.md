@@ -25,6 +25,19 @@ This doc is for contributors to Temporal Server (hopefully that's you!)
 > Note: it is possible to run Temporal server without a `docker`. If for some reason (for example, performance on macOS)
 > you want to run dependencies on the host OS, please follow the [doc](./docs/development/run-dependencies-host.md).
 
+- Runtime dependencies are optional support services that can be helpful during development and testing, providing: 1) UI, 2) 
+databases, and 3) metrics services via `docker compose`. By default, the server utilizes SQLite as an in-memory 
+database, so the runtime dependencies are optional. To start dependencies, open new terminal window and run:
+
+```bash
+make start-dependencies
+```
+
+To stop the dependencies:
+```bash
+make stop-dependencies
+```
+
 ### For Windows developers
 
 For developing on Windows, install [Windows Subsystem for Linux 2 (WSL2)](https://aka.ms/wsl) and [Ubuntu](https://docs.microsoft.com/en-us/windows/wsl/install-win10#step-6---install-your-linux-distribution-of-choice). After that, follow the guidance for installing prerequisites, building, and testing on Ubuntu.
@@ -63,17 +76,8 @@ We defined three categories of tests.
 - Integration test: Those tests cover the integration between the server and the dependencies (Cassandra, SQL, ES etc.).
 - Functional test: Those tests cover the E2E functionality of Temporal server. They are all under ./tests directory.
 
-Integration and functional tests require runtime dependencies. They can be run with `start-dependencies` target (uses `docker compose` internally). Open new terminal window and run:
-
-```bash
-make start-dependencies
-```
-
-Before testing on macOS, make sure you increase the file handle limit:
-
-```bash
-ulimit -n 8192
-```
+Integration and functional tests require [runtime dependencies](#runtime-server-and-tests-prerequisites), 
+when running with a persistence option that is not SQLite. If running unit tests, no need to start the dependencies.
 
 Run unit tests:
 
@@ -119,40 +123,81 @@ make stop-dependencies
 
 ## Run Temporal Server locally
 
-First start runtime dependencies. They can be run with `start-dependencies` target (uses `docker compose` internally). Open new terminal window and run:
+First, start the optional [runtime dependencies](#runtime-server-and-tests-prerequisites) if needed for the desired persistence option.
 
-```bash
-make start-dependencies
-```
-
-then run the server:
+Then run the server:
 
 ```bash
 make start
 ```
 
-This will start the server using SQLite as database. If you want to run with Cassandra and Elasticsearch, then run these commands:
+This will start the server using SQLite as an in-memory database. You can choose other databases as well.
+
+If you want to run with Cassandra and Elasticsearch, then run these commands:
 
 ```bash
 make install-schema-cass-es
 make start-cass-es
 ```
 
-Now you can create default namespace with Temporal CLI:
+To run with SQLite with a persisted file:
 
 ```bash
-temporal operator namespace create default
+make start-sqlite-file
 ```
 
-and run samples from [Go](https://github.com/temporalio/samples-go) and [Java](https://github.com/temporalio/samples-java) samples repos. Also, you can access web UI at `localhost:8080`.
+To run with Postgres:
+```bash
+make install-schema-postgresql
+make start-postgresql
+```
 
-When you are done, press `Ctrl+C` to stop the server. Don't forget to stop dependencies (with `Ctrl+C`) and clean up resources:
+To run with MySQL:
+```bash
+make install-schema-mysql
+make start-mysql
+```
+
+Now you can create a namespace with the Temporal CLI (While you can select any name for a namespace, we reccomend using `default` while learning, because a number of samples assume there is a namespace named `default`):
+
+```bash
+temporal operator namespace create -n default
+```
+
+and run samples from the samples repos ([Go](https://github.com/temporalio/samples-go) | [Java](https://github.com/temporalio/samples-java) | [TypeScript](https://github.com/temporalio/samples-typescript) | [.NET](https://github.com/temporalio/samples-dotnet) | [Python](https://github.com/temporalio/samples-python) | [Ruby](https://github.com/temporalio/samples-ruby)). If you are new to Temporal, helloworld ([Go](https://github.com/temporalio/samples-go/tree/main/helloworld) | [Java](https://github.com/temporalio/samples-java/tree/main/core/src/main/java/io/temporal/samples/hello) | [TypeScript](https://github.com/temporalio/samples-typescript/tree/main/hello-world) | [.NET](https://github.com/temporalio/sdk-dotnet?tab=readme-ov-file#implementing-a-workflow-and-activity) | [Python](https://github.com/temporalio/samples-python/tree/main/hello) | [Ruby](https://github.com/temporalio/sdk-ruby?tab=readme-ov-file#implementing-a-workflow-and-activity)) is a very good sample to start with.  Also, if you have started the runtime dependencies, you can access the web UI at `localhost:8080` which is a good way to visualize work done by the server and deepen your knowledge of Temporal.
+
+When you are done, press `Ctrl+C` to stop the server. 
+
+If you started [runtime dependencies](#runtime-server-and-tests-prerequisites), don't forget to stop dependencies 
+(with `Ctrl+C`) and clean up resources:
 
 ```bash
 make stop-dependencies
 ```
 
 See the [developer documentation on testing](./docs/development/testing.md) to learn more about writing tests.
+
+## Debugging with the IDE
+
+### GoLand
+
+For general instructions, see [GoLand Debugging](https://www.jetbrains.com/help/go/debugging-code.html).
+
+First, start the optional [runtime dependencies](#runtime-server-and-tests-prerequisites) if needed for the desired persistence option.
+
+To run the server, ensure the Run Type is package. In "Package path", enter `go.temporal.io/server/cmd/server`. 
+In the "Program arguments" field, add the following:
+
+```
+--env <database dev environment> --allow-no-auth start
+```
+
+For example, to run with Postgres:
+```
+--env development-postgres12 --allow-no-auth start
+```
+
+See Makefile for other environments.
 
 ## Working with merged API changes
 
@@ -212,24 +257,13 @@ Please don't use very generic titles like "bug fixes".
 
 All PR titles should start with Upper case and have no dot at the end.
 
-## Go build and run tags
-
-Prior to Server version v1.23.0 our protobuf code generator allowed invalid UTF-8 data to be stored as proto strings. This isn't actually allowed by the proto3 spec, so we need to specify `-tags protolegacy` when building against the server. Our Makefile does this, but if you're using temporal as a library you'll need to enable that yourself.
-
-Example:
-
-```shell
-$ go build -tags protolegacy ./cmd/server
-```
-
-If you see an error like `grpc: error unmarshalling request: string field contains invalid UTF-8` then you've forgotten to specify this flag.
-
 ## Go version update
 
 1. In this repository, update `go` in `go.mod`.
-2. In [docker-builds](https://github.com/temporalio/docker-builds/), update the base images:
+2. ~~In [docker-builds](https://github.com/temporalio/docker-builds/), update the base images:
 [base-ci-builder](https://github.com/temporalio/docker-builds/blob/main/docker/base-images/base-ci-builder.Dockerfile)
-and [base-builder](https://github.com/temporalio/docker-builds/blob/main/docker/base-images/base-builder.Dockerfile)
+and [base-builder](https://github.com/temporalio/docker-builds/blob/main/docker/base-images/base-builder.Dockerfile)~~ 
+**Note:** The docker-builds repository is now deprecated and will be archived.
 
 ## License
 

@@ -1,27 +1,3 @@
-// The MIT License
-//
-// Copyright (c) 2024 Temporal Technologies Inc.  All rights reserved.
-//
-// Copyright (c) 2020 Uber Technologies, Inc.
-//
-// Permission is hereby granted, free of charge, to any person obtaining a copy
-// of this software and associated documentation files (the "Software"), to deal
-// in the Software without restriction, including without limitation the rights
-// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-// copies of the Software, and to permit persons to whom the Software is
-// furnished to do so, subject to the following conditions:
-//
-// The above copyright notice and this permission notice shall be included in
-// all copies or substantial portions of the Software.
-//
-// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
-// THE SOFTWARE.
-
 package historybuilder
 
 import (
@@ -29,7 +5,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/pborman/uuid"
+	"github.com/google/uuid"
 	"github.com/stretchr/testify/require"
 	"github.com/stretchr/testify/suite"
 	commandpb "go.temporal.io/api/command/v1"
@@ -53,6 +29,8 @@ import (
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
+const defaultNamespace = "default"
+
 type (
 	historyBuilderSuite struct {
 		suite.Suite
@@ -69,23 +47,23 @@ type (
 )
 
 var (
-	testNamespaceID   = namespace.ID(uuid.New())
+	testNamespaceID   = namespace.ID(uuid.NewString())
 	testNamespaceName = namespace.Name("test namespace")
 	testWorkflowID    = "test workflow ID"
-	testRunID         = uuid.New()
+	testRunID         = uuid.NewString()
 
-	testParentNamespaceID      = uuid.New()
+	testParentNamespaceID      = uuid.NewString()
 	testParentNamespaceName    = "test parent namespace"
 	testParentWorkflowID       = "test parent workflow ID"
-	testParentRunID            = uuid.New()
+	testParentRunID            = uuid.NewString()
 	testParentInitiatedID      = rand.Int63()
 	testParentInitiatedVersion = rand.Int63()
 
 	testRootWorkflowID = "test root workflow ID"
-	testRootRunID      = uuid.New()
+	testRootRunID      = uuid.NewString()
 
 	testIdentity  = "test identity"
-	testRequestID = uuid.New()
+	testRequestID = uuid.NewString()
 
 	testPayload = &commonpb.Payload{
 		Metadata: map[string][]byte{
@@ -192,9 +170,9 @@ func (s *historyBuilderSuite) TestWorkflowExecutionStarted() {
 	workflowTaskStartToCloseTimeout := durationpb.New(time.Duration(rand.Int63()))
 
 	resetPoints := &workflowpb.ResetPoints{}
-	prevRunID := uuid.New()
-	firstRunID := uuid.New()
-	originalRunID := uuid.New()
+	prevRunID := uuid.NewString()
+	firstRunID := uuid.NewString()
+	originalRunID := uuid.NewString()
 
 	request := &historyservice.StartWorkflowExecutionRequest{
 		NamespaceId: testNamespaceID.String(),
@@ -353,7 +331,7 @@ func (s *historyBuilderSuite) TestWorkflowExecutionCancelRequested() {
 func (s *historyBuilderSuite) TestWorkflowExecutionSignaled() {
 	signalName := "random signal name"
 	event := s.historyBuilder.AddWorkflowExecutionSignaledEvent(
-		signalName, testPayloads, testIdentity, testHeader, false, nil, nil,
+		signalName, testPayloads, testIdentity, testHeader, nil, nil,
 	)
 	s.Equal(event, s.flush())
 	s.Equal(&historypb.HistoryEvent{
@@ -679,6 +657,7 @@ func (s *historyBuilderSuite) TestWorkflowTaskStarted() {
 		123678,
 		nil,
 		int64(0),
+		nil,
 	)
 	s.Equal(event, s.flush())
 	s.Equal(&historypb.HistoryEvent{
@@ -689,11 +668,12 @@ func (s *historyBuilderSuite) TestWorkflowTaskStarted() {
 		Version:   s.version,
 		Attributes: &historypb.HistoryEvent_WorkflowTaskStartedEventAttributes{
 			WorkflowTaskStartedEventAttributes: &historypb.WorkflowTaskStartedEventAttributes{
-				ScheduledEventId:     scheduledEventID,
-				Identity:             testIdentity,
-				RequestId:            testRequestID,
-				SuggestContinueAsNew: false,
-				HistorySizeBytes:     123678,
+				ScheduledEventId:            scheduledEventID,
+				Identity:                    testIdentity,
+				RequestId:                   testRequestID,
+				SuggestContinueAsNew:        false,
+				SuggestContinueAsNewReasons: nil,
+				HistorySizeBytes:            123678,
 			},
 		},
 	}, event)
@@ -713,6 +693,9 @@ func (s *historyBuilderSuite) TestWorkflowTaskCompleted() {
 		&commonpb.WorkerVersionStamp{BuildId: "build_id_9"},
 		sdkMetadata,
 		meteringMeta,
+		"",
+		nil,
+		enumspb.VERSIONING_BEHAVIOR_UNSPECIFIED,
 	)
 	s.Equal(event, s.flush())
 	s.Equal(&historypb.HistoryEvent{
@@ -739,8 +722,8 @@ func (s *historyBuilderSuite) TestWorkflowTaskFailed() {
 	scheduledEventID := rand.Int63()
 	startedEventID := rand.Int63()
 	cause := enumspb.WorkflowTaskFailedCause(rand.Int31n(int32(len(enumspb.WorkflowTaskFailedCause_name))))
-	baseRunID := uuid.New()
-	newRunID := uuid.New()
+	baseRunID := uuid.NewString()
+	newRunID := uuid.NewString()
 	forkEventVersion := rand.Int63()
 	checksum := "random checksum"
 	event := s.historyBuilder.AddWorkflowTaskFailedEvent(
@@ -828,6 +811,7 @@ func (s *historyBuilderSuite) TestActivityTaskScheduled() {
 	event := s.historyBuilder.AddActivityTaskScheduledEvent(
 		workflowTaskCompletionEventID,
 		attributes,
+		defaultNamespace,
 	)
 	s.Equal(event, s.flush())
 	s.Equal(&historypb.HistoryEvent{
@@ -918,6 +902,7 @@ func (s *historyBuilderSuite) TestActivityTaskCompleted() {
 		startedEventID,
 		testIdentity,
 		testPayloads,
+		defaultNamespace,
 	)
 	s.Equal(event, s.flush())
 	s.Equal(&historypb.HistoryEvent{
@@ -947,6 +932,7 @@ func (s *historyBuilderSuite) TestActivityTaskFailed() {
 		testFailure,
 		retryState,
 		testIdentity,
+		defaultNamespace,
 	)
 	s.Equal(event, s.flush())
 	s.Equal(&historypb.HistoryEvent{
@@ -1718,6 +1704,7 @@ func (s *historyBuilderSuite) testAppendFlushFinishEventWithoutBufferSingleBatch
 		DBBufferBatch:          nil,
 		MemBufferBatch:         nil,
 		ScheduledIDToStartedID: make(map[int64]int64),
+		RequestIDToEventID:     make(map[string]int64),
 	}, historyMutation)
 }
 
@@ -1797,6 +1784,7 @@ func (s *historyBuilderSuite) testAppendFlushFinishEventWithoutBufferMultiBatch(
 		DBBufferBatch:          nil,
 		MemBufferBatch:         nil,
 		ScheduledIDToStartedID: make(map[int64]int64),
+		RequestIDToEventID:     make(map[string]int64),
 	}, historyMutation)
 }
 
@@ -1829,6 +1817,7 @@ func (s *historyBuilderSuite) TestAppendFlushFinishEvent_WithBuffer_WithoutDBBuf
 		DBBufferBatch:          []*historypb.HistoryEvent{event1, event2},
 		MemBufferBatch:         []*historypb.HistoryEvent{event1, event2},
 		ScheduledIDToStartedID: make(map[int64]int64),
+		RequestIDToEventID:     make(map[string]int64),
 	}, historyMutation)
 }
 
@@ -1861,6 +1850,7 @@ func (s *historyBuilderSuite) TestAppendFlushFinishEvent_WithBuffer_WithoutDBBuf
 		DBBufferBatch:          nil,
 		MemBufferBatch:         nil,
 		ScheduledIDToStartedID: make(map[int64]int64),
+		RequestIDToEventID:     make(map[string]int64),
 	}, historyMutation)
 }
 
@@ -1891,6 +1881,7 @@ func (s *historyBuilderSuite) TestAppendFlushFinishEvent_WithoutBuffer_WithDBBuf
 		DBBufferBatch:          nil,
 		MemBufferBatch:         []*historypb.HistoryEvent{event1, event2},
 		ScheduledIDToStartedID: make(map[int64]int64),
+		RequestIDToEventID:     make(map[string]int64),
 	}, historyMutation)
 }
 
@@ -1921,6 +1912,7 @@ func (s *historyBuilderSuite) TestAppendFlushFinishEvent_WithoutBuffer_WithDBBuf
 		DBBufferBatch:          nil,
 		MemBufferBatch:         nil,
 		ScheduledIDToStartedID: make(map[int64]int64),
+		RequestIDToEventID:     make(map[string]int64),
 	}, historyMutation)
 }
 
@@ -1958,6 +1950,7 @@ func (s *historyBuilderSuite) TestAppendFlushFinishEvent_WithBuffer_WithDBBuffer
 		DBBufferBatch:          []*historypb.HistoryEvent{event1, event2},
 		MemBufferBatch:         []*historypb.HistoryEvent{event0, event1, event2},
 		ScheduledIDToStartedID: make(map[int64]int64),
+		RequestIDToEventID:     make(map[string]int64),
 	}, historyMutation)
 }
 
@@ -1995,6 +1988,7 @@ func (s *historyBuilderSuite) TestAppendFlushFinishEvent_WithBuffer_WithDBBuffer
 		DBBufferBatch:          nil,
 		MemBufferBatch:         nil,
 		ScheduledIDToStartedID: make(map[int64]int64),
+		RequestIDToEventID:     make(map[string]int64),
 	}, historyMutation)
 }
 
@@ -2263,7 +2257,6 @@ func (s *historyBuilderSuite) TestBufferEvent() {
 
 	// events corresponding to message from client will be assigned an event ID immediately
 	messageEvents := map[enumspb.EventType]bool{
-		enumspb.EVENT_TYPE_WORKFLOW_EXECUTION_UPDATE_REJECTED:  true,
 		enumspb.EVENT_TYPE_WORKFLOW_EXECUTION_UPDATE_ACCEPTED:  true,
 		enumspb.EVENT_TYPE_WORKFLOW_EXECUTION_UPDATE_COMPLETED: true,
 	}
@@ -2371,7 +2364,6 @@ func (s *historyBuilderSuite) TestBufferSize_Memory() {
 		&commonpb.Payloads{},
 		"identity",
 		&commonpb.Header{},
-		false,
 		nil,
 		nil,
 	)

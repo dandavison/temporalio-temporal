@@ -1,25 +1,3 @@
-// The MIT License
-//
-// Copyright (c) 2024 Temporal Technologies Inc.  All rights reserved.
-//
-// Permission is hereby granted, free of charge, to any person obtaining a copy
-// of this software and associated documentation files (the "Software"), to deal
-// in the Software without restriction, including without limitation the rights
-// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-// copies of the Software, and to permit persons to whom the Software is
-// furnished to do so, subject to the following conditions:
-//
-// The above copyright notice and this permission notice shall be included in
-// all copies or substantial portions of the Software.
-//
-// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
-// THE SOFTWARE.
-
 package nexusoperations
 
 import (
@@ -27,7 +5,6 @@ import (
 	"fmt"
 	"net/http"
 
-	"github.com/nexus-rpc/sdk-go/nexus"
 	"go.temporal.io/api/serviceerror"
 	persistencespb "go.temporal.io/server/api/persistence/v1"
 	"go.temporal.io/server/common"
@@ -38,6 +15,7 @@ import (
 	"go.temporal.io/server/common/metrics"
 	"go.temporal.io/server/common/namespace"
 	commonnexus "go.temporal.io/server/common/nexus"
+	"go.temporal.io/server/common/nexus/nexusrpc"
 	"go.temporal.io/server/common/persistence"
 	"go.temporal.io/server/common/resource"
 	"go.uber.org/fx"
@@ -109,7 +87,11 @@ func ClientProviderFactory(
 	if err != nil {
 		return nil, fmt.Errorf("cannot create local frontend HTTP client: %w", err)
 	}
+	var clusterID string
 
+	if clusterInfo, ok := clusterMetadata.GetAllClusterInfo()[clusterMetadata.GetCurrentClusterName()]; ok {
+		clusterID = clusterInfo.ClusterID
+	}
 	// TODO(bergundy): This should use an LRU or other form of cache that supports eviction.
 	m := collection.NewFallibleOnceMap(func(key clientProviderCacheKey) (*http.Client, error) {
 		transport := httpTransportProvider(key.namespaceID, key.endpointID)
@@ -117,9 +99,11 @@ func ClientProviderFactory(
 			Transport: ResponseSizeLimiter{transport},
 		}, nil
 	})
-	return func(ctx context.Context, namespaceID string, entry *persistencespb.NexusEndpointEntry, service string) (*nexus.Client, error) {
+
+	return func(ctx context.Context, namespaceID string, entry *persistencespb.NexusEndpointEntry, service string) (*nexusrpc.HTTPClient, error) {
 		var url string
 		var httpClient *http.Client
+		httpCaller := httpClient.Do
 		switch variant := entry.Endpoint.Spec.Target.Variant.(type) {
 		case *persistencespb.NexusEndpointTarget_External_:
 			url = variant.External.GetUrl()
@@ -128,20 +112,29 @@ func ClientProviderFactory(
 			if err != nil {
 				return nil, err
 			}
+			if clusterID != "" {
+				httpCaller = func(r *http.Request) (*http.Response, error) {
+					resp, callErr := httpClient.Do(r)
+					commonnexus.SetFailureSourceOnContext(ctx, resp)
+					return resp, callErr
+				}
+			}
 		case *persistencespb.NexusEndpointTarget_Worker_:
 			url = cl.BaseURL() + "/" + commonnexus.RouteDispatchNexusTaskByEndpoint.Path(entry.Id)
 			httpClient = &cl.Client
+			if clusterID != "" {
+				httpCaller = func(r *http.Request) (*http.Response, error) {
+					r.Header.Set(NexusCallbackSourceHeader, clusterID)
+					resp, callErr := httpClient.Do(r)
+					commonnexus.SetFailureSourceOnContext(ctx, resp)
+					return resp, callErr
+				}
+			}
 		default:
 			return nil, serviceerror.NewInternal("got unexpected endpoint target")
 		}
-		httpCaller := httpClient.Do
-		if clusterInfo, ok := clusterMetadata.GetAllClusterInfo()[clusterMetadata.GetCurrentClusterName()]; ok {
-			httpCaller = func(r *http.Request) (*http.Response, error) {
-				r.Header.Set(NexusCallbackSourceHeader, clusterInfo.ClusterID)
-				return httpClient.Do(r)
-			}
-		}
-		return nexus.NewClient(nexus.ClientOptions{
+		// still need to override the caller
+		return nexusrpc.NewHTTPClient(nexusrpc.HTTPClientOptions{
 			BaseURL:    url,
 			Service:    service,
 			HTTPCaller: httpCaller,

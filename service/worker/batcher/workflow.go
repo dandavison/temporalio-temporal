@@ -1,38 +1,20 @@
-// The MIT License
-//
-// Copyright (c) 2020 Temporal Technologies Inc.  All rights reserved.
-//
-// Copyright (c) 2020 Uber Technologies, Inc.
-//
-// Permission is hereby granted, free of charge, to any person obtaining a copy
-// of this software and associated documentation files (the "Software"), to deal
-// in the Software without restriction, including without limitation the rights
-// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-// copies of the Software, and to permit persons to whom the Software is
-// furnished to do so, subject to the following conditions:
-//
-// The above copyright notice and this permission notice shall be included in
-// all copies or substantial portions of the Software.
-//
-// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
-// THE SOFTWARE.
-
 package batcher
 
 import (
+	"errors"
 	"fmt"
 	"time"
 
-	commonpb "go.temporal.io/api/common/v1"
+	batchpb "go.temporal.io/api/batch/v1"
 	enumspb "go.temporal.io/api/enums/v1"
+	"go.temporal.io/api/serviceerror"
+	workflowpb "go.temporal.io/api/workflow/v1"
+	"go.temporal.io/api/workflowservice/v1"
 	"go.temporal.io/sdk/temporal"
 	"go.temporal.io/sdk/workflow"
-	"go.temporal.io/server/common/searchattribute"
+	batchspb "go.temporal.io/server/api/batch/v1"
+	"go.temporal.io/server/common/searchattribute/sadefs"
+	"google.golang.org/protobuf/types/known/durationpb"
 )
 
 const (
@@ -59,89 +41,33 @@ const (
 	BatchTypeDelete = "delete"
 	// BatchTypeReset is batch type for resetting workflows
 	BatchTypeReset = "reset"
+	// BatchTypeUpdateOptions is batch type for updating the options of workflow executions
+	BatchTypeUpdateOptions = "update_options"
+	// BatchTypeUnpauseActivities is batch type for unpausing activities
+	BatchTypeUnpauseActivities = "unpause_activities"
+	// BatchTypeUpdateActivitiesOptions is batch type for updating the options of activities
+	BatchTypeUpdateActivitiesOptions = "update_activity_options"
+	// BatchTypeResetActivities is batch type for resetting activities
+	BatchTypeResetActivities = "reset_activities"
 )
 
 var (
 	OpenBatchOperationQuery = fmt.Sprintf("%s = '%s' AND %s = %d",
-		searchattribute.TemporalNamespaceDivision,
+		sadefs.TemporalNamespaceDivision,
 		NamespaceDivision,
-		searchattribute.ExecutionStatus,
+		sadefs.ExecutionStatus,
+		int(enumspb.WORKFLOW_EXECUTION_STATUS_RUNNING),
+	)
+
+	OpenAdminBatchOperationQuery = fmt.Sprintf("%s = '%s' AND %s = %d",
+		sadefs.TemporalNamespaceDivision,
+		AdminNamespaceDivision,
+		sadefs.ExecutionStatus,
 		int(enumspb.WORKFLOW_EXECUTION_STATUS_RUNNING),
 	)
 )
 
 type (
-	// TerminateParams is the parameters for terminating workflow
-	TerminateParams struct {
-	}
-
-	// CancelParams is the parameters for canceling workflow
-	CancelParams struct {
-	}
-
-	// SignalParams is the parameters for signaling workflow
-	SignalParams struct {
-		SignalName string
-		Input      *commonpb.Payloads
-	}
-
-	// DeleteParams is the parameters for deleting workflow
-	DeleteParams struct {
-	}
-
-	// ResetParams is the parameters for reseting workflow
-	ResetParams struct {
-		// This is a serialized commonpb.ResetOptions. We can't include it with the
-		// correct type because workflow/activity arguments are going to be serialized with the
-		// json dataconverter, which doesn't support the "oneof" field in ResetOptions.
-		ResetOptions []byte
-		resetOptions *commonpb.ResetOptions // deserialized version
-		// Deprecated fields:
-		ResetType        enumspb.ResetType
-		ResetReapplyType enumspb.ResetReapplyType
-	}
-
-	// BatchParams is the parameters for batch operation workflow
-	BatchParams struct {
-		// Target namespace to execute batch operation
-		Namespace string
-		// To get the target workflows for processing
-		Query string
-		// Target workflows for processing
-		Executions []*commonpb.WorkflowExecution
-		// Reason for the operation
-		Reason string
-		// Supporting: signal,cancel,terminate,delete,reset
-		BatchType string
-
-		// Below are all optional
-		// TerminateParams is params only for BatchTypeTerminate
-		TerminateParams TerminateParams
-		// CancelParams is params only for BatchTypeCancel
-		CancelParams CancelParams
-		// SignalParams is params only for BatchTypeSignal
-		SignalParams SignalParams
-		// DeleteParams is params only for BatchTypeDelete
-		DeleteParams DeleteParams
-		// ResetParams is params only for BatchTypeReset
-		ResetParams ResetParams
-		// RPS sets the requests-per-second limit for the batch.
-		// The default (and max) is defined by `worker.BatcherRPS` in the dynamic config.
-		RPS float64
-		// Number of goroutines running in parallel to process
-		// This is moving to dynamic config.
-		// TODO: Remove it from BatchParams after 1.19+
-		Concurrency int
-		// Number of attempts for each workflow to process in case of retryable error before giving up
-		AttemptsOnRetryableError int
-		// timeout for activity heartbeat
-		ActivityHeartBeatTimeout time.Duration
-		// errors that will not retry which consumes AttemptsOnRetryableError. Default to empty
-		NonRetryableErrors []string
-		// internal conversion for NonRetryableErrors
-		_nonRetryableErrors map[string]struct{}
-	}
-
 	// HeartBeatDetails is the struct for heartbeat details
 	HeartBeatDetails struct {
 		PageToken   []byte
@@ -154,11 +80,20 @@ type (
 		ErrorCount int
 	}
 
-	taskDetail struct {
-		execution *commonpb.WorkflowExecution
-		attempts  int
-		// passing along the current heartbeat details to make heartbeat within a task so that it won't timeout
-		hbd HeartBeatDetails
+	task struct {
+		// the workflow execution to process
+		executionInfo *workflowpb.WorkflowExecutionInfo
+		// the number of attempts to process the workflow execution
+		attempts int
+		// reference to the page this task belongs to (for tracking page completion)
+		page *page
+	}
+
+	taskResponse struct {
+		// the error result from processing the task (nil for success)
+		err error
+		// reference to the page the completed task belonged to
+		page *page
 	}
 )
 
@@ -176,19 +111,18 @@ var (
 	}
 )
 
-// BatchWorkflow is the workflow that runs a batch job of resetting workflows.
-func BatchWorkflow(ctx workflow.Context, batchParams BatchParams) (HeartBeatDetails, error) {
-	batchParams = setDefaultParams(batchParams)
-	err := validateParams(batchParams)
-	if err != nil {
-		return HeartBeatDetails{}, err
+// BatchWorkflowProtobuf is the workflow that runs a batch job of resetting workflows.
+func BatchWorkflowProtobuf(ctx workflow.Context, batchParams *batchspb.BatchOperationInput) (HeartBeatDetails, error) {
+	if batchParams == nil {
+		return HeartBeatDetails{}, errors.New("batchParams is nil")
 	}
 
-	batchActivityOptions.HeartbeatTimeout = batchParams.ActivityHeartBeatTimeout
+	batchParams = setDefaultParams(batchParams)
+	batchActivityOptions.HeartbeatTimeout = batchParams.ActivityHeartbeatTimeout.AsDuration()
 	opt := workflow.WithActivityOptions(ctx, batchActivityOptions)
 	var result HeartBeatDetails
 	var ac *activities
-	err = workflow.ExecuteActivity(opt, ac.BatchActivity, batchParams).Get(ctx, &result)
+	err := workflow.ExecuteActivity(opt, ac.BatchActivityWithProtobuf, batchParams).Get(ctx, &result)
 	if err != nil {
 		return HeartBeatDetails{}, err
 	}
@@ -217,42 +151,140 @@ func attachBatchOperationStats(ctx workflow.Context, result HeartBeatDetails) er
 	return workflow.UpsertMemo(ctx, memo)
 }
 
-func validateParams(params BatchParams) error {
-	if params.BatchType == "" ||
-		params.Reason == "" ||
-		params.Namespace == "" ||
-		(params.Query == "" && len(params.Executions) == 0) {
-		return fmt.Errorf("must provide required parameters: BatchType/Reason/Namespace/Query/Executions")
+// nolint:revive,cognitive-complexity
+func ValidateBatchOperation(params *workflowservice.StartBatchOperationRequest) error {
+	if params.GetOperation() == nil ||
+		params.GetReason() == "" ||
+		params.GetNamespace() == "" ||
+		(params.GetVisibilityQuery() == "" && len(params.GetExecutions()) == 0) {
+		return serviceerror.NewInvalidArgument("must provide required parameters: BatchType/Reason/Namespace/Query/Executions")
 	}
 
-	if len(params.Query) > 0 && len(params.Executions) > 0 {
-		return fmt.Errorf("batch query and executions are mutually exclusive")
+	if len(params.GetJobId()) == 0 {
+		return serviceerror.NewInvalidArgument("JobId is not set on request.")
+	}
+	if len(params.GetNamespace()) == 0 {
+		return serviceerror.NewInvalidArgument("Namespace is not set on request.")
+	}
+	if len(params.GetVisibilityQuery()) == 0 && len(params.GetExecutions()) == 0 {
+		return serviceerror.NewInvalidArgument("VisibilityQuery or Executions must be set on request.")
+	}
+	if len(params.GetVisibilityQuery()) != 0 && len(params.GetExecutions()) != 0 {
+		return errors.New("batch query and executions are mutually exclusive")
+	}
+	if len(params.GetReason()) == 0 {
+		return serviceerror.NewInvalidArgument("Reason is not set on request.")
+	}
+	if params.GetOperation() == nil {
+		return serviceerror.NewInvalidArgument("Batch operation is not set on request.")
 	}
 
-	switch params.BatchType {
-	case BatchTypeSignal:
-		if params.SignalParams.SignalName == "" {
-			return fmt.Errorf("must provide signal name")
+	switch op := params.GetOperation().(type) {
+	case *workflowservice.StartBatchOperationRequest_SignalOperation:
+		if op.SignalOperation.GetSignal() == "" {
+			return errors.New("must provide signal name")
 		}
 		return nil
-	case BatchTypeCancel, BatchTypeTerminate, BatchTypeDelete, BatchTypeReset:
+	case *workflowservice.StartBatchOperationRequest_UpdateWorkflowOptionsOperation:
+		if op.UpdateWorkflowOptionsOperation.GetWorkflowExecutionOptions() == nil {
+			return errors.New("must provide UpdateOptions")
+		}
+		if op.UpdateWorkflowOptionsOperation.GetUpdateMask() == nil {
+			return errors.New("must provide UpdateMask")
+		}
+		// Validation for Versioning Override, if present, happens in history.
+		return nil
+	case *workflowservice.StartBatchOperationRequest_CancellationOperation,
+		*workflowservice.StartBatchOperationRequest_TerminationOperation,
+		*workflowservice.StartBatchOperationRequest_DeletionOperation:
+		return nil
+	case *workflowservice.StartBatchOperationRequest_ResetOperation:
+		if op.ResetOperation == nil {
+			return serviceerror.NewInvalidArgument("reset operation is not set")
+		}
+		if op.ResetOperation.Options != nil {
+			if op.ResetOperation.Options.Target == nil {
+				return serviceerror.NewInvalidArgument("batch reset missing target")
+			}
+		} else {
+			//nolint:staticcheck // SA1019: GetResetType is deprecated but still needed for backward compatibility
+			resetType := op.ResetOperation.GetResetType()
+			if _, ok := enumspb.ResetType_name[int32(resetType)]; !ok || resetType == enumspb.RESET_TYPE_UNSPECIFIED {
+				return serviceerror.NewInvalidArgumentf("unknown batch reset type %v", resetType)
+			}
+		}
+	case *workflowservice.StartBatchOperationRequest_UnpauseActivitiesOperation:
+		if op.UnpauseActivitiesOperation == nil {
+			return serviceerror.NewInvalidArgument("unpause activities operation is not set")
+		}
+		if op.UnpauseActivitiesOperation.GetActivity() == nil {
+			return serviceerror.NewInvalidArgument("activity filter must be set")
+		}
+		switch a := op.UnpauseActivitiesOperation.GetActivity().(type) {
+		case *batchpb.BatchOperationUnpauseActivities_Type:
+			if len(a.Type) == 0 {
+				return serviceerror.NewInvalidArgument("Either activity type must be set, or match all should be set to true")
+			}
+		case *batchpb.BatchOperationUnpauseActivities_MatchAll:
+			if !a.MatchAll {
+				return serviceerror.NewInvalidArgument("Either activity type must be set, or match all should be set to true")
+			}
+		}
+		return nil
+	case *workflowservice.StartBatchOperationRequest_ResetActivitiesOperation:
+		if op.ResetActivitiesOperation == nil {
+			return serviceerror.NewInvalidArgument("reset activities operation is not set")
+		}
+		if op.ResetActivitiesOperation.GetActivity() == nil && !op.ResetActivitiesOperation.GetMatchAll() {
+			return serviceerror.NewInvalidArgument("must provide ActivityType or MatchAll")
+		}
+
+		switch a := op.ResetActivitiesOperation.GetActivity().(type) {
+		case *batchpb.BatchOperationResetActivities_Type:
+			if len(a.Type) == 0 {
+				return serviceerror.NewInvalidArgument("Either activity type must be set, or match all should be set to true")
+			}
+		case *batchpb.BatchOperationResetActivities_MatchAll:
+			if !a.MatchAll {
+				return serviceerror.NewInvalidArgument("Either activity type must be set, or match all should be set to true")
+			}
+		}
+		return nil
+	case *workflowservice.StartBatchOperationRequest_UpdateActivityOptionsOperation:
+		if op.UpdateActivityOptionsOperation == nil {
+			return serviceerror.NewInvalidArgument("update activity options operation is not set")
+		}
+		if op.UpdateActivityOptionsOperation.GetActivityOptions() != nil && op.UpdateActivityOptionsOperation.GetRestoreOriginal() {
+			return serviceerror.NewInvalidArgument("cannot set both activity options and restore original")
+		}
+		if op.UpdateActivityOptionsOperation.GetActivityOptions() == nil && !op.UpdateActivityOptionsOperation.GetRestoreOriginal() {
+			return serviceerror.NewInvalidArgument("Either activity type must be set, or restore original should be set to true")
+		}
+
+		switch a := op.UpdateActivityOptionsOperation.GetActivity().(type) {
+		case *batchpb.BatchOperationUpdateActivityOptions_Type:
+			if len(a.Type) == 0 {
+				return serviceerror.NewInvalidArgument("Either activity type must be set, or match all should be set to true")
+			}
+		case *batchpb.BatchOperationUpdateActivityOptions_MatchAll:
+			if !a.MatchAll {
+				return serviceerror.NewInvalidArgument("Either activity type must be set, or match all should be set to true")
+			}
+		}
 		return nil
 	default:
-		return fmt.Errorf("not supported batch type: %v", params.BatchType)
+		return fmt.Errorf("not supported batch type: %v", params.GetOperation())
 	}
+	return nil
 }
 
-func setDefaultParams(params BatchParams) BatchParams {
-	if params.AttemptsOnRetryableError <= 1 {
+func setDefaultParams(params *batchspb.BatchOperationInput) *batchspb.BatchOperationInput {
+	if params.GetAttemptsOnRetryableError() <= 1 {
 		params.AttemptsOnRetryableError = defaultAttemptsOnRetryableError
 	}
-	if params.ActivityHeartBeatTimeout <= 0 {
-		params.ActivityHeartBeatTimeout = defaultActivityHeartBeatTimeout
-	}
-	if len(params.NonRetryableErrors) > 0 {
-		params._nonRetryableErrors = make(map[string]struct{}, len(params.NonRetryableErrors))
-		for _, estr := range params.NonRetryableErrors {
-			params._nonRetryableErrors[estr] = struct{}{}
+	if params.GetActivityHeartbeatTimeout().AsDuration() <= 0 {
+		params.ActivityHeartbeatTimeout = &durationpb.Duration{
+			Seconds: int64(defaultActivityHeartBeatTimeout / time.Second),
 		}
 	}
 	return params

@@ -1,27 +1,3 @@
-// The MIT License
-//
-// Copyright (c) 2020 Temporal Technologies Inc.  All rights reserved.
-//
-// Copyright (c) 2020 Uber Technologies, Inc.
-//
-// Permission is hereby granted, free of charge, to any person obtaining a copy
-// of this software and associated documentation files (the "Software"), to deal
-// in the Software without restriction, including without limitation the rights
-// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-// copies of the Software, and to permit persons to whom the Software is
-// furnished to do so, subject to the following conditions:
-//
-// The above copyright notice and this permission notice shall be included in
-// all copies or substantial portions of the Software.
-//
-// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
-// THE SOFTWARE.
-
 package authorization
 
 import (
@@ -31,7 +7,11 @@ import (
 	"crypto/x509/pkix"
 	"time"
 
+	enumspb "go.temporal.io/api/enums/v1"
 	"go.temporal.io/api/serviceerror"
+	"go.temporal.io/api/workflowservice/v1"
+	"go.temporal.io/server/common/api"
+	"go.temporal.io/server/common/dynamicconfig"
 	"go.temporal.io/server/common/headers"
 	"go.temporal.io/server/common/log"
 	"go.temporal.io/server/common/log/tag"
@@ -100,14 +80,16 @@ func PeerCert(tlsInfo *credentials.TLSInfo) *x509.Certificate {
 }
 
 type Interceptor struct {
-	claimMapper         ClaimMapper
-	authorizer          Authorizer
-	metricsHandler      metrics.Handler
-	logger              log.Logger
-	namespaceChecker    NamespaceChecker
-	audienceGetter      JWTAudienceMapper
-	authHeaderName      string
-	authExtraHeaderName string
+	claimMapper                  ClaimMapper
+	authorizer                   Authorizer
+	metricsHandler               metrics.Handler
+	logger                       log.Logger
+	namespaceChecker             NamespaceChecker
+	audienceGetter               JWTAudienceMapper
+	authHeaderName               string
+	authExtraHeaderName          string
+	exposeAuthorizerErrors       dynamicconfig.BoolPropertyFn
+	enableCrossNamespaceCommands dynamicconfig.BoolPropertyFn
 }
 
 // NewInterceptor creates an authorization interceptor.
@@ -120,16 +102,20 @@ func NewInterceptor(
 	audienceGetter JWTAudienceMapper,
 	authHeaderName string,
 	authExtraHeaderName string,
+	exposeAuthorizerErrors dynamicconfig.BoolPropertyFn,
+	enableCrossNamespaceCommands dynamicconfig.BoolPropertyFn,
 ) *Interceptor {
 	return &Interceptor{
-		claimMapper:         claimMapper,
-		authorizer:          authorizer,
-		logger:              logger,
-		namespaceChecker:    namespaceChecker,
-		metricsHandler:      metricsHandler,
-		authHeaderName:      cmp.Or(authHeaderName, defaultAuthHeaderName),
-		authExtraHeaderName: cmp.Or(authExtraHeaderName, defaultAuthExtraHeaderName),
-		audienceGetter:      audienceGetter,
+		claimMapper:                  claimMapper,
+		authorizer:                   authorizer,
+		logger:                       logger,
+		namespaceChecker:             namespaceChecker,
+		metricsHandler:               metricsHandler,
+		authHeaderName:               cmp.Or(authHeaderName, defaultAuthHeaderName),
+		authExtraHeaderName:          cmp.Or(authExtraHeaderName, defaultAuthExtraHeaderName),
+		audienceGetter:               audienceGetter,
+		exposeAuthorizerErrors:       exposeAuthorizerErrors,
+		enableCrossNamespaceCommands: enableCrossNamespaceCommands,
 	}
 }
 
@@ -172,6 +158,11 @@ func (a *Interceptor) Intercept(
 			Request:   req,
 		}
 		if err := a.Authorize(ctx, claims, ct); err != nil {
+			return nil, err
+		}
+
+		// Authorize target namespaces in cross-namespace commands
+		if err := a.authorizeTargetNamespaces(ctx, claims, namespace, req); err != nil {
 			return nil, err
 		}
 	}
@@ -246,6 +237,9 @@ func (a *Interceptor) Authorize(ctx context.Context, claims *Claims, ct *CallTar
 	if err != nil {
 		metrics.ServiceErrAuthorizeFailedCounter.With(mh).Record(1)
 		a.logger.Error("Authorization error", tag.Error(err))
+		if a.exposeAuthorizerErrors() {
+			return err
+		}
 		return errUnauthorized // return a generic error to the caller without disclosing details
 	}
 	if result.Decision != DecisionAllow {
@@ -271,4 +265,76 @@ func (a *Interceptor) getMetricsHandler(nsName string) metrics.Handler {
 		}
 	}
 	return a.metricsHandler.WithTags(metrics.OperationTag(metrics.AuthorizationScope), nsTag)
+}
+
+// authorizeTargetNamespaces authorizes cross-namespace commands in RespondWorkflowTaskCompleted.
+// Commands like SignalExternalWorkflow, StartChildWorkflow, and CancelExternalWorkflow can target
+// workflows in different namespaces. This method ensures the caller has permission in those target
+// namespaces as well.
+func (a *Interceptor) authorizeTargetNamespaces(
+	ctx context.Context,
+	claims *Claims,
+	sourceNamespace string,
+	req interface{},
+) error {
+	// Skip if cross-namespace commands are not enabled
+	if !a.enableCrossNamespaceCommands() {
+		return nil
+	}
+
+	// Cross-namespace commands can only be initiated via RespondWorkflowTaskCompletedRequest.
+	// Here we handle authorization for all such commands: SignalExternalWorkflow,
+	// StartChildWorkflow, and RequestCancelExternalWorkflow targeting a different namespace.
+	wftRequest, ok := req.(*workflowservice.RespondWorkflowTaskCompletedRequest)
+	if !ok {
+		return nil
+	}
+
+	// Track namespace+API combinations we've already authorized to avoid duplicate checks
+	authorizedNamespaceAPIs := make(map[string]struct{})
+
+	for _, cmd := range wftRequest.GetCommands() {
+		var targetNamespace string
+		var apiName string
+
+		switch cmd.GetCommandType() {
+		case enumspb.COMMAND_TYPE_SIGNAL_EXTERNAL_WORKFLOW_EXECUTION:
+			if attr := cmd.GetSignalExternalWorkflowExecutionCommandAttributes(); attr != nil {
+				targetNamespace = attr.GetNamespace()
+				apiName = "SignalWorkflowExecution"
+			}
+		case enumspb.COMMAND_TYPE_START_CHILD_WORKFLOW_EXECUTION:
+			if attr := cmd.GetStartChildWorkflowExecutionCommandAttributes(); attr != nil {
+				targetNamespace = attr.GetNamespace()
+				apiName = "StartWorkflowExecution"
+			}
+		case enumspb.COMMAND_TYPE_REQUEST_CANCEL_EXTERNAL_WORKFLOW_EXECUTION:
+			if attr := cmd.GetRequestCancelExternalWorkflowExecutionCommandAttributes(); attr != nil {
+				targetNamespace = attr.GetNamespace()
+				apiName = "RequestCancelWorkflowExecution"
+			}
+		default:
+			// Other command types don't target external namespaces
+		}
+
+		// Skip if empty, same as source, or already authorized
+		if targetNamespace == "" || targetNamespace == sourceNamespace {
+			continue
+		}
+		key := targetNamespace + ":" + apiName
+		if _, ok := authorizedNamespaceAPIs[key]; ok {
+			continue
+		}
+
+		// Authorize access to target namespace for this specific API
+		if err := a.Authorize(ctx, claims, &CallTarget{
+			APIName:   api.WorkflowServicePrefix + apiName,
+			Namespace: targetNamespace,
+			Request:   req,
+		}); err != nil {
+			return err
+		}
+		authorizedNamespaceAPIs[key] = struct{}{}
+	}
+	return nil
 }

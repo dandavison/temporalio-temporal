@@ -1,27 +1,3 @@
-// The MIT License
-//
-// Copyright (c) 2020 Temporal Technologies Inc.  All rights reserved.
-//
-// Copyright (c) 2020 Uber Technologies, Inc.
-//
-// Permission is hereby granted, free of charge, to any person obtaining a copy
-// of this software and associated documentation files (the "Software"), to deal
-// in the Software without restriction, including without limitation the rights
-// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-// copies of the Software, and to permit persons to whom the Software is
-// furnished to do so, subject to the following conditions:
-//
-// The above copyright notice and this permission notice shall be included in
-// all copies or substantial portions of the Software.
-//
-// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
-// THE SOFTWARE.
-
 package tdbg
 
 import (
@@ -31,17 +7,19 @@ import (
 	"strings"
 	"time"
 
-	"github.com/temporalio/tctl-kit/pkg/color"
+	"github.com/fatih/color"
 	"github.com/urfave/cli/v2"
 	commonpb "go.temporal.io/api/common/v1"
-	enumspb "go.temporal.io/api/enums/v1"
 	historypb "go.temporal.io/api/history/v1"
+	"go.temporal.io/api/workflowservice/v1"
 	"go.temporal.io/server/api/adminservice/v1"
 	enumsspb "go.temporal.io/server/api/enums/v1"
-	"go.temporal.io/server/api/history/v1"
+	historyspb "go.temporal.io/server/api/history/v1"
 	persistencespb "go.temporal.io/server/api/persistence/v1"
+	"go.temporal.io/server/chasm"
 	"go.temporal.io/server/common"
 	"go.temporal.io/server/common/codec"
+	"go.temporal.io/server/common/log"
 	"go.temporal.io/server/common/namespace"
 	"go.temporal.io/server/common/persistence/serialization"
 	"go.temporal.io/server/common/persistence/versionhistory"
@@ -76,7 +54,6 @@ func AdminShowWorkflow(c *cli.Context, clientFactory ClientFactory) error {
 	outputFileName := c.String(FlagOutputFilename)
 
 	client := clientFactory.AdminClient(c)
-
 	serializer := serialization.NewSerializer()
 
 	ctx, cancel := newContext(c)
@@ -115,6 +92,7 @@ func AdminShowWorkflow(c *cli.Context, clientFactory ClientFactory) error {
 	var errs []error
 	for idx, b := range histories {
 		totalSize += len(b.Data)
+		// nolint:errcheck // assuming that write will succeed.
 		fmt.Fprintf(c.App.Writer, "======== batch %v, blob len: %v ======\n", idx+1, len(b.Data))
 		historyBatch, err := serializer.DeserializeEvents(b)
 		if err != nil {
@@ -128,6 +106,7 @@ func AdminShowWorkflow(c *cli.Context, clientFactory ClientFactory) error {
 		data, err := encoder.EncodeHistoryEvents(historyBatch)
 		if err != nil {
 			err := fmt.Errorf("unable to encode History Events: %s", err)
+			// nolint:errcheck // assuming that write will succeed.
 			fmt.Fprintln(c.App.Writer, err)
 			text, terr := prototext.Marshal(&historypb.History{Events: historyBatch})
 			if terr == nil {
@@ -137,8 +116,10 @@ func AdminShowWorkflow(c *cli.Context, clientFactory ClientFactory) error {
 			errs = append(errs, err)
 			continue
 		}
+		// nolint:errcheck // assuming that write will succeed.
 		fmt.Fprintln(c.App.Writer, string(data))
 	}
+	// nolint:errcheck // assuming that write will succeed.
 	fmt.Fprintf(c.App.Writer, "======== total batches %v, total blob len: %v ======\n", len(histories), totalSize)
 
 	err = errors.Join(errs...)
@@ -176,7 +157,6 @@ func AdminImportWorkflow(c *cli.Context, clientFactory ClientFactory) error {
 	inputFileName := c.String(FlagInputFilename)
 
 	client := clientFactory.AdminClient(c)
-
 	serializer := serialization.NewSerializer()
 
 	ctx, cancel := newContext(c)
@@ -192,7 +172,7 @@ func AdminImportWorkflow(c *cli.Context, clientFactory ClientFactory) error {
 		return fmt.Errorf("unable to deserialize History data: %s", err)
 	}
 
-	versionHistory := &history.VersionHistory{}
+	versionHistory := &historyspb.VersionHistory{}
 	for _, historyBatch := range historyBatches {
 		for _, event := range historyBatch.Events {
 			item := versionhistory.NewVersionHistoryItem(event.EventId, event.Version)
@@ -208,7 +188,7 @@ func AdminImportWorkflow(c *cli.Context, clientFactory ClientFactory) error {
 	for i := 0; i < len(historyBatches)+1; i++ {
 		if i < len(historyBatches) {
 			historyBatch := historyBatches[i]
-			blob, err := serializer.SerializeEvents(historyBatch.Events, enumspb.ENCODING_TYPE_PROTO3)
+			blob, err := serializer.SerializeEvents(historyBatch.Events)
 			if err != nil {
 				return fmt.Errorf("unable to deserialize Events: %s", err)
 			}
@@ -260,40 +240,85 @@ func AdminImportWorkflow(c *cli.Context, clientFactory ClientFactory) error {
 	return nil
 }
 
-// AdminDescribeWorkflow describe a new workflow execution for admin
-func AdminDescribeWorkflow(c *cli.Context, clientFactory ClientFactory) error {
+// AdminDescribeExecution describes a Temporal execution (CHASM tree or workflow).
+func AdminDescribeExecution(c *cli.Context, clientFactory ClientFactory) error {
 	resp, err := describeMutableState(c, clientFactory)
 	if err != nil {
 		return err
 	}
+	if resp == nil {
+		return errors.New("no mutable state returned")
+	}
 
-	if resp != nil {
-		fmt.Fprintln(c.App.Writer, color.Green(c, "Cache mutable state:"))
-		if resp.GetCacheMutableState() != nil {
-			prettyPrintJSONObject(c, resp.GetCacheMutableState())
-		}
-		fmt.Fprintln(c.App.Writer, color.Green(c, "Database mutable state:"))
+	// nolint:errcheck // assuming that write will succeed.
+	fmt.Fprintln(c.App.Writer, color.GreenString("Cache mutable state:"))
+	if resp.GetCacheMutableState() != nil {
+		prettyPrintJSONObject(c, resp.GetCacheMutableState())
+	}
+	if resp.GetDatabaseMutableState() != nil {
+		// nolint:errcheck // assuming that write will succeed.
+		fmt.Fprintln(c.App.Writer, color.GreenString("Database mutable state:"))
 		prettyPrintJSONObject(c, resp.GetDatabaseMutableState())
+	}
 
-		fmt.Fprintln(c.App.Writer, color.Green(c, "Current branch token:"))
+	// CHASM executions also print their tree.
+	if len(resp.GetDatabaseMutableState().GetChasmNodes()) > 0 {
+		err := dumpChasmTree(resp, c)
+		if err != nil {
+			// nolint:errcheck // assuming that write will succeed.
+			fmt.Fprintln(c.App.Writer, color.RedString("Unable to dump CHASM tree:"), err)
+		}
+	}
+
+	if resp.GetDatabaseMutableState() != nil {
+		// nolint:errcheck // assuming that write will succeed.
+		fmt.Fprintln(c.App.Writer, color.GreenString("Current branch token:"))
 		versionHistories := resp.GetDatabaseMutableState().GetExecutionInfo().GetVersionHistories()
 		// if VersionHistories is set, then all branch infos are stored in VersionHistories
 		currentVersionHistory, err := versionhistory.GetCurrentVersionHistory(versionHistories)
 		if err != nil {
-			fmt.Fprintln(c.App.Writer, color.Red(c, "Unable to get current version history:"), err)
+			// nolint:errcheck // assuming that write will succeed.
+			fmt.Fprintln(c.App.Writer, color.RedString("Unable to get current version history:"), err)
 		} else {
 			currentBranchToken := persistencespb.HistoryBranch{}
 			err := currentBranchToken.Unmarshal(currentVersionHistory.BranchToken)
 			if err != nil {
-				fmt.Fprintln(c.App.Writer, color.Red(c, "Unable to unmarshal current branch token:"), err)
+				// nolint:errcheck // assuming that write will succeed.
+				fmt.Fprintln(c.App.Writer, color.RedString("Unable to unmarshal current branch token:"), err)
 			} else {
 				prettyPrintJSONObject(c, &currentBranchToken)
 			}
 		}
-
-		fmt.Fprintf(c.App.Writer, "History service address: %s\n", resp.GetHistoryAddr())
-		fmt.Fprintf(c.App.Writer, "Shard Id: %s\n", resp.GetShardId())
 	}
+
+	// nolint:errcheck // assuming that write will succeed.
+	fmt.Fprintf(c.App.Writer, "History service address: %s\n", resp.GetHistoryAddr())
+	// nolint:errcheck // assuming that write will succeed.
+	fmt.Fprintf(c.App.Writer, "Shard Id: %s\n", resp.GetShardId())
+
+	return nil
+}
+
+func dumpChasmTree(resp *adminservice.DescribeMutableStateResponse, c *cli.Context) error {
+	chasmNodes := resp.GetDatabaseMutableState().GetChasmNodes()
+	if len(chasmNodes) == 0 {
+		return nil
+	}
+
+	logger := log.NewNoopLogger()
+	registry, err := newChasmRegistry(logger)
+	if err != nil {
+		return fmt.Errorf("failed to create CHASM registry: %w", err)
+	}
+
+	decodedNodes, err := decodeChasmNodes(chasmNodes, registry)
+	if err != nil {
+		return fmt.Errorf("failed to decode CHASM nodes: %w", err)
+	}
+
+	fmt.Fprintln(c.App.Writer, color.GreenString("CHASM Tree Nodes:")) // nolint:errcheck // assuming that write will succeed.
+	prettyPrintJSONObject(c, decodedNodes)
+
 	return nil
 }
 
@@ -304,7 +329,7 @@ func describeMutableState(c *cli.Context, clientFactory ClientFactory) (*adminse
 	if err != nil {
 		return nil, err
 	}
-	wid, err := getRequiredOption(c, FlagWorkflowID)
+	bid, err := getRequiredOption(c, FlagBusinessID)
 	if err != nil {
 		return nil, err
 	}
@@ -316,12 +341,13 @@ func describeMutableState(c *cli.Context, clientFactory ClientFactory) (*adminse
 	resp, err := adminClient.DescribeMutableState(ctx, &adminservice.DescribeMutableStateRequest{
 		Namespace: namespace,
 		Execution: &commonpb.WorkflowExecution{
-			WorkflowId: wid,
+			WorkflowId: bid,
 			RunId:      rid,
 		},
+		Archetype: getArchetypeWithDefault(c, chasm.WorkflowArchetype),
 	})
 	if err != nil {
-		return nil, fmt.Errorf("unable to get Workflow Mutable State: %s", err)
+		return nil, fmt.Errorf("unable to get Mutable State: %s", err)
 	}
 	return resp, nil
 }
@@ -356,19 +382,23 @@ func AdminDeleteWorkflow(c *cli.Context, clientFactory ClientFactory, prompter *
 			WorkflowId: wid,
 			RunId:      rid,
 		},
+		Archetype: getArchetypeWithDefault(c, chasm.WorkflowArchetype),
 	})
 	if err != nil {
 		return fmt.Errorf("unable to delete workflow execution: %s", err)
 	}
 
 	if len(resp.Warnings) != 0 {
+		// nolint:errcheck // assuming that write will succeed.
 		fmt.Fprintln(c.App.Writer, "Warnings:")
 		for _, warning := range resp.Warnings {
 			fmt.Fprintf(c.App.Writer, "- %s\n", warning)
 		}
+		// nolint:errcheck // assuming that write will succeed.
 		fmt.Fprintln(c.App.Writer, "")
 	}
 
+	// nolint:errcheck // assuming that write will succeed.
 	fmt.Fprintln(c.App.Writer, "Workflow execution deleted.")
 
 	return nil
@@ -387,6 +417,7 @@ func AdminGetShardID(c *cli.Context) error {
 		return fmt.Errorf("missing required parameter number of Shards")
 	}
 	shardID := common.WorkflowIDToHistoryShard(namespaceID, wid, numberOfShards)
+	// nolint:errcheck // assuming that write will succeed.
 	fmt.Fprintf(c.App.Writer, "ShardId for namespace, workflowId: %v, %v is %v \n", namespaceID, wid, shardID)
 	return nil
 }
@@ -427,12 +458,12 @@ func AdminListShardTasks(c *cli.Context, clientFactory ClientFactory, registry t
 	req := &adminservice.ListHistoryTasksRequest{
 		ShardId:  sid,
 		Category: int32(category.ID()),
-		TaskRange: &history.TaskRange{
-			InclusiveMinTaskKey: &history.TaskKey{
+		TaskRange: &historyspb.TaskRange{
+			InclusiveMinTaskKey: &historyspb.TaskKey{
 				FireTime: timestamppb.New(minFireTime),
 				TaskId:   c.Int64(FlagMinTaskID),
 			},
-			ExclusiveMaxTaskKey: &history.TaskKey{
+			ExclusiveMaxTaskKey: &historyspb.TaskKey{
 				FireTime: timestamppb.New(maxFireTime),
 				TaskId:   c.Int64(FlagMaxTaskID),
 			},
@@ -477,6 +508,10 @@ func AdminRemoveTask(
 	}
 	var visibilityTimestamp int64
 	if category.Type() == tasks.CategoryTypeScheduled {
+		if !c.IsSet(FlagTaskVisibilityTimestamp) {
+			//nolint:errorlint
+			return fmt.Errorf("%s is required to remove %s tasks", FlagTaskVisibilityTimestamp, category.Name())
+		}
 		visibilityTimestamp = c.Int64(FlagTaskVisibilityTimestamp)
 	}
 
@@ -638,6 +673,16 @@ func AdminDescribeHistoryHost(c *cli.Context, clientFactory ClientFactory) error
 	return nil
 }
 
+func adminRefreshWorkflowTasks(c *cli.Context, clientFactory ClientFactory, prompter *Prompter) error {
+	if c.IsSet(FlagVisibilityQuery) && c.IsSet(FlagWorkflowID) && c.IsSet(FlagRunID) {
+		return errors.New("setting parameter visibility query with workflow ID and run ID is not allowed")
+	}
+	if c.IsSet(FlagVisibilityQuery) && !c.IsSet(FlagWorkflowID) && !c.IsSet(FlagRunID) {
+		return AdminBatchRefreshWorkflowTasks(c, clientFactory, prompter)
+	}
+	return AdminRefreshWorkflowTasks(c, clientFactory)
+}
+
 // AdminRefreshWorkflowTasks refreshes all the tasks of a workflow
 func AdminRefreshWorkflowTasks(c *cli.Context, clientFactory ClientFactory) error {
 	adminClient := clientFactory.AdminClient(c)
@@ -667,12 +712,74 @@ func AdminRefreshWorkflowTasks(c *cli.Context, clientFactory ClientFactory) erro
 			WorkflowId: wid,
 			RunId:      rid,
 		},
+		Archetype: getArchetypeWithDefault(c, chasm.WorkflowArchetype),
 	})
 	if err != nil {
 		return fmt.Errorf("unable to refresh Workflow Task: %s", err)
 	} else {
+		// nolint:errcheck // assuming that write will succeed.
 		fmt.Fprintln(c.App.Writer, "Refresh workflow task succeeded.")
 	}
+	return nil
+}
+
+// AdminBatchRefreshWorkflowTasks starts a batch job to refresh workflow tasks for multiple workflows
+func AdminBatchRefreshWorkflowTasks(c *cli.Context, clientFactory ClientFactory, prompter *Prompter) error {
+	adminClient := clientFactory.AdminClient(c)
+	workflowClient := clientFactory.WorkflowClient(c)
+
+	nsName, err := getRequiredOption(c, FlagNamespace)
+	if err != nil {
+		return err
+	}
+
+	query, err := getRequiredOption(c, FlagVisibilityQuery)
+	if err != nil {
+		return err
+	}
+
+	reason, err := getRequiredOption(c, FlagReason)
+	if err != nil {
+		return err
+	}
+
+	jobID := c.String(FlagJobID)
+	if jobID == "" {
+		jobID = fmt.Sprintf("batch-refresh-%d", time.Now().UnixNano())
+	}
+
+	ctx, cancel := newContext(c)
+	defer cancel()
+
+	// Count workflows matching the query to confirm with user
+	countResp, err := workflowClient.CountWorkflowExecutions(ctx, &workflowservice.CountWorkflowExecutionsRequest{
+		Namespace: nsName,
+		Query:     query,
+	})
+	if err != nil {
+		return fmt.Errorf("unable to count workflow executions: %w", err)
+	}
+
+	msg := fmt.Sprintf("Will refresh tasks for %d execution(s) matching query %q in namespace %q. Continue Y/N?",
+		countResp.GetCount(), query, nsName)
+	prompter.Prompt(msg)
+
+	_, err = adminClient.StartAdminBatchOperation(ctx, &adminservice.StartAdminBatchOperationRequest{
+		Namespace:       nsName,
+		VisibilityQuery: query,
+		JobId:           jobID,
+		Reason:          reason,
+		Identity:        getCurrentUserFromEnv(),
+		Operation: &adminservice.StartAdminBatchOperationRequest_RefreshTasksOperation{
+			RefreshTasksOperation: &adminservice.BatchOperationRefreshTasks{},
+		},
+	})
+	if err != nil {
+		return fmt.Errorf("unable to start batch refresh workflow tasks: %w", err)
+	}
+
+	// nolint:errcheck // assuming that write will succeed.
+	fmt.Fprintf(c.App.Writer, "Batch Refresh Workflow Tasks started successfully for Job ID: %s\n", jobID)
 	return nil
 }
 
@@ -703,6 +810,7 @@ func AdminRebuildMutableState(c *cli.Context, clientFactory ClientFactory) error
 	if err != nil {
 		return fmt.Errorf("rebuild mutable state failed: %s", err)
 	} else {
+		// nolint:errcheck // assuming that write will succeed.
 		fmt.Fprintln(c.App.Writer, "rebuild mutable state succeeded.")
 	}
 	return nil
@@ -735,11 +843,13 @@ func AdminReplicateWorkflow(
 			WorkflowId: wid,
 			RunId:      rid,
 		},
+		Archetype: getArchetypeWithDefault(c, chasm.WorkflowArchetype),
 	})
 	if err != nil {
 		return fmt.Errorf("unable to replicate workflow: %w", err)
 	}
 
+	// nolint:errcheck // assuming that write will succeed.
 	fmt.Fprintln(c.App.Writer, "Replication tasks generated successfully.")
 	return nil
 }

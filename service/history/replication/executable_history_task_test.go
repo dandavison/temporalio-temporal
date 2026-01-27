@@ -1,27 +1,3 @@
-// The MIT License
-//
-// Copyright (c) 2020 Temporal Technologies Inc.  All rights reserved.
-//
-// Copyright (c) 2020 Uber Technologies, Inc.
-//
-// Permission is hereby granted, free of charge, to any person obtaining a copy
-// of this software and associated documentation files (the "Software"), to deal
-// in the Software without restriction, including without limitation the rights
-// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-// copies of the Software, and to permit persons to whom the Software is
-// furnished to do so, subject to the following conditions:
-//
-// The above copyright notice and this permission notice shall be included in
-// all copies or substantial portions of the Software.
-//
-// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
-// THE SOFTWARE.
-
 package replication
 
 import (
@@ -34,11 +10,10 @@ import (
 	"github.com/stretchr/testify/require"
 	"github.com/stretchr/testify/suite"
 	commonpb "go.temporal.io/api/common/v1"
-	enumspb "go.temporal.io/api/enums/v1"
 	historypb "go.temporal.io/api/history/v1"
 	"go.temporal.io/api/serviceerror"
 	enumsspb "go.temporal.io/server/api/enums/v1"
-	"go.temporal.io/server/api/history/v1"
+	historyspb "go.temporal.io/server/api/history/v1"
 	replicationspb "go.temporal.io/server/api/replication/v1"
 	workflowspb "go.temporal.io/server/api/workflow/v1"
 	"go.temporal.io/server/client"
@@ -52,7 +27,9 @@ import (
 	"go.temporal.io/server/common/persistence/serialization"
 	serviceerrors "go.temporal.io/server/common/serviceerror"
 	"go.temporal.io/server/common/testing/protorequire"
-	"go.temporal.io/server/common/xdc"
+	"go.temporal.io/server/service/history/consts"
+	historyi "go.temporal.io/server/service/history/interfaces"
+	"go.temporal.io/server/service/history/replication/eventhandler"
 	"go.temporal.io/server/service/history/shard"
 	"go.temporal.io/server/service/history/tests"
 	"go.uber.org/mock/gomock"
@@ -68,13 +45,13 @@ type (
 		clientBean              *client.MockBean
 		shardController         *shard.MockController
 		namespaceCache          *namespace.MockRegistry
-		ndcHistoryResender      *xdc.MockNDCHistoryResender
 		metricsHandler          metrics.Handler
 		logger                  log.Logger
 		executableTask          *MockExecutableTask
 		eagerNamespaceRefresher *MockEagerNamespaceRefresher
 		eventSerializer         serialization.Serializer
 		mockExecutionManager    *persistence.MockExecutionManager
+		mockEventHandler        *eventhandler.MockHistoryEventsHandler
 
 		replicationTask   *replicationspb.HistoryTaskAttributes
 		sourceClusterName string
@@ -130,27 +107,26 @@ func (s *executableHistoryTaskSuite) SetupTest() {
 	s.clientBean = client.NewMockBean(s.controller)
 	s.shardController = shard.NewMockController(s.controller)
 	s.namespaceCache = namespace.NewMockRegistry(s.controller)
-	s.ndcHistoryResender = xdc.NewMockNDCHistoryResender(s.controller)
 	s.metricsHandler = metrics.NoopMetricsHandler
 	s.logger = log.NewNoopLogger()
 	s.executableTask = NewMockExecutableTask(s.controller)
 	s.eagerNamespaceRefresher = NewMockEagerNamespaceRefresher(s.controller)
 	s.eventSerializer = serialization.NewSerializer()
 	s.mockExecutionManager = persistence.NewMockExecutionManager(s.controller)
-
+	s.mockEventHandler = eventhandler.NewMockHistoryEventsHandler(s.controller)
 	s.taskID = rand.Int63()
 	s.processToolBox = ProcessToolBox{
 		ClusterMetadata:         s.clusterMetadata,
 		ClientBean:              s.clientBean,
 		ShardController:         s.shardController,
 		NamespaceCache:          s.namespaceCache,
-		NDCHistoryResender:      s.ndcHistoryResender,
 		MetricsHandler:          s.metricsHandler,
 		Logger:                  s.logger,
 		EagerNamespaceRefresher: s.eagerNamespaceRefresher,
-		EventSerializer:         s.eventSerializer,
+		Serializer:              s.eventSerializer,
 		DLQWriter:               NewExecutionManagerDLQWriter(s.mockExecutionManager),
 		Config:                  tests.NewDynamicConfig(),
+		HistoryEventsHandler:    s.mockEventHandler,
 	}
 	s.processToolBox.Config.ReplicationMultipleBatches = dynamicconfig.GetBoolPropertyFn(s.replicationMultipleBatches)
 
@@ -160,13 +136,13 @@ func (s *executableHistoryTaskSuite) SetupTest() {
 	eventsBlob, _ := s.eventSerializer.SerializeEvents([]*historypb.HistoryEvent{{
 		EventId: firstEventID,
 		Version: version,
-	}}, enumspb.ENCODING_TYPE_PROTO3)
+	}})
 	s.events, _ = s.eventSerializer.DeserializeEvents(eventsBlob)
 	s.eventsBatches = [][]*historypb.HistoryEvent{s.events}
 	newEventsBlob, _ := s.eventSerializer.SerializeEvents([]*historypb.HistoryEvent{{
 		EventId: 1,
 		Version: version,
-	}}, enumspb.ENCODING_TYPE_PROTO3)
+	}})
 	s.newRunEvents, _ = s.eventSerializer.DeserializeEvents(newEventsBlob)
 	s.newRunID = uuid.NewString()
 
@@ -181,7 +157,7 @@ func (s *executableHistoryTaskSuite) SetupTest() {
 		WorkflowId:        uuid.NewString(),
 		RunId:             uuid.NewString(),
 		BaseExecutionInfo: &workflowspb.BaseExecutionInfo{},
-		VersionHistoryItems: []*history.VersionHistoryItem{{
+		VersionHistoryItems: []*historyspb.VersionHistoryItem{{
 			EventId: nextEventID - 1,
 			Version: version,
 		}},
@@ -203,12 +179,14 @@ func (s *executableHistoryTaskSuite) SetupTest() {
 		s.replicationTask,
 		s.sourceClusterName,
 		s.sourceShardKey,
-		enumsspb.TASK_PRIORITY_HIGH,
-		nil,
+		&replicationspb.ReplicationTask{
+			Priority: enumsspb.TASK_PRIORITY_HIGH,
+		},
 	)
 	s.task.ExecutableTask = s.executableTask
 	s.executableTask.EXPECT().TaskID().Return(s.taskID).AnyTimes()
 	s.executableTask.EXPECT().SourceClusterName().Return(s.sourceClusterName).AnyTimes()
+	s.executableTask.EXPECT().GetPriority().Return(enumsspb.TASK_PRIORITY_HIGH).AnyTimes()
 }
 
 func (s *executableHistoryTaskSuite) TearDownTest() {
@@ -217,19 +195,21 @@ func (s *executableHistoryTaskSuite) TearDownTest() {
 
 func (s *executableHistoryTaskSuite) TestExecute_Process() {
 	s.executableTask.EXPECT().TerminalState().Return(false)
-	s.executableTask.EXPECT().GetNamespaceInfo(gomock.Any(), s.task.NamespaceID).Return(
+	s.executableTask.EXPECT().MarkExecutionStart()
+	s.executableTask.EXPECT().GetNamespaceInfo(gomock.Any(), s.task.NamespaceID, gomock.Any()).Return(
 		uuid.NewString(), true, nil,
 	).AnyTimes()
 
-	shardContext := shard.NewMockContext(s.controller)
-	engine := shard.NewMockEngine(s.controller)
+	shardContext := historyi.NewMockShardContext(s.controller)
+	engine := historyi.NewMockEngine(s.controller)
 	s.shardController.EXPECT().GetShardByNamespaceWorkflow(
 		namespace.ID(s.task.NamespaceID),
 		s.task.WorkflowID,
 	).Return(shardContext, nil).AnyTimes()
 	shardContext.EXPECT().GetEngine(gomock.Any()).Return(engine, nil).AnyTimes()
-	engine.EXPECT().ReplicateHistoryEvents(
+	s.mockEventHandler.EXPECT().HandleHistoryEvents(
 		gomock.Any(),
+		s.sourceClusterName,
 		definition.NewWorkflowKey(s.task.NamespaceID, s.task.WorkflowID, s.task.RunID),
 		s.task.baseExecutionInfo,
 		s.task.versionHistoryItems,
@@ -251,7 +231,8 @@ func (s *executableHistoryTaskSuite) TestExecute_Skip_TerminalState() {
 
 func (s *executableHistoryTaskSuite) TestExecute_Skip_Namespace() {
 	s.executableTask.EXPECT().TerminalState().Return(false)
-	s.executableTask.EXPECT().GetNamespaceInfo(gomock.Any(), s.task.NamespaceID).Return(
+	s.executableTask.EXPECT().MarkExecutionStart()
+	s.executableTask.EXPECT().GetNamespaceInfo(gomock.Any(), s.task.NamespaceID, gomock.Any()).Return(
 		uuid.NewString(), false, nil,
 	).AnyTimes()
 
@@ -261,8 +242,9 @@ func (s *executableHistoryTaskSuite) TestExecute_Skip_Namespace() {
 
 func (s *executableHistoryTaskSuite) TestExecute_Err() {
 	s.executableTask.EXPECT().TerminalState().Return(false)
+	s.executableTask.EXPECT().MarkExecutionStart()
 	err := errors.New("OwO")
-	s.executableTask.EXPECT().GetNamespaceInfo(gomock.Any(), s.task.NamespaceID).Return(
+	s.executableTask.EXPECT().GetNamespaceInfo(gomock.Any(), s.task.NamespaceID, gomock.Any()).Return(
 		"", false, err,
 	).AnyTimes()
 
@@ -270,19 +252,22 @@ func (s *executableHistoryTaskSuite) TestExecute_Err() {
 }
 
 func (s *executableHistoryTaskSuite) TestHandleErr_Resend_Success() {
+	s.executableTask.EXPECT().NamespaceName().Return("test-namespace").AnyTimes()
 	s.executableTask.EXPECT().TerminalState().Return(false)
-	s.executableTask.EXPECT().GetNamespaceInfo(gomock.Any(), s.task.NamespaceID).Return(
+	s.executableTask.EXPECT().MarkExecutionStart()
+	s.executableTask.EXPECT().GetNamespaceInfo(gomock.Any(), s.task.NamespaceID, gomock.Any()).Return(
 		uuid.NewString(), true, nil,
 	).AnyTimes()
-	shardContext := shard.NewMockContext(s.controller)
-	engine := shard.NewMockEngine(s.controller)
+	shardContext := historyi.NewMockShardContext(s.controller)
+	engine := historyi.NewMockEngine(s.controller)
 	s.shardController.EXPECT().GetShardByNamespaceWorkflow(
 		namespace.ID(s.task.NamespaceID),
 		s.task.WorkflowID,
 	).Return(shardContext, nil).AnyTimes()
 	shardContext.EXPECT().GetEngine(gomock.Any()).Return(engine, nil).AnyTimes()
-	engine.EXPECT().ReplicateHistoryEvents(
+	s.mockEventHandler.EXPECT().HandleHistoryEvents(
 		gomock.Any(),
+		s.sourceClusterName,
 		definition.NewWorkflowKey(s.task.NamespaceID, s.task.WorkflowID, s.task.RunID),
 		s.task.baseExecutionInfo,
 		s.task.versionHistoryItems,
@@ -307,7 +292,8 @@ func (s *executableHistoryTaskSuite) TestHandleErr_Resend_Success() {
 }
 
 func (s *executableHistoryTaskSuite) TestHandleErr_Resend_Error() {
-	s.executableTask.EXPECT().GetNamespaceInfo(gomock.Any(), s.task.NamespaceID).Return(
+	s.executableTask.EXPECT().NamespaceName().Return("test-namespace").AnyTimes()
+	s.executableTask.EXPECT().GetNamespaceInfo(gomock.Any(), s.task.NamespaceID, gomock.Any()).Return(
 		uuid.NewString(), true, nil,
 	).AnyTimes()
 	err := serviceerrors.NewRetryReplication(
@@ -326,10 +312,15 @@ func (s *executableHistoryTaskSuite) TestHandleErr_Resend_Error() {
 }
 
 func (s *executableHistoryTaskSuite) TestHandleErr_Other() {
+	s.executableTask.EXPECT().NamespaceName().Return("test-namespace").AnyTimes()
 	err := errors.New("OwO")
 	s.Equal(err, s.task.HandleErr(err))
 
 	err = serviceerror.NewNotFound("")
+	s.Equal(nil, s.task.HandleErr(err))
+
+	err = consts.ErrDuplicate
+	s.executableTask.EXPECT().MarkTaskDuplicated().Times(1)
 	s.Equal(nil, s.task.HandleErr(err))
 
 	err = serviceerror.NewUnavailable("")
@@ -338,7 +329,7 @@ func (s *executableHistoryTaskSuite) TestHandleErr_Other() {
 
 func (s *executableHistoryTaskSuite) TestMarkPoisonPill() {
 	shardID := rand.Int31()
-	shardContext := shard.NewMockContext(s.controller)
+	shardContext := historyi.NewMockShardContext(s.controller)
 	s.shardController.EXPECT().GetShardByNamespaceWorkflow(
 		namespace.ID(s.task.NamespaceID),
 		s.task.WorkflowID,
@@ -426,13 +417,13 @@ func (s *executableHistoryTaskSuite) TestBatchWith_EventVersionNotMatch_BatchFai
 
 func (s *executableHistoryTaskSuite) TestBatchWith_VersionHistoryDoesNotMatch_BatchFailed() {
 	currentTask, incomingTask := s.generateTwoBatchableTasks()
-	currentTask.versionHistoryItems = []*history.VersionHistoryItem{
+	currentTask.versionHistoryItems = []*historyspb.VersionHistoryItem{
 		{
 			EventId: 108,
 			Version: 3,
 		},
 	}
-	incomingTask.versionHistoryItems = []*history.VersionHistoryItem{
+	incomingTask.versionHistoryItems = []*historyspb.VersionHistoryItem{
 		{
 			EventId: 108,
 			Version: 4,
@@ -518,13 +509,13 @@ func (s *executableHistoryTaskSuite) generateTwoBatchableTasks() (*ExecutableHis
 			},
 		},
 	}
-	currentVersionHistoryItems := []*history.VersionHistoryItem{
+	currentVersionHistoryItems := []*historyspb.VersionHistoryItem{
 		{
 			EventId: 102,
 			Version: 3,
 		},
 	}
-	incomingVersionHistoryItems := []*history.VersionHistoryItem{
+	incomingVersionHistoryItems := []*historyspb.VersionHistoryItem{
 		{
 			EventId: 108,
 			Version: 3,
@@ -565,11 +556,11 @@ func (s *executableHistoryTaskSuite) buildExecutableHistoryTask(
 	newRunEvents []*historypb.HistoryEvent,
 	newRunID string,
 	taskId int64,
-	versionHistoryItems []*history.VersionHistoryItem,
+	versionHistoryItems []*historyspb.VersionHistoryItem,
 	workflowKey definition.WorkflowKey,
 ) *ExecutableHistoryTask {
-	eventsBlob, _ := s.eventSerializer.SerializeEvents(events[0], enumspb.ENCODING_TYPE_PROTO3)
-	newRunEventsBlob, _ := s.eventSerializer.SerializeEvents(newRunEvents, enumspb.ENCODING_TYPE_PROTO3)
+	eventsBlob, _ := s.eventSerializer.SerializeEvents(events[0])
+	newRunEventsBlob, _ := s.eventSerializer.SerializeEvents(newRunEvents)
 	replicationTaskAttribute := &replicationspb.HistoryTaskAttributes{
 		WorkflowId:          workflowKey.WorkflowID,
 		NamespaceId:         workflowKey.NamespaceID,
@@ -590,8 +581,9 @@ func (s *executableHistoryTaskSuite) buildExecutableHistoryTask(
 		replicationTaskAttribute,
 		s.sourceClusterName,
 		s.sourceShardKey,
-		enumsspb.TASK_PRIORITY_HIGH,
-		nil,
+		&replicationspb.ReplicationTask{
+			Priority: enumsspb.TASK_PRIORITY_HIGH,
+		},
 	)
 	executableHistoryTask.ExecutableTask = executableTask
 	return executableHistoryTask

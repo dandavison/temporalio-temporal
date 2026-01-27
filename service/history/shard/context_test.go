@@ -1,27 +1,3 @@
-// The MIT License
-//
-// Copyright (c) 2020 Temporal Technologies Inc.  All rights reserved.
-//
-// Copyright (c) 2020 Uber Technologies, Inc.
-//
-// Permission is hereby granted, free of charge, to any person obtaining a copy
-// of this software and associated documentation files (the "Software"), to deal
-// in the Software without restriction, including without limitation the rights
-// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-// copies of the Software, and to permit persons to whom the Software is
-// furnished to do so, subject to the following conditions:
-//
-// The above copyright notice and this permission notice shall be included in
-// all copies or substantial portions of the Software.
-//
-// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
-// THE SOFTWARE.
-
 package shard
 
 import (
@@ -34,9 +10,11 @@ import (
 
 	"github.com/stretchr/testify/require"
 	"github.com/stretchr/testify/suite"
-	"go.temporal.io/api/enums/v1"
+	enumspb "go.temporal.io/api/enums/v1"
 	"go.temporal.io/server/api/historyservice/v1"
 	persistencespb "go.temporal.io/server/api/persistence/v1"
+	"go.temporal.io/server/chasm"
+	"go.temporal.io/server/common"
 	"go.temporal.io/server/common/backoff"
 	"go.temporal.io/server/common/clock"
 	"go.temporal.io/server/common/cluster"
@@ -44,6 +22,7 @@ import (
 	"go.temporal.io/server/common/namespace"
 	"go.temporal.io/server/common/persistence"
 	"go.temporal.io/server/common/primitives/timestamp"
+	historyi "go.temporal.io/server/service/history/interfaces"
 	"go.temporal.io/server/service/history/tasks"
 	"go.temporal.io/server/service/history/tests"
 	"go.uber.org/mock/gomock"
@@ -62,7 +41,7 @@ type (
 		mockShardManager     *persistence.MockShardManager
 		mockExecutionManager *persistence.MockExecutionManager
 		mockNamespaceCache   *namespace.MockRegistry
-		mockHistoryEngine    *MockEngine
+		mockHistoryEngine    *historyi.MockEngine
 
 		timeSource *clock.EventTimeSource
 	}
@@ -103,7 +82,7 @@ func (s *contextSuite) SetupTest() {
 
 	s.mockExecutionManager = shardContext.Resource.ExecutionMgr
 	s.mockShardManager = shardContext.Resource.ShardMgr
-	s.mockHistoryEngine = NewMockEngine(s.controller)
+	s.mockHistoryEngine = historyi.NewMockEngine(s.controller)
 	shardContext.engineFuture.Set(s.mockHistoryEngine, nil)
 }
 
@@ -140,19 +119,19 @@ func (s *contextSuite) TestOverwriteScheduledTaskTimestamp() {
 			// task timestamp is lower than both scheduled queue max read level and now
 			// should be overwritten to be later than both
 			taskTimestamp:     maxReadLevel.FireTime.Add(-time.Minute),
-			expectedTimestamp: now.Add(persistence.ScheduledTaskMinPrecision).Truncate(persistence.ScheduledTaskMinPrecision),
+			expectedTimestamp: now.Add(common.ScheduledTaskMinPrecision).Truncate(common.ScheduledTaskMinPrecision),
 		},
 		{
 			// task timestamp is lower than now but higher than scheduled queue max read level
 			// should still be overwritten to be later than both
 			taskTimestamp:     now.Add(-time.Minute),
-			expectedTimestamp: now.Add(persistence.ScheduledTaskMinPrecision).Truncate(persistence.ScheduledTaskMinPrecision),
+			expectedTimestamp: now.Add(common.ScheduledTaskMinPrecision).Truncate(common.ScheduledTaskMinPrecision),
 		},
 		{
 			// task timestamp is later than both now and scheduled queue max read level
 			// should not be overwritten
 			taskTimestamp:     now.Add(time.Minute),
-			expectedTimestamp: now.Add(time.Minute).Add(persistence.ScheduledTaskMinPrecision).Truncate(persistence.ScheduledTaskMinPrecision),
+			expectedTimestamp: now.Add(time.Minute).Add(common.ScheduledTaskMinPrecision).Truncate(common.ScheduledTaskMinPrecision),
 		},
 	}
 
@@ -164,6 +143,7 @@ func (s *contextSuite) TestOverwriteScheduledTaskTimestamp() {
 				ShardID:     s.mockShard.GetShardID(),
 				NamespaceID: workflowKey.NamespaceID,
 				WorkflowID:  workflowKey.WorkflowID,
+				ArchetypeID: chasm.WorkflowArchetypeID,
 				Tasks:       testTasks,
 			},
 		)
@@ -188,6 +168,7 @@ func (s *contextSuite) TestAddTasks_Success() {
 		ShardID:     s.mockShard.GetShardID(),
 		NamespaceID: tests.NamespaceID.String(),
 		WorkflowID:  tests.WorkflowID,
+		ArchetypeID: chasm.WorkflowArchetypeID,
 
 		Tasks: testTasks,
 	}
@@ -217,6 +198,7 @@ func (s *contextSuite) TestDeleteWorkflowExecution_Success() {
 	err := s.mockShard.DeleteWorkflowExecution(
 		context.Background(),
 		workflowKey,
+		chasm.WorkflowArchetypeID,
 		branchToken,
 		0,
 		time.Time{},
@@ -242,6 +224,7 @@ func (s *contextSuite) TestDeleteWorkflowExecution_Continue_Success() {
 	err := s.mockShard.DeleteWorkflowExecution(
 		context.Background(),
 		workflowKey,
+		chasm.WorkflowArchetypeID,
 		branchToken,
 		0,
 		time.Time{},
@@ -256,6 +239,7 @@ func (s *contextSuite) TestDeleteWorkflowExecution_Continue_Success() {
 	err = s.mockShard.DeleteWorkflowExecution(
 		context.Background(),
 		workflowKey,
+		chasm.WorkflowArchetypeID,
 		branchToken,
 		0,
 		time.Time{},
@@ -269,6 +253,7 @@ func (s *contextSuite) TestDeleteWorkflowExecution_Continue_Success() {
 	err = s.mockShard.DeleteWorkflowExecution(
 		context.Background(),
 		workflowKey,
+		chasm.WorkflowArchetypeID,
 		branchToken,
 		0,
 		time.Time{},
@@ -293,6 +278,7 @@ func (s *contextSuite) TestDeleteWorkflowExecution_ErrorAndContinue_Success() {
 	err := s.mockShard.DeleteWorkflowExecution(
 		context.Background(),
 		workflowKey,
+		chasm.WorkflowArchetypeID,
 		branchToken,
 		0,
 		time.Time{},
@@ -306,6 +292,7 @@ func (s *contextSuite) TestDeleteWorkflowExecution_ErrorAndContinue_Success() {
 	err = s.mockShard.DeleteWorkflowExecution(
 		context.Background(),
 		workflowKey,
+		chasm.WorkflowArchetypeID,
 		branchToken,
 		0,
 		time.Time{},
@@ -319,6 +306,7 @@ func (s *contextSuite) TestDeleteWorkflowExecution_ErrorAndContinue_Success() {
 	err = s.mockShard.DeleteWorkflowExecution(
 		context.Background(),
 		workflowKey,
+		chasm.WorkflowArchetypeID,
 		branchToken,
 		0,
 		time.Time{},
@@ -331,6 +319,7 @@ func (s *contextSuite) TestDeleteWorkflowExecution_ErrorAndContinue_Success() {
 	err = s.mockShard.DeleteWorkflowExecution(
 		context.Background(),
 		workflowKey,
+		chasm.WorkflowArchetypeID,
 		branchToken,
 		0,
 		time.Time{},
@@ -354,6 +343,7 @@ func (s *contextSuite) TestDeleteWorkflowExecution_DeleteVisibilityTaskNotificti
 	err := s.mockShard.DeleteWorkflowExecution(
 		context.Background(),
 		workflowKey,
+		chasm.WorkflowArchetypeID,
 		branchToken,
 		0,
 		time.Time{},
@@ -369,6 +359,7 @@ func (s *contextSuite) TestDeleteWorkflowExecution_DeleteVisibilityTaskNotificti
 	err = s.mockShard.DeleteWorkflowExecution(
 		context.Background(),
 		workflowKey,
+		chasm.WorkflowArchetypeID,
 		branchToken,
 		0,
 		time.Time{},
@@ -444,7 +435,7 @@ func (s *contextSuite) TestHandoverNamespace() {
 				cluster.TestCurrentClusterName,
 				cluster.TestAlternativeClusterName,
 			},
-			State: enums.REPLICATION_STATE_HANDOVER,
+			State: enumspb.REPLICATION_STATE_HANDOVER,
 		},
 		tests.Version,
 	)

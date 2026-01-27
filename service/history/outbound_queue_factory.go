@@ -1,31 +1,8 @@
-// The MIT License
-//
-// Copyright (c) 2024 Temporal Technologies Inc.  All rights reserved.
-//
-// Permission is hereby granted, free of charge, to any person obtaining a copy
-// of this software and associated documentation files (the "Software"), to deal
-// in the Software without restriction, including without limitation the rights
-// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-// copies of the Software, and to permit persons to whom the Software is
-// furnished to do so, subject to the following conditions:
-//
-// The above copyright notice and this permission notice shall be included in
-// all copies or substantial portions of the Software.
-//
-// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
-// THE SOFTWARE.
-
 package history
 
 import (
 	"fmt"
 
-	"go.temporal.io/server/common/circuitbreaker"
 	"go.temporal.io/server/common/collection"
 	"go.temporal.io/server/common/dynamicconfig"
 	"go.temporal.io/server/common/log"
@@ -34,11 +11,13 @@ import (
 	"go.temporal.io/server/common/namespace"
 	"go.temporal.io/server/common/quotas"
 	ctasks "go.temporal.io/server/common/tasks"
+	"go.temporal.io/server/common/telemetry"
+	"go.temporal.io/server/service/history/circuitbreakerpool"
 	"go.temporal.io/server/service/history/hsm"
+	historyi "go.temporal.io/server/service/history/interfaces"
 	"go.temporal.io/server/service/history/queues"
-	"go.temporal.io/server/service/history/shard"
+	queueserrors "go.temporal.io/server/service/history/queues/errors"
 	"go.temporal.io/server/service/history/tasks"
-	wcache "go.temporal.io/server/service/history/workflow/cache"
 	"go.uber.org/fx"
 )
 
@@ -51,6 +30,7 @@ type outboundQueueFactoryParams struct {
 	fx.In
 
 	QueueFactoryBaseParams
+	CircuitBreakerPool *circuitbreakerpool.OutboundQueueCircuitBreakerPool
 }
 
 type groupLimiter struct {
@@ -120,33 +100,6 @@ func NewOutboundQueueFactory(params outboundQueueFactoryParams) QueueFactory {
 		},
 	)
 
-	circuitBreakerPool := collection.NewOnceMap(
-		func(key tasks.TaskGroupNamespaceIDAndDestination) circuitbreaker.TwoStepCircuitBreaker {
-			// This is intentionally not failing the function in case of error. The circuit breaker is
-			// agnostic to Task implementation, and thus the settings function is not expected to return
-			// an error. Also, in this case, if the namespace registry fails to get the name, then the
-			// task itself will fail when it is processed and tries to get the namespace name.
-			nsName := getNamespaceNameOrDefault(
-				params.NamespaceRegistry,
-				key.NamespaceID,
-				"",
-				metricsHandler,
-			)
-			cb := circuitbreaker.NewTwoStepCircuitBreakerWithDynamicSettings(circuitbreaker.Settings{
-				Name: fmt.Sprintf(
-					"circuit_breaker:%s:%s:%s",
-					key.TaskGroup,
-					key.NamespaceID,
-					key.Destination,
-				),
-			})
-			initial, cancel := params.Config.OutboundQueueCircuitBreakerSettings(nsName, key.Destination, cb.UpdateSettings)
-			cb.UpdateSettings(initial)
-			_ = cancel // OnceMap never deletes anything. use this if we support deletion
-			return cb
-		},
-	)
-
 	grouper := queues.GrouperStateMachineNamespaceIDAndDestination{}
 	f := &outboundQueueFactory{
 		outboundQueueFactoryParams: params,
@@ -184,7 +137,7 @@ func NewOutboundQueueFactory(params outboundQueueFactoryParams) QueueFactory {
 							ctasks.RunnableTask{
 								Task: queues.NewCircuitBreakerExecutable(
 									e,
-									circuitBreakerPool.Get(key),
+									params.CircuitBreakerPool.Get(key),
 									taggedMetricsHandler,
 								),
 							},
@@ -238,16 +191,31 @@ func (f *outboundQueueFactory) Stop() {
 }
 
 func (f *outboundQueueFactory) CreateQueue(
-	shardContext shard.Context,
-	workflowCache wcache.Cache,
+	shardContext historyi.ShardContext,
 ) queues.Queue {
 	logger := log.With(shardContext.GetLogger(), tag.ComponentOutboundQueue)
 	metricsHandler := getOutbountQueueProcessorMetricsHandler(f.MetricsHandler)
 
 	currentClusterName := f.ClusterMetadata.GetCurrentClusterName()
 
-	rescheduler := queues.NewRescheduler(
+	scheduler := queues.NewRateLimitedScheduler(
 		f.hostScheduler,
+		queues.RateLimitedSchedulerOptions{
+			Enabled:          f.Config.TaskSchedulerEnableRateLimiter,
+			EnableShadowMode: f.Config.TaskSchedulerEnableRateLimiterShadowMode,
+			StartupDelay:     f.Config.TaskSchedulerRateLimiterStartupDelay,
+		},
+		currentClusterName,
+		f.NamespaceRegistry,
+		f.SchedulerRateLimiter,
+		f.TimeSource,
+		f.ChasmRegistry,
+		logger,
+		metricsHandler,
+	)
+
+	rescheduler := queues.NewRescheduler(
+		scheduler,
 		shardContext.GetTimeSource(),
 		logger,
 		metricsHandler,
@@ -255,18 +223,19 @@ func (f *outboundQueueFactory) CreateQueue(
 
 	activeExecutor := newOutboundQueueActiveTaskExecutor(
 		shardContext,
-		workflowCache,
+		f.WorkflowCache,
 		logger,
 		metricsHandler,
+		f.ChasmEngine,
 	)
 
-	// not implemented yet
 	standbyExecutor := newOutboundQueueStandbyTaskExecutor(
 		shardContext,
-		workflowCache,
+		f.WorkflowCache,
 		currentClusterName,
 		logger,
 		metricsHandler,
+		f.ChasmEngine,
 	)
 
 	executor := queues.NewActiveStandbyExecutor(
@@ -283,14 +252,17 @@ func (f *outboundQueueFactory) CreateQueue(
 
 	factory := queues.NewExecutableFactory(
 		executor,
-		f.hostScheduler,
+		scheduler,
 		rescheduler,
 		queues.NewNoopPriorityAssigner(),
 		shardContext.GetTimeSource(),
 		shardContext.GetNamespaceRegistry(),
 		shardContext.GetClusterMetadata(),
+		f.ChasmRegistry,
+		queues.GetTaskTypeTagValue,
 		logger,
 		metricsHandler,
+		f.TracerProvider.Tracer(telemetry.ComponentQueueOutbound),
 		f.DLQWriter,
 		f.Config.TaskDLQEnabled,
 		f.Config.TaskDLQUnexpectedErrorAttempts,
@@ -300,7 +272,7 @@ func (f *outboundQueueFactory) CreateQueue(
 	return queues.NewImmediateQueue(
 		shardContext,
 		tasks.CategoryOutbound,
-		f.hostScheduler,
+		scheduler,
 		rescheduler,
 		&queues.Options{
 			ReaderOptions: queues.ReaderOptions{
@@ -321,6 +293,8 @@ func (f *outboundQueueFactory) CreateQueue(
 			CheckpointInterval:                  f.Config.OutboundProcessorUpdateAckInterval,
 			CheckpointIntervalJitterCoefficient: f.Config.OutboundProcessorUpdateAckIntervalJitterCoefficient,
 			MaxReaderCount:                      f.Config.OutboundQueueMaxReaderCount,
+			MoveGroupTaskCountBase:              f.Config.QueueMoveGroupTaskCountBase,
+			MoveGroupTaskCountMultiplier:        f.Config.QueueMoveGroupTaskCountMultiplier,
 		},
 		f.hostReaderRateLimiter,
 		queues.GrouperStateMachineNamespaceIDAndDestination{},
@@ -334,16 +308,16 @@ func getOutbountQueueProcessorMetricsHandler(handler metrics.Handler) metrics.Ha
 	return handler.WithTags(metrics.OperationTag(metrics.OperationOutboundQueueProcessorScope))
 }
 
-func stateMachineTask(shardContext shard.Context, task tasks.Task) (hsm.Ref, hsm.Task, error) {
+func StateMachineTask(smRegistry *hsm.Registry, task tasks.Task) (hsm.Ref, hsm.Task, error) {
 	cbt, ok := task.(*tasks.StateMachineOutboundTask)
 	if !ok {
-		return hsm.Ref{}, nil, queues.NewUnprocessableTaskError("unknown task type")
+		return hsm.Ref{}, nil, queueserrors.NewUnprocessableTaskError("unknown task type")
 	}
-	def, ok := shardContext.StateMachineRegistry().TaskSerializer(cbt.Info.Type)
+	def, ok := smRegistry.TaskSerializer(cbt.Info.Type)
 	if !ok {
 		return hsm.Ref{},
 			nil,
-			queues.NewUnprocessableTaskError(
+			queueserrors.NewUnprocessableTaskError(
 				fmt.Sprintf("deserializer not registered for task type %v", cbt.Info.Type),
 			)
 	}
@@ -353,7 +327,7 @@ func stateMachineTask(shardContext shard.Context, task tasks.Task) (hsm.Ref, hsm
 			nil,
 			fmt.Errorf(
 				"%w: %w",
-				queues.NewUnprocessableTaskError(fmt.Sprintf("cannot deserialize task %v", cbt.Info.Type)),
+				queueserrors.NewUnprocessableTaskError(fmt.Sprintf("cannot deserialize task %v", cbt.Info.Type)),
 				err,
 			)
 	}

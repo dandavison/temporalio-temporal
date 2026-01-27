@@ -1,27 +1,3 @@
-// The MIT License
-//
-// Copyright (c) 2020 Temporal Technologies Inc.  All rights reserved.
-//
-// Copyright (c) 2020 Uber Technologies, Inc.
-//
-// Permission is hereby granted, free of charge, to any person obtaining a copy
-// of this software and associated documentation files (the "Software"), to deal
-// in the Software without restriction, including without limitation the rights
-// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-// copies of the Software, and to permit persons to whom the Software is
-// furnished to do so, subject to the following conditions:
-//
-// The above copyright notice and this permission notice shall be included in
-// all copies or substantial portions of the Software.
-//
-// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
-// THE SOFTWARE.
-
 package queues
 
 import (
@@ -39,7 +15,6 @@ import (
 	"go.temporal.io/server/common/log"
 	"go.temporal.io/server/common/log/tag"
 	"go.temporal.io/server/common/metrics"
-	"go.temporal.io/server/common/persistence"
 	"go.temporal.io/server/common/quotas"
 )
 
@@ -237,6 +212,9 @@ func (r *ReaderImpl) SplitSlices(splitter SliceSplitter) {
 		}
 
 		for _, newSlice := range newSlices {
+			if scope := newSlice.Scope(); scope.IsEmpty() {
+				continue
+			}
 			splitSlices.PushBack(newSlice)
 		}
 	}
@@ -314,6 +292,9 @@ func (r *ReaderImpl) AppendSlices(incomingSlices ...Slice) {
 	defer r.Unlock()
 
 	for _, incomingSlice := range incomingSlices {
+		if scope := incomingSlice.Scope(); scope.IsEmpty() {
+			continue
+		}
 		r.slices.PushBack(incomingSlice)
 	}
 
@@ -533,7 +514,7 @@ func (r *ReaderImpl) submit(
 	now := r.timeSource.Now()
 	// Persistence layer may lose precision when persisting the task, which essentially moves
 	// task fire time backward. Need to account for that when submitting the task.
-	fireTime := executable.GetKey().FireTime.Add(persistence.ScheduledTaskMinPrecision)
+	fireTime := executable.GetKey().FireTime.Add(common.ScheduledTaskMinPrecision)
 	if now.Before(fireTime) {
 		r.rescheduler.Add(executable, fireTime)
 		return
@@ -553,6 +534,10 @@ func mergeOrAppendSlice(
 	slices *list.List,
 	incomingSlice Slice,
 ) {
+	if scope := incomingSlice.Scope(); scope.IsEmpty() {
+		return
+	}
+
 	if slices.Len() == 0 {
 		slices.PushBack(incomingSlice)
 		return

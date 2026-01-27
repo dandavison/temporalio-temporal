@@ -1,27 +1,3 @@
-// The MIT License
-//
-// Copyright (c) 2020 Temporal Technologies Inc.  All rights reserved.
-//
-// Copyright (c) 2020 Uber Technologies, Inc.
-//
-// Permission is hereby granted, free of charge, to any person obtaining a copy
-// of this software and associated documentation files (the "Software"), to deal
-// in the Software without restriction, including without limitation the rights
-// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-// copies of the Software, and to permit persons to whom the Software is
-// furnished to do so, subject to the following conditions:
-//
-// The above copyright notice and this permission notice shall be included in
-// all copies or substantial portions of the Software.
-//
-// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
-// THE SOFTWARE.
-
 package tests
 
 import (
@@ -31,7 +7,7 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	"go.temporal.io/api/enums/v1"
+	enumspb "go.temporal.io/api/enums/v1"
 	"go.temporal.io/api/serviceerror"
 	"go.temporal.io/server/common/persistence"
 	"go.temporal.io/server/common/persistence/persistencetest"
@@ -172,7 +148,7 @@ func testHappyPath(
 	require.NoError(t, err)
 	assert.Equal(t, 0, len(response.Messages))
 
-	encodingType := enums.ENCODING_TYPE_JSON
+	encodingType := enumspb.ENCODING_TYPE_JSON
 	_, err = persistencetest.EnqueueMessage(ctx, queue, queueType, queueName)
 	require.NoError(t, err)
 
@@ -445,6 +421,7 @@ func testListQueues(ctx context.Context, t *testing.T, queue persistence.QueueV2
 		require.Equal(t, 1, len(response.Queues))
 		require.Equal(t, queueName, response.Queues[0].QueueName)
 		require.Equal(t, int64(0), response.Queues[0].MessageCount)
+		require.Equal(t, int64(-1), response.Queues[0].LastMessageID)
 
 		// List multiple queues.
 		queueName = "test-queue-" + t.Name() + "second"
@@ -463,6 +440,7 @@ func testListQueues(ctx context.Context, t *testing.T, queue persistence.QueueV2
 		require.Equal(t, 2, len(response.Queues))
 		require.Contains(t, []string{response.Queues[0].QueueName, response.Queues[1].QueueName}, queueName)
 		require.Equal(t, int64(0), response.Queues[0].MessageCount)
+		require.Equal(t, int64(-1), response.Queues[0].LastMessageID)
 		require.Equal(t, int64(0), response.Queues[1].MessageCount)
 
 		// List multiple queues in pages.
@@ -486,6 +464,7 @@ func testListQueues(ctx context.Context, t *testing.T, queue persistence.QueueV2
 		require.Equal(t, 1, len(response.Queues))
 		listedQueueNames = append(listedQueueNames, response.Queues[0].QueueName)
 		require.Equal(t, int64(0), response.Queues[0].MessageCount)
+		require.Equal(t, int64(-1), response.Queues[0].LastMessageID)
 		response, err = queue.ListQueues(ctx, &persistence.InternalListQueuesRequest{
 			QueueType:     queueType,
 			PageSize:      1,
@@ -495,6 +474,7 @@ func testListQueues(ctx context.Context, t *testing.T, queue persistence.QueueV2
 		require.Equal(t, 1, len(response.Queues))
 		listedQueueNames = append(listedQueueNames, response.Queues[0].QueueName)
 		require.Equal(t, int64(0), response.Queues[0].MessageCount)
+		require.Equal(t, int64(-1), response.Queues[0].LastMessageID)
 		response, err = queue.ListQueues(ctx, &persistence.InternalListQueuesRequest{
 			QueueType:     queueType,
 			PageSize:      3,
@@ -505,6 +485,7 @@ func testListQueues(ctx context.Context, t *testing.T, queue persistence.QueueV2
 		for _, queue := range response.Queues {
 			listedQueueNames = append(listedQueueNames, queue.QueueName)
 			require.Equal(t, int64(0), queue.MessageCount)
+			require.Equal(t, int64(-1), queue.LastMessageID)
 		}
 		response, err = queue.ListQueues(ctx, &persistence.InternalListQueuesRequest{
 			QueueType:     queueType,
@@ -554,6 +535,7 @@ func testListQueues(ctx context.Context, t *testing.T, queue persistence.QueueV2
 			queueNames = append(queueNames, queue.QueueName)
 			if queue.QueueName == queueName {
 				assert.Equal(t, int64(1), queue.MessageCount)
+				assert.Equal(t, int64(0), queue.LastMessageID)
 			}
 		}
 		require.Contains(t, queueNames, queueName)
@@ -571,6 +553,7 @@ func testListQueues(ctx context.Context, t *testing.T, queue persistence.QueueV2
 			queueNames = append(queueNames, queue.QueueName)
 			if queue.QueueName == queueName {
 				assert.Equal(t, int64(2), queue.MessageCount)
+				assert.Equal(t, int64(1), queue.LastMessageID)
 			}
 		}
 		require.Contains(t, queueNames, queueName)
@@ -594,6 +577,7 @@ func testListQueues(ctx context.Context, t *testing.T, queue persistence.QueueV2
 			queueNames = append(queueNames, queue.QueueName)
 			if queue.QueueName == queueName {
 				assert.Equal(t, int64(1), queue.MessageCount)
+				assert.Equal(t, int64(1), queue.LastMessageID)
 			}
 		}
 		require.Contains(t, queueNames, queueName)
@@ -617,6 +601,7 @@ func testListQueues(ctx context.Context, t *testing.T, queue persistence.QueueV2
 			queueNames = append(queueNames, queue.QueueName)
 			if queue.QueueName == queueName {
 				assert.Equal(t, int64(0), queue.MessageCount)
+				assert.Equal(t, int64(1), queue.LastMessageID)
 			}
 		}
 		require.Contains(t, queueNames, queueName)

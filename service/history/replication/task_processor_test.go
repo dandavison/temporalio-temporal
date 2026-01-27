@@ -1,27 +1,3 @@
-// The MIT License
-//
-// Copyright (c) 2020 Temporal Technologies Inc.  All rights reserved.
-//
-// Copyright (c) 2020 Uber Technologies, Inc.
-//
-// Permission is hereby granted, free of charge, to any person obtaining a copy
-// of this software and associated documentation files (the "Software"), to deal
-// in the Software without restriction, including without limitation the rights
-// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-// copies of the Software, and to permit persons to whom the Software is
-// furnished to do so, subject to the following conditions:
-//
-// The above copyright notice and this permission notice shall be included in
-// all copies or substantial portions of the Software.
-//
-// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
-// THE SOFTWARE.
-
 package replication
 
 import (
@@ -30,7 +6,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/pborman/uuid"
+	"github.com/google/uuid"
 	"github.com/stretchr/testify/require"
 	"github.com/stretchr/testify/suite"
 	commonpb "go.temporal.io/api/common/v1"
@@ -55,6 +31,7 @@ import (
 	"go.temporal.io/server/common/resourcetest"
 	"go.temporal.io/server/common/testing/protorequire"
 	"go.temporal.io/server/service/history/configs"
+	historyi "go.temporal.io/server/service/history/interfaces"
 	"go.temporal.io/server/service/history/shard"
 	"go.temporal.io/server/service/history/tests"
 	"go.uber.org/mock/gomock"
@@ -70,7 +47,7 @@ type (
 		controller                  *gomock.Controller
 		mockResource                *resourcetest.Test
 		mockShard                   *shard.ContextTest
-		mockEngine                  *shard.MockEngine
+		mockEngine                  *historyi.MockEngine
 		mockNamespaceCache          *namespace.MockRegistry
 		mockClientBean              *client.MockBean
 		mockAdminClient             *adminservicemock.MockAdminServiceClient
@@ -117,7 +94,7 @@ func (s *taskProcessorSuite) SetupTest() {
 		},
 		s.config,
 	)
-	s.mockEngine = shard.NewMockEngine(s.controller)
+	s.mockEngine = historyi.NewMockEngine(s.controller)
 	s.mockResource = s.mockShard.Resource
 	s.mockNamespaceCache = s.mockResource.NamespaceCache
 	s.mockClientBean = s.mockResource.ClientBean
@@ -179,9 +156,9 @@ func (s *taskProcessorSuite) TestHandleSyncShardStatus_Success() {
 }
 
 func (s *taskProcessorSuite) TestHandleReplicationTask_SyncActivity() {
-	namespaceID := uuid.NewRandom().String()
-	workflowID := uuid.New()
-	runID := uuid.NewRandom().String()
+	namespaceID := uuid.NewString()
+	workflowID := uuid.NewString()
+	runID := uuid.NewString()
 	now := time.Now()
 	attempt := int32(2)
 	task := &replicationspb.ReplicationTask{
@@ -203,9 +180,9 @@ func (s *taskProcessorSuite) TestHandleReplicationTask_SyncActivity() {
 }
 
 func (s *taskProcessorSuite) TestHandleReplicationTask_History() {
-	namespaceID := uuid.NewRandom().String()
-	workflowID := uuid.New()
-	runID := uuid.NewRandom().String()
+	namespaceID := uuid.NewString()
+	workflowID := uuid.NewString()
+	runID := uuid.NewString()
 	now := time.Now()
 	events := []*historypb.HistoryEvent{{
 		EventId: 1,
@@ -216,7 +193,7 @@ func (s *taskProcessorSuite) TestHandleReplicationTask_History() {
 		Version: 1,
 	}}
 	serializer := s.mockResource.GetPayloadSerializer()
-	data, err := serializer.SerializeEvents(events, enumspb.ENCODING_TYPE_PROTO3)
+	data, err := serializer.SerializeEvents(events)
 	s.NoError(err)
 
 	task := &replicationspb.ReplicationTask{
@@ -254,9 +231,9 @@ func (s *taskProcessorSuite) TestHandleReplicationTask_Panic() {
 }
 
 func (s *taskProcessorSuite) TestHandleReplicationDLQTask_SyncActivity() {
-	namespaceID := uuid.NewRandom().String()
-	workflowID := uuid.New()
-	runID := uuid.NewRandom().String()
+	namespaceID := uuid.NewString()
+	workflowID := uuid.NewString()
+	runID := uuid.NewString()
 	request := &persistence.PutReplicationTaskToDLQRequest{
 		ShardID:           s.shardID,
 		SourceClusterName: cluster.TestAlternativeClusterName,
@@ -274,9 +251,9 @@ func (s *taskProcessorSuite) TestHandleReplicationDLQTask_SyncActivity() {
 }
 
 func (s *taskProcessorSuite) TestHandleReplicationDLQTask_SyncWorkflowState() {
-	namespaceID := uuid.NewRandom().String()
-	workflowID := uuid.New()
-	runID := uuid.NewRandom().String()
+	namespaceID := uuid.NewString()
+	workflowID := uuid.NewString()
+	runID := uuid.NewString()
 
 	request := &persistence.PutReplicationTaskToDLQRequest{
 		ShardID:           s.shardID,
@@ -296,9 +273,9 @@ func (s *taskProcessorSuite) TestHandleReplicationDLQTask_SyncWorkflowState() {
 }
 
 func (s *taskProcessorSuite) TestHandleReplicationDLQTask_History() {
-	namespaceID := uuid.NewRandom().String()
-	workflowID := uuid.New()
-	runID := uuid.NewRandom().String()
+	namespaceID := uuid.NewString()
+	workflowID := uuid.NewString()
+	runID := uuid.NewString()
 
 	request := &persistence.PutReplicationTaskToDLQRequest{
 		ShardID:           s.shardID,
@@ -320,9 +297,9 @@ func (s *taskProcessorSuite) TestHandleReplicationDLQTask_History() {
 }
 
 func (s *taskProcessorSuite) TestConvertTaskToDLQTask_SyncActivity() {
-	namespaceID := uuid.NewRandom().String()
-	workflowID := uuid.New()
-	runID := uuid.NewRandom().String()
+	namespaceID := uuid.NewString()
+	workflowID := uuid.NewString()
+	runID := uuid.NewString()
 	task := &replicationspb.ReplicationTask{
 		TaskType: enumsspb.REPLICATION_TASK_TYPE_SYNC_ACTIVITY_TASK,
 		Attributes: &replicationspb.ReplicationTask_SyncActivityTaskAttributes{SyncActivityTaskAttributes: &replicationspb.SyncActivityTaskAttributes{
@@ -349,9 +326,9 @@ func (s *taskProcessorSuite) TestConvertTaskToDLQTask_SyncActivity() {
 }
 
 func (s *taskProcessorSuite) TestConvertTaskToDLQTask_SyncWorkflowState() {
-	namespaceID := uuid.NewRandom().String()
-	workflowID := uuid.New()
-	runID := uuid.NewRandom().String()
+	namespaceID := uuid.NewString()
+	workflowID := uuid.NewString()
+	runID := uuid.NewString()
 	task := &replicationspb.ReplicationTask{
 		TaskType: enumsspb.REPLICATION_TASK_TYPE_SYNC_WORKFLOW_STATE_TASK,
 		Attributes: &replicationspb.ReplicationTask_SyncWorkflowStateTaskAttributes{SyncWorkflowStateTaskAttributes: &replicationspb.SyncWorkflowStateTaskAttributes{
@@ -387,9 +364,9 @@ func (s *taskProcessorSuite) TestConvertTaskToDLQTask_SyncWorkflowState() {
 }
 
 func (s *taskProcessorSuite) TestConvertTaskToDLQTask_SyncHSM() {
-	namespaceID := uuid.NewRandom().String()
-	workflowID := uuid.New()
-	runID := uuid.NewRandom().String()
+	namespaceID := uuid.NewString()
+	workflowID := uuid.NewString()
+	runID := uuid.NewString()
 	task := &replicationspb.ReplicationTask{
 		SourceTaskId: rand.Int63(),
 		TaskType:     enumsspb.REPLICATION_TASK_TYPE_SYNC_HSM_TASK,
@@ -429,9 +406,9 @@ func (s *taskProcessorSuite) TestConvertTaskToDLQTask_SyncHSM() {
 }
 
 func (s *taskProcessorSuite) TestConvertTaskToDLQTask_History() {
-	namespaceID := uuid.NewRandom().String()
-	workflowID := uuid.New()
-	runID := uuid.NewRandom().String()
+	namespaceID := uuid.NewString()
+	workflowID := uuid.NewString()
+	runID := uuid.NewString()
 	events := []*historypb.HistoryEvent{{
 		EventId: 1,
 		Version: 1,
@@ -441,7 +418,7 @@ func (s *taskProcessorSuite) TestConvertTaskToDLQTask_History() {
 		Version: 1,
 	}}
 	serializer := s.mockResource.GetPayloadSerializer()
-	data, err := serializer.SerializeEvents(events, enumspb.ENCODING_TYPE_PROTO3)
+	data, err := serializer.SerializeEvents(events)
 	s.NoError(err)
 
 	task := &replicationspb.ReplicationTask{
@@ -479,9 +456,9 @@ func (s *taskProcessorSuite) TestConvertTaskToDLQTask_History() {
 }
 
 func (s *taskProcessorSuite) TestPaginationFn_Success_More() {
-	namespaceID := uuid.NewRandom().String()
-	workflowID := uuid.New()
-	runID := uuid.NewRandom().String()
+	namespaceID := uuid.NewString()
+	workflowID := uuid.NewString()
+	runID := uuid.NewString()
 	events := []*historypb.HistoryEvent{{
 		EventId: 1,
 		Version: 1,
@@ -491,7 +468,7 @@ func (s *taskProcessorSuite) TestPaginationFn_Success_More() {
 		Version: 1,
 	}}
 	serializer := s.mockResource.GetPayloadSerializer()
-	data, err := serializer.SerializeEvents(events, enumspb.ENCODING_TYPE_PROTO3)
+	data, err := serializer.SerializeEvents(events)
 	s.NoError(err)
 
 	syncShardTask := &replicationspb.SyncShardStatus{
@@ -552,9 +529,9 @@ func (s *taskProcessorSuite) TestPaginationFn_Success_More() {
 }
 
 func (s *taskProcessorSuite) TestPaginationFn_Success_NoMore() {
-	namespaceID := uuid.NewRandom().String()
-	workflowID := uuid.New()
-	runID := uuid.NewRandom().String()
+	namespaceID := uuid.NewString()
+	workflowID := uuid.NewString()
+	runID := uuid.NewString()
 	events := []*historypb.HistoryEvent{{
 		EventId: 1,
 		Version: 1,
@@ -564,7 +541,7 @@ func (s *taskProcessorSuite) TestPaginationFn_Success_NoMore() {
 		Version: 1,
 	}}
 	serializer := s.mockResource.GetPayloadSerializer()
-	data, err := serializer.SerializeEvents(events, enumspb.ENCODING_TYPE_PROTO3)
+	data, err := serializer.SerializeEvents(events)
 	s.NoError(err)
 
 	syncShardTask := &replicationspb.SyncShardStatus{

@@ -1,41 +1,18 @@
-// The MIT License
-//
-// Copyright (c) 2020 Temporal Technologies Inc.  All rights reserved.
-//
-// Copyright (c) 2020 Uber Technologies, Inc.
-//
-// Permission is hereby granted, free of charge, to any person obtaining a copy
-// of this software and associated documentation files (the "Software"), to deal
-// in the Software without restriction, including without limitation the rights
-// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-// copies of the Software, and to permit persons to whom the Software is
-// furnished to do so, subject to the following conditions:
-//
-// The above copyright notice and this permission notice shall be included in
-// all copies or substantial portions of the Software.
-//
-// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
-// THE SOFTWARE.
-
-//go:generate mockgen -copyright_file ../../../LICENSE -package $GOPACKAGE -source $GOFILE -destination stream_receiver_mock.go
+//go:generate mockgen -package $GOPACKAGE -source $GOFILE -destination stream_receiver_mock.go
 
 package replication
 
 import (
 	"context"
 	"fmt"
+	"sync"
 	"sync/atomic"
 	"time"
 
 	"go.temporal.io/api/serviceerror"
 	"go.temporal.io/server/api/adminservice/v1"
-	"go.temporal.io/server/api/enums/v1"
-	replicationpb "go.temporal.io/server/api/replication/v1"
+	enumsspb "go.temporal.io/server/api/enums/v1"
+	replicationspb "go.temporal.io/server/api/replication/v1"
 	"go.temporal.io/server/common"
 	"go.temporal.io/server/common/channel"
 	"go.temporal.io/server/common/log"
@@ -73,6 +50,10 @@ type (
 		taskConverter           ExecutableTaskConverter
 		receiverMode            ReceiverMode
 		flowController          ReceiverFlowController
+		recvSignalChan          chan struct{}
+
+		slowSubmissionMu         sync.RWMutex
+		slowSubmissionTimestamps map[enumsspb.TaskPriority]time.Time
 	}
 )
 
@@ -97,21 +78,11 @@ func NewStreamReceiver(
 		tag.SourceCluster(processToolBox.ClusterMetadata.ClusterNameForFailoverVersion(true, int64(serverShardKey.ClusterID))),
 		tag.SourceShardID(serverShardKey.ShardID),
 		tag.ShardID(clientShardKey.ShardID), // client is the local cluster (target cluster, passive cluster)
+		tag.Operation("replication-stream-receiver"),
 	)
 	highPriorityTaskTracker := NewExecutableTaskTracker(logger, processToolBox.MetricsHandler)
 	lowPriorityTaskTracker := NewExecutableTaskTracker(logger, processToolBox.MetricsHandler)
-	taskTrackerMap := make(map[enums.TaskPriority]FlowControlSignalProvider)
-	taskTrackerMap[enums.TASK_PRIORITY_HIGH] = func() *FlowControlSignal {
-		return &FlowControlSignal{
-			taskTrackingCount: highPriorityTaskTracker.Size(),
-		}
-	}
-	taskTrackerMap[enums.TASK_PRIORITY_LOW] = func() *FlowControlSignal {
-		return &FlowControlSignal{
-			taskTrackingCount: lowPriorityTaskTracker.Size(),
-		}
-	}
-	return &StreamReceiverImpl{
+	receiver := &StreamReceiverImpl{
 		ProcessToolBox: processToolBox,
 
 		status:                  common.DaemonStatusInitialized,
@@ -126,10 +97,26 @@ func NewStreamReceiver(
 			clientShardKey,
 			serverShardKey,
 		),
-		taskConverter:  taskConverter,
-		receiverMode:   ReceiverModeUnset,
-		flowController: NewReceiverFlowControl(taskTrackerMap, processToolBox.Config),
+		taskConverter:            taskConverter,
+		receiverMode:             ReceiverModeUnset,
+		slowSubmissionTimestamps: make(map[enumsspb.TaskPriority]time.Time),
+		recvSignalChan:           make(chan struct{}, 1),
 	}
+	taskTrackerMap := make(map[enumsspb.TaskPriority]FlowControlSignalProvider)
+	taskTrackerMap[enumsspb.TASK_PRIORITY_HIGH] = func() *FlowControlSignal {
+		return &FlowControlSignal{
+			taskTrackingCount:  highPriorityTaskTracker.Size(),
+			lastSlowSubmission: receiver.getLastSlowSubmissionTimestamp(enumsspb.TASK_PRIORITY_HIGH),
+		}
+	}
+	taskTrackerMap[enumsspb.TASK_PRIORITY_LOW] = func() *FlowControlSignal {
+		return &FlowControlSignal{
+			taskTrackingCount:  lowPriorityTaskTracker.Size(),
+			lastSlowSubmission: receiver.getLastSlowSubmissionTimestamp(enumsspb.TASK_PRIORITY_LOW),
+		}
+	}
+	receiver.flowController = NewReceiverFlowControl(taskTrackerMap, processToolBox.Config)
+	return receiver
 }
 
 // Start starts the processor
@@ -142,9 +129,16 @@ func (r *StreamReceiverImpl) Start() {
 		return
 	}
 
-	go WrapEventLoop(r.sendEventLoop, r.Stop, r.logger, r.MetricsHandler, r.clientShardKey, r.serverShardKey, streamReceiverMonitorInterval)
-	go WrapEventLoop(r.recvEventLoop, r.Stop, r.logger, r.MetricsHandler, r.clientShardKey, r.serverShardKey, streamReceiverMonitorInterval)
-
+	go WrapEventLoop(context.Background(), r.sendEventLoop, r.Stop, r.logger, r.MetricsHandler, r.clientShardKey, r.serverShardKey, r.Config)
+	go WrapEventLoop(context.Background(), r.recvEventLoop, r.Stop, r.logger, r.MetricsHandler, r.clientShardKey, r.serverShardKey, r.Config)
+	go livenessMonitor(
+		r.recvSignalChan,
+		r.Config.ReplicationStreamSendEmptyTaskDuration,
+		r.Config.ReplicationStreamReceiverLivenessMultiplier,
+		r.shutdownChan,
+		r.Stop,
+		r.logger,
+	)
 	r.logger.Info("StreamReceiver started.")
 }
 
@@ -194,14 +188,8 @@ func (r *StreamReceiverImpl) sendEventLoop() error {
 	for {
 		select {
 		case <-timer.C:
-			timer.Reset(r.Config.ReplicationStreamSyncStatusDuration())
 			watermark, err := r.ackMessage(r.stream)
 			if err != nil {
-				if IsStreamError(err) {
-					r.logger.Error("ReplicationStreamError StreamReceiver exit send loop", tag.Error(err))
-				} else {
-					r.logger.Error("ReplicationServiceError StreamReceiver exit send loop", tag.Error(err))
-				}
 				return err
 			}
 			if watermark != inclusiveLowWatermark {
@@ -227,11 +215,6 @@ func (r *StreamReceiverImpl) recvEventLoop() error {
 	if err == nil {
 		return nil
 	}
-	if IsStreamError(err) {
-		r.logger.Error("ReplicationStreamError StreamReceiver exit recv loop", tag.Error(err))
-	} else {
-		r.logger.Error("ReplicationServiceError StreamReceiver exit recv loop", tag.Error(err))
-	}
 	return err
 }
 
@@ -243,7 +226,7 @@ func (r *StreamReceiverImpl) ackMessage(
 	lowPriorityWaterMarkInfo := r.lowPriorityTaskTracker.LowWatermark()
 	size := r.highPriorityTaskTracker.Size() + r.lowPriorityTaskTracker.Size()
 
-	var highPriorityWatermark, lowPriorityWatermark *replicationpb.ReplicationState
+	var highPriorityWatermark, lowPriorityWatermark *replicationspb.ReplicationState
 	inclusiveLowWaterMark := int64(-1)
 	var inclusiveLowWaterMarkTime time.Time
 
@@ -261,20 +244,20 @@ func (r *StreamReceiverImpl) ackMessage(
 			r.logger.Warn("Tiered stack mode. Have to wait for both high and low priority tracker received at least one batch of tasks before acking.")
 			return 0, nil
 		}
-		highPriorityFlowControlCommand := r.flowController.GetFlowControlInfo(enums.TASK_PRIORITY_HIGH)
-		if highPriorityFlowControlCommand == enums.REPLICATION_FLOW_CONTROL_COMMAND_PAUSE {
+		highPriorityFlowControlCommand := r.flowController.GetFlowControlInfo(enumsspb.TASK_PRIORITY_HIGH)
+		if highPriorityFlowControlCommand == enumsspb.REPLICATION_FLOW_CONTROL_COMMAND_PAUSE {
 			r.logger.Warn(fmt.Sprintf("pausing High Priority Tasks, current size: %v, lowWatermark: %v", r.highPriorityTaskTracker.Size(), highPriorityWaterMarkInfo.Watermark))
 		}
-		highPriorityWatermark = &replicationpb.ReplicationState{
+		highPriorityWatermark = &replicationspb.ReplicationState{
 			InclusiveLowWatermark:     highPriorityWaterMarkInfo.Watermark,
 			InclusiveLowWatermarkTime: timestamppb.New(highPriorityWaterMarkInfo.Timestamp),
 			FlowControlCommand:        highPriorityFlowControlCommand,
 		}
-		lowPriorityFlowControlCommand := r.flowController.GetFlowControlInfo(enums.TASK_PRIORITY_LOW)
-		if lowPriorityFlowControlCommand == enums.REPLICATION_FLOW_CONTROL_COMMAND_PAUSE {
+		lowPriorityFlowControlCommand := r.flowController.GetFlowControlInfo(enumsspb.TASK_PRIORITY_LOW)
+		if lowPriorityFlowControlCommand == enumsspb.REPLICATION_FLOW_CONTROL_COMMAND_PAUSE {
 			r.logger.Warn(fmt.Sprintf("pausing Low Priority Tasks, current size: %v, lowWatermark: %v", r.lowPriorityTaskTracker.Size(), lowPriorityWaterMarkInfo.Watermark))
 		}
-		lowPriorityWatermark = &replicationpb.ReplicationState{
+		lowPriorityWatermark = &replicationspb.ReplicationState{
 			InclusiveLowWatermark:     lowPriorityWaterMarkInfo.Watermark,
 			InclusiveLowWatermarkTime: timestamppb.New(lowPriorityWaterMarkInfo.Timestamp),
 			FlowControlCommand:        lowPriorityFlowControlCommand,
@@ -302,7 +285,7 @@ func (r *StreamReceiverImpl) ackMessage(
 
 	if err := stream.Send(&adminservice.StreamWorkflowReplicationMessagesRequest{
 		Attributes: &adminservice.StreamWorkflowReplicationMessagesRequest_SyncReplicationState{
-			SyncReplicationState: &replicationpb.SyncReplicationState{
+			SyncReplicationState: &replicationspb.SyncReplicationState{
 				InclusiveLowWatermark:     inclusiveLowWaterMark,
 				InclusiveLowWatermarkTime: timestamppb.New(inclusiveLowWaterMarkTime),
 				HighPriorityState:         highPriorityWatermark,
@@ -310,7 +293,7 @@ func (r *StreamReceiverImpl) ackMessage(
 			},
 		},
 	}); err != nil {
-		return 0, err
+		return 0, NewStreamError("stream_receiver failed to send", err)
 	}
 	metrics.ReplicationTasksRecvBacklog.With(r.MetricsHandler).Record(
 		int64(size),
@@ -337,96 +320,165 @@ func (r *StreamReceiverImpl) processMessages(
 
 	streamRespChen, err := stream.Recv()
 	if err != nil {
-		return err
+		return NewStreamError("stream_receiver failed to recv", err)
 	}
 	for streamResp := range streamRespChen {
+		select {
+		case r.recvSignalChan <- struct{}{}:
+		default:
+			// signal channel is full. Continue
+		}
 		if streamResp.Err != nil {
 			return streamResp.Err
 		}
-		if err := r.validateAndSetReceiverMode(streamResp.Resp.GetMessages().Priority); err != nil {
+
+		messages := streamResp.Resp.GetMessages()
+		priority := messages.Priority
+
+		if err := r.validateAndSetReceiverMode(priority); err != nil {
 			// sender mode changed, exit loop and let stream reconnect to retry
 			return NewStreamError("ReplicationTask wrong receiver mode", err)
 		}
 
-		if err = ValidateTasksHaveSamePriority(streamResp.Resp.GetMessages().Priority, streamResp.Resp.GetMessages().ReplicationTasks...); err != nil {
+		if err = ValidateTasksHaveSamePriority(priority, messages.ReplicationTasks...); err != nil {
 			// This should not happen because source side is sending task 1 by 1. Validate here just in case.
 			return NewStreamError("ReplicationTask priority check failed", err)
 		}
+
 		convertedTasks := r.taskConverter.Convert(
 			clusterName,
 			r.clientShardKey,
 			r.serverShardKey,
-			streamResp.Resp.GetMessages().ReplicationTasks...,
+			messages.ReplicationTasks...,
 		)
-		exclusiveHighWatermark := streamResp.Resp.GetMessages().ExclusiveHighWatermark
-		exclusiveHighWatermarkTime := timestamp.TimeValue(streamResp.Resp.GetMessages().ExclusiveHighWatermarkTime)
-		taskTracker, taskScheduler, err := r.getTrackerAndSchedulerByPriority(streamResp.Resp.GetMessages().Priority)
+		exclusiveHighWatermark := messages.ExclusiveHighWatermark
+		exclusiveHighWatermarkTime := timestamp.TimeValue(messages.ExclusiveHighWatermarkTime)
+		taskTracker, err := r.getTaskTracker(priority)
 		if err != nil {
 			// Todo: Change to write Tasks to DLQ. As resend task will not help here
 			return NewStreamError("ReplicationTask wrong priority", err)
 		}
+
+		submissionThreshold := r.Config.ReplicationReceiverSlowSubmissionLatencyThreshold()
+
 		for _, task := range taskTracker.TrackTasks(WatermarkInfo{
 			Watermark: exclusiveHighWatermark,
 			Timestamp: exclusiveHighWatermarkTime,
 		}, convertedTasks...) {
-			taskScheduler.Submit(task)
+			schedulerPriority, err := r.getTaskSchedulerPriority(priority, task)
+			if err != nil {
+				return err
+			}
+			scheduler, err := r.getTaskScheduler(schedulerPriority)
+			if err != nil {
+				return err
+			}
+			start := time.Now()
+			scheduler.Submit(task)
+			end := time.Now()
+			if end.Sub(start) > submissionThreshold {
+				r.recordSlowSubmission(schedulerPriority, end)
+			}
 		}
 	}
-	r.logger.Error("StreamReceiver encountered channel close")
 	return nil
 }
 
-func (r *StreamReceiverImpl) getTrackerAndSchedulerByPriority(priority enums.TaskPriority) (ExecutableTaskTracker, ctasks.Scheduler[TrackableExecutableTask], error) {
+func (r *StreamReceiverImpl) getLastSlowSubmissionTimestamp(priority enumsspb.TaskPriority) time.Time {
+	r.slowSubmissionMu.RLock()
+	defer r.slowSubmissionMu.RUnlock()
+	if ts, ok := r.slowSubmissionTimestamps[priority]; ok {
+		return ts
+	}
+	return time.Time{}
+}
+
+func (r *StreamReceiverImpl) recordSlowSubmission(priority enumsspb.TaskPriority, ts time.Time) {
+	r.slowSubmissionMu.Lock()
+	defer r.slowSubmissionMu.Unlock()
+	r.slowSubmissionTimestamps[priority] = ts
+}
+
+func (r *StreamReceiverImpl) getTaskTracker(priority enumsspb.TaskPriority) (ExecutableTaskTracker, error) {
 	switch priority {
-	case enums.TASK_PRIORITY_UNSPECIFIED, enums.TASK_PRIORITY_HIGH:
-		return r.highPriorityTaskTracker, r.ProcessToolBox.HighPriorityTaskScheduler, nil
-	case enums.TASK_PRIORITY_LOW:
-		return r.lowPriorityTaskTracker, r.ProcessToolBox.LowPriorityTaskScheduler, nil
+	case enumsspb.TASK_PRIORITY_UNSPECIFIED, enumsspb.TASK_PRIORITY_HIGH:
+		return r.highPriorityTaskTracker, nil
+	case enumsspb.TASK_PRIORITY_LOW:
+		return r.lowPriorityTaskTracker, nil
 	default:
-		return nil, nil, serviceerror.NewInvalidArgument(fmt.Sprintf("Unknown task priority: %v", priority))
+		return nil, serviceerror.NewInvalidArgumentf("Unknown task priority: %v", priority)
+	}
+}
+
+func (r *StreamReceiverImpl) getTaskSchedulerPriority(priority enumsspb.TaskPriority, task TrackableExecutableTask) (enumsspb.TaskPriority, error) {
+	switch priority {
+	case enumsspb.TASK_PRIORITY_UNSPECIFIED:
+		switch task.(type) {
+		case *ExecutableWorkflowStateTask:
+			// This is an optimization for workflow state task. The low priority task scheduler is grouping task by workflow ID.
+			// When multiple runs of task come in, we can serialize them in the low priority task scheduler. As long as we use a single tracker,
+			// the task ACK is guaranteed to be in order.(i.e. no task will be lost)
+			return enumsspb.TASK_PRIORITY_LOW, nil
+		}
+		return enumsspb.TASK_PRIORITY_HIGH, nil
+	case enumsspb.TASK_PRIORITY_HIGH, enumsspb.TASK_PRIORITY_LOW:
+		return priority, nil
+	default:
+		return 0, serviceerror.NewInvalidArgumentf("Unknown task priority: %v", priority)
+	}
+}
+
+func (r *StreamReceiverImpl) getTaskScheduler(priority enumsspb.TaskPriority) (ctasks.Scheduler[TrackableExecutableTask], error) {
+	switch priority {
+	case enumsspb.TASK_PRIORITY_HIGH:
+		return r.ProcessToolBox.HighPriorityTaskScheduler, nil
+	case enumsspb.TASK_PRIORITY_LOW:
+		return r.ProcessToolBox.LowPriorityTaskScheduler, nil
+	default:
+		return nil, serviceerror.NewInvalidArgumentf("Unknown task scheduler priority: %v", priority)
 	}
 }
 
 // Receiver mode can only be set once for the lifetime of the receiver. Receiver mode is set when receiver receive the first task.
 // If the first task is prioritized, receiver mode will be set to ReceiverModeTieredStack. If the first task is not prioritized, receiver mode will be set to ReceiverModeSingleStack.
 // Receiver mode cannot be changed once it is set. If we enabled sender side to send tasks with different priority, we need to change the receiver mode by reconnecting the stream.
-func (r *StreamReceiverImpl) validateAndSetReceiverMode(priority enums.TaskPriority) error {
+func (r *StreamReceiverImpl) validateAndSetReceiverMode(priority enumsspb.TaskPriority) error {
 	receiverMode := ReceiverMode(atomic.LoadInt32((*int32)(&r.receiverMode)))
 	switch receiverMode {
 	case ReceiverModeUnset:
 		r.setReceiverMode(priority)
 		return nil
 	case ReceiverModeSingleStack:
-		if priority != enums.TASK_PRIORITY_UNSPECIFIED {
+		if priority != enumsspb.TASK_PRIORITY_UNSPECIFIED {
 			return serviceerror.NewInvalidArgument("ReceiverModeSingleStack cannot process prioritized task")
 		}
 	case ReceiverModeTieredStack:
-		if priority == enums.TASK_PRIORITY_UNSPECIFIED {
+		if priority == enumsspb.TASK_PRIORITY_UNSPECIFIED {
 			return serviceerror.NewInvalidArgument("ReceiverModeTieredStack cannot process non-prioritized task")
 		}
 	}
 	return nil
 }
 
-func (r *StreamReceiverImpl) setReceiverMode(priority enums.TaskPriority) {
+func (r *StreamReceiverImpl) setReceiverMode(priority enumsspb.TaskPriority) {
 	if r.receiverMode != ReceiverModeUnset {
 		return
 	}
 	switch priority {
-	case enums.TASK_PRIORITY_UNSPECIFIED:
+	case enumsspb.TASK_PRIORITY_UNSPECIFIED:
 		atomic.StoreInt32((*int32)(&r.receiverMode), int32(ReceiverModeSingleStack))
-	case enums.TASK_PRIORITY_HIGH, enums.TASK_PRIORITY_LOW:
+	case enumsspb.TASK_PRIORITY_HIGH, enumsspb.TASK_PRIORITY_LOW:
 		atomic.StoreInt32((*int32)(&r.receiverMode), int32(ReceiverModeTieredStack))
 	}
 }
 
-func ValidateTasksHaveSamePriority(messageBatchPriority enums.TaskPriority, tasks ...*replicationpb.ReplicationTask) error {
-	if len(tasks) == 0 || messageBatchPriority == enums.TASK_PRIORITY_UNSPECIFIED {
+func ValidateTasksHaveSamePriority(messageBatchPriority enumsspb.TaskPriority, tasks ...*replicationspb.ReplicationTask) error {
+	if len(tasks) == 0 || messageBatchPriority == enumsspb.TASK_PRIORITY_UNSPECIFIED {
 		return nil
 	}
 	for _, task := range tasks {
 		if task.Priority != messageBatchPriority {
-			return serviceerror.NewInvalidArgument(fmt.Sprintf("Task priority does not match batch priority: %v, %v", task.Priority, messageBatchPriority))
+			return serviceerror.NewInvalidArgumentf("Task priority does not match batch priority: %v, %v", task.Priority, messageBatchPriority)
 		}
 	}
 	return nil

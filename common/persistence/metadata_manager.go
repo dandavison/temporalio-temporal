@@ -1,31 +1,8 @@
-// The MIT License
-//
-// Copyright (c) 2020 Temporal Technologies Inc.  All rights reserved.
-//
-// Copyright (c) 2020 Uber Technologies, Inc.
-//
-// Permission is hereby granted, free of charge, to any person obtaining a copy
-// of this software and associated documentation files (the "Software"), to deal
-// in the Software without restriction, including without limitation the rights
-// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-// copies of the Software, and to permit persons to whom the Software is
-// furnished to do so, subject to the following conditions:
-//
-// The above copyright notice and this permission notice shall be included in
-// all copies or substantial portions of the Software.
-//
-// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
-// THE SOFTWARE.
-
 package persistence
 
 import (
 	"context"
+	"errors"
 
 	enumspb "go.temporal.io/api/enums/v1"
 	namespacepb "go.temporal.io/api/namespace/v1"
@@ -37,6 +14,8 @@ import (
 	"go.temporal.io/server/common/primitives"
 	"google.golang.org/protobuf/types/known/durationpb"
 )
+
+var ErrWatchNotSupported = errors.New("watch not supported")
 
 type (
 
@@ -74,7 +53,7 @@ func (m *metadataManagerImpl) CreateNamespace(
 	ctx context.Context,
 	request *CreateNamespaceRequest,
 ) (*CreateNamespaceResponse, error) {
-	datablob, err := m.serializer.NamespaceDetailToBlob(request.Namespace, enumspb.ENCODING_TYPE_PROTO3)
+	datablob, err := m.serializer.NamespaceDetailToBlob(request.Namespace)
 	if err != nil {
 		return nil, err
 	}
@@ -95,14 +74,14 @@ func (m *metadataManagerImpl) GetNamespace(
 	if err != nil {
 		return nil, err
 	}
-	return m.ConvertInternalGetResponse(resp)
+	return ConvertInternalGetNamespaceResponse(m.serializer, m.clusterName, resp)
 }
 
 func (m *metadataManagerImpl) UpdateNamespace(
 	ctx context.Context,
 	request *UpdateNamespaceRequest,
 ) error {
-	datablob, err := m.serializer.NamespaceDetailToBlob(request.Namespace, enumspb.ENCODING_TYPE_PROTO3)
+	datablob, err := m.serializer.NamespaceDetailToBlob(request.Namespace)
 	if err != nil {
 		return err
 	}
@@ -135,7 +114,7 @@ func (m *metadataManagerImpl) RenameNamespace(
 	previousName := ns.Namespace.Info.Name
 	ns.Namespace.Info.Name = request.NewName
 
-	nsDataBlob, err := m.serializer.NamespaceDetailToBlob(ns.Namespace, enumspb.ENCODING_TYPE_PROTO3)
+	nsDataBlob, err := m.serializer.NamespaceDetailToBlob(ns.Namespace)
 	if err != nil {
 		return err
 	}
@@ -168,8 +147,8 @@ func (m *metadataManagerImpl) DeleteNamespaceByName(
 	return m.persistence.DeleteNamespaceByName(ctx, request)
 }
 
-func (m *metadataManagerImpl) ConvertInternalGetResponse(d *InternalGetNamespaceResponse) (*GetNamespaceResponse, error) {
-	ns, err := m.serializer.NamespaceDetailFromBlob(d.Namespace)
+func ConvertInternalGetNamespaceResponse(serializer serialization.Serializer, currentClusterName string, d *InternalGetNamespaceResponse) (*GetNamespaceResponse, error) {
+	ns, err := serializer.NamespaceDetailFromBlob(d.Namespace)
 	if err != nil {
 		return nil, err
 	}
@@ -182,8 +161,8 @@ func (m *metadataManagerImpl) ConvertInternalGetResponse(d *InternalGetNamespace
 		ns.Config.BadBinaries = &namespacepb.BadBinaries{Binaries: map[string]*namespacepb.BadBinaryInfo{}}
 	}
 
-	ns.ReplicationConfig.ActiveClusterName = GetOrUseDefaultActiveCluster(m.clusterName, ns.ReplicationConfig.ActiveClusterName)
-	ns.ReplicationConfig.Clusters = GetOrUseDefaultClusters(m.clusterName, ns.ReplicationConfig.Clusters)
+	ns.ReplicationConfig.ActiveClusterName = GetOrUseDefaultActiveCluster(currentClusterName, ns.ReplicationConfig.ActiveClusterName)
+	ns.ReplicationConfig.Clusters = GetOrUseDefaultClusters(currentClusterName, ns.ReplicationConfig.Clusters)
 	return &GetNamespaceResponse{
 		Namespace:           ns,
 		IsGlobalNamespace:   d.IsGlobal,
@@ -209,7 +188,7 @@ func (m *metadataManagerImpl) ListNamespaces(
 		}
 		deletedNamespacesCount := 0
 		for _, d := range resp.Namespaces {
-			ret, err := m.ConvertInternalGetResponse(d)
+			ret, err := ConvertInternalGetNamespaceResponse(m.serializer, m.clusterName, d)
 			if err != nil {
 				return nil, err
 			}
@@ -257,7 +236,7 @@ func (m *metadataManagerImpl) InitializeSystemNamespaces(
 			},
 			ReplicationConfig: &persistencespb.NamespaceReplicationConfig{
 				ActiveClusterName: currentClusterName,
-				Clusters:          GetOrUseDefaultClusters(currentClusterName, nil),
+				Clusters:          []string{currentClusterName},
 			},
 			FailoverVersion:             common.EmptyVersion,
 			FailoverNotificationVersion: -1,
@@ -281,4 +260,8 @@ func (m *metadataManagerImpl) GetMetadata(
 
 func (m *metadataManagerImpl) Close() {
 	m.persistence.Close()
+}
+
+func (m *metadataManagerImpl) WatchNamespaces(context.Context) (<-chan *NamespaceWatchEvent, error) {
+	return nil, ErrWatchNotSupported
 }

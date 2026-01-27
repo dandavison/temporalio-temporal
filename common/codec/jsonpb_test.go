@@ -1,27 +1,3 @@
-// The MIT License
-//
-// Copyright (c) 2020 Temporal Technologies Inc.  All rights reserved.
-//
-// Copyright (c) 2020 Uber Technologies, Inc.
-//
-// Permission is hereby granted, free of charge, to any person obtaining a copy
-// of this software and associated documentation files (the "Software"), to deal
-// in the Software without restriction, including without limitation the rights
-// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-// copies of the Software, and to permit persons to whom the Software is
-// furnished to do so, subject to the following conditions:
-//
-// The above copyright notice and this permission notice shall be included in
-// all copies or substantial portions of the Software.
-//
-// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
-// THE SOFTWARE.
-
 package codec
 
 import (
@@ -79,14 +55,14 @@ func (s *jsonpbEncoderSuite) SetupSuite() {
 
 func (s *jsonpbEncoderSuite) TestEncode() {
 	json, err := s.encoder.Encode(history)
-	s.Nil(err)
+	s.Require().NoError(err)
 	s.JSONEq(encodedHistory, string(json))
 }
 
 func (s *jsonpbEncoderSuite) TestDecode() {
 	var val historypb.History
 	err := s.encoder.Decode([]byte(encodedHistory), &val)
-	s.Nil(err)
+	s.Require().NoError(err)
 	protoassert.ProtoEqual(s.T(), &val, history)
 }
 
@@ -97,8 +73,16 @@ func (s *jsonpbEncoderSuite) TestEncodeHistories() {
 	histories = append(histories, history)
 
 	json, err := s.encoder.EncodeHistories(histories)
-	s.Nil(err)
+	s.Require().NoError(err)
 	s.JSONEq(fmt.Sprintf("[%[1]s,%[1]s,%[1]s]", encodedHistory), string(json))
+}
+
+func (s *jsonpbEncoderSuite) TestEncodeEmptyHistories() {
+	var histories []*historypb.History
+
+	json, err := s.encoder.EncodeHistories(histories)
+	s.Require().NoError(err)
+	s.JSONEq("[]", string(json))
 }
 
 func (s *jsonpbEncoderSuite) TestDecodeHistories() {
@@ -111,7 +95,7 @@ func (s *jsonpbEncoderSuite) TestDecodeHistories() {
 
 	decodedHistories, err := s.encoder.DecodeHistories([]byte(historyJSON))
 
-	s.Nil(err)
+	s.Require().NoError(err)
 	protoassert.ProtoSliceEqual(s.T(), histories, decodedHistories)
 }
 
@@ -125,6 +109,6 @@ func (s *jsonpbEncoderSuite) TestDecodeOldHistories() {
 
 	decodedHistories, err := s.encoder.DecodeHistories([]byte(historyJSON))
 
-	s.Nil(err)
+	s.Require().NoError(err)
 	protoassert.ProtoSliceEqual(s.T(), historyEvents, decodedHistories)
 }

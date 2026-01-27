@@ -1,27 +1,3 @@
-// The MIT License
-//
-// Copyright (c) 2020 Temporal Technologies Inc.  All rights reserved.
-//
-// Copyright (c) 2020 Uber Technologies, Inc.
-//
-// Permission is hereby granted, free of charge, to any person obtaining a copy
-// of this software and associated documentation files (the "Software"), to deal
-// in the Software without restriction, including without limitation the rights
-// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-// copies of the Software, and to permit persons to whom the Software is
-// furnished to do so, subject to the following conditions:
-//
-// The above copyright notice and this permission notice shall be included in
-// all copies or substantial portions of the Software.
-//
-// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
-// THE SOFTWARE.
-
 package queues
 
 import (
@@ -30,7 +6,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/pborman/uuid"
+	"github.com/google/uuid"
 	"github.com/stretchr/testify/require"
 	"github.com/stretchr/testify/suite"
 	enumsspb "go.temporal.io/server/api/enums/v1"
@@ -65,7 +41,7 @@ func (s *scopeSuite) TearDownSuite() {
 
 func (s *scopeSuite) TestContains() {
 	r := NewRandomRange()
-	namespaceIDs := []string{uuid.New(), uuid.New(), uuid.New()}
+	namespaceIDs := []string{uuid.NewString(), uuid.NewString(), uuid.NewString()}
 	predicate := tasks.NewNamespacePredicate(namespaceIDs)
 	scope := NewScope(r, predicate)
 
@@ -81,7 +57,7 @@ func (s *scopeSuite) TestContains() {
 	}
 
 	mockTask := tasks.NewMockTask(s.controller)
-	mockTask.EXPECT().GetNamespaceID().Return(uuid.New()).AnyTimes()
+	mockTask.EXPECT().GetNamespaceID().Return(uuid.NewString()).AnyTimes()
 	mockTask.EXPECT().GetKey().Return(NewRandomKeyInRange(r)).MaxTimes(1)
 	s.False(scope.Contains(mockTask))
 }
@@ -121,11 +97,11 @@ func (s *scopeSuite) TestSplitByRange() {
 
 func (s *scopeSuite) TestSplitByPredicate_SamePredicateType() {
 	r := NewRandomRange()
-	namespaceIDs := []string{uuid.New(), uuid.New(), uuid.New(), uuid.New()}
+	namespaceIDs := []string{uuid.NewString(), uuid.NewString(), uuid.NewString(), uuid.NewString()}
 	predicate := tasks.NewNamespacePredicate(namespaceIDs)
 	scope := NewScope(r, predicate)
 
-	splitNamespaceIDs := append(slices.Clone(namespaceIDs[:rand.Intn(len(namespaceIDs))]), uuid.New(), uuid.New())
+	splitNamespaceIDs := append(slices.Clone(namespaceIDs[:rand.Intn(len(namespaceIDs))]), uuid.NewString(), uuid.NewString())
 	splitPredicate := tasks.NewNamespacePredicate(splitNamespaceIDs)
 	passScope, failScope := scope.SplitByPredicate(splitPredicate)
 	s.Equal(r, passScope.Range)
@@ -157,7 +133,7 @@ func (s *scopeSuite) TestSplitByPredicate_SamePredicateType() {
 	}
 
 	mockTask := tasks.NewMockTask(s.controller)
-	mockTask.EXPECT().GetNamespaceID().Return(uuid.New()).AnyTimes()
+	mockTask.EXPECT().GetNamespaceID().Return(uuid.NewString()).AnyTimes()
 	mockTask.EXPECT().GetKey().Return(NewRandomKeyInRange(r)).AnyTimes()
 	s.False(passScope.Contains(mockTask))
 	s.False(failScope.Contains(mockTask))
@@ -165,7 +141,7 @@ func (s *scopeSuite) TestSplitByPredicate_SamePredicateType() {
 
 func (s *scopeSuite) TestSplitByPredicate_DifferentPredicateType() {
 	r := NewRandomRange()
-	namespaceIDs := []string{uuid.New(), uuid.New(), uuid.New(), uuid.New()}
+	namespaceIDs := []string{uuid.NewString(), uuid.NewString(), uuid.NewString(), uuid.NewString()}
 	predicate := tasks.NewNamespacePredicate(namespaceIDs)
 	scope := NewScope(r, predicate)
 
@@ -198,7 +174,7 @@ func (s *scopeSuite) TestSplitByPredicate_DifferentPredicateType() {
 	}
 
 	mockTask := tasks.NewMockTask(s.controller)
-	mockTask.EXPECT().GetNamespaceID().Return(uuid.New()).AnyTimes()
+	mockTask.EXPECT().GetNamespaceID().Return(uuid.NewString()).AnyTimes()
 	mockTask.EXPECT().GetKey().Return(NewRandomKeyInRange(r)).AnyTimes()
 	for _, typeType := range splitTaskTypes {
 		mockTask.EXPECT().GetType().Return(typeType).MaxTimes(2)
@@ -214,14 +190,14 @@ func (s *scopeSuite) TestSplitByPredicate_DifferentPredicateType() {
 
 func (s *scopeSuite) TestCanMergeByRange() {
 	r := NewRandomRange()
-	namespaceIDs := []string{uuid.New(), uuid.New(), uuid.New(), uuid.New()}
+	namespaceIDs := []string{uuid.NewString(), uuid.NewString(), uuid.NewString(), uuid.NewString()}
 	predicate := tasks.NewNamespacePredicate(namespaceIDs)
 	scope := NewScope(r, predicate)
 
 	testPredicates := []tasks.Predicate{
 		predicate,
 		tasks.NewNamespacePredicate(namespaceIDs),
-		tasks.NewNamespacePredicate([]string{uuid.New(), uuid.New(), uuid.New(), uuid.New()}),
+		tasks.NewNamespacePredicate([]string{uuid.NewString(), uuid.NewString(), uuid.NewString(), uuid.NewString()}),
 		tasks.NewTypePredicate([]enumsspb.TaskType{enumsspb.TASK_TYPE_ACTIVITY_RETRY_TIMER}),
 	}
 	s.True(predicate.Equals(testPredicates[0]))
@@ -302,7 +278,7 @@ func (s *scopeSuite) TestMergeByRange() {
 
 func (s *scopeSuite) TestCanMergeByPredicate() {
 	r := NewRandomRange()
-	namespaceIDs := []string{uuid.New(), uuid.New(), uuid.New(), uuid.New()}
+	namespaceIDs := []string{uuid.NewString(), uuid.NewString(), uuid.NewString(), uuid.NewString()}
 	predicate := tasks.NewNamespacePredicate(namespaceIDs)
 	scope := NewScope(r, predicate)
 
@@ -316,11 +292,11 @@ func (s *scopeSuite) TestCanMergeByPredicate() {
 
 func (s *scopeSuite) TestMergeByPredicate_SamePredicateType() {
 	r := NewRandomRange()
-	namespaceIDs := []string{uuid.New(), uuid.New(), uuid.New(), uuid.New()}
+	namespaceIDs := []string{uuid.NewString(), uuid.NewString(), uuid.NewString(), uuid.NewString()}
 	predicate := tasks.NewNamespacePredicate(namespaceIDs)
 	scope := NewScope(r, predicate)
 
-	mergeNamespaceIDs := append(slices.Clone(namespaceIDs[:rand.Intn(len(namespaceIDs))]), uuid.New(), uuid.New())
+	mergeNamespaceIDs := append(slices.Clone(namespaceIDs[:rand.Intn(len(namespaceIDs))]), uuid.NewString(), uuid.NewString())
 	mergePredicate := tasks.NewNamespacePredicate(mergeNamespaceIDs)
 	mergedScope := scope.MergeByPredicate(NewScope(r, mergePredicate))
 	s.Equal(r, mergedScope.Range)
@@ -342,13 +318,13 @@ func (s *scopeSuite) TestMergeByPredicate_SamePredicateType() {
 
 	mockTask := tasks.NewMockTask(s.controller)
 	mockTask.EXPECT().GetKey().Return(NewRandomKeyInRange(r)).AnyTimes()
-	mockTask.EXPECT().GetNamespaceID().Return(uuid.New()).AnyTimes()
+	mockTask.EXPECT().GetNamespaceID().Return(uuid.NewString()).AnyTimes()
 	s.False(mergedScope.Contains(mockTask))
 }
 
 func (s *scopeSuite) TestMergeByPredicate_DifferentPredicateType() {
 	r := NewRandomRange()
-	namespaceIDs := []string{uuid.New(), uuid.New(), uuid.New(), uuid.New()}
+	namespaceIDs := []string{uuid.NewString(), uuid.NewString(), uuid.NewString(), uuid.NewString()}
 	predicate := tasks.NewNamespacePredicate(namespaceIDs)
 	scope := NewScope(r, predicate)
 
@@ -377,7 +353,7 @@ func (s *scopeSuite) TestMergeByPredicate_DifferentPredicateType() {
 	}
 
 	mockTask := tasks.NewMockTask(s.controller)
-	mockTask.EXPECT().GetNamespaceID().Return(uuid.New()).AnyTimes()
+	mockTask.EXPECT().GetNamespaceID().Return(uuid.NewString()).AnyTimes()
 	mockTask.EXPECT().GetKey().Return(NewRandomKeyInRange(r)).AnyTimes()
 	for _, typeType := range mergeTaskTypes {
 		mockTask.EXPECT().GetType().Return(typeType).MaxTimes(1)

@@ -1,27 +1,3 @@
-// The MIT License
-//
-// Copyright (c) 2020 Temporal Technologies Inc.  All rights reserved.
-//
-// Copyright (c) 2020 Uber Technologies, Inc.
-//
-// Permission is hereby granted, free of charge, to any person obtaining a copy
-// of this software and associated documentation files (the "Software"), to deal
-// in the Software without restriction, including without limitation the rights
-// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-// copies of the Software, and to permit persons to whom the Software is
-// furnished to do so, subject to the following conditions:
-//
-// The above copyright notice and this permission notice shall be included in
-// all copies or substantial portions of the Software.
-//
-// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
-// THE SOFTWARE.
-
 package history
 
 import (
@@ -30,7 +6,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/pborman/uuid"
+	"github.com/google/uuid"
 	"github.com/stretchr/testify/suite"
 	commonpb "go.temporal.io/api/common/v1"
 	"go.temporal.io/api/serviceerror"
@@ -39,13 +15,15 @@ import (
 	enumsspb "go.temporal.io/server/api/enums/v1"
 	"go.temporal.io/server/api/historyservice/v1"
 	"go.temporal.io/server/api/historyservicemock/v1"
-	persistencepb "go.temporal.io/server/api/persistence/v1"
+	persistencespb "go.temporal.io/server/api/persistence/v1"
+	"go.temporal.io/server/chasm"
 	"go.temporal.io/server/common"
 	"go.temporal.io/server/common/dynamicconfig"
 	"go.temporal.io/server/common/log"
 	"go.temporal.io/server/common/metrics"
 	"go.temporal.io/server/common/namespace"
 	"go.temporal.io/server/common/persistence"
+	"go.temporal.io/server/common/persistence/serialization"
 	"go.temporal.io/server/common/primitives"
 	"go.temporal.io/server/common/primitives/timestamp"
 	"go.temporal.io/server/common/testing/protomock"
@@ -74,17 +52,17 @@ type (
 )
 
 var (
-	treeID1 = primitives.MustValidateUUID(uuid.New())
-	treeID2 = primitives.MustValidateUUID(uuid.New())
-	treeID3 = primitives.MustValidateUUID(uuid.New())
-	treeID4 = primitives.MustValidateUUID(uuid.New())
-	treeID5 = primitives.MustValidateUUID(uuid.New())
+	treeID1 = primitives.MustValidateUUID(uuid.NewString())
+	treeID2 = primitives.MustValidateUUID(uuid.NewString())
+	treeID3 = primitives.MustValidateUUID(uuid.NewString())
+	treeID4 = primitives.MustValidateUUID(uuid.NewString())
+	treeID5 = primitives.MustValidateUUID(uuid.NewString())
 
-	branchID1 = primitives.MustValidateUUID(uuid.New())
-	branchID2 = primitives.MustValidateUUID(uuid.New())
-	branchID3 = primitives.MustValidateUUID(uuid.New())
-	branchID4 = primitives.MustValidateUUID(uuid.New())
-	branchID5 = primitives.MustValidateUUID(uuid.New())
+	branchID1 = primitives.MustValidateUUID(uuid.NewString())
+	branchID2 = primitives.MustValidateUUID(uuid.NewString())
+	branchID3 = primitives.MustValidateUUID(uuid.NewString())
+	branchID4 = primitives.MustValidateUUID(uuid.NewString())
+	branchID5 = primitives.MustValidateUUID(uuid.NewString())
 )
 
 func TestScavengerTestSuite(t *testing.T) {
@@ -126,8 +104,10 @@ func (s *ScavengerTestSuite) createTestScavenger(
 		enableRetentionVerification,
 		s.metricHandler,
 		s.logger,
+		serialization.NewSerializer(),
 	)
 	s.scavenger.isInTest = true
+	s.historyBranchUtil = *persistence.NewHistoryBranchUtil(serialization.NewSerializer())
 }
 
 func (s *ScavengerTestSuite) TestAllSkipTasksTwoPages() {
@@ -137,7 +117,7 @@ func (s *ScavengerTestSuite) TestAllSkipTasksTwoPages() {
 		NextPageToken: []byte("page1"),
 		Branches: []persistence.HistoryBranchDetail{
 			{
-				BranchInfo: &persistencepb.HistoryBranch{
+				BranchInfo: &persistencespb.HistoryBranch{
 					TreeId:   treeID1,
 					BranchId: branchID1,
 				},
@@ -145,7 +125,7 @@ func (s *ScavengerTestSuite) TestAllSkipTasksTwoPages() {
 				Info:     persistence.BuildHistoryGarbageCleanupInfo("namespaceID1", "workflowID1", "runID1"),
 			},
 			{
-				BranchInfo: &persistencepb.HistoryBranch{
+				BranchInfo: &persistencespb.HistoryBranch{
 					TreeId:   treeID2,
 					BranchId: branchID2,
 				},
@@ -161,7 +141,7 @@ func (s *ScavengerTestSuite) TestAllSkipTasksTwoPages() {
 	})).Return(&persistence.GetAllHistoryTreeBranchesResponse{
 		Branches: []persistence.HistoryBranchDetail{
 			{
-				BranchInfo: &persistencepb.HistoryBranch{
+				BranchInfo: &persistencespb.HistoryBranch{
 					TreeId:   treeID3,
 					BranchId: branchID3,
 				},
@@ -169,7 +149,7 @@ func (s *ScavengerTestSuite) TestAllSkipTasksTwoPages() {
 				Info:     persistence.BuildHistoryGarbageCleanupInfo("namespaceID3", "workflowID3", "runID3"),
 			},
 			{
-				BranchInfo: &persistencepb.HistoryBranch{
+				BranchInfo: &persistencespb.HistoryBranch{
 					TreeId:   treeID4,
 					BranchId: branchID4,
 				},
@@ -195,7 +175,7 @@ func (s *ScavengerTestSuite) TestAllErrorSplittingTasksTwoPages() {
 		NextPageToken: []byte("page1"),
 		Branches: []persistence.HistoryBranchDetail{
 			{
-				BranchInfo: &persistencepb.HistoryBranch{
+				BranchInfo: &persistencespb.HistoryBranch{
 					TreeId:   treeID1,
 					BranchId: branchID1,
 				},
@@ -203,7 +183,7 @@ func (s *ScavengerTestSuite) TestAllErrorSplittingTasksTwoPages() {
 				Info:     "error-info",
 			},
 			{
-				BranchInfo: &persistencepb.HistoryBranch{
+				BranchInfo: &persistencespb.HistoryBranch{
 					TreeId:   treeID2,
 					BranchId: branchID2,
 				},
@@ -219,7 +199,7 @@ func (s *ScavengerTestSuite) TestAllErrorSplittingTasksTwoPages() {
 	})).Return(&persistence.GetAllHistoryTreeBranchesResponse{
 		Branches: []persistence.HistoryBranchDetail{
 			{
-				BranchInfo: &persistencepb.HistoryBranch{
+				BranchInfo: &persistencespb.HistoryBranch{
 					TreeId:   treeID3,
 					BranchId: branchID3,
 				},
@@ -227,7 +207,7 @@ func (s *ScavengerTestSuite) TestAllErrorSplittingTasksTwoPages() {
 				Info:     "error-info",
 			},
 			{
-				BranchInfo: &persistencepb.HistoryBranch{
+				BranchInfo: &persistencespb.HistoryBranch{
 					TreeId:   treeID4,
 					BranchId: branchID4,
 				},
@@ -253,7 +233,7 @@ func (s *ScavengerTestSuite) TestNoGarbageTwoPages() {
 		NextPageToken: []byte("page1"),
 		Branches: []persistence.HistoryBranchDetail{
 			{
-				BranchInfo: &persistencepb.HistoryBranch{
+				BranchInfo: &persistencespb.HistoryBranch{
 					TreeId:   treeID1,
 					BranchId: branchID1,
 				},
@@ -261,7 +241,7 @@ func (s *ScavengerTestSuite) TestNoGarbageTwoPages() {
 				Info:     persistence.BuildHistoryGarbageCleanupInfo("namespaceID1", "workflowID1", "runID1"),
 			},
 			{
-				BranchInfo: &persistencepb.HistoryBranch{
+				BranchInfo: &persistencespb.HistoryBranch{
 					TreeId:   treeID2,
 					BranchId: branchID2,
 				},
@@ -277,7 +257,7 @@ func (s *ScavengerTestSuite) TestNoGarbageTwoPages() {
 	}).Return(&persistence.GetAllHistoryTreeBranchesResponse{
 		Branches: []persistence.HistoryBranchDetail{
 			{
-				BranchInfo: &persistencepb.HistoryBranch{
+				BranchInfo: &persistencespb.HistoryBranch{
 					TreeId:   treeID3,
 					BranchId: branchID3,
 				},
@@ -285,7 +265,7 @@ func (s *ScavengerTestSuite) TestNoGarbageTwoPages() {
 				Info:     persistence.BuildHistoryGarbageCleanupInfo("namespaceID3", "workflowID3", "runID3"),
 			},
 			{
-				BranchInfo: &persistencepb.HistoryBranch{
+				BranchInfo: &persistencespb.HistoryBranch{
 					TreeId:   treeID4,
 					BranchId: branchID4,
 				},
@@ -296,14 +276,14 @@ func (s *ScavengerTestSuite) TestNoGarbageTwoPages() {
 	}, nil)
 	mockedNamespace := namespace.NewNamespaceForTest(
 		nil,
-		&persistencepb.NamespaceConfig{Retention: durationpb.New(time.Hour)},
+		&persistencespb.NamespaceConfig{Retention: durationpb.New(time.Hour)},
 		false,
 		nil,
 		0,
 	)
 	ms := &historyservice.DescribeMutableStateResponse{
-		DatabaseMutableState: &persistencepb.WorkflowMutableState{
-			ExecutionInfo: &persistencepb.WorkflowExecutionInfo{
+		DatabaseMutableState: &persistencespb.WorkflowMutableState{
+			ExecutionInfo: &persistencespb.WorkflowExecutionInfo{
 				LastUpdateTime: timestamppb.New(time.Now()),
 			},
 		},
@@ -315,6 +295,7 @@ func (s *ScavengerTestSuite) TestNoGarbageTwoPages() {
 			WorkflowId: "workflowID1",
 			RunId:      "runID1",
 		},
+		ArchetypeId: chasm.WorkflowArchetypeID,
 	})).Return(ms, nil)
 	s.mockHistoryClient.EXPECT().DescribeMutableState(gomock.Any(), protomock.Eq(&historyservice.DescribeMutableStateRequest{
 		NamespaceId: "namespaceID2",
@@ -322,6 +303,7 @@ func (s *ScavengerTestSuite) TestNoGarbageTwoPages() {
 			WorkflowId: "workflowID2",
 			RunId:      "runID2",
 		},
+		ArchetypeId: chasm.WorkflowArchetypeID,
 	})).Return(ms, nil)
 	s.mockHistoryClient.EXPECT().DescribeMutableState(gomock.Any(), protomock.Eq(&historyservice.DescribeMutableStateRequest{
 		NamespaceId: "namespaceID3",
@@ -329,6 +311,7 @@ func (s *ScavengerTestSuite) TestNoGarbageTwoPages() {
 			WorkflowId: "workflowID3",
 			RunId:      "runID3",
 		},
+		ArchetypeId: chasm.WorkflowArchetypeID,
 	})).Return(ms, nil)
 	s.mockHistoryClient.EXPECT().DescribeMutableState(gomock.Any(), protomock.Eq(&historyservice.DescribeMutableStateRequest{
 		NamespaceId: "namespaceID4",
@@ -336,6 +319,7 @@ func (s *ScavengerTestSuite) TestNoGarbageTwoPages() {
 			WorkflowId: "workflowID4",
 			RunId:      "runID4",
 		},
+		ArchetypeId: chasm.WorkflowArchetypeID,
 	})).Return(ms, nil)
 
 	hbd, err := s.scavenger.Run(context.Background())
@@ -354,7 +338,7 @@ func (s *ScavengerTestSuite) TestDeletingBranchesTwoPages() {
 		NextPageToken: []byte("page1"),
 		Branches: []persistence.HistoryBranchDetail{
 			{
-				BranchInfo: &persistencepb.HistoryBranch{
+				BranchInfo: &persistencespb.HistoryBranch{
 					TreeId:   treeID1,
 					BranchId: branchID1,
 				},
@@ -362,7 +346,7 @@ func (s *ScavengerTestSuite) TestDeletingBranchesTwoPages() {
 				Info:     persistence.BuildHistoryGarbageCleanupInfo("namespaceID1", "workflowID1", "runID1"),
 			},
 			{
-				BranchInfo: &persistencepb.HistoryBranch{
+				BranchInfo: &persistencespb.HistoryBranch{
 					TreeId:   treeID2,
 					BranchId: branchID2,
 				},
@@ -377,7 +361,7 @@ func (s *ScavengerTestSuite) TestDeletingBranchesTwoPages() {
 	})).Return(&persistence.GetAllHistoryTreeBranchesResponse{
 		Branches: []persistence.HistoryBranchDetail{
 			{
-				BranchInfo: &persistencepb.HistoryBranch{
+				BranchInfo: &persistencespb.HistoryBranch{
 					TreeId:   treeID3,
 					BranchId: branchID3,
 				},
@@ -385,7 +369,7 @@ func (s *ScavengerTestSuite) TestDeletingBranchesTwoPages() {
 				Info:     persistence.BuildHistoryGarbageCleanupInfo("namespaceID3", "workflowID3", "runID3"),
 			},
 			{
-				BranchInfo: &persistencepb.HistoryBranch{
+				BranchInfo: &persistencespb.HistoryBranch{
 					TreeId:   treeID4,
 					BranchId: branchID4,
 				},
@@ -401,6 +385,7 @@ func (s *ScavengerTestSuite) TestDeletingBranchesTwoPages() {
 			WorkflowId: "workflowID1",
 			RunId:      "runID1",
 		},
+		ArchetypeId: chasm.WorkflowArchetypeID,
 	})).Return(nil, serviceerror.NewNotFound(""))
 	s.mockHistoryClient.EXPECT().DescribeMutableState(gomock.Any(), protomock.Eq(&historyservice.DescribeMutableStateRequest{
 		NamespaceId: "namespaceID2",
@@ -408,6 +393,7 @@ func (s *ScavengerTestSuite) TestDeletingBranchesTwoPages() {
 			WorkflowId: "workflowID2",
 			RunId:      "runID2",
 		},
+		ArchetypeId: chasm.WorkflowArchetypeID,
 	})).Return(nil, serviceerror.NewNotFound(""))
 	s.mockHistoryClient.EXPECT().DescribeMutableState(gomock.Any(), protomock.Eq(&historyservice.DescribeMutableStateRequest{
 		NamespaceId: "namespaceID3",
@@ -415,6 +401,7 @@ func (s *ScavengerTestSuite) TestDeletingBranchesTwoPages() {
 			WorkflowId: "workflowID3",
 			RunId:      "runID3",
 		},
+		ArchetypeId: chasm.WorkflowArchetypeID,
 	})).Return(nil, serviceerror.NewNotFound(""))
 	s.mockHistoryClient.EXPECT().DescribeMutableState(gomock.Any(), protomock.Eq(&historyservice.DescribeMutableStateRequest{
 		NamespaceId: "namespaceID4",
@@ -422,26 +409,27 @@ func (s *ScavengerTestSuite) TestDeletingBranchesTwoPages() {
 			WorkflowId: "workflowID4",
 			RunId:      "runID4",
 		},
+		ArchetypeId: chasm.WorkflowArchetypeID,
 	})).Return(nil, serviceerror.NewNotFound(""))
-	branchToken1, err := s.historyBranchUtil.NewHistoryBranch(uuid.New(), uuid.New(), uuid.New(), treeID1, &branchID1, []*persistencepb.HistoryBranchRange{}, 0, 0, 0)
+	branchToken1, err := s.historyBranchUtil.NewHistoryBranch(uuid.NewString(), uuid.NewString(), uuid.NewString(), treeID1, &branchID1, []*persistencespb.HistoryBranchRange{}, 0, 0, 0)
 	s.Nil(err)
 	s.mockExecutionManager.EXPECT().DeleteHistoryBranch(gomock.Any(), protomock.Eq(&persistence.DeleteHistoryBranchRequest{
 		BranchToken: branchToken1,
 		ShardID:     common.WorkflowIDToHistoryShard("namespaceID1", "workflowID1", s.numShards),
 	})).Return(nil)
-	branchToken2, err := s.historyBranchUtil.NewHistoryBranch(uuid.New(), uuid.New(), uuid.New(), treeID2, &branchID2, []*persistencepb.HistoryBranchRange{}, 0, 0, 0)
+	branchToken2, err := s.historyBranchUtil.NewHistoryBranch(uuid.NewString(), uuid.NewString(), uuid.NewString(), treeID2, &branchID2, []*persistencespb.HistoryBranchRange{}, 0, 0, 0)
 	s.Nil(err)
 	s.mockExecutionManager.EXPECT().DeleteHistoryBranch(gomock.Any(), protomock.Eq(&persistence.DeleteHistoryBranchRequest{
 		BranchToken: branchToken2,
 		ShardID:     common.WorkflowIDToHistoryShard("namespaceID2", "workflowID2", s.numShards),
 	})).Return(nil)
-	branchToken3, err := s.historyBranchUtil.NewHistoryBranch(uuid.New(), uuid.New(), uuid.New(), treeID3, &branchID3, []*persistencepb.HistoryBranchRange{}, 0, 0, 0)
+	branchToken3, err := s.historyBranchUtil.NewHistoryBranch(uuid.NewString(), uuid.NewString(), uuid.NewString(), treeID3, &branchID3, []*persistencespb.HistoryBranchRange{}, 0, 0, 0)
 	s.Nil(err)
 	s.mockExecutionManager.EXPECT().DeleteHistoryBranch(gomock.Any(), protomock.Eq(&persistence.DeleteHistoryBranchRequest{
 		BranchToken: branchToken3,
 		ShardID:     common.WorkflowIDToHistoryShard("namespaceID3", "workflowID3", s.numShards),
 	})).Return(nil)
-	branchToken4, err := s.historyBranchUtil.NewHistoryBranch(uuid.New(), uuid.New(), uuid.New(), treeID4, &branchID4, []*persistencepb.HistoryBranchRange{}, 0, 0, 0)
+	branchToken4, err := s.historyBranchUtil.NewHistoryBranch(uuid.NewString(), uuid.NewString(), uuid.NewString(), treeID4, &branchID4, []*persistencespb.HistoryBranchRange{}, 0, 0, 0)
 	s.Nil(err)
 	s.mockExecutionManager.EXPECT().DeleteHistoryBranch(gomock.Any(), protomock.Eq(&persistence.DeleteHistoryBranchRequest{
 		BranchToken: branchToken4,
@@ -465,7 +453,7 @@ func (s *ScavengerTestSuite) TestMixesTwoPages() {
 		Branches: []persistence.HistoryBranchDetail{
 			{
 				// skip
-				BranchInfo: &persistencepb.HistoryBranch{
+				BranchInfo: &persistencespb.HistoryBranch{
 					TreeId:   treeID1,
 					BranchId: branchID1,
 				},
@@ -474,7 +462,7 @@ func (s *ScavengerTestSuite) TestMixesTwoPages() {
 			},
 			{
 				// split error
-				BranchInfo: &persistencepb.HistoryBranch{
+				BranchInfo: &persistencespb.HistoryBranch{
 					TreeId:   treeID2,
 					BranchId: branchID2,
 				},
@@ -490,7 +478,7 @@ func (s *ScavengerTestSuite) TestMixesTwoPages() {
 		Branches: []persistence.HistoryBranchDetail{
 			{
 				// delete succ
-				BranchInfo: &persistencepb.HistoryBranch{
+				BranchInfo: &persistencespb.HistoryBranch{
 					TreeId:   treeID3,
 					BranchId: branchID3,
 				},
@@ -499,7 +487,7 @@ func (s *ScavengerTestSuite) TestMixesTwoPages() {
 			},
 			{
 				// delete fail
-				BranchInfo: &persistencepb.HistoryBranch{
+				BranchInfo: &persistencespb.HistoryBranch{
 					TreeId:   treeID4,
 					BranchId: branchID4,
 				},
@@ -508,7 +496,7 @@ func (s *ScavengerTestSuite) TestMixesTwoPages() {
 			},
 			{
 				// not delete
-				BranchInfo: &persistencepb.HistoryBranch{
+				BranchInfo: &persistencespb.HistoryBranch{
 					TreeId:   treeID5,
 					BranchId: branchID5,
 				},
@@ -520,14 +508,14 @@ func (s *ScavengerTestSuite) TestMixesTwoPages() {
 
 	mockedNamespace := namespace.NewNamespaceForTest(
 		nil,
-		&persistencepb.NamespaceConfig{Retention: durationpb.New(time.Hour)},
+		&persistencespb.NamespaceConfig{Retention: durationpb.New(time.Hour)},
 		false,
 		nil,
 		0,
 	)
 	ms := &historyservice.DescribeMutableStateResponse{
-		DatabaseMutableState: &persistencepb.WorkflowMutableState{
-			ExecutionInfo: &persistencepb.WorkflowExecutionInfo{
+		DatabaseMutableState: &persistencespb.WorkflowMutableState{
+			ExecutionInfo: &persistencespb.WorkflowExecutionInfo{
 				LastUpdateTime: timestamppb.New(time.Now()),
 			},
 		},
@@ -539,6 +527,7 @@ func (s *ScavengerTestSuite) TestMixesTwoPages() {
 			WorkflowId: "workflowID3",
 			RunId:      "runID3",
 		},
+		ArchetypeId: chasm.WorkflowArchetypeID,
 	})).Return(nil, serviceerror.NewNotFound(""))
 
 	s.mockHistoryClient.EXPECT().DescribeMutableState(gomock.Any(), protomock.Eq(&historyservice.DescribeMutableStateRequest{
@@ -547,6 +536,7 @@ func (s *ScavengerTestSuite) TestMixesTwoPages() {
 			WorkflowId: "workflowID4",
 			RunId:      "runID4",
 		},
+		ArchetypeId: chasm.WorkflowArchetypeID,
 	})).Return(nil, serviceerror.NewNotFound(""))
 	s.mockHistoryClient.EXPECT().DescribeMutableState(gomock.Any(), protomock.Eq(&historyservice.DescribeMutableStateRequest{
 		NamespaceId: "namespaceID5",
@@ -554,16 +544,17 @@ func (s *ScavengerTestSuite) TestMixesTwoPages() {
 			WorkflowId: "workflowID5",
 			RunId:      "runID5",
 		},
+		ArchetypeId: chasm.WorkflowArchetypeID,
 	})).Return(ms, nil)
 
-	branchToken3, err := s.historyBranchUtil.NewHistoryBranch(uuid.New(), uuid.New(), uuid.New(), treeID3, &branchID3, []*persistencepb.HistoryBranchRange{}, 0, 0, 0)
+	branchToken3, err := s.historyBranchUtil.NewHistoryBranch(uuid.NewString(), uuid.NewString(), uuid.NewString(), treeID3, &branchID3, []*persistencespb.HistoryBranchRange{}, 0, 0, 0)
 	s.Nil(err)
 	s.mockExecutionManager.EXPECT().DeleteHistoryBranch(gomock.Any(), protomock.Eq(&persistence.DeleteHistoryBranchRequest{
 		BranchToken: branchToken3,
 		ShardID:     common.WorkflowIDToHistoryShard("namespaceID3", "workflowID3", s.numShards),
 	})).Return(nil)
 
-	branchToken4, err := s.historyBranchUtil.NewHistoryBranch(uuid.New(), uuid.New(), uuid.New(), treeID4, &branchID4, []*persistencepb.HistoryBranchRange{}, 0, 0, 0)
+	branchToken4, err := s.historyBranchUtil.NewHistoryBranch(uuid.NewString(), uuid.NewString(), uuid.NewString(), treeID4, &branchID4, []*persistencespb.HistoryBranchRange{}, 0, 0, 0)
 	s.Nil(err)
 	s.mockExecutionManager.EXPECT().DeleteHistoryBranch(gomock.Any(), protomock.Eq(&persistence.DeleteHistoryBranchRequest{
 		BranchToken: branchToken4,
@@ -587,7 +578,7 @@ func (s *ScavengerTestSuite) TestDeleteWorkflowAfterRetention() {
 		NextPageToken: []byte("page1"),
 		Branches: []persistence.HistoryBranchDetail{
 			{
-				BranchInfo: &persistencepb.HistoryBranch{
+				BranchInfo: &persistencespb.HistoryBranch{
 					TreeId:   treeID1,
 					BranchId: branchID1,
 				},
@@ -595,7 +586,7 @@ func (s *ScavengerTestSuite) TestDeleteWorkflowAfterRetention() {
 				Info:     persistence.BuildHistoryGarbageCleanupInfo("namespaceID1", "workflowID1", "runID1"),
 			},
 			{
-				BranchInfo: &persistencepb.HistoryBranch{
+				BranchInfo: &persistencespb.HistoryBranch{
 					TreeId:   treeID2,
 					BranchId: branchID2,
 				},
@@ -611,7 +602,7 @@ func (s *ScavengerTestSuite) TestDeleteWorkflowAfterRetention() {
 	})).Return(&persistence.GetAllHistoryTreeBranchesResponse{
 		Branches: []persistence.HistoryBranchDetail{
 			{
-				BranchInfo: &persistencepb.HistoryBranch{
+				BranchInfo: &persistencespb.HistoryBranch{
 					TreeId:   treeID3,
 					BranchId: branchID3,
 				},
@@ -619,7 +610,7 @@ func (s *ScavengerTestSuite) TestDeleteWorkflowAfterRetention() {
 				Info:     persistence.BuildHistoryGarbageCleanupInfo("namespaceID3", "workflowID3", "runID3"),
 			},
 			{
-				BranchInfo: &persistencepb.HistoryBranch{
+				BranchInfo: &persistencespb.HistoryBranch{
 					TreeId:   treeID4,
 					BranchId: branchID4,
 				},
@@ -627,7 +618,7 @@ func (s *ScavengerTestSuite) TestDeleteWorkflowAfterRetention() {
 				Info:     persistence.BuildHistoryGarbageCleanupInfo("namespaceID4", "workflowID4", "runID4"),
 			},
 			{
-				BranchInfo: &persistencepb.HistoryBranch{
+				BranchInfo: &persistencespb.HistoryBranch{
 					TreeId:   treeID5,
 					BranchId: branchID5,
 				},
@@ -638,52 +629,52 @@ func (s *ScavengerTestSuite) TestDeleteWorkflowAfterRetention() {
 	}, nil)
 	mockedNamespace := namespace.NewNamespaceForTest(
 		nil,
-		&persistencepb.NamespaceConfig{Retention: durationpb.New(retention)},
+		&persistencespb.NamespaceConfig{Retention: durationpb.New(retention)},
 		false,
 		nil,
 		0,
 	)
 	workflowInRetention := &historyservice.DescribeMutableStateResponse{
-		DatabaseMutableState: &persistencepb.WorkflowMutableState{
-			ExecutionInfo: &persistencepb.WorkflowExecutionInfo{
+		DatabaseMutableState: &persistencespb.WorkflowMutableState{
+			ExecutionInfo: &persistencespb.WorkflowExecutionInfo{
 				LastUpdateTime: timestamppb.New(time.Now()),
 			},
 		},
 	}
 	workflowPastRetention2 := &historyservice.DescribeMutableStateResponse{
-		DatabaseMutableState: &persistencepb.WorkflowMutableState{
-			ExecutionInfo: &persistencepb.WorkflowExecutionInfo{
+		DatabaseMutableState: &persistencespb.WorkflowMutableState{
+			ExecutionInfo: &persistencespb.WorkflowExecutionInfo{
 				WorkflowId:     "workflowID2",
 				NamespaceId:    "namespaceID2",
 				LastUpdateTime: timestamppb.New(time.Now().UTC().Add(-time.Hour * 24)),
 			},
-			ExecutionState: &persistencepb.WorkflowExecutionState{
+			ExecutionState: &persistencespb.WorkflowExecutionState{
 				RunId: "runID2",
 				State: enumsspb.WORKFLOW_EXECUTION_STATE_COMPLETED,
 			},
 		},
 	}
 	workflowPastRetention4 := &historyservice.DescribeMutableStateResponse{
-		DatabaseMutableState: &persistencepb.WorkflowMutableState{
-			ExecutionInfo: &persistencepb.WorkflowExecutionInfo{
+		DatabaseMutableState: &persistencespb.WorkflowMutableState{
+			ExecutionInfo: &persistencespb.WorkflowExecutionInfo{
 				WorkflowId:     "workflowID4",
 				NamespaceId:    "namespaceID4",
 				LastUpdateTime: timestamppb.New(time.Now().UTC().Add(-time.Hour * 24)),
 			},
-			ExecutionState: &persistencepb.WorkflowExecutionState{
+			ExecutionState: &persistencespb.WorkflowExecutionState{
 				RunId: "runID4",
 				State: enumsspb.WORKFLOW_EXECUTION_STATE_COMPLETED,
 			},
 		},
 	}
 	runningWorkflow5 := &historyservice.DescribeMutableStateResponse{
-		DatabaseMutableState: &persistencepb.WorkflowMutableState{
-			ExecutionInfo: &persistencepb.WorkflowExecutionInfo{
+		DatabaseMutableState: &persistencespb.WorkflowMutableState{
+			ExecutionInfo: &persistencespb.WorkflowExecutionInfo{
 				WorkflowId:     "workflowID5",
 				NamespaceId:    "namespaceID5",
 				LastUpdateTime: timestamppb.New(time.Now().UTC().Add(-time.Hour * 24)),
 			},
-			ExecutionState: &persistencepb.WorkflowExecutionState{
+			ExecutionState: &persistencespb.WorkflowExecutionState{
 				RunId: "runID5",
 				State: enumsspb.WORKFLOW_EXECUTION_STATE_RUNNING,
 			},
@@ -696,6 +687,7 @@ func (s *ScavengerTestSuite) TestDeleteWorkflowAfterRetention() {
 			WorkflowId: "workflowID1",
 			RunId:      "runID1",
 		},
+		ArchetypeId: chasm.WorkflowArchetypeID,
 	})).Return(workflowInRetention, nil)
 	s.mockHistoryClient.EXPECT().DescribeMutableState(gomock.Any(), protomock.Eq(&historyservice.DescribeMutableStateRequest{
 		NamespaceId: "namespaceID2",
@@ -703,6 +695,7 @@ func (s *ScavengerTestSuite) TestDeleteWorkflowAfterRetention() {
 			WorkflowId: "workflowID2",
 			RunId:      "runID2",
 		},
+		ArchetypeId: chasm.WorkflowArchetypeID,
 	})).Return(workflowPastRetention2, nil)
 	s.mockHistoryClient.EXPECT().DescribeMutableState(gomock.Any(), protomock.Eq(&historyservice.DescribeMutableStateRequest{
 		NamespaceId: "namespaceID3",
@@ -710,6 +703,7 @@ func (s *ScavengerTestSuite) TestDeleteWorkflowAfterRetention() {
 			WorkflowId: "workflowID3",
 			RunId:      "runID3",
 		},
+		ArchetypeId: chasm.WorkflowArchetypeID,
 	})).Return(workflowInRetention, nil)
 	s.mockHistoryClient.EXPECT().DescribeMutableState(gomock.Any(), protomock.Eq(&historyservice.DescribeMutableStateRequest{
 		NamespaceId: "namespaceID4",
@@ -717,6 +711,7 @@ func (s *ScavengerTestSuite) TestDeleteWorkflowAfterRetention() {
 			WorkflowId: "workflowID4",
 			RunId:      "runID4",
 		},
+		ArchetypeId: chasm.WorkflowArchetypeID,
 	})).Return(workflowPastRetention4, nil)
 	s.mockHistoryClient.EXPECT().DescribeMutableState(gomock.Any(), protomock.Eq(&historyservice.DescribeMutableStateRequest{
 		NamespaceId: "namespaceID5",
@@ -724,18 +719,21 @@ func (s *ScavengerTestSuite) TestDeleteWorkflowAfterRetention() {
 			WorkflowId: "workflowID5",
 			RunId:      "runID5",
 		},
+		ArchetypeId: chasm.WorkflowArchetypeID,
 	})).Return(runningWorkflow5, nil)
 	s.mockAdminClient.EXPECT().DeleteWorkflowExecution(gomock.Any(), protomock.Eq(&adminservice.DeleteWorkflowExecutionRequest{
 		Execution: &commonpb.WorkflowExecution{
 			WorkflowId: "workflowID2",
 			RunId:      "runID2",
 		},
+		Archetype: chasm.WorkflowArchetype,
 	})).Return(nil, nil).Times(1)
 	s.mockAdminClient.EXPECT().DeleteWorkflowExecution(gomock.Any(), protomock.Eq(&adminservice.DeleteWorkflowExecutionRequest{
 		Execution: &commonpb.WorkflowExecution{
 			WorkflowId: "workflowID4",
 			RunId:      "runID4",
 		},
+		Archetype: chasm.WorkflowArchetype,
 	})).Return(nil, nil).Times(1)
 
 	hbd, err := s.scavenger.Run(context.Background())

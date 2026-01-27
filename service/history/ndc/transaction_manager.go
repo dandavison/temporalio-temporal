@@ -1,38 +1,15 @@
-// The MIT License
-//
-// Copyright (c) 2020 Temporal Technologies Inc.  All rights reserved.
-//
-// Copyright (c) 2020 Uber Technologies, Inc.
-//
-// Permission is hereby granted, free of charge, to any person obtaining a copy
-// of this software and associated documentation files (the "Software"), to deal
-// in the Software without restriction, including without limitation the rights
-// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-// copies of the Software, and to permit persons to whom the Software is
-// furnished to do so, subject to the following conditions:
-//
-// The above copyright notice and this permission notice shall be included in
-// all copies or substantial portions of the Software.
-//
-// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
-// THE SOFTWARE.
-
-//go:generate mockgen -copyright_file ../../../LICENSE -package $GOPACKAGE -source $GOFILE -destination transaction_manager_mock.go
+//go:generate mockgen -package $GOPACKAGE -source $GOFILE -destination transaction_manager_mock.go
 
 package ndc
 
 import (
 	"context"
 
-	"github.com/pborman/uuid"
+	"github.com/google/uuid"
 	commonpb "go.temporal.io/api/common/v1"
 	historypb "go.temporal.io/api/history/v1"
 	"go.temporal.io/api/serviceerror"
+	"go.temporal.io/server/chasm"
 	"go.temporal.io/server/common/cluster"
 	"go.temporal.io/server/common/locks"
 	"go.temporal.io/server/common/log"
@@ -42,8 +19,7 @@ import (
 	"go.temporal.io/server/common/persistence"
 	"go.temporal.io/server/common/persistence/serialization"
 	"go.temporal.io/server/common/persistence/versionhistory"
-	"go.temporal.io/server/service/history/shard"
-	"go.temporal.io/server/service/history/workflow"
+	historyi "go.temporal.io/server/service/history/interfaces"
 	wcache "go.temporal.io/server/service/history/workflow/cache"
 )
 
@@ -115,11 +91,13 @@ type (
 	TransactionManager interface {
 		CreateWorkflow(
 			ctx context.Context,
+			archetypeID chasm.ArchetypeID,
 			targetWorkflow Workflow,
 		) error
 		UpdateWorkflow(
 			ctx context.Context,
 			isWorkflowRebuilt bool,
+			archetypeID chasm.ArchetypeID,
 			targetWorkflow Workflow,
 			newWorkflow Workflow,
 		) error
@@ -134,22 +112,25 @@ type (
 			namespaceID namespace.ID,
 			workflowID string,
 			runID string,
+			archetypeID chasm.ArchetypeID,
 		) (bool, error)
 		GetCurrentWorkflowRunID(
 			ctx context.Context,
 			namespaceID namespace.ID,
 			workflowID string,
+			archetypeID chasm.ArchetypeID,
 		) (string, error)
 		LoadWorkflow(
 			ctx context.Context,
 			namespaceID namespace.ID,
 			workflowID string,
 			runID string,
+			archetypeID chasm.ArchetypeID,
 		) (Workflow, error)
 	}
 
 	transactionMgrImpl struct {
-		shardContext      shard.Context
+		shardContext      historyi.ShardContext
 		namespaceRegistry namespace.Registry
 		workflowCache     wcache.Cache
 		clusterMetadata   cluster.Metadata
@@ -168,7 +149,7 @@ type (
 var _ TransactionManager = (*transactionMgrImpl)(nil)
 
 func NewTransactionManager(
-	shardContext shard.Context,
+	shardContext historyi.ShardContext,
 	workflowCache wcache.Cache,
 	eventsReapplier EventsReapplier,
 	logger log.Logger,
@@ -201,11 +182,13 @@ func NewTransactionManager(
 
 func (r *transactionMgrImpl) CreateWorkflow(
 	ctx context.Context,
+	archetypeID chasm.ArchetypeID,
 	targetWorkflow Workflow,
 ) error {
 
 	return r.createMgr.dispatchForNewWorkflow(
 		ctx,
+		archetypeID,
 		targetWorkflow,
 	)
 }
@@ -213,6 +196,7 @@ func (r *transactionMgrImpl) CreateWorkflow(
 func (r *transactionMgrImpl) UpdateWorkflow(
 	ctx context.Context,
 	isWorkflowRebuilt bool,
+	archetypeID chasm.ArchetypeID,
 	targetWorkflow Workflow,
 	newWorkflow Workflow,
 ) error {
@@ -220,6 +204,7 @@ func (r *transactionMgrImpl) UpdateWorkflow(
 	return r.updateMgr.dispatchForExistingWorkflow(
 		ctx,
 		isWorkflowRebuilt,
+		archetypeID,
 		targetWorkflow,
 		newWorkflow,
 	)
@@ -274,14 +259,14 @@ func (r *transactionMgrImpl) backfillWorkflowEventsReapply(
 	ctx context.Context,
 	targetWorkflow Workflow,
 	targetWorkflowEventsSlice ...*persistence.WorkflowEvents,
-) (persistence.UpdateWorkflowMode, workflow.TransactionPolicy, error) {
+) (persistence.UpdateWorkflowMode, historyi.TransactionPolicy, error) {
 
-	isCurrentWorkflow, err := r.isWorkflowCurrent(ctx, targetWorkflow)
+	isCurrentWorkflow, err := r.isWorkflowCurrent(ctx, chasm.WorkflowArchetypeID, targetWorkflow)
 	if err != nil {
-		return 0, workflow.TransactionPolicyActive, err
+		return 0, historyi.TransactionPolicyActive, err
 	}
 	isWorkflowRunning := targetWorkflow.GetMutableState().IsWorkflowExecutionRunning()
-	targetWorkflowActiveCluster := targetWorkflow.GetMutableState().GetNamespaceEntry().ActiveClusterName()
+	targetWorkflowActiveCluster := targetWorkflow.GetMutableState().GetNamespaceEntry().ActiveClusterName(targetWorkflow.GetMutableState().GetExecutionInfo().WorkflowId)
 	currentCluster := r.clusterMetadata.GetCurrentClusterName()
 	isActiveCluster := targetWorkflowActiveCluster == currentCluster
 
@@ -304,13 +289,13 @@ func (r *transactionMgrImpl) backfillWorkflowEventsReapply(
 			if _, err := r.eventsReapplier.ReapplyEvents(
 				ctx,
 				targetWorkflow.GetMutableState(),
-				targetWorkflow.GetContext().UpdateRegistry(ctx, nil),
+				targetWorkflow.GetContext().UpdateRegistry(ctx),
 				totalEvents,
 				targetWorkflow.GetMutableState().GetExecutionState().GetRunId(),
 			); err != nil {
-				return 0, workflow.TransactionPolicyActive, err
+				return 0, historyi.TransactionPolicyActive, err
 			}
-			return persistence.UpdateWorkflowModeUpdateCurrent, workflow.TransactionPolicyActive, nil
+			return persistence.UpdateWorkflowModeUpdateCurrent, historyi.TransactionPolicyActive, nil
 		}
 
 		// case 1.b
@@ -320,16 +305,16 @@ func (r *transactionMgrImpl) backfillWorkflowEventsReapply(
 		namespaceID := namespace.ID(baseMutableState.GetExecutionInfo().NamespaceId)
 		workflowID := baseMutableState.GetExecutionInfo().WorkflowId
 		baseRunID := baseMutableState.GetExecutionState().GetRunId()
-		resetRunID := uuid.New()
+		resetRunID := uuid.NewString()
 		baseRebuildLastEventID := baseMutableState.GetLastCompletedWorkflowTaskStartedEventId()
 		baseVersionHistories := baseMutableState.GetExecutionInfo().GetVersionHistories()
 		baseCurrentVersionHistory, err := versionhistory.GetCurrentVersionHistory(baseVersionHistories)
 		if err != nil {
-			return 0, workflow.TransactionPolicyActive, err
+			return 0, historyi.TransactionPolicyActive, err
 		}
 		baseRebuildLastEventVersion, err := versionhistory.GetVersionHistoryEventVersion(baseCurrentVersionHistory, baseRebuildLastEventID)
 		if err != nil {
-			return 0, workflow.TransactionPolicyActive, err
+			return 0, historyi.TransactionPolicyActive, err
 		}
 		baseCurrentBranchToken := baseCurrentVersionHistory.GetBranchToken()
 		baseNextEventID := baseMutableState.GetNextEventID()
@@ -344,10 +329,13 @@ func (r *transactionMgrImpl) backfillWorkflowEventsReapply(
 			baseRebuildLastEventVersion,
 			baseNextEventID,
 			resetRunID,
-			uuid.New(),
+			uuid.NewString(),
+			targetWorkflow,
 			targetWorkflow,
 			EventsReapplicationResetWorkflowReason,
 			totalEvents,
+			nil,
+			false, // allowResetWithPendingChildren
 			nil,
 		)
 		switch err.(type) {
@@ -355,13 +343,13 @@ func (r *transactionMgrImpl) backfillWorkflowEventsReapply(
 			// no-op. Usually this is due to reset workflow with pending child workflows
 			r.logger.Warn("Cannot reset workflow. Ignoring reapply events.", tag.Error(err))
 			// the target workflow is not reset so it is still the current workflow. It need to persist updated version histories.
-			return persistence.UpdateWorkflowModeUpdateCurrent, workflow.TransactionPolicyPassive, nil
+			return persistence.UpdateWorkflowModeUpdateCurrent, historyi.TransactionPolicyPassive, nil
 		case nil:
 			// after the reset of target workflow (current workflow) with additional events to be reapplied
 			// target workflow is no longer the current workflow
-			return persistence.UpdateWorkflowModeBypassCurrent, workflow.TransactionPolicyPassive, nil
+			return persistence.UpdateWorkflowModeBypassCurrent, historyi.TransactionPolicyPassive, nil
 		default:
-			return 0, workflow.TransactionPolicyActive, err
+			return 0, historyi.TransactionPolicyActive, err
 		}
 	}
 
@@ -372,13 +360,13 @@ func (r *transactionMgrImpl) backfillWorkflowEventsReapply(
 		r.shardContext,
 		targetWorkflowEventsSlice,
 	); err != nil {
-		return 0, workflow.TransactionPolicyActive, err
+		return 0, historyi.TransactionPolicyActive, err
 	}
 
 	if isCurrentWorkflow {
-		return persistence.UpdateWorkflowModeUpdateCurrent, workflow.TransactionPolicyPassive, nil
+		return persistence.UpdateWorkflowModeUpdateCurrent, historyi.TransactionPolicyPassive, nil
 	}
-	return persistence.UpdateWorkflowModeBypassCurrent, workflow.TransactionPolicyPassive, nil
+	return persistence.UpdateWorkflowModeBypassCurrent, historyi.TransactionPolicyPassive, nil
 }
 
 func (r *transactionMgrImpl) CheckWorkflowExists(
@@ -386,6 +374,7 @@ func (r *transactionMgrImpl) CheckWorkflowExists(
 	namespaceID namespace.ID,
 	workflowID string,
 	runID string,
+	archetypeID chasm.ArchetypeID,
 ) (bool, error) {
 
 	_, err := r.shardContext.GetWorkflowExecution(
@@ -395,6 +384,7 @@ func (r *transactionMgrImpl) CheckWorkflowExists(
 			NamespaceID: namespaceID.String(),
 			WorkflowID:  workflowID,
 			RunID:       runID,
+			ArchetypeID: archetypeID,
 		},
 	)
 
@@ -412,6 +402,7 @@ func (r *transactionMgrImpl) GetCurrentWorkflowRunID(
 	ctx context.Context,
 	namespaceID namespace.ID,
 	workflowID string,
+	archetypeID chasm.ArchetypeID,
 ) (string, error) {
 
 	resp, err := r.shardContext.GetCurrentExecution(
@@ -420,6 +411,7 @@ func (r *transactionMgrImpl) GetCurrentWorkflowRunID(
 			ShardID:     r.shardContext.GetShardID(),
 			NamespaceID: namespaceID.String(),
 			WorkflowID:  workflowID,
+			ArchetypeID: archetypeID,
 		},
 	)
 
@@ -438,9 +430,10 @@ func (r *transactionMgrImpl) LoadWorkflow(
 	namespaceID namespace.ID,
 	workflowID string,
 	runID string,
+	archetypeID chasm.ArchetypeID,
 ) (Workflow, error) {
 
-	weContext, release, err := r.workflowCache.GetOrCreateWorkflowExecution(
+	weContext, release, err := r.workflowCache.GetOrCreateChasmExecution(
 		ctx,
 		r.shardContext,
 		namespaceID,
@@ -448,6 +441,7 @@ func (r *transactionMgrImpl) LoadWorkflow(
 			WorkflowId: workflowID,
 			RunId:      runID,
 		},
+		archetypeID,
 		locks.PriorityHigh,
 	)
 	if err != nil {
@@ -465,6 +459,7 @@ func (r *transactionMgrImpl) LoadWorkflow(
 
 func (r *transactionMgrImpl) isWorkflowCurrent(
 	ctx context.Context,
+	archetypeID chasm.ArchetypeID,
 	targetWorkflow Workflow,
 ) (bool, error) {
 
@@ -485,6 +480,7 @@ func (r *transactionMgrImpl) isWorkflowCurrent(
 		ctx,
 		namespaceID,
 		workflowID,
+		archetypeID,
 	)
 	if err != nil {
 		return false, err

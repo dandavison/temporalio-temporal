@@ -1,35 +1,13 @@
-// The MIT License
-//
-// Copyright (c) 2020 Temporal Technologies Inc.  All rights reserved.
-//
-// Copyright (c) 2020 Uber Technologies, Inc.
-//
-// Permission is hereby granted, free of charge, to any person obtaining a copy
-// of this software and associated documentation files (the "Software"), to deal
-// in the Software without restriction, including without limitation the rights
-// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-// copies of the Software, and to permit persons to whom the Software is
-// furnished to do so, subject to the following conditions:
-//
-// The above copyright notice and this permission notice shall be included in
-// all copies or substantial portions of the Software.
-//
-// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
-// THE SOFTWARE.
-
 package cassandra
 
 import (
 	"context"
 	"time"
 
+	"go.temporal.io/server/common/log"
 	p "go.temporal.io/server/common/persistence"
 	"go.temporal.io/server/common/persistence/nosql/nosqlplugin/cassandra/gocql"
+	"go.temporal.io/server/common/persistence/serialization"
 )
 
 // Guidelines for creating new special UUID constants
@@ -87,12 +65,6 @@ const (
 )
 
 const (
-	// Row types for table tasks
-	rowTypeTask = iota
-	rowTypeTaskQueue
-)
-
-const (
 	taskQueueTaskID = -12345
 
 	// ref: https://docs.datastax.com/en/dse-trblshoot/doc/troubleshooting/recoveringTtlYear2038Problem.html
@@ -114,11 +86,11 @@ type (
 
 var _ p.ExecutionStore = (*ExecutionStore)(nil)
 
-func NewExecutionStore(session gocql.Session) *ExecutionStore {
+func NewExecutionStore(session gocql.Session, serializer serialization.Serializer, logger log.Logger) *ExecutionStore {
 	return &ExecutionStore{
-		HistoryStore:          NewHistoryStore(session),
-		MutableStateStore:     NewMutableStateStore(session),
-		MutableStateTaskStore: NewMutableStateTaskStore(session),
+		HistoryStore:          NewHistoryStore(session, serializer),
+		MutableStateStore:     NewMutableStateStore(session, serializer, logger),
+		MutableStateTaskStore: NewMutableStateTaskStore(session, serializer),
 	}
 }
 

@@ -1,27 +1,3 @@
-// The MIT License
-//
-// Copyright (c) 2020 Temporal Technologies Inc.  All rights reserved.
-//
-// Copyright (c) 2020 Uber Technologies, Inc.
-//
-// Permission is hereby granted, free of charge, to any person obtaining a copy
-// of this software and associated documentation files (the "Software"), to deal
-// in the Software without restriction, including without limitation the rights
-// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-// copies of the Software, and to permit persons to whom the Software is
-// furnished to do so, subject to the following conditions:
-//
-// The above copyright notice and this permission notice shall be included in
-// all copies or substantial portions of the Software.
-//
-// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
-// THE SOFTWARE.
-
 package replication
 
 import (
@@ -30,13 +6,14 @@ import (
 	"testing"
 	"time"
 
-	"github.com/pborman/uuid"
+	"github.com/google/uuid"
 	"github.com/stretchr/testify/require"
 	"github.com/stretchr/testify/suite"
 	commonpb "go.temporal.io/api/common/v1"
 	"go.temporal.io/api/serviceerror"
 	historyspb "go.temporal.io/server/api/history/v1"
 	persistencespb "go.temporal.io/server/api/persistence/v1"
+	"go.temporal.io/server/chasm"
 	"go.temporal.io/server/common/cluster"
 	"go.temporal.io/server/common/definition"
 	"go.temporal.io/server/common/log"
@@ -46,6 +23,7 @@ import (
 	"go.temporal.io/server/common/util"
 	"go.temporal.io/server/service/history/events"
 	"go.temporal.io/server/service/history/hsm"
+	historyi "go.temporal.io/server/service/history/interfaces"
 	"go.temporal.io/server/service/history/shard"
 	"go.temporal.io/server/service/history/tasks"
 	"go.temporal.io/server/service/history/tests"
@@ -62,7 +40,7 @@ type (
 		controller            *gomock.Controller
 		mockShard             *shard.ContextTest
 		mockNamespaceRegistry *namespace.MockRegistry
-		mockMutableState      *workflow.MockMutableState
+		mockMutableState      *historyi.MockMutableState
 		mockClusterMetadata   *cluster.MockMetadata
 		syncStateRetriever    *MockSyncStateRetriever
 
@@ -91,7 +69,7 @@ func (s *ackManagerSuite) SetupTest() {
 	s.Assertions = require.New(s.T())
 
 	s.controller = gomock.NewController(s.T())
-	s.mockMutableState = workflow.NewMockMutableState(s.controller)
+	s.mockMutableState = historyi.NewMockMutableState(s.controller)
 
 	s.mockShard = shard.NewTestContext(
 		s.controller,
@@ -280,6 +258,7 @@ func (s *ackManagerSuite) TestGetTasks_FirstPersistenceErrorReturnsErrorAndEmpty
 		NamespaceID: tasksResponse.Tasks[0].GetNamespaceID(),
 		WorkflowID:  tasksResponse.Tasks[0].GetWorkflowID(),
 		RunID:       tasksResponse.Tasks[0].GetRunID(),
+		ArchetypeID: chasm.WorkflowArchetypeID,
 	}).Return(nil, gweErr)
 
 	replicationTasks, lastTaskID, err := s.replicationAckManager.getTasks(ctx, cluster.TestCurrentClusterName, minTaskID, maxTaskID)
@@ -328,7 +307,7 @@ func (s *ackManagerSuite) TestGetTasks_SecondPersistenceErrorReturnsPartialResul
 	}
 
 	s.mockExecutionMgr.EXPECT().GetWorkflowExecution(gomock.Any(), gomock.Any()).Return(&persistence.GetWorkflowExecutionResponse{
-		State: workflow.TestCloneToProto(ms)}, nil)
+		State: workflow.TestCloneToProto(context.Background(), ms)}, nil)
 	s.mockExecutionMgr.EXPECT().GetWorkflowExecution(gomock.Any(), gomock.Any()).Return(nil, serviceerror.NewUnavailable("some random error"))
 	s.mockExecutionMgr.EXPECT().ReadRawHistoryBranch(gomock.Any(), gomock.Any()).Return(&persistence.ReadRawHistoryBranchResponse{
 		HistoryEventBlobs: []*commonpb.DataBlob{{}}}, nil)
@@ -376,7 +355,7 @@ func (s *ackManagerSuite) TestGetTasks_FullPage() {
 	}
 
 	s.mockExecutionMgr.EXPECT().GetWorkflowExecution(gomock.Any(), gomock.Any()).Return(&persistence.GetWorkflowExecutionResponse{
-		State: workflow.TestCloneToProto(ms)}, nil).Times(s.replicationAckManager.pageSize())
+		State: workflow.TestCloneToProto(context.Background(), ms)}, nil).Times(s.replicationAckManager.pageSize())
 	s.mockExecutionMgr.EXPECT().ReadRawHistoryBranch(gomock.Any(), gomock.Any()).Return(&persistence.ReadRawHistoryBranchResponse{
 		HistoryEventBlobs: []*commonpb.DataBlob{{}}}, nil).Times(s.replicationAckManager.pageSize())
 
@@ -424,7 +403,7 @@ func (s *ackManagerSuite) TestGetTasks_PartialPage() {
 	}
 
 	s.mockExecutionMgr.EXPECT().GetWorkflowExecution(gomock.Any(), gomock.Any()).Return(&persistence.GetWorkflowExecutionResponse{
-		State: workflow.TestCloneToProto(ms)}, nil).Times(numTasks)
+		State: workflow.TestCloneToProto(context.Background(), ms)}, nil).Times(numTasks)
 	s.mockExecutionMgr.EXPECT().ReadRawHistoryBranch(gomock.Any(), gomock.Any()).Return(&persistence.ReadRawHistoryBranchResponse{
 		HistoryEventBlobs: []*commonpb.DataBlob{{}}}, nil).Times(numTasks)
 
@@ -507,7 +486,7 @@ func (s *ackManagerSuite) TestGetTasks_FilterNamespace() {
 	}
 
 	s.mockExecutionMgr.EXPECT().GetWorkflowExecution(gomock.Any(), gomock.Any()).Return(&persistence.GetWorkflowExecutionResponse{
-		State: workflow.TestCloneToProto(ms)}, nil).Times(s.replicationAckManager.pageSize())
+		State: workflow.TestCloneToProto(context.Background(), ms)}, nil).Times(s.replicationAckManager.pageSize())
 	s.mockExecutionMgr.EXPECT().ReadRawHistoryBranch(gomock.Any(), gomock.Any()).Return(&persistence.ReadRawHistoryBranchResponse{
 		HistoryEventBlobs: []*commonpb.DataBlob{{}}}, nil).Times(s.replicationAckManager.pageSize())
 
@@ -525,7 +504,7 @@ func (s *ackManagerSuite) getHistoryTasksResponse(size int) *persistence.GetHist
 			WorkflowKey: definition.WorkflowKey{
 				NamespaceID: tests.NamespaceID.String(),
 				WorkflowID:  tests.WorkflowID + strconv.Itoa(i),
-				RunID:       uuid.New(),
+				RunID:       uuid.NewString(),
 			},
 			TaskID:       int64(i),
 			FirstEventID: 1,

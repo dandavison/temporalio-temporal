@@ -1,58 +1,38 @@
-// The MIT License
-//
-// Copyright (c) 2020 Temporal Technologies Inc.  All rights reserved.
-//
-// Copyright (c) 2020 Uber Technologies, Inc.
-//
-// Permission is hereby granted, free of charge, to any person obtaining a copy
-// of this software and associated documentation files (the "Software"), to deal
-// in the Software without restriction, including without limitation the rights
-// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-// copies of the Software, and to permit persons to whom the Software is
-// furnished to do so, subject to the following conditions:
-//
-// The above copyright notice and this permission notice shall be included in
-// all copies or substantial portions of the Software.
-//
-// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
-// THE SOFTWARE.
-
 package respondworkflowtaskfailed
 
 import (
 	"context"
 
+	enumspb "go.temporal.io/api/enums/v1"
 	"go.temporal.io/api/serviceerror"
 	"go.temporal.io/server/api/historyservice/v1"
 	"go.temporal.io/server/common"
 	"go.temporal.io/server/common/definition"
+	"go.temporal.io/server/common/metrics"
 	"go.temporal.io/server/common/namespace"
+	"go.temporal.io/server/common/tasktoken"
 	"go.temporal.io/server/service/history/api"
 	"go.temporal.io/server/service/history/consts"
-	"go.temporal.io/server/service/history/shard"
+	historyi "go.temporal.io/server/service/history/interfaces"
+	"go.temporal.io/server/service/history/workflow"
 )
 
 func Invoke(
 	ctx context.Context,
 	req *historyservice.RespondWorkflowTaskFailedRequest,
-	shardContext shard.Context,
-	tokenSerializer common.TaskTokenSerializer,
+	shardContext historyi.ShardContext,
+	tokenSerializer *tasktoken.Serializer,
 	workflowConsistencyChecker api.WorkflowConsistencyChecker,
 ) (retError error) {
-	_, err := api.GetActiveNamespace(shardContext, namespace.ID(req.GetNamespaceId()))
-	if err != nil {
-		return err
-	}
-
 	request := req.FailedRequest
 	token, err := tokenSerializer.Deserialize(request.TaskToken)
 	if err != nil {
 		return consts.ErrDeserializingToken
+	}
+
+	_, err = api.GetActiveNamespace(shardContext, namespace.ID(req.GetNamespaceId()), token.WorkflowId)
+	if err != nil {
+		return err
 	}
 
 	return api.GetAndUpdateWorkflowWithNew(
@@ -64,6 +44,11 @@ func Invoke(
 			token.RunId,
 		),
 		func(workflowLease api.WorkflowLease) (*api.UpdateWorkflowAction, error) {
+			namespaceEntry, err := api.GetActiveNamespace(shardContext, namespace.ID(req.GetNamespaceId()), token.WorkflowId)
+			if err != nil {
+				return nil, err
+			}
+
 			mutableState := workflowLease.GetMutableState()
 			if !mutableState.IsWorkflowExecutionRunning() {
 				return nil, consts.ErrWorkflowCompleted
@@ -83,12 +68,45 @@ func Invoke(
 				return nil, serviceerror.NewNotFound("Workflow task not found.")
 			}
 
+			if workflowTask.Attempt > 1 && shardContext.GetConfig().EnableDropRepeatedWorkflowTaskFailures(namespaceEntry.Name().String()) {
+				// drop repeated workflow task failed calls, as workaround to prevent busy loop
+				return &api.UpdateWorkflowAction{
+					Noop: true,
+				}, nil
+			}
+
+			metrics.FailedWorkflowTasksCounter.With(shardContext.GetMetricsHandler()).Record(
+				1,
+				metrics.OperationTag(metrics.HistoryRespondWorkflowTaskFailedScope),
+				metrics.NamespaceTag(namespaceEntry.Name().String()),
+				metrics.VersioningBehaviorTag(mutableState.GetEffectiveVersioningBehavior()),
+				metrics.FailureTag(request.GetCause().String()),
+				metrics.FirstAttemptTag(workflowTask.Attempt),
+			)
+
+			if request.GetCause() == enumspb.WORKFLOW_TASK_FAILED_CAUSE_GRPC_MESSAGE_TOO_LARGE {
+				if err := workflow.TerminateWorkflow(
+					mutableState,
+					request.GetCause().String(),
+					nil,
+					consts.IdentityHistoryService,
+					false,
+					nil,
+				); err != nil {
+					return nil, err
+				}
+
+				return api.UpdateWorkflowTerminate, nil
+			}
+
 			if _, err := mutableState.AddWorkflowTaskFailedEvent(
 				workflowTask,
 				request.GetCause(),
 				request.GetFailure(),
 				request.GetIdentity(),
+				//nolint:staticcheck
 				request.GetWorkerVersion(),
+				//nolint:staticcheck
 				request.GetBinaryChecksum(),
 				"",
 				"",

@@ -1,27 +1,3 @@
-// The MIT License
-//
-// Copyright (c) 2020 Temporal Technologies Inc.  All rights reserved.
-//
-// Copyright (c) 2020 Uber Technologies, Inc.
-//
-// Permission is hereby granted, free of charge, to any person obtaining a copy
-// of this software and associated documentation files (the "Software"), to deal
-// in the Software without restriction, including without limitation the rights
-// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-// copies of the Software, and to permit persons to whom the Software is
-// furnished to do so, subject to the following conditions:
-//
-// The above copyright notice and this permission notice shall be included in
-// all copies or substantial portions of the Software.
-//
-// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
-// THE SOFTWARE.
-
 package tdbg
 
 import (
@@ -193,6 +169,10 @@ func (ac *DLQV2Service) ReadMessages(c *cli.Context) (err error) {
 			}
 			res, err := adminClient.GetDLQTasks(ctx, request)
 			if err != nil {
+				// If the DLQ does not exist yet, it's effectively empty, so we can safely return without an error.
+				if strings.Contains(err.Error(), "queue not found:") {
+					return nil, nil, nil
+				}
 				return nil, nil, fmt.Errorf("call to GetDLQTasks from ReadMessages failed: %w", err)
 			}
 			return res.DlqTasks, res.NextPageToken, nil
@@ -260,9 +240,34 @@ func (ac *DLQV2Service) PurgeMessages(c *cli.Context) error {
 
 func (ac *DLQV2Service) MergeMessages(c *cli.Context) error {
 	adminClient := ac.clientFactory.AdminClient(c)
-	lastMessageID, err := ac.getLastMessageID(c, "merge")
-	if err != nil {
-		return err
+
+	var lastMessageID int64
+	if c.IsSet(FlagLastMessageID) {
+		lastMessageID = c.Int64(FlagLastMessageID)
+		if lastMessageID < persistence.FirstQueueMessageID {
+			return fmt.Errorf(
+				"--%s must be at least %d but was %d",
+				FlagLastMessageID,
+				persistence.FirstQueueMessageID,
+				lastMessageID,
+			)
+		}
+	} else {
+		_, _ = fmt.Fprint(c.App.Writer, "Note: No last message ID provided. Using ListQueues to find the last message ID.\n")
+
+		var err error
+		var ok bool
+		lastMessageID, ok, err = ac.findLastMessageIDFromListQueues(c)
+		if err != nil {
+			return fmt.Errorf("failed to find last message ID: %w", err)
+		}
+
+		if !ok {
+			_, _ = fmt.Fprint(c.App.Writer, "DLQ is empty, nothing to merge.\n")
+			return nil
+		}
+
+		_, _ = fmt.Fprintf(c.App.Writer, "Found last message ID: %d. Using this as the upper bound for merge operation.\n", lastMessageID)
 	}
 	ctx, cancel := newContext(c)
 	defer cancel()
@@ -312,6 +317,43 @@ func (ac *DLQV2Service) getLastMessageID(c *cli.Context, action string) (int64, 
 		)
 	}
 	return lastMessageID, nil
+}
+
+func (ac *DLQV2Service) findLastMessageIDFromListQueues(c *cli.Context) (int64, bool, error) {
+	ctx, cancel := newContext(c)
+	defer cancel()
+
+	adminClient := ac.clientFactory.AdminClient(c)
+
+	// Use ListQueues to find our specific DLQ and get its LastMessageID
+	dlqKey := ac.getDLQKey()
+	queueName := persistence.GetHistoryTaskQueueName(int(dlqKey.TaskCategory), dlqKey.SourceCluster, dlqKey.TargetCluster)
+
+	var nextPageToken []byte
+	for {
+		resp, err := adminClient.ListQueues(ctx, &adminservice.ListQueuesRequest{
+			QueueType:     int32(persistence.QueueTypeHistoryDLQ),
+			PageSize:      int32(defaultPageSize),
+			NextPageToken: nextPageToken,
+		})
+		if err != nil {
+			return 0, false, fmt.Errorf("call to ListQueues from findLastMessageIDFromListQueues failed: %w", err)
+		}
+
+		for _, queueInfo := range resp.Queues {
+			if queueInfo.QueueName == queueName {
+				return queueInfo.LastMessageId, queueInfo.MessageCount > 0, nil
+			}
+		}
+
+		if len(resp.NextPageToken) == 0 {
+			break
+		}
+		nextPageToken = resp.NextPageToken
+	}
+
+	// Queue not found, it is empty in that case. We create the queue on first write.
+	return 0, false, nil
 }
 
 func getSupportedDLQTaskCategories(taskCategoryRegistry tasks.TaskCategoryRegistry) []tasks.Category {

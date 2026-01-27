@@ -1,27 +1,3 @@
-// The MIT License
-//
-// Copyright (c) 2020 Temporal Technologies Inc.  All rights reserved.
-//
-// Copyright (c) 2020 Uber Technologies, Inc.
-//
-// Permission is hereby granted, free of charge, to any person obtaining a copy
-// of this software and associated documentation files (the "Software"), to deal
-// in the Software without restriction, including without limitation the rights
-// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-// copies of the Software, and to permit persons to whom the Software is
-// furnished to do so, subject to the following conditions:
-//
-// The above copyright notice and this permission notice shall be included in
-// all copies or substantial portions of the Software.
-//
-// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
-// THE SOFTWARE.
-
 package matching
 
 import (
@@ -33,7 +9,7 @@ import (
 
 	"github.com/temporalio/sqlparser"
 	enumspb "go.temporal.io/api/enums/v1"
-	"go.temporal.io/server/api/clock/v1"
+	clockspb "go.temporal.io/server/api/clock/v1"
 	persistencespb "go.temporal.io/server/api/persistence/v1"
 	"go.temporal.io/server/common/cache"
 	hlc "go.temporal.io/server/common/clock/hybrid_logical_clock"
@@ -42,7 +18,7 @@ import (
 	"go.temporal.io/server/common/metrics"
 	"go.temporal.io/server/common/namespace"
 	"go.temporal.io/server/common/persistence/visibility/manager"
-	"go.temporal.io/server/common/searchattribute"
+	"go.temporal.io/server/common/searchattribute/sadefs"
 	"go.temporal.io/server/common/tqid"
 	"go.temporal.io/server/common/util"
 	"go.temporal.io/server/common/worker_versioning"
@@ -118,10 +94,10 @@ func getBuildIdTaskReachability(
 	reachability, exitPoint, err := rc.run(ctx, buildId)
 	handler := metrics.GetPerTaskQueueFamilyScope(metricsHandler, rc.nsName.String(), rc.taskQueue, rc.tqConfig.BreakdownMetricsByTaskQueue())
 	metrics.ReachabilityExitPointCounter.With(handler).Record(1,
-		metrics.WorkerBuildIdTag(buildId, rc.tqConfig.BreakdownMetricsByBuildID()),
+		metrics.WorkerVersionTag(buildId, rc.tqConfig.BreakdownMetricsByBuildID()),
 		metrics.StringTag(reachabilityExitPointTagName, reachabilityExitPoint2TagValue[exitPoint]))
 	logger.Info("Calculated reachability for build id",
-		tag.WorkerBuildId(buildId),
+		tag.WorkerVersion(buildId),
 		tag.BuildIdTaskReachabilityTag(reachability.String()),
 		tag.ReachabilityExitPointTag(reachabilityExitPoint2TagValue[exitPoint]),
 		tag.WorkflowNamespace(rc.nsName.String()),
@@ -201,7 +177,7 @@ func (rc *reachabilityCalculator) getBuildIdsOfInterest(
 	buildId string,
 	deletedRuleInclusionPeriod time.Duration) []string {
 
-	withinRuleInclusionPeriod := func(clk *clock.HybridLogicalClock) bool {
+	withinRuleInclusionPeriod := func(clk *clockspb.HybridLogicalClock) bool {
 		if clk == nil {
 			return true
 		}
@@ -266,7 +242,7 @@ func (rc *reachabilityCalculator) makeBuildIdQuery(
 	var escapedBuildIds []string
 	var includeNull bool
 	if open {
-		statusFilter = fmt.Sprintf(` AND %s = "Running"`, searchattribute.ExecutionStatus)
+		statusFilter = fmt.Sprintf(` AND %s = "Running"`, sadefs.ExecutionStatus)
 		// want: currently assigned to that build-id
 		// (b1, b2) --> (assigned:b1, assigned:b2)
 		// (b1, b2, "") --> (assigned:b1, assigned:b2, unversioned, null)
@@ -280,7 +256,7 @@ func (rc *reachabilityCalculator) makeBuildIdQuery(
 			}
 		}
 	} else {
-		statusFilter = fmt.Sprintf(` AND %s != "Running"`, searchattribute.ExecutionStatus)
+		statusFilter = fmt.Sprintf(` AND %s != "Running"`, sadefs.ExecutionStatus)
 		// want: closed AT that build ID, and once used that build ID
 		// (b1, b2) --> (versioned:b1, versioned:b2)
 		// (b1, b2, "") --> (versioned:b1, versioned:b2, unversioned, null)
@@ -294,11 +270,11 @@ func (rc *reachabilityCalculator) makeBuildIdQuery(
 			}
 		}
 	}
-	buildIdsFilter := fmt.Sprintf("%s IN (%s)", searchattribute.BuildIds, strings.Join(escapedBuildIds, ","))
+	buildIdsFilter := fmt.Sprintf("%s IN (%s)", sadefs.BuildIds, strings.Join(escapedBuildIds, ","))
 	if includeNull {
-		buildIdsFilter = fmt.Sprintf("(%s IS NULL OR %s)", searchattribute.BuildIds, buildIdsFilter)
+		buildIdsFilter = fmt.Sprintf("(%s IS NULL OR %s)", sadefs.BuildIds, buildIdsFilter)
 	}
-	return fmt.Sprintf("%s = %s AND %s%s", searchattribute.TaskQueue, escapedTaskQueue, buildIdsFilter, statusFilter)
+	return fmt.Sprintf("%s = %s AND %s%s", sadefs.TaskQueue, escapedTaskQueue, buildIdsFilter, statusFilter)
 }
 
 // getDefaultBuildId gets the build ID mentioned in the first fully-ramped Assignment Rule.

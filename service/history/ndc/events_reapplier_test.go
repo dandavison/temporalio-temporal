@@ -1,27 +1,3 @@
-// The MIT License
-//
-// Copyright (c) 2020 Temporal Technologies Inc.  All rights reserved.
-//
-// Copyright (c) 2020 Uber Technologies, Inc.
-//
-// Permission is hereby granted, free of charge, to any person obtaining a copy
-// of this software and associated documentation files (the "Software"), to deal
-// in the Software without restriction, including without limitation the rights
-// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-// copies of the Software, and to permit persons to whom the Software is
-// furnished to do so, subject to the following conditions:
-//
-// The above copyright notice and this permission notice shall be included in
-// all copies or substantial portions of the Software.
-//
-// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
-// THE SOFTWARE.
-
 package ndc
 
 import (
@@ -37,6 +13,7 @@ import (
 	historypb "go.temporal.io/api/history/v1"
 	"go.temporal.io/api/serviceerror"
 	updatepb "go.temporal.io/api/update/v1"
+	enumsspb "go.temporal.io/server/api/enums/v1"
 	persistencespb "go.temporal.io/server/api/persistence/v1"
 	"go.temporal.io/server/common/definition"
 	"go.temporal.io/server/common/log"
@@ -44,6 +21,7 @@ import (
 	"go.temporal.io/server/common/payloads"
 	"go.temporal.io/server/service/history/hsm"
 	"go.temporal.io/server/service/history/hsm/hsmtest"
+	historyi "go.temporal.io/server/service/history/interfaces"
 	"go.temporal.io/server/service/history/workflow"
 	"go.temporal.io/server/service/history/workflow/update"
 	"go.uber.org/mock/gomock"
@@ -91,6 +69,65 @@ func (s *nDCEventReapplicationSuite) TearDownTest() {
 	s.controller.Finish()
 }
 
+func (s *nDCEventReapplicationSuite) TestReapplyEvents_AppliedEvent_WorkflowExecutionOptionsUpdated() {
+	runID := uuid.NewString()
+	execution := &persistencespb.WorkflowExecutionInfo{
+		NamespaceId: uuid.NewString(),
+	}
+	event := &historypb.HistoryEvent{
+		EventId:   1,
+		EventType: enumspb.EVENT_TYPE_WORKFLOW_EXECUTION_OPTIONS_UPDATED,
+		Attributes: &historypb.HistoryEvent_WorkflowExecutionOptionsUpdatedEventAttributes{
+			WorkflowExecutionOptionsUpdatedEventAttributes: &historypb.WorkflowExecutionOptionsUpdatedEventAttributes{
+				VersioningOverride:          nil,
+				UnsetVersioningOverride:     false,
+				AttachedRequestId:           "test-attached-request-id",
+				AttachedCompletionCallbacks: nil,
+			},
+		},
+		Links: []*commonpb.Link{
+			{
+				Variant: &commonpb.Link_WorkflowEvent_{
+					WorkflowEvent: &commonpb.Link_WorkflowEvent{
+						Namespace:  "whatever",
+						WorkflowId: "abc",
+						RunId:      uuid.NewString(),
+					},
+				},
+			},
+		},
+	}
+	attr := event.GetWorkflowExecutionOptionsUpdatedEventAttributes()
+
+	msCurrent := historyi.NewMockMutableState(s.controller)
+	msCurrent.EXPECT().VisitUpdates(gomock.Any()).Return()
+	msCurrent.EXPECT().GetCurrentVersion().Return(int64(0))
+	updateRegistry := update.NewRegistry(msCurrent)
+	msCurrent.EXPECT().IsWorkflowExecutionRunning().Return(true).Times(2)
+	msCurrent.EXPECT().GetExecutionInfo().Return(execution).AnyTimes()
+	msCurrent.EXPECT().AddWorkflowExecutionOptionsUpdatedEvent(
+		attr.GetVersioningOverride(),
+		attr.GetUnsetVersioningOverride(),
+		attr.GetAttachedRequestId(),
+		attr.GetAttachedCompletionCallbacks(),
+		event.Links,
+		attr.GetIdentity(),
+		attr.GetPriority(),
+	).Return(event, nil)
+	msCurrent.EXPECT().HSM().Return(s.hsmNode).AnyTimes()
+	msCurrent.EXPECT().IsWorkflowPendingOnWorkflowTaskBackoff().Return(true)
+	dedupResource := definition.NewEventReappliedID(runID, event.GetEventId(), event.GetVersion())
+	msCurrent.EXPECT().IsResourceDuplicated(dedupResource).Return(false)
+	msCurrent.EXPECT().UpdateDuplicatedResource(dedupResource)
+	events := []*historypb.HistoryEvent{
+		{EventType: enumspb.EVENT_TYPE_WORKFLOW_EXECUTION_STARTED},
+		event,
+	}
+	appliedEvent, err := s.nDCReapplication.ReapplyEvents(context.Background(), msCurrent, updateRegistry, events, runID)
+	s.NoError(err)
+	s.Equal(1, len(appliedEvent))
+}
+
 func (s *nDCEventReapplicationSuite) TestReapplyEvents_AppliedEvent_Signal() {
 	runID := uuid.NewString()
 	execution := &persistencespb.WorkflowExecutionInfo{
@@ -119,18 +156,17 @@ func (s *nDCEventReapplicationSuite) TestReapplyEvents_AppliedEvent_Signal() {
 	}
 	attr := event.GetWorkflowExecutionSignaledEventAttributes()
 
-	msCurrent := workflow.NewMockMutableState(s.controller)
+	msCurrent := historyi.NewMockMutableState(s.controller)
 	msCurrent.EXPECT().VisitUpdates(gomock.Any()).Return()
 	msCurrent.EXPECT().GetCurrentVersion().Return(int64(0))
 	updateRegistry := update.NewRegistry(msCurrent)
-	msCurrent.EXPECT().IsWorkflowExecutionRunning().Return(true)
+	msCurrent.EXPECT().IsWorkflowExecutionRunning().Return(true).Times(2)
 	msCurrent.EXPECT().GetExecutionInfo().Return(execution).AnyTimes()
 	msCurrent.EXPECT().AddWorkflowExecutionSignaled(
 		attr.GetSignalName(),
 		attr.GetInput(),
 		attr.GetIdentity(),
 		attr.GetHeader(),
-		attr.GetSkipGenerateWorkflowTask(),
 		event.Links,
 	).Return(event, nil)
 	msCurrent.EXPECT().HSM().Return(s.hsmNode).AnyTimes()
@@ -171,11 +207,11 @@ func (s *nDCEventReapplicationSuite) TestReapplyEvents_AppliedEvent_Update() {
 		},
 	} {
 
-		msCurrent := workflow.NewMockMutableState(s.controller)
+		msCurrent := historyi.NewMockMutableState(s.controller)
 		msCurrent.EXPECT().VisitUpdates(gomock.Any()).Return()
 		msCurrent.EXPECT().GetCurrentVersion().Return(int64(0))
 		updateRegistry := update.NewRegistry(msCurrent)
-		msCurrent.EXPECT().IsWorkflowExecutionRunning().Return(true)
+		msCurrent.EXPECT().IsWorkflowExecutionRunning().Return(true).Times(2)
 		msCurrent.EXPECT().GetExecutionInfo().Return(execution).AnyTimes()
 		switch event.EventType {
 		case enumspb.EVENT_TYPE_WORKFLOW_EXECUTION_UPDATE_ADMITTED:
@@ -220,7 +256,7 @@ func (s *nDCEventReapplicationSuite) TestReapplyEvents_Noop() {
 		}},
 	}
 
-	msCurrent := workflow.NewMockMutableState(s.controller)
+	msCurrent := historyi.NewMockMutableState(s.controller)
 	msCurrent.EXPECT().VisitUpdates(gomock.Any()).Return()
 	msCurrent.EXPECT().GetCurrentVersion().Return(int64(0))
 	updateRegistry := update.NewRegistry(msCurrent)
@@ -264,18 +300,17 @@ func (s *nDCEventReapplicationSuite) TestReapplyEvents_PartialAppliedEvent() {
 	}
 	attr1 := event1.GetWorkflowExecutionSignaledEventAttributes()
 
-	msCurrent := workflow.NewMockMutableState(s.controller)
+	msCurrent := historyi.NewMockMutableState(s.controller)
 	msCurrent.EXPECT().VisitUpdates(gomock.Any()).Return()
 	msCurrent.EXPECT().GetCurrentVersion().Return(int64(0))
 	updateRegistry := update.NewRegistry(msCurrent)
-	msCurrent.EXPECT().IsWorkflowExecutionRunning().Return(true)
+	msCurrent.EXPECT().IsWorkflowExecutionRunning().Return(true).Times(2)
 	msCurrent.EXPECT().GetExecutionInfo().Return(execution).AnyTimes()
 	msCurrent.EXPECT().AddWorkflowExecutionSignaled(
 		attr1.GetSignalName(),
 		attr1.GetInput(),
 		attr1.GetIdentity(),
 		attr1.GetHeader(),
-		attr1.GetSkipGenerateWorkflowTask(),
 		event1.Links,
 	).Return(event1, nil)
 	msCurrent.EXPECT().IsWorkflowPendingOnWorkflowTaskBackoff().Return(true)
@@ -312,7 +347,7 @@ func (s *nDCEventReapplicationSuite) TestReapplyEvents_Error() {
 	}
 	attr := event.GetWorkflowExecutionSignaledEventAttributes()
 
-	msCurrent := workflow.NewMockMutableState(s.controller)
+	msCurrent := historyi.NewMockMutableState(s.controller)
 	msCurrent.EXPECT().VisitUpdates(gomock.Any()).Return()
 	msCurrent.EXPECT().GetCurrentVersion().Return(int64(0))
 	updateRegistry := update.NewRegistry(msCurrent)
@@ -323,7 +358,6 @@ func (s *nDCEventReapplicationSuite) TestReapplyEvents_Error() {
 		attr.GetInput(),
 		attr.GetIdentity(),
 		attr.GetHeader(),
-		attr.GetSkipGenerateWorkflowTask(),
 		event.Links,
 	).Return(nil, fmt.Errorf("test"))
 	dedupResource := definition.NewEventReappliedID(runID, event.GetEventId(), event.GetVersion())
@@ -336,4 +370,161 @@ func (s *nDCEventReapplicationSuite) TestReapplyEvents_Error() {
 	appliedEvent, err := s.nDCReapplication.ReapplyEvents(context.Background(), msCurrent, updateRegistry, events, runID)
 	s.Error(err)
 	s.Equal(0, len(appliedEvent))
+}
+
+func (s *nDCEventReapplicationSuite) TestReapplyEvents_AppliedEvent_Termination() {
+	runID := uuid.NewString()
+	execution := &persistencespb.WorkflowExecutionInfo{
+		NamespaceId: uuid.NewString(),
+	}
+	event := &historypb.HistoryEvent{
+		EventId:   1,
+		EventType: enumspb.EVENT_TYPE_WORKFLOW_EXECUTION_TERMINATED,
+		Attributes: &historypb.HistoryEvent_WorkflowExecutionTerminatedEventAttributes{WorkflowExecutionTerminatedEventAttributes: &historypb.WorkflowExecutionTerminatedEventAttributes{
+			Reason:   "test",
+			Details:  payloads.EncodeBytes([]byte{}),
+			Identity: "test",
+		}},
+	}
+	msCurrent := historyi.NewMockMutableState(s.controller)
+	msCurrent.EXPECT().VisitUpdates(gomock.Any()).Return()
+	msCurrent.EXPECT().GetCurrentVersion().Return(int64(0))
+	updateRegistry := update.NewRegistry(msCurrent)
+	gomock.InOrder(
+		msCurrent.EXPECT().IsWorkflowExecutionRunning().Return(true),
+		msCurrent.EXPECT().IsWorkflowExecutionRunning().Return(false),
+	)
+	msCurrent.EXPECT().GetExecutionInfo().Return(execution).AnyTimes()
+	msCurrent.EXPECT().HSM().Return(s.hsmNode).AnyTimes()
+	dedupResource := definition.NewEventReappliedID(runID, event.GetEventId(), event.GetVersion())
+	msCurrent.EXPECT().IsResourceDuplicated(dedupResource).Return(false)
+	msCurrent.EXPECT().UpdateDuplicatedResource(dedupResource)
+	msCurrent.EXPECT().GetNextEventID().Return(int64(2))
+	msCurrent.EXPECT().GetStartedWorkflowTask().Return(nil)
+	msCurrent.EXPECT().AddWorkflowExecutionTerminatedEvent(
+		int64(2),
+		event.GetWorkflowExecutionTerminatedEventAttributes().GetReason(),
+		event.GetWorkflowExecutionTerminatedEventAttributes().GetDetails(),
+		event.GetWorkflowExecutionTerminatedEventAttributes().GetIdentity(),
+		false,
+		nil,
+	).Return(nil, nil)
+	events := []*historypb.HistoryEvent{
+		{EventType: enumspb.EVENT_TYPE_WORKFLOW_EXECUTION_STARTED},
+		event,
+	}
+	appliedEvent, err := s.nDCReapplication.ReapplyEvents(context.Background(), msCurrent, updateRegistry, events, runID)
+	s.NoError(err)
+	s.Equal(1, len(appliedEvent))
+}
+
+func (s *nDCEventReapplicationSuite) TestReapplyEvents_AppliedEvent_NoPendingWorkflowTask() {
+	runID := uuid.NewString()
+	execution := &persistencespb.WorkflowExecutionInfo{
+		NamespaceId: uuid.NewString(),
+	}
+	event := &historypb.HistoryEvent{
+		EventId:   1,
+		EventType: enumspb.EVENT_TYPE_WORKFLOW_EXECUTION_SIGNALED,
+		Attributes: &historypb.HistoryEvent_WorkflowExecutionSignaledEventAttributes{WorkflowExecutionSignaledEventAttributes: &historypb.WorkflowExecutionSignaledEventAttributes{
+			Identity:   "test",
+			SignalName: "signal",
+			Input:      payloads.EncodeBytes([]byte{}),
+			Header:     &commonpb.Header{Fields: map[string]*commonpb.Payload{"myheader": {Data: []byte("myheader")}}},
+		}},
+		Links: []*commonpb.Link{
+			{
+				Variant: &commonpb.Link_WorkflowEvent_{
+					WorkflowEvent: &commonpb.Link_WorkflowEvent{
+						Namespace:  "whatever",
+						WorkflowId: "abc",
+						RunId:      uuid.NewString(),
+					},
+				},
+			},
+		},
+	}
+	attr := event.GetWorkflowExecutionSignaledEventAttributes()
+
+	msCurrent := historyi.NewMockMutableState(s.controller)
+	msCurrent.EXPECT().VisitUpdates(gomock.Any()).Return()
+	msCurrent.EXPECT().GetCurrentVersion().Return(int64(0))
+	updateRegistry := update.NewRegistry(msCurrent)
+	msCurrent.EXPECT().IsWorkflowExecutionRunning().Return(true).Times(2)
+	msCurrent.EXPECT().GetExecutionInfo().Return(execution).AnyTimes()
+	msCurrent.EXPECT().AddWorkflowExecutionSignaled(
+		attr.GetSignalName(),
+		attr.GetInput(),
+		attr.GetIdentity(),
+		attr.GetHeader(),
+		event.Links,
+	).Return(event, nil)
+	msCurrent.EXPECT().HSM().Return(s.hsmNode).AnyTimes()
+	msCurrent.EXPECT().IsWorkflowPendingOnWorkflowTaskBackoff().Return(false)
+	dedupResource := definition.NewEventReappliedID(runID, event.GetEventId(), event.GetVersion())
+	msCurrent.EXPECT().IsResourceDuplicated(dedupResource).Return(false)
+	msCurrent.EXPECT().UpdateDuplicatedResource(dedupResource)
+	msCurrent.EXPECT().HasPendingWorkflowTask().Return(false)
+	msCurrent.EXPECT().IsWorkflowExecutionStatusPaused().Return(false)
+	msCurrent.EXPECT().AddWorkflowTaskScheduledEvent(
+		false,
+		enumsspb.WORKFLOW_TASK_TYPE_NORMAL,
+	).Return(nil, nil)
+	events := []*historypb.HistoryEvent{
+		{EventType: enumspb.EVENT_TYPE_WORKFLOW_EXECUTION_STARTED},
+		event,
+	}
+	appliedEvent, err := s.nDCReapplication.ReapplyEvents(context.Background(), msCurrent, updateRegistry, events, runID)
+	s.NoError(err)
+	s.Equal(1, len(appliedEvent))
+}
+
+// Reapplies a signal event to a paused workflow
+// Asserts that AddWorkflowTaskScheduledEvent() is NOT called
+
+func (s *nDCEventReapplicationSuite) TestReapplyEvents_PausedWorkflow_NoWorkflowTaskScheduled() {
+	runID := uuid.NewString()
+	execution := &persistencespb.WorkflowExecutionInfo{
+		NamespaceId: uuid.NewString(),
+	}
+	event := &historypb.HistoryEvent{
+		EventId:   1,
+		EventType: enumspb.EVENT_TYPE_WORKFLOW_EXECUTION_SIGNALED,
+		Attributes: &historypb.HistoryEvent_WorkflowExecutionSignaledEventAttributes{WorkflowExecutionSignaledEventAttributes: &historypb.WorkflowExecutionSignaledEventAttributes{
+			Identity:   "test",
+			SignalName: "signal",
+			Input:      payloads.EncodeBytes([]byte{}),
+			Header:     &commonpb.Header{Fields: map[string]*commonpb.Payload{"myheader": {Data: []byte("myheader")}}},
+		}},
+	}
+	attr := event.GetWorkflowExecutionSignaledEventAttributes()
+
+	msCurrent := historyi.NewMockMutableState(s.controller)
+	msCurrent.EXPECT().VisitUpdates(gomock.Any()).Return()
+	msCurrent.EXPECT().GetCurrentVersion().Return(int64(0))
+	updateRegistry := update.NewRegistry(msCurrent)
+	msCurrent.EXPECT().IsWorkflowExecutionRunning().Return(true).Times(2)
+	msCurrent.EXPECT().GetExecutionInfo().Return(execution).AnyTimes()
+	msCurrent.EXPECT().AddWorkflowExecutionSignaled(
+		attr.GetSignalName(),
+		attr.GetInput(),
+		attr.GetIdentity(),
+		attr.GetHeader(),
+		event.Links,
+	).Return(event, nil)
+	msCurrent.EXPECT().HSM().Return(s.hsmNode).AnyTimes()
+	msCurrent.EXPECT().IsWorkflowPendingOnWorkflowTaskBackoff().Return(false)
+	dedupResource := definition.NewEventReappliedID(runID, event.GetEventId(), event.GetVersion())
+	msCurrent.EXPECT().IsResourceDuplicated(dedupResource).Return(false)
+	msCurrent.EXPECT().UpdateDuplicatedResource(dedupResource)
+	msCurrent.EXPECT().HasPendingWorkflowTask().Return(false)
+	// Workflow is paused, so AddWorkflowTaskScheduledEvent should NOT be called.
+	msCurrent.EXPECT().IsWorkflowExecutionStatusPaused().Return(true)
+	events := []*historypb.HistoryEvent{
+		{EventType: enumspb.EVENT_TYPE_WORKFLOW_EXECUTION_STARTED},
+		event,
+	}
+	appliedEvent, err := s.nDCReapplication.ReapplyEvents(context.Background(), msCurrent, updateRegistry, events, runID)
+	s.NoError(err)
+	s.Len(appliedEvent, 1)
 }

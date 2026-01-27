@@ -1,27 +1,3 @@
-// The MIT License
-//
-// Copyright (c) 2020 Temporal Technologies Inc.  All rights reserved.
-//
-// Copyright (c) 2020 Uber Technologies, Inc.
-//
-// Permission is hereby granted, free of charge, to any person obtaining a copy
-// of this software and associated documentation files (the "Software"), to deal
-// in the Software without restriction, including without limitation the rights
-// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-// copies of the Software, and to permit persons to whom the Software is
-// furnished to do so, subject to the following conditions:
-//
-// The above copyright notice and this permission notice shall be included in
-// all copies or substantial portions of the Software.
-//
-// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
-// THE SOFTWARE.
-
 package sql
 
 import (
@@ -32,6 +8,7 @@ import (
 	"go.temporal.io/api/serviceerror"
 	"go.temporal.io/server/common/log"
 	"go.temporal.io/server/common/persistence"
+	"go.temporal.io/server/common/persistence/serialization"
 	"go.temporal.io/server/common/persistence/sql/sqlplugin"
 	"go.temporal.io/server/common/primitives"
 )
@@ -46,9 +23,10 @@ func newMetadataPersistenceV2(
 	db sqlplugin.DB,
 	currentClusterName string,
 	logger log.Logger,
+	serializer serialization.Serializer,
 ) (persistence.MetadataStore, error) {
 	return &sqlMetadataManagerV2{
-		SqlStore:          NewSqlStore(db, logger),
+		SqlStore:          NewSQLStore(db, logger, serializer),
 		activeClusterName: currentClusterName,
 	}, nil
 }
@@ -76,8 +54,8 @@ func (m *sqlMetadataManagerV2) CreateNamespace(
 			IsGlobal:            request.IsGlobal,
 			NotificationVersion: metadata.NotificationVersion,
 		}); err != nil {
-			if m.Db.IsDupEntryError(err) {
-				return serviceerror.NewNamespaceAlreadyExists(fmt.Sprintf("name: %v", request.Name))
+			if m.DB.IsDupEntryError(err) {
+				return serviceerror.NewNamespaceAlreadyExistsf("name: %v", request.Name)
 			}
 			return err
 		}
@@ -113,7 +91,7 @@ func (m *sqlMetadataManagerV2) GetNamespace(
 		return nil, serviceerror.NewInvalidArgument("GetNamespace operation failed.  Both ID and Name are empty.")
 	}
 
-	rows, err := m.Db.SelectFromNamespace(ctx, filter)
+	rows, err := m.DB.SelectFromNamespace(ctx, filter)
 	if err != nil {
 		switch err {
 		case sql.ErrNoRows:
@@ -125,7 +103,7 @@ func (m *sqlMetadataManagerV2) GetNamespace(
 
 			return nil, serviceerror.NewNamespaceNotFound(identity)
 		default:
-			return nil, serviceerror.NewUnavailable(fmt.Sprintf("GetNamespace operation failed. Error %v", err))
+			return nil, serviceerror.NewUnavailablef("GetNamespace operation failed. Error %v", err)
 		}
 	}
 
@@ -235,9 +213,9 @@ func (m *sqlMetadataManagerV2) DeleteNamespaceByName(
 func (m *sqlMetadataManagerV2) GetMetadata(
 	ctx context.Context,
 ) (*persistence.GetMetadataResponse, error) {
-	row, err := m.Db.SelectFromNamespaceMetadata(ctx)
+	row, err := m.DB.SelectFromNamespaceMetadata(ctx)
 	if err != nil {
-		return nil, serviceerror.NewUnavailable(fmt.Sprintf("GetMetadata operation failed. Error: %v", err))
+		return nil, serviceerror.NewUnavailablef("GetMetadata operation failed. Error: %v", err)
 	}
 	return &persistence.GetMetadataResponse{NotificationVersion: row.NotificationVersion}, nil
 }
@@ -251,7 +229,7 @@ func (m *sqlMetadataManagerV2) ListNamespaces(
 		token := primitives.UUID(request.NextPageToken)
 		pageToken = &token
 	}
-	rows, err := m.Db.SelectFromNamespace(ctx, sqlplugin.NamespaceFilter{
+	rows, err := m.DB.SelectFromNamespace(ctx, sqlplugin.NamespaceFilter{
 		GreaterThanID: pageToken,
 		PageSize:      &request.PageSize,
 	})
@@ -259,7 +237,7 @@ func (m *sqlMetadataManagerV2) ListNamespaces(
 		if err == sql.ErrNoRows {
 			return &persistence.InternalListNamespacesResponse{}, nil
 		}
-		return nil, serviceerror.NewUnavailable(fmt.Sprintf("ListNamespaces operation failed. Failed to get namespace rows. Error: %v", err))
+		return nil, serviceerror.NewUnavailablef("ListNamespaces operation failed. Failed to get namespace rows. Error: %v", err)
 	}
 
 	var namespaces []*persistence.InternalGetNamespaceResponse
@@ -288,14 +266,14 @@ func updateMetadata(
 		NotificationVersion: oldNotificationVersion,
 	})
 	if err != nil {
-		return serviceerror.NewUnavailable(fmt.Sprintf("Failed to update namespace metadata. Error: %v", err))
+		return serviceerror.NewUnavailablef("Failed to update namespace metadata. Error: %v", err)
 	}
 
 	rowsAffected, err := result.RowsAffected()
 	if err != nil {
-		return serviceerror.NewUnavailable(fmt.Sprintf("Could not verify whether namespace metadata update occurred. Error: %v", err))
+		return serviceerror.NewUnavailablef("Could not verify whether namespace metadata update occurred. Error: %v", err)
 	} else if rowsAffected != 1 {
-		return serviceerror.NewUnavailable(fmt.Sprintf("Failed to update namespace metadata. <>1 rows affected. Error: %v", err))
+		return serviceerror.NewUnavailablef("Failed to update namespace metadata. <>1 rows affected. Error: %v", err)
 	}
 
 	return nil
@@ -307,7 +285,7 @@ func lockMetadata(
 ) (*sqlplugin.NamespaceMetadataRow, error) {
 	row, err := tx.LockNamespaceMetadata(ctx)
 	if err != nil {
-		return nil, serviceerror.NewUnavailable(fmt.Sprintf("Failed to lock namespace metadata. Error: %v", err))
+		return nil, serviceerror.NewUnavailablef("Failed to lock namespace metadata. Error: %v", err)
 	}
 	return row, nil
 }

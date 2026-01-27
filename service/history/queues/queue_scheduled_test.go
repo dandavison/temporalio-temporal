@@ -1,27 +1,3 @@
-// The MIT License
-//
-// Copyright (c) 2020 Temporal Technologies Inc.  All rights reserved.
-//
-// Copyright (c) 2020 Uber Technologies, Inc.
-//
-// Permission is hereby granted, free of charge, to any person obtaining a copy
-// of this software and associated documentation files (the "Software"), to deal
-// in the Software without restriction, including without limitation the rights
-// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-// copies of the Software, and to permit persons to whom the Software is
-// furnished to do so, subject to the following conditions:
-//
-// The above copyright notice and this permission notice shall be included in
-// all copies or substantial portions of the Software.
-//
-// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
-// THE SOFTWARE.
-
 package queues
 
 import (
@@ -36,11 +12,13 @@ import (
 	"github.com/stretchr/testify/require"
 	"github.com/stretchr/testify/suite"
 	persistencespb "go.temporal.io/server/api/persistence/v1"
+	"go.temporal.io/server/common"
 	"go.temporal.io/server/common/cluster"
 	"go.temporal.io/server/common/log"
 	"go.temporal.io/server/common/metrics"
 	"go.temporal.io/server/common/persistence"
 	"go.temporal.io/server/common/predicates"
+	"go.temporal.io/server/common/telemetry"
 	"go.temporal.io/server/common/timer"
 	"go.temporal.io/server/service/history/shard"
 	"go.temporal.io/server/service/history/tasks"
@@ -119,6 +97,7 @@ func (s *scheduledQueueSuite) SetupTest() {
 		s.mockShard.GetNamespaceRegistry(),
 		rateLimiter,
 		s.mockShard.GetTimeSource(),
+		s.mockShard.ChasmRegistry(),
 		logger,
 		metrics.NoopMetricsHandler,
 	)
@@ -137,8 +116,11 @@ func (s *scheduledQueueSuite) SetupTest() {
 		s.mockShard.GetTimeSource(),
 		s.mockShard.GetNamespaceRegistry(),
 		s.mockShard.GetClusterMetadata(),
+		s.mockShard.ChasmRegistry(),
+		GetTaskTypeTagValue,
 		logger,
 		metrics.NoopMetricsHandler,
+		telemetry.NoopTracer,
 		nil,
 		func() bool {
 			return false
@@ -159,7 +141,7 @@ func (s *scheduledQueueSuite) SetupTest() {
 		scheduler,
 		rescheduler,
 		factory,
-		testQueueOptions,
+		&testQueueOptions,
 		NewReaderPriorityRateLimiter(
 			func() float64 { return 10 },
 			1,
@@ -173,7 +155,7 @@ func (s *scheduledQueueSuite) TearDownTest() {
 	s.controller.Finish()
 }
 
-func (s *scheduledQueueSuite) TestPaginationFnProvider() {
+func (s *scheduledQueueSuite) TestPaginationFnProvider_Success() {
 	paginationFnProvider := s.scheduledQueue.paginationFnProvider
 
 	r := NewRandomRange()
@@ -216,7 +198,7 @@ func (s *scheduledQueueSuite) TestPaginationFnProvider() {
 		ShardID:             s.mockShard.GetShardID(),
 		TaskCategory:        tasks.CategoryTimer,
 		InclusiveMinTaskKey: tasks.NewKey(r.InclusiveMin.FireTime, 0),
-		ExclusiveMaxTaskKey: tasks.NewKey(r.ExclusiveMax.FireTime.Add(persistence.ScheduledTaskMinPrecision), 0),
+		ExclusiveMaxTaskKey: tasks.NewKey(r.ExclusiveMax.FireTime.Add(common.ScheduledTaskMinPrecision), 0),
 		BatchSize:           testQueueOptions.BatchSize(),
 		NextPageToken:       currentPageToken,
 	}).Return(&persistence.GetHistoryTasksResponse{
@@ -237,6 +219,21 @@ func (s *scheduledQueueSuite) TestPaginationFnProvider() {
 	} else {
 		s.Nil(actualNextPageToken)
 	}
+}
+
+func (s *scheduledQueueSuite) TestPaginationFnProvider_ShardOwnershipLost() {
+	paginationFnProvider := s.scheduledQueue.paginationFnProvider
+
+	s.mockExecutionManager.EXPECT().GetHistoryTasks(gomock.Any(), gomock.Any()).Return(nil, &persistence.ShardOwnershipLostError{
+		ShardID: s.mockShard.GetShardID(),
+	}).Times(1)
+
+	paginationFn := paginationFnProvider(NewRandomRange())
+	_, _, err := paginationFn(nil)
+	s.True(shard.IsShardOwnershipLostError(err))
+
+	// make sure shard is also marked as invalid
+	s.False(s.mockShard.IsValid())
 }
 
 func (s *scheduledQueueSuite) TestLookAheadTask_HasLookAheadTask() {

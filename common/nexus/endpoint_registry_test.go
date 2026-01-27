@@ -1,25 +1,3 @@
-// The MIT License
-//
-// Copyright (c) 2024 Temporal Technologies Inc.  All rights reserved.
-//
-// Permission is hereby granted, free of charge, to any person obtaining a copy
-// of this software and associated documentation files (the "Software"), to deal
-// in the Software without restriction, including without limitation the rights
-// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-// copies of the Software, and to permit persons to whom the Software is
-// furnished to do so, subject to the following conditions:
-//
-// The above copyright notice and this permission notice shall be included in
-// all copies or substantial portions of the Software.
-//
-// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
-// THE SOFTWARE.
-
 package nexus
 
 import (
@@ -33,11 +11,11 @@ import (
 	"github.com/google/uuid"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	"go.temporal.io/api/nexus/v1"
+	nexuspb "go.temporal.io/api/nexus/v1"
 	"go.temporal.io/api/serviceerror"
 	"go.temporal.io/server/api/matchingservice/v1"
 	"go.temporal.io/server/api/matchingservicemock/v1"
-	persistencepb "go.temporal.io/server/api/persistence/v1"
+	persistencespb "go.temporal.io/server/api/persistence/v1"
 	"go.temporal.io/server/common/clock/hybrid_logical_clock"
 	"go.temporal.io/server/common/dynamicconfig"
 	"go.temporal.io/server/common/log"
@@ -62,20 +40,20 @@ func TestGet(t *testing.T) {
 
 	// initial load
 	mocks.matchingClient.EXPECT().ListNexusEndpoints(gomock.Any(), gomock.Any()).Return(&matchingservice.ListNexusEndpointsResponse{
-		Entries:       []*persistencepb.NexusEndpointEntry{testEntry},
+		Entries:       []*persistencespb.NexusEndpointEntry{testEntry},
 		TableVersion:  1,
 		NextPageToken: nil,
 	}, nil)
 
 	// first long poll
 	mocks.matchingClient.EXPECT().ListNexusEndpoints(gomock.Any(), &matchingservice.ListNexusEndpointsRequest{
-		PageSize:              int32(1000),
+		PageSize:              int32(100),
 		LastKnownTableVersion: int64(1),
 		Wait:                  true,
 	}).DoAndReturn(func(context.Context, *matchingservice.ListNexusEndpointsRequest, ...interface{}) (*matchingservice.ListNexusEndpointsResponse, error) {
 		time.Sleep(20 * time.Millisecond)
 		return &matchingservice.ListNexusEndpointsResponse{TableVersion: int64(1)}, nil
-	}).MaxTimes(1)
+	}).AnyTimes()
 
 	reg := NewEndpointRegistry(mocks.config, mocks.matchingClient, mocks.persistence, log.NewNoopLogger(), metrics.NoopMetricsHandler)
 	reg.StartLifecycle()
@@ -102,20 +80,20 @@ func TestGetNotFound(t *testing.T) {
 
 	// initial load
 	mocks.matchingClient.EXPECT().ListNexusEndpoints(gomock.Any(), gomock.Any()).Return(&matchingservice.ListNexusEndpointsResponse{
-		Entries:       []*persistencepb.NexusEndpointEntry{},
+		Entries:       []*persistencespb.NexusEndpointEntry{},
 		TableVersion:  1,
 		NextPageToken: nil,
 	}, nil)
 
 	// first long poll
 	mocks.matchingClient.EXPECT().ListNexusEndpoints(gomock.Any(), &matchingservice.ListNexusEndpointsRequest{
-		PageSize:              int32(1000),
+		PageSize:              int32(100),
 		LastKnownTableVersion: int64(1),
 		Wait:                  true,
 	}).DoAndReturn(func(context.Context, *matchingservice.ListNexusEndpointsRequest, ...interface{}) (*matchingservice.ListNexusEndpointsResponse, error) {
 		time.Sleep(20 * time.Millisecond)
 		return &matchingservice.ListNexusEndpointsResponse{TableVersion: int64(1)}, nil
-	}).MaxTimes(1)
+	}).AnyTimes()
 
 	// readthrough
 	mocks.persistence.EXPECT().GetNexusEndpoint(gomock.Any(), &persistence.GetNexusEndpointRequest{ID: testEntry.Id}).Return(testEntry, nil)
@@ -162,7 +140,7 @@ func TestInitializationFallback(t *testing.T) {
 	mocks.persistence.EXPECT().ListNexusEndpoints(gomock.Any(), gomock.Any()).Return(&persistence.ListNexusEndpointsResponse{
 		TableVersion:  int64(1),
 		NextPageToken: nil,
-		Entries:       []*persistencepb.NexusEndpointEntry{testEndpoint},
+		Entries:       []*persistencespb.NexusEndpointEntry{testEndpoint},
 	}, nil)
 
 	reg := NewEndpointRegistry(mocks.config, mocks.matchingClient, mocks.persistence, log.NewNoopLogger(), metrics.NoopMetricsHandler)
@@ -205,7 +183,7 @@ func TestEnableDisableEnable(t *testing.T) {
 	inLongPoll := make(chan struct{})
 	closeOnce := sync.OnceFunc(func() { close(inLongPoll) })
 	mocks.matchingClient.EXPECT().ListNexusEndpoints(gomock.Any(), gomock.Any()).Return(&matchingservice.ListNexusEndpointsResponse{
-		Entries:       []*persistencepb.NexusEndpointEntry{testEntry},
+		Entries:       []*persistencespb.NexusEndpointEntry{testEntry},
 		TableVersion:  1,
 		NextPageToken: nil,
 	}, nil)
@@ -240,7 +218,7 @@ func TestEnableDisableEnable(t *testing.T) {
 	inLongPoll = make(chan struct{})
 	closeOnce = sync.OnceFunc(func() { close(inLongPoll) })
 	mocks.matchingClient.EXPECT().ListNexusEndpoints(gomock.Any(), gomock.Any()).Return(&matchingservice.ListNexusEndpointsResponse{
-		Entries:       []*persistencepb.NexusEndpointEntry{testEntry},
+		Entries:       []*persistencespb.NexusEndpointEntry{testEntry},
 		TableVersion:  1,
 		NextPageToken: nil,
 	}, nil)
@@ -274,7 +252,7 @@ func TestTableVersionErrorResetsMatchingPagination(t *testing.T) {
 		LastKnownTableVersion: int64(0),
 		Wait:                  false,
 	}).Return(&matchingservice.ListNexusEndpointsResponse{
-		Entries:       []*persistencepb.NexusEndpointEntry{testEntry0},
+		Entries:       []*persistencespb.NexusEndpointEntry{testEntry0},
 		TableVersion:  int64(2),
 		NextPageToken: []byte(testEntry0.Id),
 	}, nil)
@@ -292,7 +270,7 @@ func TestTableVersionErrorResetsMatchingPagination(t *testing.T) {
 		LastKnownTableVersion: int64(0),
 		Wait:                  false,
 	}).Return(&matchingservice.ListNexusEndpointsResponse{
-		Entries:       []*persistencepb.NexusEndpointEntry{testEntry0},
+		Entries:       []*persistencespb.NexusEndpointEntry{testEntry0},
 		TableVersion:  int64(3),
 		NextPageToken: []byte(testEntry0.Id),
 	}, nil)
@@ -303,7 +281,7 @@ func TestTableVersionErrorResetsMatchingPagination(t *testing.T) {
 		LastKnownTableVersion: int64(3),
 		Wait:                  false,
 	}).Return(&matchingservice.ListNexusEndpointsResponse{
-		Entries:       []*persistencepb.NexusEndpointEntry{testEntry1},
+		Entries:       []*persistencespb.NexusEndpointEntry{testEntry1},
 		TableVersion:  int64(3),
 		NextPageToken: nil,
 	}, nil)
@@ -354,7 +332,7 @@ func TestTableVersionErrorResetsPersistencePagination(t *testing.T) {
 		PageSize:              1,
 		LastKnownTableVersion: int64(0),
 	}).Return(&persistence.ListNexusEndpointsResponse{
-		Entries:       []*persistencepb.NexusEndpointEntry{testEntry0},
+		Entries:       []*persistencespb.NexusEndpointEntry{testEntry0},
 		TableVersion:  int64(2),
 		NextPageToken: []byte(testEntry0.Id),
 	}, nil)
@@ -370,7 +348,7 @@ func TestTableVersionErrorResetsPersistencePagination(t *testing.T) {
 		PageSize:              1,
 		LastKnownTableVersion: int64(0),
 	}).Return(&persistence.ListNexusEndpointsResponse{
-		Entries:       []*persistencepb.NexusEndpointEntry{testEntry0},
+		Entries:       []*persistencespb.NexusEndpointEntry{testEntry0},
 		TableVersion:  int64(3),
 		NextPageToken: []byte(testEntry0.Id),
 	}, nil)
@@ -380,7 +358,7 @@ func TestTableVersionErrorResetsPersistencePagination(t *testing.T) {
 		PageSize:              1,
 		LastKnownTableVersion: int64(3),
 	}).Return(&persistence.ListNexusEndpointsResponse{
-		Entries:       []*persistencepb.NexusEndpointEntry{testEntry1},
+		Entries:       []*persistencespb.NexusEndpointEntry{testEntry1},
 		TableVersion:  int64(3),
 		NextPageToken: nil,
 	}, nil)
@@ -415,19 +393,19 @@ func newTestMocks(t *testing.T) *testMocks {
 	}
 }
 
-func newEndpointEntry(name string) *persistencepb.NexusEndpointEntry {
+func newEndpointEntry(name string) *persistencespb.NexusEndpointEntry {
 	id := uuid.NewString()
-	return &persistencepb.NexusEndpointEntry{
+	return &persistencespb.NexusEndpointEntry{
 		Version: 1,
 		Id:      id,
-		Endpoint: &persistencepb.NexusEndpoint{
+		Endpoint: &persistencespb.NexusEndpoint{
 			Clock:       hybrid_logical_clock.Zero(1),
 			CreatedTime: timestamppb.Now(),
-			Spec: &persistencepb.NexusEndpointSpec{
+			Spec: &persistencespb.NexusEndpointSpec{
 				Name: name,
-				Target: &persistencepb.NexusEndpointTarget{
-					Variant: &persistencepb.NexusEndpointTarget_Worker_{
-						Worker: &persistencepb.NexusEndpointTarget_Worker{
+				Target: &persistencespb.NexusEndpointTarget{
+					Variant: &persistencespb.NexusEndpointTarget_Worker_{
+						Worker: &persistencespb.NexusEndpointTarget_Worker{
 							NamespaceId: uuid.NewString(),
 							TaskQueue:   name + "-task-queue",
 						},
@@ -438,21 +416,21 @@ func newEndpointEntry(name string) *persistencepb.NexusEndpointEntry {
 	}
 }
 
-func publicToInternalEndpointTarget(target *nexus.EndpointTarget) *persistencepb.NexusEndpointTarget {
+func publicToInternalEndpointTarget(target *nexuspb.EndpointTarget) *persistencespb.NexusEndpointTarget {
 	switch v := target.Variant.(type) {
-	case *nexus.EndpointTarget_Worker_:
-		return &persistencepb.NexusEndpointTarget{
-			Variant: &persistencepb.NexusEndpointTarget_Worker_{
-				Worker: &persistencepb.NexusEndpointTarget_Worker{
+	case *nexuspb.EndpointTarget_Worker_:
+		return &persistencespb.NexusEndpointTarget{
+			Variant: &persistencespb.NexusEndpointTarget_Worker_{
+				Worker: &persistencespb.NexusEndpointTarget_Worker{
 					NamespaceId: "TODO",
 					TaskQueue:   v.Worker.TaskQueue,
 				},
 			},
 		}
-	case *nexus.EndpointTarget_External_:
-		return &persistencepb.NexusEndpointTarget{
-			Variant: &persistencepb.NexusEndpointTarget_External_{
-				External: &persistencepb.NexusEndpointTarget_External{
+	case *nexuspb.EndpointTarget_External_:
+		return &persistencespb.NexusEndpointTarget{
+			Variant: &persistencespb.NexusEndpointTarget_External_{
+				External: &persistencespb.NexusEndpointTarget_External{
 					Url: v.External.Url,
 				},
 			},

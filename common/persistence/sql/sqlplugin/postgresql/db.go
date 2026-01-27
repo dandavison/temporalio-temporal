@@ -1,27 +1,3 @@
-// The MIT License
-//
-// Copyright (c) 2020 Temporal Technologies Inc.  All rights reserved.
-//
-// Copyright (c) 2020 Uber Technologies, Inc.
-//
-// Permission is hereby granted, free of charge, to any person obtaining a copy
-// of this software and associated documentation files (the "Software"), to deal
-// in the Software without restriction, including without limitation the rights
-// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-// copies of the Software, and to permit persons to whom the Software is
-// furnished to do so, subject to the following conditions:
-//
-// The above copyright notice and this permission notice shall be included in
-// all copies or substantial portions of the Software.
-//
-// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
-// THE SOFTWARE.
-
 package postgresql
 
 import (
@@ -31,6 +7,7 @@ import (
 
 	"github.com/jmoiron/sqlx"
 	"go.temporal.io/server/common/config"
+	"go.temporal.io/server/common/log"
 	"go.temporal.io/server/common/persistence/schema"
 	"go.temporal.io/server/common/persistence/sql/sqlplugin"
 	"go.temporal.io/server/common/persistence/sql/sqlplugin/postgresql/driver"
@@ -56,6 +33,7 @@ type db struct {
 	cfg       *config.SQL
 	resolver  resolver.ServiceResolver
 	converter DataConverter
+	logger    log.Logger
 
 	handle *sqlplugin.DatabaseHandle
 	tx     *sqlx.Tx
@@ -71,6 +49,7 @@ func newDB(
 	dbDriver driver.Driver,
 	handle *sqlplugin.DatabaseHandle,
 	tx *sqlx.Tx,
+	logger log.Logger,
 ) *db {
 	mdb := &db{
 		dbKind:   dbKind,
@@ -78,6 +57,7 @@ func newDB(
 		dbDriver: dbDriver,
 		handle:   handle,
 		tx:       tx,
+		logger:   logger,
 	}
 	mdb.converter = &converter{}
 	return mdb
@@ -101,7 +81,7 @@ func (pdb *db) BeginTx(ctx context.Context) (sqlplugin.Tx, error) {
 	if err != nil {
 		return nil, pdb.handle.ConvertError(err)
 	}
-	return newDB(pdb.dbKind, pdb.dbName, pdb.dbDriver, pdb.handle, tx), nil
+	return newDB(pdb.dbKind, pdb.dbName, pdb.dbDriver, pdb.handle, tx, pdb.logger), nil
 }
 
 // Close closes the connection to the mysql db

@@ -1,27 +1,3 @@
-// The MIT License
-//
-// Copyright (c) 2020 Temporal Technologies Inc.  All rights reserved.
-//
-// Copyright (c) 2020 Uber Technologies, Inc.
-//
-// Permission is hereby granted, free of charge, to any person obtaining a copy
-// of this software and associated documentation files (the "Software"), to deal
-// in the Software without restriction, including without limitation the rights
-// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-// copies of the Software, and to permit persons to whom the Software is
-// furnished to do so, subject to the following conditions:
-//
-// The above copyright notice and this permission notice shall be included in
-// all copies or substantial portions of the Software.
-//
-// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
-// THE SOFTWARE.
-
 package tests
 
 import (
@@ -38,7 +14,6 @@ import (
 	"go.temporal.io/sdk/converter"
 	"go.temporal.io/sdk/worker"
 	"go.temporal.io/sdk/workflow"
-	"go.temporal.io/server/common/log/tag"
 	"go.temporal.io/server/common/rpc"
 	"go.temporal.io/server/tests/testcore"
 )
@@ -48,7 +23,7 @@ var (
 )
 
 type ClientDataConverterTestSuite struct {
-	testcore.ClientFunctionalSuite
+	testcore.FunctionalTestBase
 }
 
 func TestClientDataConverterTestSuite(t *testing.T) {
@@ -108,20 +83,17 @@ func testChildWorkflow(ctx workflow.Context, totalCount, runCount int) (string, 
 func (s *ClientDataConverterTestSuite) startWorkerWithDataConverter(tl string, dataConverter converter.DataConverter) (sdkclient.Client, worker.Worker) {
 	sdkClient, err := sdkclient.Dial(sdkclient.Options{
 		HostPort:      s.FrontendGRPCAddress(),
-		Namespace:     s.Namespace(),
+		Namespace:     s.Namespace().String(),
 		DataConverter: dataConverter,
 	})
-	if err != nil {
-		s.Logger.Fatal("Error when creating SDK client", tag.Error(err))
-	}
+	s.NoError(err)
 
 	newWorker := worker.New(sdkClient, tl, worker.Options{})
 	newWorker.RegisterActivity(testActivity)
 	newWorker.RegisterWorkflow(testChildWorkflow)
 
-	if err := newWorker.Start(); err != nil {
-		s.Logger.Fatal("Error when start worker with data converter", tag.Error(err))
-	}
+	err = newWorker.Start()
+	s.NoError(err)
 	return sdkClient, newWorker
 }
 
@@ -184,9 +156,7 @@ func (s *ClientDataConverterTestSuite) TestClientDataConverter() {
 	s.Worker().RegisterWorkflow(testDataConverterWorkflow)
 	s.Worker().RegisterActivity(testActivity)
 	we, err := s.SdkClient().ExecuteWorkflow(ctx, workflowOptions, testDataConverterWorkflow, tl)
-	if err != nil {
-		s.Logger.Fatal("Start workflow with err", tag.Error(err))
-	}
+	s.NoError(err)
 	s.NotNil(we)
 	s.True(we.GetRunID() != "")
 
@@ -222,9 +192,7 @@ func (s *ClientDataConverterTestSuite) TestClientDataConverterFailed() {
 	s.Worker().RegisterWorkflow(testDataConverterWorkflow)
 	s.Worker().RegisterActivity(testActivity)
 	we, err := s.SdkClient().ExecuteWorkflow(ctx, workflowOptions, testDataConverterWorkflow, tl)
-	if err != nil {
-		s.Logger.Fatal("Start workflow with err", tag.Error(err))
-	}
+	s.NoError(err)
 	s.NotNil(we)
 	s.True(we.GetRunID() != "")
 
@@ -273,9 +241,7 @@ func (s *ClientDataConverterTestSuite) TestClientDataConverterWithChild() {
 	s.Worker().RegisterWorkflow(testChildWorkflow)
 
 	we, err := s.SdkClient().ExecuteWorkflow(ctx, workflowOptions, testParentWorkflow)
-	if err != nil {
-		s.Logger.Fatal("Start workflow with err", tag.Error(err))
-	}
+	s.NoError(err)
 	s.NotNil(we)
 	s.True(we.GetRunID() != "")
 

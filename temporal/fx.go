@@ -1,27 +1,3 @@
-// The MIT License
-//
-// Copyright (c) 2020 Temporal Technologies Inc.  All rights reserved.
-//
-// Copyright (c) 2020 Uber Technologies, Inc.
-//
-// Permission is hereby granted, free of charge, to any person obtaining a copy
-// of this software and associated documentation files (the "Software"), to deal
-// in the Software without restriction, including without limitation the rights
-// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-// copies of the Software, and to permit persons to whom the Software is
-// furnished to do so, subject to the following conditions:
-//
-// The above copyright notice and this permission notice shall be included in
-// all copies or substantial portions of the Software.
-//
-// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
-// THE SOFTWARE.
-
 package temporal
 
 import (
@@ -30,8 +6,10 @@ import (
 	"fmt"
 	"maps"
 	"os"
+	"sync/atomic"
+	"time"
 
-	"github.com/pborman/uuid"
+	"github.com/google/uuid"
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/propagation"
@@ -39,8 +17,13 @@ import (
 	otelsdktrace "go.opentelemetry.io/otel/sdk/trace"
 	semconv "go.opentelemetry.io/otel/semconv/v1.10.0"
 	"go.opentelemetry.io/otel/trace"
+	enumspb "go.temporal.io/api/enums/v1"
 	"go.temporal.io/api/serviceerror"
 	persistencespb "go.temporal.io/server/api/persistence/v1"
+	"go.temporal.io/server/chasm"
+	chasmcallback "go.temporal.io/server/chasm/lib/callback"
+	chasmscheduler "go.temporal.io/server/chasm/lib/scheduler"
+	chasmworkflow "go.temporal.io/server/chasm/lib/workflow"
 	"go.temporal.io/server/client"
 	"go.temporal.io/server/common/archiver"
 	"go.temporal.io/server/common/authorization"
@@ -56,6 +39,7 @@ import (
 	"go.temporal.io/server/common/persistence"
 	"go.temporal.io/server/common/persistence/cassandra"
 	persistenceClient "go.temporal.io/server/common/persistence/client"
+	"go.temporal.io/server/common/persistence/serialization"
 	"go.temporal.io/server/common/persistence/sql"
 	"go.temporal.io/server/common/persistence/visibility"
 	esclient "go.temporal.io/server/common/persistence/visibility/store/elasticsearch/client"
@@ -65,6 +49,7 @@ import (
 	"go.temporal.io/server/common/resource"
 	"go.temporal.io/server/common/rpc/encryption"
 	"go.temporal.io/server/common/searchattribute"
+	"go.temporal.io/server/common/searchattribute/sadefs"
 	"go.temporal.io/server/common/telemetry"
 	"go.temporal.io/server/service/frontend"
 	"go.temporal.io/server/service/history"
@@ -136,7 +121,6 @@ type (
 		ClientFactoryProvider client.FactoryProvider
 		DynamicConfigClient   dynamicconfig.Client
 		TLSConfigProvider     encryption.TLSConfigProvider
-		EsConfig              *esclient.Config
 		EsClient              esclient.Client
 		MetricsHandler        metrics.Handler
 	}
@@ -160,8 +144,17 @@ var (
 		dynamicconfig.Module,
 		pprof.Module,
 		TraceExportModule,
+		chasm.Module,
+		serialization.Module,
 		FxLogAdapter,
 		fx.Invoke(ServerLifetimeHooks),
+	)
+
+	ChasmLibraryOptions = fx.Options(
+		chasm.Module,
+		chasmworkflow.Module,
+		chasmscheduler.Module,
+		chasmcallback.Module,
 	)
 )
 
@@ -187,19 +180,19 @@ func ServerOptionsProvider(opts []ServerOption) (serverOptionsProvider, error) {
 		return serverOptionsProvider{}, err
 	}
 
-	persistenceConfig := so.config.Persistence
-	err = verifyPersistenceCompatibleVersion(persistenceConfig, so.persistenceServiceResolver)
-	if err != nil {
-		return serverOptionsProvider{}, err
-	}
-
-	stopChan := make(chan interface{})
-
 	// Logger
 	logger := so.logger
 	if logger == nil {
 		logger = log.NewZapLogger(log.BuildZapLogger(so.config.Log))
 	}
+
+	persistenceConfig := so.config.Persistence
+	err = verifyPersistenceCompatibleVersion(persistenceConfig, so.persistenceServiceResolver, logger)
+	if err != nil {
+		return serverOptionsProvider{}, err
+	}
+
+	stopChan := make(chan interface{})
 
 	// ClientFactoryProvider
 	clientFactoryProvider := so.clientFactoryProvider
@@ -245,17 +238,19 @@ func ServerOptionsProvider(opts []ServerOption) (serverOptionsProvider, error) {
 	var esConfig *esclient.Config
 	var esClient esclient.Client
 
+	if persistenceConfig.SecondaryVisibilityConfigExist() &&
+		persistenceConfig.DataStores[persistenceConfig.SecondaryVisibilityStore].Elasticsearch != nil {
+		esConfig = persistenceConfig.DataStores[persistenceConfig.SecondaryVisibilityStore].Elasticsearch
+		esConfig.SetHttpClient(so.elasticsearchHttpClient)
+	}
 	if persistenceConfig.VisibilityConfigExist() &&
 		persistenceConfig.DataStores[persistenceConfig.VisibilityStore].Elasticsearch != nil {
 		esConfig = persistenceConfig.DataStores[persistenceConfig.VisibilityStore].Elasticsearch
-	} else if persistenceConfig.SecondaryVisibilityConfigExist() &&
-		persistenceConfig.DataStores[persistenceConfig.SecondaryVisibilityStore].Elasticsearch != nil {
-		esConfig = persistenceConfig.DataStores[persistenceConfig.SecondaryVisibilityStore].Elasticsearch
+		esConfig.SetHttpClient(so.elasticsearchHttpClient)
 	}
 
 	if esConfig != nil {
 		esHttpClient := so.elasticsearchHttpClient
-		esConfig.SetHttpClient(esHttpClient)
 		if esHttpClient == nil {
 			var err error
 			esHttpClient, err = esclient.NewAwsHttpClient(esConfig.AWSRequestSigning)
@@ -308,7 +303,6 @@ func ServerOptionsProvider(opts []ServerOption) (serverOptionsProvider, error) {
 		ClientFactoryProvider: clientFactoryProvider,
 		DynamicConfigClient:   dcClient,
 		TLSConfigProvider:     tlsConfigProvider,
-		EsConfig:              esConfig,
 		EsClient:              esClient,
 		MetricsHandler:        metricHandler,
 	}, nil
@@ -356,7 +350,6 @@ type (
 		NamespaceLogger            resource.NamespaceLogger
 		DynamicConfigClient        dynamicconfig.Client
 		MetricsHandler             metrics.Handler
-		EsConfig                   *esclient.Config
 		EsClient                   esclient.Client
 		TlsConfigProvider          encryption.TLSConfigProvider
 		PersistenceConfig          config.Persistence
@@ -394,7 +387,6 @@ func (params ServiceProviderParamsCommon) GetCommonServiceOptions(serviceName pr
 	return fx.Options(
 		fx.Supply(
 			serviceName,
-			params.EsConfig,
 			params.PersistenceConfig,
 			params.ClusterMetadata,
 			params.Cfg,
@@ -453,6 +445,7 @@ func (params ServiceProviderParamsCommon) GetCommonServiceOptions(serviceName pr
 		resource.DefaultOptions,
 		membershipModule,
 		FxLogAdapter,
+		ChasmLibraryOptions,
 	)
 }
 
@@ -543,6 +536,7 @@ func genericFrontendServiceProvider(
 	app := fx.New(
 		params.GetCommonServiceOptions(serviceName),
 		fx.Supply(params.CustomFrontendInterceptors),
+		fx.Supply([]grpc.StreamServerInterceptor{}),
 		fx.Decorate(func() authorization.ClaimMapper {
 			switch serviceName {
 			case primitives.FrontendService:
@@ -596,7 +590,9 @@ func ApplyClusterMetadataConfigProvider(
 	persistenceServiceResolver resolver.ServiceResolver,
 	persistenceFactoryProvider persistenceClient.FactoryProviderFn,
 	customDataStoreFactory persistenceClient.AbstractDataStoreFactory,
+	customVisibilityStoreFactory visibility.VisibilityStoreFactory,
 	metricsHandler metrics.Handler,
+	serializer serialization.Serializer,
 ) (*cluster.Config, config.Persistence, error) {
 	ctx := context.TODO()
 	logger = log.With(logger, tag.ComponentMetadataInitializer)
@@ -609,6 +605,8 @@ func ApplyClusterMetadataConfigProvider(
 		customDataStoreFactory,
 		logger,
 		metricsHandler,
+		telemetry.NoopTracerProvider,
+		serializer,
 	)
 	factory := persistenceFactoryProvider(persistenceClient.NewFactoryParams{
 		DataStoreFactory:           dataStoreFactory,
@@ -618,6 +616,7 @@ func ApplyClusterMetadataConfigProvider(
 		ClusterName:                persistenceClient.ClusterName(svc.ClusterMetadata.CurrentClusterName),
 		MetricsHandler:             metricsHandler,
 		Logger:                     logger,
+		Serializer:                 serializer,
 	})
 	defer factory.Close()
 
@@ -627,12 +626,34 @@ func ApplyClusterMetadataConfigProvider(
 	}
 	defer clusterMetadataManager.Close()
 
-	initialIndexSearchAttributes := make(map[string]*persistencespb.IndexSearchAttributes)
-	if ds := svc.Persistence.GetVisibilityStoreConfig(); ds.SQL != nil {
-		initialIndexSearchAttributes[ds.GetIndexName()] = searchattribute.GetSqlDbIndexSearchAttributes()
+	visCSAOverride := map[enumspb.IndexedValueType]int{}
+	for tpName, value := range svc.Visibility.PersistenceCustomSearchAttributes {
+		saType, ok := enumspb.IndexedValueType_shorthandValue[tpName]
+		if !ok {
+			return svc.ClusterMetadata,
+				svc.Persistence,
+				fmt.Errorf("invalid search attribute type: %s", tpName)
+		}
+		if value < 0 || value > 99 {
+			return svc.ClusterMetadata,
+				svc.Persistence,
+				fmt.Errorf(
+					"invalid number of custom search attributes for type %s (must be between 0 and 99)",
+					tpName,
+				)
+		}
+		visCSAOverride[enumspb.IndexedValueType(saType)] = value
 	}
-	if ds := svc.Persistence.GetSecondaryVisibilityStoreConfig(); ds.SQL != nil {
-		initialIndexSearchAttributes[ds.GetIndexName()] = searchattribute.GetSqlDbIndexSearchAttributes()
+
+	visDataStores := []config.DataStore{
+		svc.Persistence.GetVisibilityStoreConfig(),
+		svc.Persistence.GetSecondaryVisibilityStoreConfig(),
+	}
+	indexSearchAttributes := make(map[string]*persistencespb.IndexSearchAttributes)
+	for _, ds := range visDataStores {
+		if ds.SQL != nil || ds.CustomDataStoreConfig != nil {
+			indexSearchAttributes[ds.GetIndexName()] = sadefs.GetDBIndexSearchAttributes(visCSAOverride)
+		}
 	}
 
 	clusterMetadata := svc.ClusterMetadata
@@ -647,7 +668,7 @@ func ApplyClusterMetadataConfigProvider(
 			tag.ClusterName(clusterMetadata.CurrentClusterName))
 		return svc.ClusterMetadata, svc.Persistence, missingCurrentClusterMetadataErr
 	}
-	ctx = headers.SetCallerInfo(ctx, headers.SystemBackgroundCallerInfo)
+	ctx = headers.SetCallerInfo(ctx, headers.SystemOperatorCallerInfo)
 	resp, err := clusterMetadataManager.GetClusterMetadata(
 		ctx,
 		&persistence.GetClusterMetadataRequest{ClusterName: clusterMetadata.CurrentClusterName},
@@ -659,7 +680,7 @@ func ApplyClusterMetadataConfigProvider(
 			ctx,
 			clusterMetadataManager,
 			svc,
-			initialIndexSearchAttributes,
+			indexSearchAttributes,
 			resp,
 		); updateErr != nil {
 			return svc.ClusterMetadata, svc.Persistence, updateErr
@@ -676,7 +697,7 @@ func ApplyClusterMetadataConfigProvider(
 			ctx,
 			clusterMetadataManager,
 			svc,
-			initialIndexSearchAttributes,
+			indexSearchAttributes,
 			logger,
 		); initErr != nil {
 			return svc.ClusterMetadata, svc.Persistence, initErr
@@ -703,11 +724,11 @@ func initCurrentClusterMetadataRecord(
 	var clusterId string
 	currentClusterName := svc.ClusterMetadata.CurrentClusterName
 	currentClusterInfo := svc.ClusterMetadata.ClusterInformation[currentClusterName]
-	if uuid.Parse(currentClusterInfo.ClusterID) == nil {
+	if uuid.Validate(currentClusterInfo.ClusterID) != nil {
 		if currentClusterInfo.ClusterID != "" {
 			logger.Warn("Cluster Id in Cluster Metadata config is not a valid uuid. Generating a new Cluster Id")
 		}
-		clusterId = uuid.New()
+		clusterId = uuid.NewString()
 	} else {
 		clusterId = currentClusterInfo.ClusterID
 	}
@@ -772,18 +793,8 @@ func updateCurrentClusterMetadataRecord(
 		updateDBRecord = true
 	}
 
-	if len(initialIndexSearchAttributes) > 0 {
-		if currentClusterDBRecord.IndexSearchAttributes == nil {
-			currentClusterDBRecord.IndexSearchAttributes = initialIndexSearchAttributes
-			updateDBRecord = true
-		} else {
-			for indexName, initialValue := range initialIndexSearchAttributes {
-				if _, ok := currentClusterDBRecord.IndexSearchAttributes[indexName]; !ok {
-					currentClusterDBRecord.IndexSearchAttributes[indexName] = initialValue
-					updateDBRecord = true
-				}
-			}
-		}
+	if updateIndexSearchAttributes(initialIndexSearchAttributes, currentClusterDBRecord) {
+		updateDBRecord = true
 	}
 
 	if !updateDBRecord {
@@ -835,6 +846,39 @@ func overwriteCurrentClusterMetadataWithDBRecord(
 	}
 }
 
+// updateIndexSearchAttributes updates the IndexSearchAttributes if needed.
+// Returns true if any change was made.
+func updateIndexSearchAttributes(
+	initialIndexSearchAttributes map[string]*persistencespb.IndexSearchAttributes,
+	currentClusterDBRecord *persistence.GetClusterMetadataResponse,
+) bool {
+	// initialIndexSearchAttributes is non-empty for SQL and custom visibility stores.
+	if len(initialIndexSearchAttributes) == 0 {
+		return false
+	}
+	if currentClusterDBRecord.IndexSearchAttributes == nil {
+		currentClusterDBRecord.IndexSearchAttributes = initialIndexSearchAttributes
+		return true
+	}
+	updateDBRecord := false
+	for indexName, initialValue := range initialIndexSearchAttributes {
+		isa := currentClusterDBRecord.IndexSearchAttributes[indexName]
+		if isa == nil {
+			currentClusterDBRecord.IndexSearchAttributes[indexName] = initialValue
+			updateDBRecord = true
+			continue
+		}
+
+		for k, v := range initialValue.CustomSearchAttributes {
+			if _, ok := isa.CustomSearchAttributes[k]; !ok {
+				isa.CustomSearchAttributes[k] = v
+				updateDBRecord = true
+			}
+		}
+	}
+	return updateDBRecord
+}
+
 func PersistenceFactoryProvider() persistenceClient.FactoryProviderFn {
 	return persistenceClient.FactoryProvider
 }
@@ -846,16 +890,27 @@ func ServerLifetimeHooks(
 	lc.Append(fx.StartStopHook(svr.Start, svr.Stop))
 }
 
-func verifyPersistenceCompatibleVersion(config config.Persistence, persistenceServiceResolver resolver.ServiceResolver) error {
+func verifyPersistenceCompatibleVersion(
+	cfg config.Persistence,
+	persistenceServiceResolver resolver.ServiceResolver,
+	logger log.Logger,
+) error {
 	// cassandra schema version validation
-	if err := cassandra.VerifyCompatibleVersion(config, persistenceServiceResolver); err != nil {
+	if err := cassandra.VerifyCompatibleVersion(cfg, persistenceServiceResolver, logger); err != nil {
 		return fmt.Errorf("cassandra schema version compatibility check failed: %w", err)
 	}
 	// sql schema version validation
-	if err := sql.VerifyCompatibleVersion(config, persistenceServiceResolver); err != nil {
+	if err := sql.VerifyCompatibleVersion(cfg, persistenceServiceResolver, logger); err != nil {
 		return fmt.Errorf("sql schema version compatibility check failed: %w", err)
 	}
 	return nil
+}
+
+type SpanExporterInputs struct {
+	fx.In
+	Lifecycyle fx.Lifecycle
+	Logger     log.Logger
+	Config     *config.Config `optional:"true"`
 }
 
 // TraceExportModule holds process-global telemetry fx state defining the set of
@@ -864,32 +919,46 @@ func verifyPersistenceCompatibleVersion(config config.Persistence, persistenceSe
 //
 // - []go.opentelemetry.io/otel/sdk/trace.SpanExporter
 var TraceExportModule = fx.Options(
-	fx.Invoke(func(log log.Logger) {
-		otel.SetErrorHandler(otel.ErrorHandlerFunc(
-			func(err error) {
-				log.Warn("OTEL error", tag.Error(err), tag.ServiceErrorType(err))
-			}),
-		)
-	}),
+	fx.Provide(func(inputs SpanExporterInputs) ([]otelsdktrace.SpanExporter, error) {
+		var tracingReady atomic.Bool
+		otel.SetErrorHandler(otel.ErrorHandlerFunc(func(err error) {
+			if tracingReady.Load() { // ignore errors during startup
+				inputs.Logger.Warn("OTEL error", tag.Error(err), tag.ServiceErrorType(err))
+			}
+		}))
 
-	fx.Provide(func(lc fx.Lifecycle, c *config.Config) ([]otelsdktrace.SpanExporter, error) {
-		exportersByType, err := c.ExporterConfig.SpanExporters()
-		if err != nil {
-			return nil, err
+		// (1) Exporters from config.
+		exportersByType := map[telemetry.SpanExporterType]otelsdktrace.SpanExporter{}
+		if inputs.Config != nil {
+			var err error
+			exportersByType, err = inputs.Config.ExporterConfig.SpanExporters()
+			if err != nil {
+				return nil, err
+			}
 		}
 
+		// (2) Exporters from env variables.
 		exportersByTypeFromEnv, err := telemetry.SpanExportersFromEnv(os.LookupEnv)
 		if err != nil {
 			return nil, err
 		}
 
-		// config-defined exporters override env-defined exporters with the same type
-		maps.Copy(exportersByType, exportersByTypeFromEnv)
+		// (3) Exporters from code (ie from testing).
+		customExportersByType := inputs.Config.ExporterConfig.CustomExporters
 
+		// Merge exporters.
+		maps.Copy(exportersByType, exportersByTypeFromEnv) // env overrides config
+		maps.Copy(exportersByType, customExportersByType)  // custom overrides all
 		exporters := expmaps.Values(exportersByType)
-		lc.Append(fx.Hook{
-			OnStart: startAll(exporters),
-			OnStop:  shutdownAll(exporters),
+
+		// Configure exporters' lifecycle hooks.
+		inputs.Lifecycyle.Append(fx.Hook{
+			OnStart: func(ctx context.Context) error {
+				err = startAll(exporters)(ctx)
+				tracingReady.Store(true)
+				return err
+			},
+			OnStop: shutdownAll(exporters),
 		})
 		return exporters, nil
 	}),
@@ -904,14 +973,12 @@ var TraceExportModule = fx.Options(
 //     default: wrap each otelsdktrace.SpanExporter with otelsdktrace.NewBatchSpanProcessor
 //   - *go.opentelemetry.io/otel/sdk/resource.Resource
 //     default: resource.Default() augmented with the supplied serviceName
-//   - []go.opentelemetry.io/otel/sdk/trace.TracerProviderOption
-//     default: the provided resource.Resource and each of the otelsdktrace.SpanExporter
 //   - go.opentelemetry.io/otel/trace.TracerProvider
-//     default: otelsdktrace.NewTracerProvider with each of the otelsdktrace.TracerProviderOption
+//     default: otelnoop.NewTracerProvider()
 //   - go.opentelemetry.io/otel/ppropagation.TextMapPropagator
 //     default: propagation.TraceContext{}
-//   - telemetry.ServerTraceInterceptor
-//   - telemetry.ClientTraceInterceptor
+//   - telemetry.ServerStatsHandler
+//   - telemetry.ClientStatsHandler
 var ServiceTracingModule = fx.Options(
 	fx.Supply([]otelsdktrace.BatchSpanProcessorOption{}),
 	fx.Provide(
@@ -948,27 +1015,40 @@ var ServiceTracingModule = fx.Options(
 			fx.ParamTags(``, `optional:"true"`),
 		),
 	),
-	fx.Provide(
-		func(r *otelresource.Resource, sps []otelsdktrace.SpanProcessor) []otelsdktrace.TracerProviderOption {
-			opts := make([]otelsdktrace.TracerProviderOption, 0, len(sps)+1)
-			opts = append(opts, otelsdktrace.WithResource(r))
-			for _, sp := range sps {
-				opts = append(opts, otelsdktrace.WithSpanProcessor(sp))
-			}
-			return opts
-		},
-	),
-	fx.Provide(func(lc fx.Lifecycle, opts []otelsdktrace.TracerProviderOption) trace.TracerProvider {
+	fx.Provide(func(lc fx.Lifecycle, r *otelresource.Resource, sps []otelsdktrace.SpanProcessor) trace.TracerProvider {
+		if len(sps) == 0 {
+			return telemetry.NoopTracerProvider
+		}
+		opts := make([]otelsdktrace.TracerProviderOption, 0, len(sps)+1)
+		opts = append(opts, otelsdktrace.WithResource(r))
+		for _, sp := range sps {
+			opts = append(opts, otelsdktrace.WithSpanProcessor(sp))
+		}
 		tp := otelsdktrace.NewTracerProvider(opts...)
-		lc.Append(fx.Hook{OnStop: func(ctx context.Context) error {
-			return tp.Shutdown(ctx)
-		}})
+		lc.Append(fx.Hook{
+			OnStop: func(ctx context.Context) error {
+				otel.SetErrorHandler(otel.ErrorHandlerFunc(func(err error) {
+					// ignore errors during shutdown
+				}))
+
+				shutdownCtx, cancel := context.WithTimeout(context.Background(), 1*time.Second)
+				defer cancel()
+
+				err := tp.Shutdown(shutdownCtx)
+				if errors.Is(err, context.DeadlineExceeded) {
+					// Ignore timeouts since it's okay to drop OTEL traces on shutdown.
+					// Either there's no collector, or there are too many traces left to export.
+					return nil
+				}
+				return err
+			}})
 		return tp
 	}),
 	// Haven't had use for baggage propagation yet
 	fx.Provide(func() propagation.TextMapPropagator { return propagation.TraceContext{} }),
-	fx.Provide(telemetry.NewServerTraceInterceptor),
-	fx.Provide(telemetry.NewClientTraceInterceptor),
+	fx.Provide(telemetry.NewServerStatsHandler),
+	fx.Provide(telemetry.NewClientStatsHandler),
+	fx.Provide(metrics.NewServerStatsHandler),
 )
 
 func startAll(exporters []otelsdktrace.SpanExporter) func(ctx context.Context) error {
@@ -988,10 +1068,15 @@ func startAll(exporters []otelsdktrace.SpanExporter) func(ctx context.Context) e
 
 func shutdownAll(exporters []otelsdktrace.SpanExporter) func(ctx context.Context) error {
 	return func(ctx context.Context) error {
+		shutdownCtx, cancel := context.WithTimeout(context.Background(), 1*time.Second)
+		defer cancel()
+
 		for _, e := range exporters {
-			err := e.Shutdown(ctx)
-			if err != nil {
-				return err
+			err := e.Shutdown(shutdownCtx)
+			if errors.Is(err, context.DeadlineExceeded) {
+				// Ignore timeouts since it's okay to drop OTEL traces on shutdown.
+				// Either there's no collector, or there are too many traces left to export.
+				return nil
 			}
 		}
 		return nil
@@ -1027,7 +1112,7 @@ func (l *fxLogAdapter) LogEvent(e fxevent.Event) {
 				tag.ComponentFX,
 				tag.NewStringTag("callee", e.FunctionName),
 				tag.NewStringTag("caller", e.CallerName),
-				tag.NewStringTag("runtime", e.Runtime.String()),
+				tag.NewStringerTag("runtime", e.Runtime),
 			)
 		}
 	case *fxevent.OnStopExecuting:
@@ -1049,7 +1134,7 @@ func (l *fxLogAdapter) LogEvent(e fxevent.Event) {
 				tag.ComponentFX,
 				tag.NewStringTag("callee", e.FunctionName),
 				tag.NewStringTag("caller", e.CallerName),
-				tag.NewStringTag("runtime", e.Runtime.String()),
+				tag.NewStringerTag("runtime", e.Runtime),
 			)
 		}
 	case *fxevent.Supplied:
@@ -1111,7 +1196,7 @@ func (l *fxLogAdapter) LogEvent(e fxevent.Event) {
 	case *fxevent.Stopping:
 		l.logger.Info("received signal",
 			tag.ComponentFX,
-			tag.NewStringTag("signal", e.Signal.String()))
+			tag.NewStringerTag("signal", e.Signal))
 	case *fxevent.Stopped:
 		if e.Err != nil {
 			l.logger.Error("stop failed", tag.ComponentFX, tag.Error(e.Err))
@@ -1136,6 +1221,13 @@ func (l *fxLogAdapter) LogEvent(e fxevent.Event) {
 				tag.ComponentFX,
 				tag.NewStringTag("function", e.ConstructorName))
 		}
+	case *fxevent.BeforeRun:
+		l.logger.Debug("before run",
+			tag.ComponentFX,
+			tag.NewStringTag("name", e.Name),
+			tag.NewStringTag("kind", e.Kind),
+			tag.NewStringTag("module", e.ModuleName),
+		)
 	default:
 		l.logger.Warn("unknown fx log type, update fxLogAdapter",
 			tag.ComponentFX,

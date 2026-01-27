@@ -1,48 +1,20 @@
-// The MIT License
-//
-// Copyright (c) 2020 Temporal Technologies Inc.  All rights reserved.
-//
-// Copyright (c) 2020 Uber Technologies, Inc.
-//
-// Permission is hereby granted, free of charge, to any person obtaining a copy
-// of this software and associated documentation files (the "Software"), to deal
-// in the Software without restriction, including without limitation the rights
-// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-// copies of the Software, and to permit persons to whom the Software is
-// furnished to do so, subject to the following conditions:
-//
-// The above copyright notice and this permission notice shall be included in
-// all copies or substantial portions of the Software.
-//
-// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
-// THE SOFTWARE.
-
 package rpc
 
 import (
 	"context"
 	"crypto/tls"
-	"errors"
+	"net"
 	"time"
 
-	"go.temporal.io/api/serviceerror"
 	"go.temporal.io/server/common/headers"
 	"go.temporal.io/server/common/log"
-	"go.temporal.io/server/common/log/tag"
 	"go.temporal.io/server/common/metrics"
-	"go.temporal.io/server/common/persistence/serialization"
 	"go.temporal.io/server/common/rpc/interceptor"
 	serviceerrors "go.temporal.io/server/common/serviceerror"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/backoff"
 	"google.golang.org/grpc/credentials"
 	"google.golang.org/grpc/credentials/insecure"
-	"google.golang.org/grpc/metadata"
 	"google.golang.org/grpc/status"
 )
 
@@ -69,21 +41,19 @@ const (
 
 	// maxInternodeRecvPayloadSize indicates the internode max receive payload size.
 	maxInternodeRecvPayloadSize = 128 * 1024 * 1024 // 128 Mb
-
-	// ResourceExhaustedCauseHeader will be added to rpc response if request returns ResourceExhausted error.
-	// Value of this header will be ResourceExhaustedCause.
-	ResourceExhaustedCauseHeader = "X-Resource-Exhausted-Cause"
-
-	// ResourceExhaustedScopeHeader will be added to rpc response if request returns ResourceExhausted error.
-	// Value of this header will be the scope of exhausted resource.
-	ResourceExhaustedScopeHeader = "X-Resource-Exhausted-Scope"
 )
 
 // Dial creates a client connection to the given target with default options.
 // The hostName syntax is defined in
 // https://github.com/grpc/grpc/blob/master/doc/naming.md.
 // dns resolver is used by default
-func Dial(hostName string, tlsConfig *tls.Config, logger log.Logger, interceptors ...grpc.UnaryClientInterceptor) (*grpc.ClientConn, error) {
+func Dial(
+	hostName string,
+	tlsConfig *tls.Config,
+	logger log.Logger,
+	metricsHandler metrics.Handler,
+	opts ...grpc.DialOption,
+) (*grpc.ClientConn, error) {
 	var grpcSecureOpt grpc.DialOption
 	if tlsConfig == nil {
 		grpcSecureOpt = grpc.WithTransportCredentials(insecure.NewCredentials())
@@ -102,16 +72,32 @@ func Dial(hostName string, tlsConfig *tls.Config, logger log.Logger, interceptor
 	}
 	cp.Backoff.MaxDelay = MaxBackoffDelay
 
+	dtrace := newDialTracer(hostName, metricsHandler, logger)
+
+	contextDialer := func(ctx context.Context, s string) (net.Conn, error) {
+		// Keep the existing gRPC behavior by using OS defaults for TCP keepalive settings.
+		// We are on Go 1.23+ and can use KeepAliveConfig directly instead of the old KeepAlive/Control hacks.
+		dialer := &net.Dialer{
+			KeepAliveConfig: net.KeepAliveConfig{
+				Enable: true,
+			},
+		}
+
+		var ndt *networkDialTrace
+		ctx, ndt = dtrace.beginNetworkDial(ctx)
+		conn, dialErr := dialer.DialContext(ctx, "tcp", s)
+		dtrace.endNetworkDial(ndt, dialErr)
+		return conn, dialErr
+	}
+
 	dialOptions := []grpc.DialOption{
 		grpcSecureOpt,
+		grpc.WithContextDialer(contextDialer),
 		grpc.WithDefaultCallOptions(grpc.MaxCallRecvMsgSize(maxInternodeRecvPayloadSize)),
 		grpc.WithChainUnaryInterceptor(
-			append(
-				interceptors,
-				headersInterceptor,
-				metrics.NewClientMetricsTrailerPropagatorInterceptor(logger),
-				errorInterceptor,
-			)...,
+			headersInterceptor,
+			metrics.NewClientMetricsTrailerPropagatorInterceptor(logger),
+			errorInterceptor,
 		),
 		grpc.WithChainStreamInterceptor(
 			interceptor.StreamErrorInterceptor,
@@ -120,6 +106,7 @@ func Dial(hostName string, tlsConfig *tls.Config, logger log.Logger, interceptor
 		grpc.WithDisableServiceConfig(),
 		grpc.WithConnectParams(cp),
 	}
+	dialOptions = append(dialOptions, opts...)
 
 	return grpc.NewClient(hostName, dialOptions...)
 }
@@ -147,65 +134,4 @@ func headersInterceptor(
 ) error {
 	ctx = headers.Propagate(ctx)
 	return invoker(ctx, method, req, reply, cc, opts...)
-}
-
-func ServiceErrorInterceptor(
-	ctx context.Context,
-	req interface{},
-	_ *grpc.UnaryServerInfo,
-	handler grpc.UnaryHandler,
-) (interface{}, error) {
-
-	resp, err := handler(ctx, req)
-
-	var deserializationError *serialization.DeserializationError
-	var serializationError *serialization.SerializationError
-	// convert serialization errors to be captured as serviceerrors across gRPC calls
-	if errors.As(err, &deserializationError) || errors.As(err, &serializationError) {
-		err = serviceerror.NewDataLoss(err.Error())
-	}
-	return resp, serviceerror.ToStatus(err).Err()
-}
-
-func NewFrontendServiceErrorInterceptor(
-	logger log.Logger,
-) grpc.UnaryServerInterceptor {
-	return func(
-		ctx context.Context,
-		req interface{},
-		_ *grpc.UnaryServerInfo,
-		handler grpc.UnaryHandler,
-	) (interface{}, error) {
-
-		resp, err := handler(ctx, req)
-
-		if err == nil {
-			return resp, err
-		}
-
-		// mask some internal service errors at frontend
-		switch err.(type) {
-		case *serviceerrors.ShardOwnershipLost:
-			err = serviceerror.NewUnavailable("shard unavailable, please backoff and retry")
-		case *serviceerror.DataLoss:
-			err = serviceerror.NewUnavailable("internal history service error")
-		}
-
-		addHeadersForResourceExhausted(ctx, logger, err)
-
-		return resp, err
-	}
-}
-
-func addHeadersForResourceExhausted(ctx context.Context, logger log.Logger, err error) {
-	var reErr *serviceerror.ResourceExhausted
-	if errors.As(err, &reErr) {
-		headerErr := grpc.SetHeader(ctx, metadata.Pairs(
-			ResourceExhaustedCauseHeader, reErr.Cause.String(),
-			ResourceExhaustedScopeHeader, reErr.Scope.String(),
-		))
-		if headerErr != nil {
-			logger.Error("Failed to add Resource-Exhausted headers to response", tag.Error(headerErr))
-		}
-	}
 }

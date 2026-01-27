@@ -1,25 +1,3 @@
-// The MIT License
-//
-// Copyright (c) 2024 Temporal Technologies Inc.  All rights reserved.
-//
-// Permission is hereby granted, free of charge, to any person obtaining a copy
-// of this software and associated documentation files (the "Software"), to deal
-// in the Software without restriction, including without limitation the rights
-// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-// copies of the Software, and to permit persons to whom the Software is
-// furnished to do so, subject to the following conditions:
-//
-// The above copyright notice and this permission notice shall be included in
-// all copies or substantial portions of the Software.
-//
-// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
-// THE SOFTWARE.
-
 package util
 
 import (
@@ -31,21 +9,27 @@ import (
 )
 
 func ConvertPathToCamel(input string) []string {
-	pathParts := strings.Split(input, ".")
-	for i, path := range pathParts {
+	var pathParts []string
+	for path := range strings.SplitSeq(input, ".") {
 		// Split by "_" and convert each word to Title Case (CamelCase)
-		words := strings.Split(path, "_")
-		snakeCase := len(words) > 1
-		for j, word := range words {
-			if snakeCase && j > 0 {
-				words[j] = cases.Title(language.Und).String(strings.ToLower(word))
+		var b strings.Builder
+		j := 0
+		for word := range strings.SplitSeq(path, "_") {
+			if j > 0 {
+				b.WriteString(cases.Title(language.Und).String(strings.ToLower(word)))
 			} else {
 				// lowercase the first letter
-				words[j] = strings.ToLower(word[:1]) + word[1:]
+				if len(word) > 0 {
+					b.WriteString(strings.ToLower(word[:1]))
+					if len(word) > 1 {
+						b.WriteString(word[1:])
+					}
+				}
 			}
+			j++
 		}
 		// Join the words into a CamelCase substring
-		pathParts[i] = strings.Join(words, "")
+		pathParts = append(pathParts, b.String())
 	}
 	// Join all CamelCase substrings back with "."
 	return pathParts

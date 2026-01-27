@@ -1,27 +1,3 @@
-// The MIT License
-//
-// Copyright (c) 2020 Temporal Technologies Inc.  All rights reserved.
-//
-// Copyright (c) 2020 Uber Technologies, Inc.
-//
-// Permission is hereby granted, free of charge, to any person obtaining a copy
-// of this software and associated documentation files (the "Software"), to deal
-// in the Software without restriction, including without limitation the rights
-// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-// copies of the Software, and to permit persons to whom the Software is
-// furnished to do so, subject to the following conditions:
-//
-// The above copyright notice and this permission notice shall be included in
-// all copies or substantial portions of the Software.
-//
-// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
-// THE SOFTWARE.
-
 package config
 
 import (
@@ -101,20 +77,6 @@ func (c *Persistence) Validate() error {
 				ErrPersistenceConfig,
 				c.SecondaryVisibilityStore)
 		}
-		if isPrimaryEs && isSecondaryEs {
-			// ElasticSearch config for visibilityStore and secondaryVisibilityStore must be the same except for
-			// `indices.visibility` config key and private fields - this is a restriction due to global ES client
-			esConfig := *c.DataStores[c.VisibilityStore].Elasticsearch
-			secEsConfig := *c.DataStores[c.SecondaryVisibilityStore].Elasticsearch
-			esConfig.Indices = nil
-			secEsConfig.Indices = nil
-			if !reflect.DeepEqual(esConfig, secEsConfig) {
-				return fmt.Errorf(
-					"%w: config mismatch for visibilityStore and secondaryVisibilityStore",
-					ErrPersistenceConfig,
-				)
-			}
-		}
 	}
 
 	for _, st := range stores {
@@ -142,6 +104,11 @@ func (c *Persistence) SecondaryVisibilityConfigExist() bool {
 func (c *Persistence) IsSQLVisibilityStore() bool {
 	return (c.VisibilityConfigExist() && c.DataStores[c.VisibilityStore].SQL != nil) ||
 		(c.SecondaryVisibilityConfigExist() && c.DataStores[c.SecondaryVisibilityStore].SQL != nil)
+}
+
+func (c *Persistence) IsCustomVisibilityStore() bool {
+	return c.GetVisibilityStoreConfig().CustomDataStoreConfig != nil ||
+		c.GetSecondaryVisibilityStoreConfig().CustomDataStoreConfig != nil
 }
 
 func (c *Persistence) GetVisibilityStoreConfig() DataStore {
@@ -174,6 +141,8 @@ func (ds *DataStore) GetIndexName() string {
 		return ds.Cassandra.Keyspace
 	case ds.Elasticsearch != nil:
 		return ds.Elasticsearch.GetVisibilityIndex()
+	case ds.CustomDataStoreConfig != nil:
+		return ds.CustomDataStoreConfig.IndexName
 	default:
 		return ""
 	}

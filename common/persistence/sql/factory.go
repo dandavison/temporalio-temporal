@@ -1,27 +1,3 @@
-// The MIT License
-//
-// Copyright (c) 2020 Temporal Technologies Inc.  All rights reserved.
-//
-// Copyright (c) 2020 Uber Technologies, Inc.
-//
-// Permission is hereby granted, free of charge, to any person obtaining a copy
-// of this software and associated documentation files (the "Software"), to deal
-// in the Software without restriction, including without limitation the rights
-// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-// copies of the Software, and to permit persons to whom the Software is
-// furnished to do so, subject to the following conditions:
-//
-// The above copyright notice and this permission notice shall be included in
-// all copies or substantial portions of the Software.
-//
-// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
-// THE SOFTWARE.
-
 package sql
 
 import (
@@ -32,6 +8,7 @@ import (
 	"go.temporal.io/server/common/log"
 	"go.temporal.io/server/common/metrics"
 	p "go.temporal.io/server/common/persistence"
+	"go.temporal.io/server/common/persistence/serialization"
 	"go.temporal.io/server/common/persistence/sql/sqlplugin"
 	"go.temporal.io/server/common/resolver"
 )
@@ -43,6 +20,7 @@ type (
 		mainDBConn  DbConn
 		clusterName string
 		logger      log.Logger
+		serializer  serialization.Serializer
 	}
 
 	// DbConn represents a logical mysql connection - its a
@@ -70,11 +48,13 @@ func NewFactory(
 	clusterName string,
 	logger log.Logger,
 	metricsHandler metrics.Handler,
+	serializer serialization.Serializer,
 ) *Factory {
 	return &Factory{
 		cfg:         cfg,
 		clusterName: clusterName,
 		logger:      logger,
+		serializer:  serializer,
 		mainDBConn:  NewRefCountedDBConn(sqlplugin.DbKindMain, &cfg, r, logger, metricsHandler),
 	}
 }
@@ -94,7 +74,16 @@ func (f *Factory) NewTaskStore() (p.TaskStore, error) {
 	if err != nil {
 		return nil, err
 	}
-	return newTaskPersistence(conn, f.cfg.TaskScanPartitions, f.logger)
+	return newTaskPersistence(conn, f.cfg.TaskScanPartitions, f.logger, false, f.serializer)
+}
+
+// NewFairTaskStore returns a new task store
+func (f *Factory) NewFairTaskStore() (p.TaskStore, error) {
+	conn, err := f.mainDBConn.Get()
+	if err != nil {
+		return nil, err
+	}
+	return newTaskPersistence(conn, f.cfg.TaskScanPartitions, f.logger, true, f.serializer)
 }
 
 // NewShardStore returns a new shard store
@@ -103,7 +92,7 @@ func (f *Factory) NewShardStore() (p.ShardStore, error) {
 	if err != nil {
 		return nil, err
 	}
-	return newShardPersistence(conn, f.clusterName, f.logger)
+	return newShardPersistence(conn, f.clusterName, f.logger, f.serializer)
 }
 
 // NewMetadataStore returns a new metadata store
@@ -112,7 +101,7 @@ func (f *Factory) NewMetadataStore() (p.MetadataStore, error) {
 	if err != nil {
 		return nil, err
 	}
-	return newMetadataPersistenceV2(conn, f.clusterName, f.logger)
+	return newMetadataPersistenceV2(conn, f.clusterName, f.logger, f.serializer)
 }
 
 // NewClusterMetadataStore returns a new ClusterMetadata store
@@ -121,7 +110,7 @@ func (f *Factory) NewClusterMetadataStore() (p.ClusterMetadataStore, error) {
 	if err != nil {
 		return nil, err
 	}
-	return newClusterMetadataPersistence(conn, f.logger)
+	return newClusterMetadataPersistence(conn, f.logger, f.serializer)
 }
 
 // NewExecutionStore returns a new ExecutionStore
@@ -130,7 +119,7 @@ func (f *Factory) NewExecutionStore() (p.ExecutionStore, error) {
 	if err != nil {
 		return nil, err
 	}
-	return NewSQLExecutionStore(conn, f.logger)
+	return NewSQLExecutionStore(conn, f.logger, f.serializer)
 }
 
 // NewQueue returns a new queue backed by sql
@@ -140,7 +129,7 @@ func (f *Factory) NewQueue(queueType p.QueueType) (p.Queue, error) {
 		return nil, err
 	}
 
-	return newQueue(conn, f.logger, queueType)
+	return newQueue(conn, f.logger, queueType, f.serializer)
 }
 
 // NewQueueV2 returns a new data-access object for queues and messages.
@@ -149,7 +138,7 @@ func (f *Factory) NewQueueV2() (p.QueueV2, error) {
 	if err != nil {
 		return nil, err
 	}
-	return NewQueueV2(conn, f.logger), nil
+	return NewQueueV2(conn, f.logger, f.serializer), nil
 }
 
 // NewNexusEndpointStore returns a new NexusEndpointStore
@@ -158,7 +147,7 @@ func (f *Factory) NewNexusEndpointStore() (p.NexusEndpointStore, error) {
 	if err != nil {
 		return nil, err
 	}
-	return NewSqlNexusEndpointStore(conn, f.logger)
+	return NewSqlNexusEndpointStore(conn, f.logger, f.serializer)
 }
 
 // Close closes the factory
@@ -186,8 +175,8 @@ func NewRefCountedDBConn(
 	}
 }
 
-// Get returns a mysql db connection and increments a reference count
-// this method will create a new connection, if an existing connection
+// Get returns a db connection and increments a reference count.
+// This method will create a new connection, if an existing connection
 // does not exist
 func (c *DbConn) Get() (sqlplugin.DB, error) {
 	c.Lock()

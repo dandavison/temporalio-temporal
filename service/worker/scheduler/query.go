@@ -1,25 +1,3 @@
-// The MIT License
-//
-// Copyright (c) 2024 Temporal Technologies Inc.  All rights reserved.
-//
-// Permission is hereby granted, free of charge, to any person obtaining a copy
-// of this software and associated documentation files (the "Software"), to deal
-// in the Software without restriction, including without limitation the rights
-// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-// copies of the Software, and to permit persons to whom the Software is
-// furnished to do so, subject to the following conditions:
-//
-// The above copyright notice and this permission notice shall be included in
-// all copies or substantial portions of the Software.
-//
-// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
-// THE SOFTWARE.
-
 package scheduler
 
 import (
@@ -27,10 +5,13 @@ import (
 	"fmt"
 
 	"go.temporal.io/api/serviceerror"
+	"go.temporal.io/server/chasm"
+	"go.temporal.io/server/common/dynamicconfig"
 	"go.temporal.io/server/common/namespace"
 	"go.temporal.io/server/common/persistence/visibility/store/elasticsearch"
 	"go.temporal.io/server/common/persistence/visibility/store/query"
 	"go.temporal.io/server/common/searchattribute"
+	"go.temporal.io/server/common/searchattribute/sadefs"
 	expmaps "golang.org/x/exp/maps"
 )
 
@@ -54,23 +35,52 @@ func newFieldNameAggInterceptor(
 	saMapperProvider searchattribute.MapperProvider,
 ) *fieldNameAggInterceptor {
 	return &fieldNameAggInterceptor{
-		baseInterceptor: elasticsearch.NewNameInterceptor(namespaceName, saNameType, saMapperProvider),
+		baseInterceptor: elasticsearch.NewNameInterceptor(namespaceName, saNameType, saMapperProvider, nil, chasm.UnspecifiedArchetypeID),
 		names:           make(map[string]bool),
 	}
+}
+
+type saAggInterceptor struct {
+	names map[string]struct{}
+}
+
+var _ query.SearchAttributeInterceptor = (*saAggInterceptor)(nil)
+
+func newSaAggInterceptor() *saAggInterceptor {
+	return &saAggInterceptor{
+		names: make(map[string]struct{}),
+	}
+}
+
+func (i *saAggInterceptor) Intercept(col *query.SAColumn) error {
+	i.names[col.Alias] = struct{}{}
+	return nil
 }
 
 func ValidateVisibilityQuery(
 	namespaceName namespace.Name,
 	saNameType searchattribute.NameTypeMap,
 	saMapperProvider searchattribute.MapperProvider,
+	enableUnifiedQueryConverter dynamicconfig.BoolPropertyFn,
 	queryString string,
 ) error {
-	fields, err := getQueryFields(namespaceName, saNameType, saMapperProvider, queryString)
+	var fields []string
+	var err error
+	if enableUnifiedQueryConverter() {
+		fields, err = getQueryFields(
+			namespaceName,
+			saNameType,
+			saMapperProvider,
+			queryString,
+		)
+	} else {
+		fields, err = getQueryFieldsLegacy(namespaceName, saNameType, saMapperProvider, queryString)
+	}
 	if err != nil {
 		return err
 	}
 	for _, field := range fields {
-		if searchattribute.IsReserved(field) && field != searchattribute.TemporalSchedulePaused {
+		if sadefs.IsReserved(field) && field != sadefs.TemporalSchedulePaused {
 			return serviceerror.NewInvalidArgument(
 				fmt.Sprintf("invalid query filter for schedules: cannot filter on %q", field),
 			)
@@ -85,8 +95,38 @@ func getQueryFields(
 	saMapperProvider searchattribute.MapperProvider,
 	queryString string,
 ) ([]string, error) {
+	saMapper, err := saMapperProvider.GetMapper(namespaceName)
+	if err != nil {
+		return nil, err
+	}
+	saInterceptor := newSaAggInterceptor()
+	queryConverter := query.NewNilQueryConverter(
+		namespaceName,
+		saNameType,
+		saMapper,
+	).WithSearchAttributeInterceptor(saInterceptor)
+	_, err = queryConverter.Convert(queryString)
+	if err != nil {
+		var converterErr *query.ConverterError
+		if errors.As(err, &converterErr) {
+			return nil, converterErr.ToInvalidArgument()
+		}
+		return nil, err
+	}
+	if !queryConverter.SeenNamespaceDivision() {
+		delete(saInterceptor.names, sadefs.TemporalNamespaceDivision)
+	}
+	return expmaps.Keys(saInterceptor.names), nil
+}
+
+func getQueryFieldsLegacy(
+	namespaceName namespace.Name,
+	saNameType searchattribute.NameTypeMap,
+	saMapperProvider searchattribute.MapperProvider,
+	queryString string,
+) ([]string, error) {
 	fnInterceptor := newFieldNameAggInterceptor(namespaceName, saNameType, saMapperProvider)
-	queryConverter := elasticsearch.NewQueryConverter(fnInterceptor, nil, saNameType)
+	queryConverter := elasticsearch.NewQueryConverterLegacy(fnInterceptor, nil, saNameType, nil)
 	_, err := queryConverter.ConvertWhereOrderBy(queryString)
 	if err != nil {
 		var converterErr *query.ConverterError

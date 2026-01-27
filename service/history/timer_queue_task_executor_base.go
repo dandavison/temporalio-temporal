@@ -1,27 +1,3 @@
-// The MIT License
-//
-// Copyright (c) 2020 Temporal Technologies Inc.  All rights reserved.
-//
-// Copyright (c) 2020 Uber Technologies, Inc.
-//
-// Permission is hereby granted, free of charge, to any person obtaining a copy
-// of this software and associated documentation files (the "Software"), to deal
-// in the Software without restriction, including without limitation the rights
-// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-// copies of the Software, and to permit persons to whom the Software is
-// furnished to do so, subject to the following conditions:
-//
-// The above copyright notice and this permission notice shall be included in
-// all copies or substantial portions of the Software.
-//
-// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
-// THE SOFTWARE.
-
 package history
 
 import (
@@ -34,6 +10,7 @@ import (
 	"go.temporal.io/api/serviceerror"
 	enumsspb "go.temporal.io/server/api/enums/v1"
 	persistencespb "go.temporal.io/server/api/persistence/v1"
+	"go.temporal.io/server/chasm"
 	"go.temporal.io/server/common/locks"
 	"go.temporal.io/server/common/log"
 	"go.temporal.io/server/common/log/tag"
@@ -41,40 +18,44 @@ import (
 	"go.temporal.io/server/common/namespace"
 	"go.temporal.io/server/common/persistence"
 	"go.temporal.io/server/common/resource"
+	"go.temporal.io/server/common/util"
 	"go.temporal.io/server/service/history/configs"
 	"go.temporal.io/server/service/history/consts"
 	"go.temporal.io/server/service/history/deletemanager"
 	"go.temporal.io/server/service/history/hsm"
+	historyi "go.temporal.io/server/service/history/interfaces"
 	"go.temporal.io/server/service/history/queues"
-	"go.temporal.io/server/service/history/shard"
+	queueserrors "go.temporal.io/server/service/history/queues/errors"
 	"go.temporal.io/server/service/history/tasks"
-	"go.temporal.io/server/service/history/workflow"
 	wcache "go.temporal.io/server/service/history/workflow/cache"
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
 var (
-	errNoTimerFired = serviceerror.NewNotFound("no expired timer to fire found")
+	errNoTimerFired        = serviceerror.NewNotFound("no expired timer to fire found")
+	errNoChasmTree         = serviceerror.NewInternal("mutable state associated with CHASM task has no CHASM tree")
+	errNoChasmMutableState = serviceerror.NewInternal("mutable state couldn't be loaded for a CHASM task")
 )
 
 type (
 	timerQueueTaskExecutorBase struct {
 		stateMachineEnvironment
+		chasmEngine        chasm.Engine
 		currentClusterName string
 		registry           namespace.Registry
 		deleteManager      deletemanager.DeleteManager
 		matchingRawClient  resource.MatchingRawClient
 		config             *configs.Config
-		metricHandler      metrics.Handler
 		isActive           bool
 	}
 )
 
 func newTimerQueueTaskExecutorBase(
-	shardContext shard.Context,
+	shardContext historyi.ShardContext,
 	workflowCache wcache.Cache,
 	deleteManager deletemanager.DeleteManager,
 	matchingRawClient resource.MatchingRawClient,
+	chasmEngine chasm.Engine,
 	logger log.Logger,
 	metricsHandler metrics.Handler,
 	config *configs.Config,
@@ -89,10 +70,10 @@ func newTimerQueueTaskExecutorBase(
 		},
 		currentClusterName: shardContext.GetClusterMetadata().GetCurrentClusterName(),
 		registry:           shardContext.GetNamespaceRegistry(),
+		chasmEngine:        chasmEngine,
 		deleteManager:      deleteManager,
 		matchingRawClient:  matchingRawClient,
 		config:             config,
-		metricHandler:      metricsHandler,
 		isActive:           isActive,
 	}
 }
@@ -109,11 +90,16 @@ func (t *timerQueueTaskExecutorBase) executeDeleteHistoryEventTask(
 		RunId:      task.GetRunID(),
 	}
 
-	weContext, release, err := t.cache.GetOrCreateWorkflowExecution(
+	if task.ArchetypeID == chasm.UnspecifiedArchetypeID {
+		task.ArchetypeID = chasm.WorkflowArchetypeID
+	}
+
+	weContext, release, err := t.cache.GetOrCreateChasmExecution(
 		ctx,
 		t.shardContext,
 		namespace.ID(task.GetNamespaceID()),
 		workflowExecution,
+		task.ArchetypeID,
 		locks.PriorityLow,
 	)
 	if err != nil {
@@ -174,32 +160,33 @@ func (t *timerQueueTaskExecutorBase) deleteHistoryBranch(
 }
 
 func (t *timerQueueTaskExecutorBase) isValidExpirationTime(
-	mutableState workflow.MutableState,
+	mutableState historyi.MutableState,
+	task tasks.Task,
 	expirationTime *timestamppb.Timestamp,
 ) bool {
 	if !mutableState.IsWorkflowExecutionRunning() {
 		return false
 	}
 
-	now := t.shardContext.GetTimeSource().Now()
+	now := t.Now()
 	taskShouldTriggerAt := expirationTime.AsTime()
-	expired := queues.IsTimeExpired(now, taskShouldTriggerAt)
+	expired := queues.IsTimeExpired(task, now, taskShouldTriggerAt)
 	return expired
-
 }
 
 func (t *timerQueueTaskExecutorBase) isValidWorkflowRunTimeoutTask(
-	mutableState workflow.MutableState,
+	mutableState historyi.MutableState,
+	task *tasks.WorkflowRunTimeoutTask,
 ) bool {
 	executionInfo := mutableState.GetExecutionInfo()
 
 	// Check if workflow execution timeout is not expired
 	// This can happen if the workflow is reset but old timer task is still fired.
-	return t.isValidExpirationTime(mutableState, executionInfo.WorkflowRunExpirationTime)
+	return t.isValidExpirationTime(mutableState, task, executionInfo.WorkflowRunExpirationTime)
 }
 
 func (t *timerQueueTaskExecutorBase) isValidWorkflowExecutionTimeoutTask(
-	mutableState workflow.MutableState,
+	mutableState historyi.MutableState,
 	task *tasks.WorkflowExecutionTimeoutTask,
 ) bool {
 
@@ -212,32 +199,32 @@ func (t *timerQueueTaskExecutorBase) isValidWorkflowExecutionTimeoutTask(
 	// Check if workflow execution timeout is not expired
 	// This can happen if the workflow is reset since reset re-calculates
 	// the execution timeout but shares the same firstRunID as the base run
-	return t.isValidExpirationTime(mutableState, executionInfo.WorkflowExecutionExpirationTime)
+	return t.isValidExpirationTime(mutableState, task, executionInfo.WorkflowExecutionExpirationTime)
 
 	// NOTE: we don't need to do version check here because if we were to do it, we need to compare the task version
 	// and the start version in the first run. However, failover & conflict resolution will never change
 	// the first event of a workflowID (the history tree model we are using always share at least one node),
 	// meaning start version check will always pass.
-	// Also there's no way we can perform version check before first run may already be deleted due to retention
+	// Also, there's no way we can perform version check before first run may already be deleted due to retention
 }
 
 func (t *timerQueueTaskExecutorBase) executeSingleStateMachineTimer(
 	ctx context.Context,
-	workflowContext workflow.Context,
-	ms workflow.MutableState,
+	workflowContext historyi.WorkflowContext,
+	ms historyi.MutableState,
 	deadline time.Time,
 	timer *persistencespb.StateMachineTaskInfo,
 	execute func(node *hsm.Node, task hsm.Task) error,
 ) error {
 	def, ok := t.shardContext.StateMachineRegistry().TaskSerializer(timer.Type)
 	if !ok {
-		return queues.NewUnprocessableTaskError(fmt.Sprintf("deserializer not registered for task type %v", timer.Type))
+		return queueserrors.NewUnprocessableTaskError(fmt.Sprintf("deserializer not registered for task type %v", timer.Type))
 	}
 	smt, err := def.Deserialize(timer.Data, hsm.TaskAttributes{Deadline: deadline})
 	if err != nil {
 		return fmt.Errorf(
 			"%w: %w",
-			queues.NewUnprocessableTaskError(fmt.Sprintf("cannot deserialize task %v", timer.Type)),
+			queueserrors.NewUnprocessableTaskError(fmt.Sprintf("cannot deserialize task %v", timer.Type)),
 			err,
 		)
 	}
@@ -265,12 +252,42 @@ func (t *timerQueueTaskExecutorBase) executeSingleStateMachineTimer(
 	return nil
 }
 
-// executeStateMachineTimers gets the state machine timers, processed the expired timers,
-// and return a slice of unprocessed timers.
+// executeChasmPureTimers walks a CHASM tree for expired pure task timers,
+// executes them, and returns a count of timers processed.
+func (t *timerQueueTaskExecutorBase) executeChasmPureTimers(
+	ms historyi.MutableState,
+	task *tasks.ChasmTaskPure,
+	callback func(node chasm.NodePureTask, taskAttributes chasm.TaskAttributes, task any) (bool, error),
+) error {
+	// Because CHASM timers can target closed workflows, we need to specifically
+	// exclude zombie workflows, instead of merely checking that the workflow is
+	// running.
+	if ms.GetExecutionState().State == enumsspb.WORKFLOW_EXECUTION_STATE_ZOMBIE {
+		return consts.ErrWorkflowZombie
+	}
+
+	tree := ms.ChasmTree()
+	if tree == nil {
+		return errNoChasmTree
+	}
+
+	// Because the persistence layer can lose precision on the task compared to the
+	// physical task stored in the queue, we take the max of both here. Time is also
+	// truncated to a common (millisecond) precision later on.
+	//
+	// See also queues.IsTimeExpired.
+	referenceTime := util.MaxTime(t.Now(), task.GetKey().FireTime)
+
+	return tree.EachPureTask(referenceTime, callback)
+}
+
+// executeStateMachineTimers gets the state machine timers, processes the expired timers,
+// and returns a count of timers processed.
 func (t *timerQueueTaskExecutorBase) executeStateMachineTimers(
 	ctx context.Context,
-	workflowContext workflow.Context,
-	ms workflow.MutableState,
+	workflowContext historyi.WorkflowContext,
+	ms historyi.MutableState,
+	task *tasks.StateMachineTimerTask,
 	execute func(node *hsm.Node, task hsm.Task) error,
 ) (int, error) {
 
@@ -287,7 +304,7 @@ func (t *timerQueueTaskExecutorBase) executeStateMachineTimers(
 	// StateMachineTimers are sorted by Deadline, iterate through them as long as the deadline is expired.
 	for len(timers) > 0 {
 		group := timers[0]
-		if !queues.IsTimeExpired(t.Now(), group.Deadline.AsTime()) {
+		if !queues.IsTimeExpired(task, t.Now(), group.Deadline.AsTime()) {
 			break
 		}
 
@@ -296,7 +313,7 @@ func (t *timerQueueTaskExecutorBase) executeStateMachineTimers(
 			if err != nil {
 				// This includes errors such as ErrStaleReference and ErrWorkflowCompleted.
 				if !errors.As(err, new(*serviceerror.NotFound)) {
-					metrics.StateMachineTimerProcessingFailuresCounter.With(t.metricHandler).Record(
+					metrics.StateMachineTimerProcessingFailuresCounter.With(t.metricsHandler).Record(
 						1,
 						metrics.OperationTag(queues.GetTimerStateMachineTaskTypeTagValue(timer.GetType(), t.isActive)),
 						metrics.ServiceErrorTypeTag(err),
@@ -306,7 +323,7 @@ func (t *timerQueueTaskExecutorBase) executeStateMachineTimers(
 					// tasks to be stuck. We'll accept this limitation for now.
 					return 0, err
 				}
-				metrics.StateMachineTimerSkipsCounter.With(t.metricHandler).Record(
+				metrics.StateMachineTimerSkipsCounter.With(t.metricsHandler).Record(
 					1,
 					metrics.OperationTag(queues.GetTimerStateMachineTaskTypeTagValue(timer.GetType(), t.isActive)),
 				)

@@ -1,28 +1,4 @@
-// The MIT License
-//
-// Copyright (c) 2020 Temporal Technologies Inc.  All rights reserved.
-//
-// Copyright (c) 2020 Uber Technologies, Inc.
-//
-// Permission is hereby granted, free of charge, to any person obtaining a copy
-// of this software and associated documentation files (the "Software"), to deal
-// in the Software without restriction, including without limitation the rights
-// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-// copies of the Software, and to permit persons to whom the Software is
-// furnished to do so, subject to the following conditions:
-//
-// The above copyright notice and this permission notice shall be included in
-// all copies or substantial portions of the Software.
-//
-// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
-// THE SOFTWARE.
-
-//go:generate mockgen -copyright_file ../../LICENSE -package $GOPACKAGE -source $GOFILE -destination data_interfaces_mock.go
+//go:generate mockgen -package $GOPACKAGE -source $GOFILE -destination data_interfaces_mock.go
 
 package persistence
 
@@ -33,16 +9,20 @@ import (
 	"strings"
 	"time"
 
-	"github.com/pborman/uuid"
 	commonpb "go.temporal.io/api/common/v1"
 	enumspb "go.temporal.io/api/enums/v1"
 	historypb "go.temporal.io/api/history/v1"
 	enumsspb "go.temporal.io/server/api/enums/v1"
 	persistencespb "go.temporal.io/server/api/persistence/v1"
+	"go.temporal.io/server/chasm"
+	"go.temporal.io/server/common/namespace"
 	"go.temporal.io/server/common/persistence/serialization"
 	"go.temporal.io/server/service/history/tasks"
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
+
+// Archetype is a type alias for chasm.Archetype to avoid circular dependency.
+type Archetype = chasm.Archetype
 
 // CreateWorkflowMode workflow creation mode
 type CreateWorkflowMode int
@@ -82,6 +62,12 @@ const (
 	// UpdateWorkflowModeBypassCurrent update workflow, without current record
 	// NOTE: current record CANNOT point to the workflow to be updated
 	UpdateWorkflowModeBypassCurrent
+	// UpdateWorkflowModeIgnoreCurrent update workflow, without checking or update current record.
+	// This mode should only be used when we don't know if the workflow being updated is the current workflow or not in DB.
+	// For example, when updating a closed workflow, it may or may not be the current workflow.
+	// This is similar to SetWorkflowExecution, but UpdateWorkflowExecution with this mode persists the workflow as a mutation,
+	// instead of a snapshot.
+	UpdateWorkflowModeIgnoreCurrent
 )
 
 // ConflictResolveWorkflowMode conflict resolve mode
@@ -107,7 +93,11 @@ const (
 
 const numItemsInGarbageInfo = 3
 
-const ScheduledTaskMinPrecision = time.Millisecond
+const (
+	NamespaceWatchEventTypeCreate NamespaceWatchEventType = iota
+	NamespaceWatchEventTypeUpdate
+	NamespaceWatchEventTypeDelete
+)
 
 type (
 	// InvalidPersistenceRequestError represents invalid request to persistence
@@ -122,8 +112,11 @@ type (
 
 	// CurrentWorkflowConditionFailedError represents a failed conditional update for current workflow record
 	CurrentWorkflowConditionFailedError struct {
-		Msg              string
-		RequestID        string
+		Msg string
+		// RequestIDs contains all request IDs associated with the workflow execution, ie., contain the
+		// request ID that started the workflow execution as well as the request IDs that were attached
+		// to the workflow execution when it was running.
+		RequestIDs       map[string]*persistencespb.RequestIDInfo
 		RunID            string
 		State            enumsspb.WorkflowExecutionState
 		Status           enumspb.WorkflowExecutionStatus
@@ -203,6 +196,7 @@ type (
 
 		NamespaceID string
 		WorkflowID  string
+		ArchetypeID chasm.ArchetypeID
 
 		Tasks map[tasks.Category][]tasks.Task
 	}
@@ -216,6 +210,8 @@ type (
 
 		PreviousRunID            string
 		PreviousLastWriteVersion int64
+
+		ArchetypeID chasm.ArchetypeID
 
 		NewWorkflowSnapshot WorkflowSnapshot
 		NewWorkflowEvents   []*WorkflowEvents
@@ -232,6 +228,8 @@ type (
 		RangeID int64
 
 		Mode UpdateWorkflowMode
+
+		ArchetypeID chasm.ArchetypeID
 
 		UpdateWorkflowMutation WorkflowMutation
 		UpdateWorkflowEvents   []*WorkflowEvents
@@ -251,6 +249,8 @@ type (
 		RangeID int64
 
 		Mode ConflictResolveWorkflowMode
+
+		ArchetypeID chasm.ArchetypeID
 
 		// workflow to be resetted
 		ResetWorkflowSnapshot WorkflowSnapshot
@@ -276,6 +276,7 @@ type (
 		ShardID     int32
 		NamespaceID string
 		WorkflowID  string
+		ArchetypeID chasm.ArchetypeID
 	}
 
 	// GetCurrentExecutionResponse is the response to GetCurrentExecution
@@ -292,6 +293,7 @@ type (
 		NamespaceID string
 		WorkflowID  string
 		RunID       string
+		ArchetypeID chasm.ArchetypeID
 	}
 
 	// GetWorkflowExecutionResponse is the response to GetWorkflowExecutionRequest
@@ -305,6 +307,8 @@ type (
 	SetWorkflowExecutionRequest struct {
 		ShardID int32
 		RangeID int64
+
+		ArchetypeID chasm.ArchetypeID
 
 		SetWorkflowSnapshot WorkflowSnapshot
 	}
@@ -356,10 +360,13 @@ type (
 		DeleteSignalInfos         map[int64]struct{}
 		UpsertSignalRequestedIDs  map[string]struct{}
 		DeleteSignalRequestedIDs  map[string]struct{}
+		UpsertChasmNodes          map[string]*persistencespb.ChasmNode
+		DeleteChasmNodes          map[string]struct{}
 		NewBufferedEvents         []*historypb.HistoryEvent
 		ClearBufferedEvents       bool
 
-		Tasks map[tasks.Category][]tasks.Task
+		Tasks                 map[tasks.Category][]tasks.Task
+		BestEffortDeleteTasks map[tasks.Category][]tasks.Key
 
 		// TODO deprecate Condition in favor of DBRecordVersion
 		Condition       int64
@@ -380,6 +387,7 @@ type (
 		RequestCancelInfos  map[int64]*persistencespb.RequestCancelInfo
 		SignalInfos         map[int64]*persistencespb.SignalInfo
 		SignalRequestedIDs  map[string]struct{}
+		ChasmNodes          map[string]*persistencespb.ChasmNode
 
 		Tasks map[tasks.Category][]tasks.Task
 
@@ -395,6 +403,7 @@ type (
 		NamespaceID string
 		WorkflowID  string
 		RunID       string
+		ArchetypeID chasm.ArchetypeID
 	}
 
 	// DeleteCurrentWorkflowExecutionRequest is used to delete the current workflow execution
@@ -403,6 +412,7 @@ type (
 		NamespaceID string
 		WorkflowID  string
 		RunID       string
+		ArchetypeID chasm.ArchetypeID
 	}
 
 	// GetHistoryTasksRequest is used to get a range of history tasks
@@ -428,6 +438,9 @@ type (
 		ShardID      int32
 		TaskCategory tasks.Category
 		TaskKey      tasks.Key
+
+		// BestEffort indicates that this request is a suggestion. System may choose to ignore it without error.
+		BestEffort bool
 	}
 
 	// RangeCompleteHistoryTasksRequest deletes a range of history tasks
@@ -523,13 +536,26 @@ type (
 		UserData *persistencespb.VersionedTaskQueueUserData
 	}
 
-	// UpdateTaskQueueUserDataRequest is the input type for the UpdateTaskQueueUserData API
+	// UpdateTaskQueueUserDataRequest is the input type for the UpdateTaskQueueUserData API.
+	// This updates user data for multiple task queues in one namespace.
 	UpdateTaskQueueUserDataRequest struct {
-		NamespaceID     string
-		TaskQueue       string
+		NamespaceID string
+		Updates     map[string]*SingleTaskQueueUserDataUpdate // key is task queue name
+	}
+
+	SingleTaskQueueUserDataUpdate struct {
 		UserData        *persistencespb.VersionedTaskQueueUserData
 		BuildIdsAdded   []string
 		BuildIdsRemoved []string
+		// If Applied is non-nil, and this single update succeeds (while others may have
+		// failed), then it will be set to true.
+		Applied *bool
+		// If Conflicting is non-nil, and this single update fails due to a version conflict,
+		// then it will be set to true. Conflicting updates should not be retried.
+		// Note that even if Conflicting is not set to true, the update may still be
+		// conflicting, because persistence implementations may only be able to identify the
+		// first conflict in a set.
+		Conflicting *bool
 	}
 
 	ListTaskQueueUserDataEntriesRequest struct {
@@ -580,10 +606,14 @@ type (
 	CreateTasksRequest struct {
 		TaskQueueInfo *PersistedTaskQueueInfo
 		Tasks         []*persistencespb.AllocatedTaskInfo
+		// If Subqueues is present, it should be the same size as Tasks and hold the subqueue
+		// indexes that each task should be added to.
+		Subqueues []int
 	}
 
 	// CreateTasksResponse is the response to CreateTasksRequest
 	CreateTasksResponse struct {
+		UpdatedMetadata bool
 	}
 
 	PersistedTaskQueueInfo struct {
@@ -593,12 +623,18 @@ type (
 
 	// GetTasksRequest is used to retrieve tasks of a task queue
 	GetTasksRequest struct {
-		NamespaceID        string
-		TaskQueue          string
-		TaskType           enumspb.TaskQueueType
+		NamespaceID string
+		TaskQueue   string
+		TaskType    enumspb.TaskQueueType
+		// If InclusiveMinPass is set, return tasks greater or equal to <InclusiveMinPass,
+		// InclusiveMinTaskID> with no upper bound. InclusiveMinPass must be >= 1 for fair task
+		// manager and must be 0 for classic task manager.
+		InclusiveMinPass   int64
 		InclusiveMinTaskID int64
 		ExclusiveMaxTaskID int64
+		Subqueue           int
 		PageSize           int
+		UseLimit           bool // If true, use LIMIT in the query
 		NextPageToken      []byte
 	}
 
@@ -608,19 +644,15 @@ type (
 		NextPageToken []byte
 	}
 
-	// CompleteTaskRequest is used to complete a task
-	CompleteTaskRequest struct {
-		TaskQueue *TaskQueueKey
-		TaskID    int64
-	}
-
 	// CompleteTasksLessThanRequest contains the request params needed to invoke CompleteTasksLessThan API
 	CompleteTasksLessThanRequest struct {
 		NamespaceID        string
 		TaskQueueName      string
 		TaskType           enumspb.TaskQueueType
+		ExclusiveMaxPass   int64 // If set, delete tasks less than <ExclusiveMaxPass, ExclusiveMaxTaskID>
 		ExclusiveMaxTaskID int64 // Tasks less than this ID will be completed
-		Limit              int   // Limit on the max number of tasks that can be completed. Required param
+		Subqueue           int
+		Limit              int // Limit on the max number of tasks that can be completed. Required param
 	}
 
 	// CreateNamespaceRequest is used to create the namespace
@@ -704,6 +736,7 @@ type (
 		SignalInfoSize        int
 		SignalRequestIDSize   int
 		BufferedEventsSize    int
+		ChasmTotalSize        int // total size of all CHASM nodes within a record
 		// UpdateInfoSize is included in ExecutionInfoSize
 
 		// Item count for various information captured within mutable state
@@ -981,7 +1014,7 @@ type (
 	GetClusterMembersRequest struct {
 		LastHeartbeatWithin time.Duration
 		RPCAddressEquals    net.IP
-		HostIDEquals        uuid.UUID
+		HostIDEquals        []byte
 		RoleEquals          ServiceType
 		SessionStartedAfter time.Time
 		NextPageToken       []byte
@@ -997,7 +1030,7 @@ type (
 	// ClusterMember is used as a response to GetClusterMembers
 	ClusterMember struct {
 		Role          ServiceType
-		HostID        uuid.UUID
+		HostID        []byte
 		RPCAddress    net.IP
 		RPCPort       uint16
 		SessionStart  time.Time
@@ -1008,7 +1041,7 @@ type (
 	// UpsertClusterMembershipRequest is the request to UpsertClusterMembership
 	UpsertClusterMembershipRequest struct {
 		Role         ServiceType
-		HostID       uuid.UUID
+		HostID       []byte
 		RPCAddress   net.IP
 		RPCPort      uint16
 		SessionStart time.Time
@@ -1048,6 +1081,15 @@ type (
 	DeleteNexusEndpointRequest struct {
 		LastKnownTableVersion int64
 		ID                    string
+	}
+
+	NamespaceWatchEventType int
+
+	NamespaceWatchEvent struct {
+		Type        NamespaceWatchEventType
+		Response    *GetNamespaceResponse
+		NamespaceID namespace.ID
+		Err         error
 	}
 
 	// Closeable is an interface for any entity that supports a close operation to release resources
@@ -1152,15 +1194,19 @@ type (
 		// This data would only exist if a user uses APIs that generate it, such as the worker versioning related APIs.
 		// The caller should be prepared to gracefully handle the "NotFound" service error.
 		GetTaskQueueUserData(ctx context.Context, request *GetTaskQueueUserDataRequest) (*GetTaskQueueUserDataResponse, error)
-		// UpdateTaskQueueUserData updates the user data for a given task queue.
+		// UpdateTaskQueueUserData updates the user data for a set of task queues in one namespace.
 		// The request takes the _current_ known version along with the data to update.
 		// The caller should +1 increment the cached version number if this call succeeds.
-		// Fails with ConditionFailedError if the user data was updated concurrently.
+		// For efficiency, the store should attempt to perform these updates in as few
+		// transactions as possible.
+		// Returns an error if any individual update fails. The Applied/Conflicting fields of
+		// the individual updates may provide more information in that case.
 		UpdateTaskQueueUserData(ctx context.Context, request *UpdateTaskQueueUserDataRequest) error
 		ListTaskQueueUserDataEntries(ctx context.Context, request *ListTaskQueueUserDataEntriesRequest) (*ListTaskQueueUserDataEntriesResponse, error)
 		GetTaskQueuesByBuildId(ctx context.Context, request *GetTaskQueuesByBuildIdRequest) ([]string, error)
 		CountTaskQueuesByBuildId(ctx context.Context, request *CountTaskQueuesByBuildIdRequest) (int, error)
 	}
+	FairTaskManager TaskManager
 
 	// MetadataManager is used to manage metadata CRUD for namespace entities
 	MetadataManager interface {
@@ -1175,6 +1221,7 @@ type (
 		ListNamespaces(ctx context.Context, request *ListNamespacesRequest) (*ListNamespacesResponse, error)
 		GetMetadata(ctx context.Context) (*GetMetadataResponse, error)
 		InitializeSystemNamespaces(ctx context.Context, currentClusterName string) error
+		WatchNamespaces(ctx context.Context) (<-chan *NamespaceWatchEvent, error)
 	}
 
 	// ClusterMetadataManager is used to manage cluster-wide metadata and configuration
@@ -1373,15 +1420,16 @@ func BuildHistoryGarbageCleanupInfo(namespaceID, workflowID, runID string) strin
 
 // SplitHistoryGarbageCleanupInfo returns workflow identity information
 func SplitHistoryGarbageCleanupInfo(info string) (namespaceID, workflowID, runID string, err error) {
-	ss := strings.Split(info, ":")
-	// workflowID can contain ":" so len(ss) can be greater than 3
-	if len(ss) < numItemsInGarbageInfo {
-		return "", "", "", fmt.Errorf("not able to split info for  %s", info)
+	// Expect format: namespaceID:workflowID:runID, but workflowID may contain ':' so we
+	// take everything between the first and last ':' as workflowID.
+	first := strings.IndexByte(info, ':')
+	last := strings.LastIndexByte(info, ':')
+	if first < 0 || first == last { // need at least two ':' to have 3 parts
+		return "", "", "", fmt.Errorf("not able to split info for %s", info)
 	}
-	namespaceID = ss[0]
-	runID = ss[len(ss)-1]
-	workflowEnd := len(info) - len(runID) - 1
-	workflowID = info[len(namespaceID)+1 : workflowEnd]
+	namespaceID = info[:first]
+	workflowID = info[first+1 : last]
+	runID = info[last+1:]
 	return
 }
 

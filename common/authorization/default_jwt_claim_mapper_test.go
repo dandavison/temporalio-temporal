@@ -1,27 +1,3 @@
-// The MIT License
-//
-// Copyright (c) 2020 Temporal Technologies Inc.  All rights reserved.
-//
-// Copyright (c) 2020 Uber Technologies, Inc.
-//
-// Permission is hereby granted, free of charge, to any person obtaining a copy
-// of this software and associated documentation files (the "Software"), to deal
-// in the Software without restriction, including without limitation the rights
-// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-// copies of the Software, and to permit persons to whom the Software is
-// furnished to do so, subject to the following conditions:
-//
-// The above copyright notice and this permission notice shall be included in
-// all copies or substantial portions of the Software.
-//
-// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
-// THE SOFTWARE.
-
 package authorization
 
 import (
@@ -209,6 +185,24 @@ func (s *defaultClaimMapperSuite) testTokenWithReaderWriterWorkerPermissions(alg
 	defaultRole := claims.Namespaces[defaultNamespace]
 	s.Equal(RoleReader|RoleWriter|RoleWorker, defaultRole)
 }
+
+func (s *defaultClaimMapperSuite) TestTokenWithReaderWriterWorkerPermissionsRegex() {
+	permissions := []string{"read:default", "write:default", "worker:default"}
+	tokenString, err := s.tokenGenerator.generateToken(RSA, testSubject, permissions, errorTestOptionNoError)
+	s.NoError(err)
+	authConfig := &config.Authorization{PermissionsRegex: `(?P<role>\w+):(?P<namespace>\w+)`}
+	claimMapper := NewDefaultJWTClaimMapper(s.tokenGenerator, authConfig, log.NewNoopLogger())
+	s.NotNil(claimMapper)
+	authInfo := &AuthInfo{AuthToken: AddBearer(tokenString), Audience: "test-audience"}
+	claims, err := claimMapper.GetClaims(authInfo)
+	s.NoError(err)
+	s.Equal(testSubject, claims.Subject)
+	s.Equal(RoleUndefined, claims.System)
+	s.Equal(1, len(claims.Namespaces))
+	defaultRole := claims.Namespaces[defaultNamespace]
+	s.Equal(RoleReader|RoleWriter|RoleWorker, defaultRole)
+}
+
 func (s *defaultClaimMapperSuite) TestGetClaimMapperFromConfigNoop() {
 	s.testGetClaimMapperFromConfig("", true, reflect.TypeOf(&noopClaimMapper{}))
 }
@@ -218,6 +212,55 @@ func (s *defaultClaimMapperSuite) TestGetClaimMapperFromConfigDefault() {
 
 func (s *defaultClaimMapperSuite) TestGetClaimMapperFromConfigUnknown() {
 	s.testGetClaimMapperFromConfig("foo", false, nil)
+}
+
+func (s *defaultClaimMapperSuite) TestGetClaimMapperWithPermissionsRegexInvalidRegex() {
+	pattern := `(?P<namespace\w+):(?P<role>\w+)`
+	mapper := NewDefaultJWTClaimMapper(nil, &config.Authorization{PermissionsRegex: pattern}, log.NewNoopLogger()).(*defaultJWTClaimMapper)
+	s.Nil(mapper.permissionsRegex)
+	s.Zero(mapper.matchNamespaceIndex)
+	s.Zero(mapper.matchRoleIndex)
+}
+
+func (s *defaultClaimMapperSuite) TestGetClaimMapperWithPermissionsRegexMissingNamespaceGroup() {
+	pattern := `(?P<role>\w+):(\w+)`
+	mapper := NewDefaultJWTClaimMapper(
+		nil, &config.Authorization{PermissionsRegex: pattern}, log.NewNoopLogger(),
+	).(*defaultJWTClaimMapper)
+	s.Nil(mapper.permissionsRegex)
+}
+
+func (s *defaultClaimMapperSuite) TestGetClaimMapperWithPermissionsRegexMissingRoleGroup() {
+	pattern := `(?P<namespace>\w+):(\w+)`
+	mapper := NewDefaultJWTClaimMapper(
+		nil, &config.Authorization{PermissionsRegex: pattern}, log.NewNoopLogger(),
+	).(*defaultJWTClaimMapper)
+	s.Nil(mapper.permissionsRegex)
+}
+
+func (s *defaultClaimMapperSuite) TestGetClaimMapperWithPermissionsRegex() {
+	authConfig := &config.Authorization{PermissionsRegex: `(?P<role>\w+):(?P<namespace>\w+)`}
+	mapper := NewDefaultJWTClaimMapper(nil, authConfig, nil).(*defaultJWTClaimMapper)
+	s.NotNil(mapper.permissionsRegex)
+	s.NotZero(mapper.matchNamespaceIndex)
+	s.NotZero(mapper.matchRoleIndex)
+}
+
+func (s *defaultClaimMapperSuite) TestTokenWithAdminPermissionsRegex() {
+	permissions := []string{"admin:" + primitives.SystemLocalNamespace, "read:default"}
+	pattern := `(?P<role>[\w-]+):(?P<namespace>[\w-]+)`
+	tokenString, err := s.tokenGenerator.generateToken(RSA, testSubject, permissions, errorTestOptionNoError)
+	s.NoError(err)
+	authInfo := &AuthInfo{AuthToken: AddBearer(tokenString)}
+	authConfig := &config.Authorization{PermissionsRegex: pattern}
+	claimMapper := NewDefaultJWTClaimMapper(s.tokenGenerator, authConfig, nil)
+	claims, err := claimMapper.GetClaims(authInfo)
+	s.NoError(err)
+	s.Equal(testSubject, claims.Subject)
+	s.Equal(RoleAdmin, claims.System)
+	s.Equal(1, len(claims.Namespaces))
+	defaultRole := claims.Namespaces[defaultNamespace]
+	s.Equal(RoleReader, defaultRole)
 }
 
 func (s *defaultClaimMapperSuite) TestWrongAudience() {

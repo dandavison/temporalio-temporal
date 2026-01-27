@@ -1,27 +1,3 @@
-// The MIT License
-//
-// Copyright (c) 2020 Temporal Technologies Inc.  All rights reserved.
-//
-// Copyright (c) 2020 Uber Technologies, Inc.
-//
-// Permission is hereby granted, free of charge, to any person obtaining a copy
-// of this software and associated documentation files (the "Software"), to deal
-// in the Software without restriction, including without limitation the rights
-// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-// copies of the Software, and to permit persons to whom the Software is
-// furnished to do so, subject to the following conditions:
-//
-// The above copyright notice and this permission notice shall be included in
-// all copies or substantial portions of the Software.
-//
-// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
-// THE SOFTWARE.
-
 package historyrequire
 
 import (
@@ -76,7 +52,9 @@ func (h HistoryRequire) EqualHistoryEvents(expectedHistory string, actualHistory
 
 	expectedHistoryEvents, expectedEventsAttributes := h.parseHistory(expectedHistory)
 
-	require.Equalf(h.t, len(expectedHistoryEvents), len(actualHistoryEvents), "Length of expected(%d) and actual(%d) histories is not equal", len(expectedHistoryEvents), len(actualHistoryEvents))
+	require.Equalf(h.t, len(expectedHistoryEvents), len(actualHistoryEvents),
+		"Length of expected(%d) and actual(%d) histories is not equal - actual history: \n%v",
+		len(expectedHistoryEvents), len(actualHistoryEvents), h.formatHistoryEvents(actualHistoryEvents, true))
 
 	h.equalHistoryEvents(expectedHistoryEvents, expectedEventsAttributes, actualHistoryEvents)
 }
@@ -88,7 +66,9 @@ func (h HistoryRequire) EqualHistoryEventsSuffix(expectedHistorySuffix string, a
 
 	expectedHistoryEvents, expectedEventsAttributes := h.parseHistory(expectedHistorySuffix)
 
-	require.GreaterOrEqualf(h.t, len(actualHistoryEvents), len(expectedHistoryEvents), "Length of actual history(%d) must be greater or equal to the length of expected history suffix(%d)", len(actualHistoryEvents), len(expectedHistoryEvents))
+	require.GreaterOrEqualf(h.t, len(actualHistoryEvents), len(expectedHistoryEvents),
+		"Length of actual history(%d) must be greater or equal to the length of expected history suffix(%d) - actual history: \n%v",
+		len(actualHistoryEvents), len(expectedHistoryEvents), h.formatHistoryEvents(actualHistoryEvents, true))
 
 	h.equalHistoryEvents(expectedHistoryEvents, expectedEventsAttributes, actualHistoryEvents[len(actualHistoryEvents)-len(expectedHistoryEvents):])
 }
@@ -100,7 +80,9 @@ func (h HistoryRequire) EqualHistoryEventsPrefix(expectedHistoryPrefix string, a
 
 	expectedHistoryEvents, expectedEventsAttributes := h.parseHistory(expectedHistoryPrefix)
 
-	require.GreaterOrEqualf(h.t, len(actualHistoryEvents), len(expectedHistoryEvents), "Length of actual history(%d) must be greater or equal to the length of expected history prefix(%d)", len(actualHistoryEvents), len(expectedHistoryEvents))
+	require.GreaterOrEqualf(h.t, len(actualHistoryEvents), len(expectedHistoryEvents),
+		"Length of actual history(%d) must be greater or equal to the length of expected history prefix(%d) - actual history: \n%v",
+		len(actualHistoryEvents), len(expectedHistoryEvents), h.formatHistoryEvents(actualHistoryEvents, true))
 
 	h.equalHistoryEvents(expectedHistoryEvents, expectedEventsAttributes, actualHistoryEvents[:len(expectedHistoryEvents)])
 }
@@ -114,7 +96,9 @@ func (h HistoryRequire) ContainsHistoryEvents(expectedHistorySegment string, act
 
 	expectedHistoryEvents, expectedEventsAttributes := h.parseHistory(expectedHistorySegment)
 
-	require.GreaterOrEqualf(h.t, len(actualHistoryEvents), len(expectedHistoryEvents), "Length of actual history(%d) must be greater or equal to the length of expected history segment(%d)", len(actualHistoryEvents), len(expectedHistoryEvents))
+	require.GreaterOrEqualf(h.t, len(actualHistoryEvents), len(expectedHistoryEvents),
+		"Length of actual history(%d) must be greater or equal to the length of expected history segment(%d) - actual history: \n%v",
+		len(actualHistoryEvents), len(expectedHistoryEvents), h.formatHistoryEvents(actualHistoryEvents, true))
 
 	h.containsHistoryEvents(expectedHistoryEvents, expectedEventsAttributes, actualHistoryEvents)
 }
@@ -127,9 +111,11 @@ func (h HistoryRequire) WaitForHistoryEvents(expectedHistory string, actualHisto
 	expectedHistoryEvents, expectedEventsAttributes := h.parseHistory(expectedHistory)
 
 	var actualHistoryEvents []*historypb.HistoryEvent
-	require.EventuallyWithT(h.t, func(collect *assert.CollectT) {
+	require.EventuallyWithT(h.t, func(t *assert.CollectT) {
 		actualHistoryEvents = actualHistoryEventsReader()
-		assert.Equalf(collect, len(expectedHistoryEvents), len(actualHistoryEvents), "Length of expected(%d) and actual(%d) histories is not equal", len(expectedHistoryEvents), len(actualHistoryEvents))
+		require.Equalf(t, len(expectedHistoryEvents), len(actualHistoryEvents),
+			"Length of expected(%d) and actual(%d) histories is not equal - actual history: \n%v",
+			len(expectedHistoryEvents), len(actualHistoryEvents), h.formatHistoryEvents(actualHistoryEvents, true))
 	}, waitFor, tick)
 
 	h.equalHistoryEvents(expectedHistoryEvents, expectedEventsAttributes, actualHistoryEvents)
@@ -145,25 +131,26 @@ func (h HistoryRequire) WaitForHistoryEventsSuffix(expectedHistorySuffix string,
 	expectedCompactHistory := h.formatHistoryEvents(expectedHistoryEvents, true)
 
 	var actualHistoryEvents []*historypb.HistoryEvent
-	require.EventuallyWithT(h.t, func(collect *assert.CollectT) {
+	require.EventuallyWithT(h.t, func(t *assert.CollectT) {
 		actualHistoryEvents = actualHistoryEventsReader()
 
-		assert.GreaterOrEqualf(collect, len(actualHistoryEvents), len(expectedHistoryEvents), "Length of actual history(%d) must be greater or equal to the length of expected history suffix(%d)", len(actualHistoryEvents), len(expectedHistoryEvents))
-		if len(actualHistoryEvents) < len(expectedHistoryEvents) {
-			return
-		}
+		require.GreaterOrEqualf(t, len(actualHistoryEvents), len(expectedHistoryEvents),
+			"Length of actual history(%d) must be greater or equal to the length of expected history suffix(%d) - actual history: \n%v",
+			len(actualHistoryEvents), len(expectedHistoryEvents), h.formatHistoryEvents(actualHistoryEvents, true))
 
 		actualHistoryEvents = actualHistoryEvents[len(actualHistoryEvents)-len(expectedHistoryEvents):]
 		actualHistoryEvents = h.sanitizeActualHistoryEventsForEquals(expectedHistoryEvents, actualHistoryEvents)
 		actualCompactHistory := h.formatHistoryEvents(actualHistoryEvents, true)
 
-		assert.Equalf(collect, actualCompactHistory, expectedCompactHistory, "Expected history suffix is not found in actual history. Expected suffix:\n%s\nLast actual:\n%s", expectedCompactHistory, actualCompactHistory)
+		require.Equalf(t, expectedCompactHistory, actualCompactHistory,
+			"Expected history suffix is not found in actual history. Expected suffix:\n%s\nLast actual:\n%s",
+			expectedCompactHistory, actualCompactHistory)
 	}, waitFor, tick)
 
-	// TODO: Now if expected sequence of events is found, all attributes must match.
-	//  If attributes also need to be checked (but not asserted) then this call
-	//  needs to be moved to Eventually block. This will require passing `collect`
-	//  all way down and replace require with assert.
+	// TODO: Now if expected sequence of events is reached, all attributes must match.
+	//  If attributes values also need to be reached (but not just asserted) then this call
+	//  needs to be moved to Eventually block. This will require passing `t`
+	//  all way down and replace `require` with `assert`.
 	h.equalHistoryEventsAttributes(expectedEventsAttributes, actualHistoryEvents)
 }
 
@@ -375,7 +362,7 @@ func (h HistoryRequire) formatHistoryEvents(historyEvents []*historypb.HistoryEv
 
 		var versionStr string
 		if event.GetVersion() != 0 {
-			versionStr = fmt.Sprintf("v%2d ", event.GetVersion())
+			versionStr = fmt.Sprintf("%3s ", "v"+strconv.Itoa(int(event.GetVersion())))
 		}
 
 		var eventAttrsJsonStr string
@@ -480,6 +467,13 @@ func (h HistoryRequire) equalExpectedMapToActualAttributes(expectedMap map[strin
 			require.Failf(h.t, "", "Expected property %s.%s wasn't found for EventID=%v", attrPrefix, attrName, eventID)
 		}
 
+		if expectedValue == nil {
+			if !actualV.IsNil() {
+				require.Failf(h.t, "", "Value of property %s.%s for EventID=%v expected to be nil", attrPrefix, attrName, eventID)
+			}
+			continue
+		}
+
 		if es, ok := expectedValue.([]any); ok {
 			for i, ei := range es {
 				eim := ei.(map[string]any)
@@ -496,6 +490,7 @@ func (h HistoryRequire) equalExpectedMapToActualAttributes(expectedMap map[strin
 			h.equalExpectedMapToActualAttributes(em, actualV, eventID, attrPrefix+"."+attrName)
 			continue
 		}
+
 		actualValue := actualV.Interface()
 		// Actual bytes are expressed as strings in expected history.
 		if actualValueBytes, ok := actualValue.([]byte); ok {

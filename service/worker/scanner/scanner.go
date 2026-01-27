@@ -1,27 +1,3 @@
-// The MIT License
-//
-// Copyright (c) 2020 Temporal Technologies Inc.  All rights reserved.
-//
-// Copyright (c) 2020 Uber Technologies, Inc.
-//
-// Permission is hereby granted, free of charge, to any person obtaining a copy
-// of this software and associated documentation files (the "Software"), to deal
-// in the Software without restriction, including without limitation the rights
-// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-// copies of the Software, and to permit persons to whom the Software is
-// furnished to do so, subject to the following conditions:
-//
-// The above copyright notice and this permission notice shall be included in
-// all copies or substantial portions of the Software.
-//
-// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
-// THE SOFTWARE.
-
 package scanner
 
 import (
@@ -48,6 +24,7 @@ import (
 	"go.temporal.io/server/common/metrics"
 	"go.temporal.io/server/common/namespace"
 	"go.temporal.io/server/common/persistence"
+	"go.temporal.io/server/common/persistence/serialization"
 	"go.temporal.io/server/common/persistence/visibility/manager"
 	"go.temporal.io/server/common/sdk"
 	"go.temporal.io/server/service/worker/scanner/build_ids"
@@ -113,6 +90,7 @@ type (
 		namespaceRegistry  namespace.Registry
 		currentClusterName string
 		hostInfo           membership.HostInfo
+		serializer         serialization.Serializer
 	}
 
 	// Scanner is the background sub-system that does full scans
@@ -145,6 +123,7 @@ func New(
 	registry namespace.Registry,
 	currentClusterName string,
 	hostInfo membership.HostInfo,
+	serializer serialization.Serializer,
 ) *Scanner {
 	return &Scanner{
 		context: scannerContext{
@@ -162,6 +141,7 @@ func New(
 			namespaceRegistry:  registry,
 			currentClusterName: currentClusterName,
 			hostInfo:           hostInfo,
+			serializer:         serializer,
 		},
 	}
 }
@@ -169,7 +149,7 @@ func New(
 // Start starts the scanner
 func (s *Scanner) Start() error {
 	ctx := context.WithValue(context.Background(), scannerContextKey, s.context)
-	ctx = headers.SetCallerInfo(ctx, headers.SystemBackgroundCallerInfo)
+	ctx = headers.SetCallerInfo(ctx, headers.SystemBackgroundHighCallerInfo)
 	ctx, s.lifecycleCancel = context.WithCancel(ctx)
 
 	workerOpts := worker.Options{
@@ -183,10 +163,12 @@ func (s *Scanner) Start() error {
 	}
 
 	var workerTaskQueueNames []string
-	if s.context.cfg.ExecutionsScannerEnabled() {
+	if s.context.cfg.Persistence.DefaultStoreType() != config.StoreTypeSQL && s.context.cfg.ExecutionsScannerEnabled() {
 		s.wg.Add(1)
 		go s.startWorkflowWithRetry(ctx, executionsScannerWFStartOptions, executionsScannerWFTypeName)
 		workerTaskQueueNames = append(workerTaskQueueNames, executionsScannerTaskQueueName)
+	} else if s.context.cfg.ExecutionsScannerEnabled() {
+		s.context.logger.Info("ExecutionsScanner is not supported for SQL store")
 	}
 
 	if s.context.cfg.Persistence.DefaultStoreType() == config.StoreTypeSQL && s.context.cfg.TaskQueueScannerEnabled() {
@@ -289,9 +271,9 @@ func (s *Scanner) startWorkflow(
 		if _, ok := err.(*serviceerror.WorkflowExecutionAlreadyStarted); ok {
 			return nil
 		}
-		s.context.logger.Error("error starting "+workflowType+" workflow", tag.Error(err))
+		s.context.logger.Error("error starting workflow", tag.WorkflowType(workflowType), tag.Error(err))
 		return err
 	}
-	s.context.logger.Info(workflowType + " workflow successfully started")
+	s.context.logger.Info("workflow successfully started", tag.WorkflowType(workflowType))
 	return nil
 }

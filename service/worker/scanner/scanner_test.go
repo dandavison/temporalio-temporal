@@ -1,27 +1,3 @@
-// The MIT License
-//
-// Copyright (c) 2020 Temporal Technologies Inc.  All rights reserved.
-//
-// Copyright (c) 2020 Uber Technologies, Inc.
-//
-// Permission is hereby granted, free of charge, to any person obtaining a copy
-// of this software and associated documentation files (the "Software"), to deal
-// in the Software without restriction, including without limitation the rights
-// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-// copies of the Software, and to permit persons to whom the Software is
-// furnished to do so, subject to the following conditions:
-//
-// The above copyright notice and this permission notice shall be included in
-// all copies or substantial portions of the Software.
-//
-// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
-// THE SOFTWARE.
-
 package scanner
 
 import (
@@ -40,6 +16,7 @@ import (
 	"go.temporal.io/server/common/metrics"
 	"go.temporal.io/server/common/namespace"
 	p "go.temporal.io/server/common/persistence"
+	"go.temporal.io/server/common/persistence/serialization"
 	"go.temporal.io/server/common/sdk"
 	"go.temporal.io/server/common/testing/mocksdk"
 	"go.temporal.io/server/service/worker/scanner/build_ids"
@@ -158,7 +135,7 @@ func (s *scannerTestSuite) TestScannerEnabled() {
 			HistoryScannerEnabled:    false,
 			BuildIdScavengerEnabled:  false,
 			DefaultStore:             config.StoreTypeSQL,
-			ExpectedScanners:         []expectedScanner{executionScanner},
+			ExpectedScanners:         []expectedScanner{}, // ExecutionsScanner is not supported for SQL store
 		},
 		{
 			Name:                     "BuildIdScavengerNoSQL",
@@ -185,7 +162,16 @@ func (s *scannerTestSuite) TestScannerEnabled() {
 			HistoryScannerEnabled:    true,
 			BuildIdScavengerEnabled:  true,
 			DefaultStore:             config.StoreTypeSQL,
-			ExpectedScanners:         []expectedScanner{historyScanner, taskQueueScanner, executionScanner, buildIdScavenger},
+			ExpectedScanners:         []expectedScanner{historyScanner, taskQueueScanner, buildIdScavenger}, // ExecutionsScanner is not supported for SQL store
+		},
+		{
+			Name:                     "AllScannersNoSQL",
+			ExecutionsScannerEnabled: true,
+			TaskQueueScannerEnabled:  true,
+			HistoryScannerEnabled:    true,
+			BuildIdScavengerEnabled:  true,
+			DefaultStore:             config.StoreTypeNoSQL,
+			ExpectedScanners:         []expectedScanner{historyScanner, executionScanner, buildIdScavenger}, // TaskQueueScanner is only supported for SQL store
 		},
 	} {
 		s.Run(c.Name, func() {
@@ -228,6 +214,7 @@ func (s *scannerTestSuite) TestScannerEnabled() {
 				mockNamespaceRegistry,
 				"active-cluster",
 				membership.NewHostInfoFromAddress("localhost"),
+				serialization.NewSerializer(),
 			)
 			var wg sync.WaitGroup
 			for _, sc := range c.ExpectedScanners {
@@ -304,6 +291,7 @@ func (s *scannerTestSuite) TestScannerShutdown() {
 		mockNamespaceRegistry,
 		"active-cluster",
 		membership.NewHostInfoFromAddress("localhost"),
+		serialization.NewSerializer(),
 	)
 	mockSdkClientFactory.EXPECT().GetSystemClient().Return(mockSdkClient).AnyTimes()
 	worker.EXPECT().RegisterActivityWithOptions(gomock.Any(), gomock.Any()).AnyTimes()

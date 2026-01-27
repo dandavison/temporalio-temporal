@@ -1,27 +1,3 @@
-// The MIT License
-//
-// Copyright (c) 2020 Temporal Technologies Inc.  All rights reserved.
-//
-// Copyright (c) 2020 Uber Technologies, Inc.
-//
-// Permission is hereby granted, free of charge, to any person obtaining a copy
-// of this software and associated documentation files (the "Software"), to deal
-// in the Software without restriction, including without limitation the rights
-// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-// copies of the Software, and to permit persons to whom the Software is
-// furnished to do so, subject to the following conditions:
-//
-// The above copyright notice and this permission notice shall be included in
-// all copies or substantial portions of the Software.
-//
-// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
-// THE SOFTWARE.
-
 package cassandra
 
 import (
@@ -29,7 +5,7 @@ import (
 	"fmt"
 
 	commonpb "go.temporal.io/api/common/v1"
-	"go.temporal.io/api/enums/v1"
+	enumspb "go.temporal.io/api/enums/v1"
 	persistencespb "go.temporal.io/server/api/persistence/v1"
 	"go.temporal.io/server/common/log"
 	"go.temporal.io/server/common/persistence"
@@ -142,16 +118,22 @@ func (s *queueV2Store) EnqueueMessage(
 	if err != nil {
 		return nil, err
 	}
-	messageID, err := s.getNextMessageID(ctx, request.QueueType, request.QueueName)
+	lastMessageID, ok, err := s.getMaxMessageID(ctx, request.QueueType, request.QueueName)
 	if err != nil {
 		return nil, err
 	}
-	err = s.tryInsert(ctx, request.QueueType, request.QueueName, request.Blob, messageID)
+	var nextMessageID int64
+	if !ok {
+		nextMessageID = persistence.FirstQueueMessageID
+	} else {
+		nextMessageID = lastMessageID + 1
+	}
+	err = s.tryInsert(ctx, request.QueueType, request.QueueName, request.Blob, nextMessageID)
 	if err != nil {
 		return nil, err
 	}
 	return &persistence.InternalEnqueueMessageResponse{
-		Metadata: persistence.MessageMetadata{ID: messageID},
+		Metadata: persistence.MessageMetadata{ID: nextMessageID},
 	}, nil
 }
 
@@ -194,12 +176,12 @@ func (s *queueV2Store) ReadMessages(
 		if !iter.Scan(&messageID, &messagePayload, &messageEncoding) {
 			break
 		}
-		encoding, err := enums.EncodingTypeFromString(messageEncoding)
+		encoding, err := enumspb.EncodingTypeFromString(messageEncoding)
 		if err != nil {
 			return nil, serialization.NewUnknownEncodingTypeError(messageEncoding)
 		}
 
-		encodingType := enums.EncodingType(encoding)
+		encodingType := enumspb.EncodingType(encoding)
 
 		message := persistence.QueueV2Message{
 			MetaData: persistence.MessageMetadata{ID: messageID},
@@ -241,7 +223,7 @@ func (s *queueV2Store) CreateQueue(
 		queueType,
 		queueName,
 		bytes,
-		enums.ENCODING_TYPE_PROTO3.String(),
+		enumspb.ENCODING_TYPE_PROTO3.String(),
 		0,
 	).WithContext(ctx).MapScanCAS(make(map[string]interface{}))
 	if err != nil {
@@ -333,7 +315,7 @@ func (s *queueV2Store) updateQueue(
 	applied, err := s.session.Query(
 		TemplateUpdateQueueMetadataQuery,
 		bytes,
-		enums.ENCODING_TYPE_PROTO3.String(),
+		enumspb.ENCODING_TYPE_PROTO3.String(),
 		nextVersion,
 		queueType,
 		queueName,
@@ -426,10 +408,10 @@ func getQueueFromMetadata(
 	queueEncodingStr string,
 	version int64,
 ) (*Queue, error) {
-	if queueEncodingStr != enums.ENCODING_TYPE_PROTO3.String() {
+	if queueEncodingStr != enumspb.ENCODING_TYPE_PROTO3.String() {
 		return nil, fmt.Errorf(
 			"%w: invalid queue encoding type: queue with type %v and name %v has invalid encoding",
-			serialization.NewUnknownEncodingTypeError(queueEncodingStr, enums.ENCODING_TYPE_PROTO3),
+			serialization.NewUnknownEncodingTypeError(queueEncodingStr, enumspb.ENCODING_TYPE_PROTO3),
 			queueType,
 			queueName,
 		)
@@ -439,7 +421,7 @@ func getQueueFromMetadata(
 	err := q.Unmarshal(queueBytes)
 	if err != nil {
 		return nil, serialization.NewDeserializationError(
-			enums.ENCODING_TYPE_PROTO3,
+			enumspb.ENCODING_TYPE_PROTO3,
 			fmt.Errorf("%w: unmarshal queue payload: failed for queue with type %v and name %v",
 				err, queueType, queueName),
 		)
@@ -451,17 +433,22 @@ func getQueueFromMetadata(
 	}, nil
 }
 
-func (s *queueV2Store) getNextMessageID(ctx context.Context, queueType persistence.QueueV2Type, queueName string) (int64, error) {
-	maxMessageID, ok, err := s.getMaxMessageID(ctx, queueType, queueName)
+func (s *queueV2Store) getMessageCountAndLastID(
+	ctx context.Context,
+	queueType persistence.QueueV2Type,
+	queueName string,
+	partition *persistencespb.QueuePartition,
+) (messageCount int64, maxMessageID int64, err error) {
+	var ok bool
+	maxMessageID, ok, err = s.getMaxMessageID(ctx, queueType, queueName)
 	if err != nil {
-		return 0, err
+		return 0, 0, err
 	}
 	if !ok {
-		return persistence.FirstQueueMessageID, nil
+		return 0, -1, nil // No messages
 	}
-
-	// The next message ID is the max message ID + 1.
-	return maxMessageID + 1, nil
+	messageCount = maxMessageID - partition.MinMessageId + 1
+	return messageCount, maxMessageID, nil
 }
 
 func (s *queueV2Store) getMaxMessageID(ctx context.Context, queueType persistence.QueueV2Type, queueName string) (int64, bool, error) {
@@ -508,14 +495,14 @@ func (s *queueV2Store) ListQueues(
 		if err != nil {
 			return nil, err
 		}
-		nextMessageID, err := s.getNextMessageID(ctx, request.QueueType, queueName)
+		messageCount, lastMessageID, err := s.getMessageCountAndLastID(ctx, request.QueueType, queueName, partition)
 		if err != nil {
 			return nil, err
 		}
-		messageCount := nextMessageID - partition.MinMessageId
 		queues = append(queues, persistence.QueueInfo{
-			QueueName:    queueName,
-			MessageCount: messageCount,
+			QueueName:     queueName,
+			MessageCount:  messageCount,
+			LastMessageID: lastMessageID,
 		})
 	}
 	if err := iter.Close(); err != nil {

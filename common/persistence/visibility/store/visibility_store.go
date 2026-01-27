@@ -1,31 +1,7 @@
-// The MIT License
-//
-// Copyright (c) 2020 Temporal Technologies Inc.  All rights reserved.
-//
-// Copyright (c) 2020 Uber Technologies, Inc.
-//
-// Permission is hereby granted, free of charge, to any person obtaining a copy
-// of this software and associated documentation files (the "Software"), to deal
-// in the Software without restriction, including without limitation the rights
-// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-// copies of the Software, and to permit persons to whom the Software is
-// furnished to do so, subject to the following conditions:
-//
-// The above copyright notice and this permission notice shall be included in
-// all copies or substantial portions of the Software.
-//
-// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
-// THE SOFTWARE.
-
 package store
 
 // -aux_files is required here due to Closeable interface being in another file.
-//go:generate mockgen -copyright_file ../../../../LICENSE -package $GOPACKAGE -source $GOFILE -destination visibility_store_mock.go -aux_files go.temporal.io/server/common/persistence=../../data_interfaces.go
+//go:generate mockgen -package $GOPACKAGE -source $GOFILE -destination visibility_store_mock.go -aux_files go.temporal.io/server/common/persistence=../../data_interfaces.go
 
 import (
 	"context"
@@ -45,8 +21,8 @@ type (
 		GetIndexName() string
 
 		// Validate search attributes based on the store constraints. It returns a new map containing
-		// only search attributes with valid values. If there are invalid values, an error of type
-		// VisibilityStoreInvalidValuesError wraps all invalid values errors.
+		// only search attributes with valid values. If there are invalid values, it returns error of type
+		// serviceerror.InvalidArgument.
 		ValidateCustomSearchAttributes(searchAttributes map[string]any) (map[string]any, error)
 
 		// Write APIs.
@@ -56,14 +32,22 @@ type (
 		DeleteWorkflowExecution(ctx context.Context, request *manager.VisibilityDeleteWorkflowExecutionRequest) error
 
 		// Read APIs.
-		ListWorkflowExecutions(ctx context.Context, request *manager.ListWorkflowExecutionsRequestV2) (*InternalListWorkflowExecutionsResponse, error)
-		ScanWorkflowExecutions(ctx context.Context, request *manager.ListWorkflowExecutionsRequestV2) (*InternalListWorkflowExecutionsResponse, error)
-		CountWorkflowExecutions(ctx context.Context, request *manager.CountWorkflowExecutionsRequest) (*manager.CountWorkflowExecutionsResponse, error)
+		ListWorkflowExecutions(ctx context.Context, request *manager.ListWorkflowExecutionsRequestV2) (*InternalListExecutionsResponse, error)
+		ListChasmExecutions(ctx context.Context, request *manager.ListChasmExecutionsRequest) (*InternalListExecutionsResponse, error)
+		CountWorkflowExecutions(ctx context.Context, request *manager.CountWorkflowExecutionsRequest) (*InternalCountExecutionsResponse, error)
+		CountChasmExecutions(ctx context.Context, request *manager.CountChasmExecutionsRequest) (*InternalCountExecutionsResponse, error)
 		GetWorkflowExecution(ctx context.Context, request *manager.GetWorkflowExecutionRequest) (*InternalGetWorkflowExecutionResponse, error)
+
+		// Admin APIs
+
+		// AddSearchAttributes makes schema changes to add the search attributes. This function must be
+		// idempotent, ie., if a search attribute already exists, this function must be no-op, and must
+		// not return any error.
+		AddSearchAttributes(ctx context.Context, request *manager.AddSearchAttributesRequest) error
 	}
 
-	// InternalWorkflowExecutionInfo is visibility info for internal response
-	InternalWorkflowExecutionInfo struct {
+	// InternalExecutionInfo is internal visibility info for workflow execution
+	InternalExecutionInfo struct {
 		WorkflowID           string
 		RunID                string
 		TypeName             string
@@ -84,17 +68,29 @@ type (
 		RootRunID            string
 	}
 
-	// InternalListWorkflowExecutionsResponse is response from ListWorkflowExecutions
-	InternalListWorkflowExecutionsResponse struct {
-		Executions []*InternalWorkflowExecutionInfo
+	// InternalListExecutionsResponse is response from ListWorkflowExecutions and ListChasmExecutions
+	InternalListExecutionsResponse struct {
+		Executions []*InternalExecutionInfo
 		// Token to read next page if there are more workflow executions beyond page size.
 		// Use this to set NextPageToken on ListWorkflowExecutionsRequest to read the next page.
 		NextPageToken []byte
 	}
 
+	// InternalCountExecutionsResponse is response from CountWorkflowExecutions and CountChasmExecutions
+	InternalCountExecutionsResponse struct {
+		Count  int64
+		Groups []InternalAggregationGroup
+	}
+
+	// InternalAggregationGroup represents a GROUP BY aggregation result
+	InternalAggregationGroup struct {
+		GroupValues []*commonpb.Payload
+		Count       int64
+	}
+
 	// InternalGetWorkflowExecutionResponse is response from GetWorkflowExecution
 	InternalGetWorkflowExecutionResponse struct {
-		Execution *InternalWorkflowExecutionInfo
+		Execution *InternalExecutionInfo
 	}
 
 	// InternalVisibilityRequestBase is a base request to visibility APIs.

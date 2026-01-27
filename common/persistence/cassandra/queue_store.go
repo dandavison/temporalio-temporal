@@ -1,27 +1,3 @@
-// The MIT License
-//
-// Copyright (c) 2020 Temporal Technologies Inc.  All rights reserved.
-//
-// Copyright (c) 2020 Uber Technologies, Inc.
-//
-// Permission is hereby granted, free of charge, to any person obtaining a copy
-// of this software and associated documentation files (the "Software"), to deal
-// in the Software without restriction, including without limitation the rights
-// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-// copies of the Software, and to permit persons to whom the Software is
-// furnished to do so, subject to the following conditions:
-//
-// The above copyright notice and this permission notice shall be included in
-// all copies or substantial portions of the Software.
-//
-// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
-// THE SOFTWARE.
-
 package cassandra
 
 import (
@@ -54,9 +30,10 @@ const (
 
 type (
 	QueueStore struct {
-		queueType persistence.QueueType
-		session   gocql.Session
-		logger    log.Logger
+		queueType  persistence.QueueType
+		session    gocql.Session
+		logger     log.Logger
+		serializer serialization.Serializer
 	}
 )
 
@@ -66,9 +43,10 @@ func NewQueueStore(
 	logger log.Logger,
 ) (persistence.Queue, error) {
 	return &QueueStore{
-		queueType: queueType,
-		session:   session,
-		logger:    logger,
+		queueType:  queueType,
+		session:    session,
+		logger:     logger,
+		serializer: serialization.NewSerializer(),
 	}, nil
 }
 
@@ -169,7 +147,7 @@ func (q *QueueStore) ReadMessages(
 	}
 
 	if err := iter.Close(); err != nil {
-		return nil, serviceerror.NewUnavailable(fmt.Sprintf("ReadMessages operation failed. Error: %v", err))
+		return nil, serviceerror.NewUnavailablef("ReadMessages operation failed. Error: %v", err)
 	}
 
 	return result, nil
@@ -204,7 +182,7 @@ func (q *QueueStore) ReadMessagesFromDLQ(
 		nextPageToken = iter.PageState()
 	}
 	if err := iter.Close(); err != nil {
-		return nil, nil, serviceerror.NewUnavailable(fmt.Sprintf("ReadMessagesFromDLQ operation failed. Error: %v", err))
+		return nil, nil, serviceerror.NewUnavailablef("ReadMessagesFromDLQ operation failed. Error: %v", err)
 	}
 
 	return result, nextPageToken, nil
@@ -217,7 +195,7 @@ func (q *QueueStore) DeleteMessagesBefore(
 
 	query := q.session.Query(templateDeleteMessagesBeforeQuery, q.queueType, messageID).WithContext(ctx)
 	if err := query.Exec(); err != nil {
-		return serviceerror.NewUnavailable(fmt.Sprintf("DeleteMessagesBefore operation failed. Error %v", err))
+		return serviceerror.NewUnavailablef("DeleteMessagesBefore operation failed. Error %v", err)
 	}
 	return nil
 }
@@ -230,7 +208,7 @@ func (q *QueueStore) DeleteMessageFromDLQ(
 	// Use negative queue type as the dlq type
 	query := q.session.Query(templateDeleteMessageQuery, q.getDLQTypeFromQueueType(), messageID).WithContext(ctx)
 	if err := query.Exec(); err != nil {
-		return serviceerror.NewUnavailable(fmt.Sprintf("DeleteMessageFromDLQ operation failed. Error %v", err))
+		return serviceerror.NewUnavailablef("DeleteMessageFromDLQ operation failed. Error %v", err)
 	}
 
 	return nil
@@ -245,7 +223,7 @@ func (q *QueueStore) RangeDeleteMessagesFromDLQ(
 	// Use negative queue type as the dlq type
 	query := q.session.Query(templateDeleteMessagesQuery, q.getDLQTypeFromQueueType(), firstMessageID, lastMessageID).WithContext(ctx)
 	if err := query.Exec(); err != nil {
-		return serviceerror.NewUnavailable(fmt.Sprintf("RangeDeleteMessagesFromDLQ operation failed. Error %v", err))
+		return serviceerror.NewUnavailablef("RangeDeleteMessagesFromDLQ operation failed. Error %v", err)
 	}
 
 	return nil
@@ -324,7 +302,7 @@ func (q *QueueStore) getQueueMetadata(
 		return nil, err
 	}
 
-	return convertQueueMetadata(message)
+	return convertQueueMetadata(message, q.serializer)
 }
 
 func (q *QueueStore) updateAckLevel(
@@ -334,7 +312,7 @@ func (q *QueueStore) updateAckLevel(
 ) error {
 
 	// TODO: remove this once cluster_ack_level is removed from DB
-	metadataStruct, err := serialization.QueueMetadataFromBlob(metadata.Blob.Data, metadata.Blob.EncodingType.String())
+	metadataStruct, err := q.serializer.QueueMetadataFromBlob(metadata.Blob)
 	if err != nil {
 		return gocql.ConvertError("updateAckLevel", err)
 	}
@@ -409,6 +387,7 @@ func convertQueueMessage(
 
 func convertQueueMetadata(
 	message map[string]interface{},
+	serializer serialization.Serializer,
 ) (*persistence.InternalQueueMetadata, error) {
 
 	metadata := &persistence.InternalQueueMetadata{
@@ -418,7 +397,7 @@ func convertQueueMetadata(
 	if ok {
 		clusterAckLevel := message["cluster_ack_level"].(map[string]int64)
 		// TODO: remove this once we remove cluster_ack_level from DB.
-		blob, err := serialization.QueueMetadataToBlob(&persistencespb.QueueMetadata{ClusterAckLevels: clusterAckLevel})
+		blob, err := serializer.QueueMetadataToBlob(&persistencespb.QueueMetadata{ClusterAckLevels: clusterAckLevel})
 		if err != nil {
 			return nil, err
 		}

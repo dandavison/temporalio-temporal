@@ -1,32 +1,12 @@
-// The MIT License
-//
-// Copyright (c) 2020 Temporal Technologies Inc.  All rights reserved.
-//
-// Copyright (c) 2020 Uber Technologies, Inc.
-//
-// Permission is hereby granted, free of charge, to any person obtaining a copy
-// of this software and associated documentation files (the "Software"), to deal
-// in the Software without restriction, including without limitation the rights
-// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-// copies of the Software, and to permit persons to whom the Software is
-// furnished to do so, subject to the following conditions:
-//
-// The above copyright notice and this permission notice shall be included in
-// all copies or substantial portions of the Software.
-//
-// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
-// THE SOFTWARE.
-
 package visibility
 
 import (
 	"context"
+	"errors"
+	"sync"
 
+	commonpb "go.temporal.io/api/common/v1"
+	"go.temporal.io/server/chasm"
 	"go.temporal.io/server/common/dynamicconfig"
 	"go.temporal.io/server/common/namespace"
 	"go.temporal.io/server/common/persistence/visibility/manager"
@@ -38,6 +18,13 @@ type (
 		secondaryVisibilityManager manager.VisibilityManager
 		managerSelector            managerSelector
 		enableShadowReadMode       dynamicconfig.BoolPropertyFn
+
+		// Separate context for the shadow read requests. It ensures the main request context won't
+		// cancel the shadow request if the former completes before the shadow request.
+		// Each shadow request gets a new child context from shadowReadCtx, and we cancel all of them
+		// when visibilityManager closes by calling shadowReadCtxCancel.
+		shadowReadCtx       context.Context
+		shadowReadCtxCancel context.CancelFunc
 	}
 )
 
@@ -51,11 +38,14 @@ func NewVisibilityManagerDual(
 	managerSelector managerSelector,
 	enableShadowReadMode dynamicconfig.BoolPropertyFn,
 ) *VisibilityManagerDual {
+	shadowReadCtx, shadowReadCtxCancel := context.WithCancel(context.Background())
 	return &VisibilityManagerDual{
 		visibilityManager:          visibilityManager,
 		secondaryVisibilityManager: secondaryVisibilityManager,
 		managerSelector:            managerSelector,
 		enableShadowReadMode:       enableShadowReadMode,
+		shadowReadCtx:              shadowReadCtx,
+		shadowReadCtxCancel:        shadowReadCtxCancel,
 	}
 }
 
@@ -68,6 +58,7 @@ func (v *VisibilityManagerDual) GetSecondaryVisibility() manager.VisibilityManag
 }
 
 func (v *VisibilityManagerDual) Close() {
+	v.shadowReadCtxCancel()
 	v.visibilityManager.Close()
 	v.secondaryVisibilityManager.Close()
 }
@@ -113,146 +104,175 @@ func (v *VisibilityManagerDual) RecordWorkflowExecutionStarted(
 	ctx context.Context,
 	request *manager.RecordWorkflowExecutionStartedRequest,
 ) error {
-	ms, err := v.managerSelector.writeManagers()
-	if err != nil {
-		return err
-	}
-	for _, m := range ms {
-		err = m.RecordWorkflowExecutionStarted(ctx, request)
-		if err != nil {
-			return err
-		}
-	}
-	return nil
+	return dualWriteWrapper(
+		ctx,
+		v,
+		request,
+		manager.VisibilityManager.RecordWorkflowExecutionStarted,
+	)
 }
 
 func (v *VisibilityManagerDual) RecordWorkflowExecutionClosed(
 	ctx context.Context,
 	request *manager.RecordWorkflowExecutionClosedRequest,
 ) error {
-	ms, err := v.managerSelector.writeManagers()
-	if err != nil {
-		return err
-	}
-	for _, m := range ms {
-		err = m.RecordWorkflowExecutionClosed(ctx, request)
-		if err != nil {
-			return err
-		}
-	}
-	return nil
+	return dualWriteWrapper(
+		ctx,
+		v,
+		request,
+		manager.VisibilityManager.RecordWorkflowExecutionClosed,
+	)
 }
 
 func (v *VisibilityManagerDual) UpsertWorkflowExecution(
 	ctx context.Context,
 	request *manager.UpsertWorkflowExecutionRequest,
 ) error {
-	ms, err := v.managerSelector.writeManagers()
-	if err != nil {
-		return err
-	}
-	for _, m := range ms {
-		err = m.UpsertWorkflowExecution(ctx, request)
-		if err != nil {
-			return err
-		}
-	}
-	return nil
+	return dualWriteWrapper(
+		ctx,
+		v,
+		request,
+		manager.VisibilityManager.UpsertWorkflowExecution,
+	)
 }
 
 func (v *VisibilityManagerDual) DeleteWorkflowExecution(
 	ctx context.Context,
 	request *manager.VisibilityDeleteWorkflowExecutionRequest,
 ) error {
-	ms, err := v.managerSelector.writeManagers()
-	if err != nil {
-		return err
-	}
-	for _, m := range ms {
-		err = m.DeleteWorkflowExecution(ctx, request)
-		if err != nil {
-			return err
-		}
-	}
-	return nil
+	return dualWriteWrapper(
+		ctx,
+		v,
+		request,
+		manager.VisibilityManager.DeleteWorkflowExecution,
+	)
 }
 
 func (v *VisibilityManagerDual) ListWorkflowExecutions(
 	ctx context.Context,
 	request *manager.ListWorkflowExecutionsRequestV2,
 ) (*manager.ListWorkflowExecutionsResponse, error) {
-	if v.enableShadowReadMode() {
-		ms, err := v.managerSelector.readManagers(request.Namespace)
-		if err != nil {
-			return nil, err
-		}
-		//nolint:errcheck // ignore error since it's shadow request
-		go ms[1].ListWorkflowExecutions(ctx, request)
-		res, err := ms[0].ListWorkflowExecutions(ctx, request)
-		if err != nil {
-			return nil, err
-		}
-		return res, err
-	}
-	return v.managerSelector.readManager(request.Namespace).ListWorkflowExecutions(ctx, request)
+	return dualReadWrapper(
+		ctx,
+		v,
+		request,
+		request.Namespace,
+		manager.VisibilityManager.ListWorkflowExecutions,
+	)
 }
 
-func (v *VisibilityManagerDual) ScanWorkflowExecutions(
+func (v *VisibilityManagerDual) ListChasmExecutions(
 	ctx context.Context,
-	request *manager.ListWorkflowExecutionsRequestV2,
-) (*manager.ListWorkflowExecutionsResponse, error) {
-	if v.enableShadowReadMode() {
-		ms, err := v.managerSelector.readManagers(request.Namespace)
-		if err != nil {
-			return nil, err
-		}
-		//nolint:errcheck // ignore error since it's shadow request
-		go ms[1].ScanWorkflowExecutions(ctx, request)
-		res, err := ms[0].ScanWorkflowExecutions(ctx, request)
-		if err != nil {
-			return nil, err
-		}
-		return res, err
-	}
-	return v.managerSelector.readManager(request.Namespace).ScanWorkflowExecutions(ctx, request)
+	request *manager.ListChasmExecutionsRequest,
+) (*chasm.ListExecutionsResponse[*commonpb.Payload], error) {
+	return dualReadWrapper(
+		ctx,
+		v,
+		request,
+		request.Namespace,
+		manager.VisibilityManager.ListChasmExecutions,
+	)
 }
 
 func (v *VisibilityManagerDual) CountWorkflowExecutions(
 	ctx context.Context,
 	request *manager.CountWorkflowExecutionsRequest,
 ) (*manager.CountWorkflowExecutionsResponse, error) {
-	if v.enableShadowReadMode() {
-		ms, err := v.managerSelector.readManagers(request.Namespace)
-		if err != nil {
-			return nil, err
-		}
-		//nolint:errcheck // ignore error since it's shadow request
-		go ms[1].CountWorkflowExecutions(ctx, request)
-		res, err := ms[0].CountWorkflowExecutions(ctx, request)
-		if err != nil {
-			return nil, err
-		}
-		return res, err
-	}
-	return v.managerSelector.readManager(request.Namespace).CountWorkflowExecutions(ctx, request)
+	return dualReadWrapper(
+		ctx,
+		v,
+		request,
+		request.Namespace,
+		manager.VisibilityManager.CountWorkflowExecutions,
+	)
+}
+
+func (v *VisibilityManagerDual) CountChasmExecutions(
+	ctx context.Context,
+	request *manager.CountChasmExecutionsRequest,
+) (*chasm.CountExecutionsResponse, error) {
+	return dualReadWrapper(
+		ctx,
+		v,
+		request,
+		request.Namespace,
+		manager.VisibilityManager.CountChasmExecutions,
+	)
 }
 
 func (v *VisibilityManagerDual) GetWorkflowExecution(
 	ctx context.Context,
 	request *manager.GetWorkflowExecutionRequest,
 ) (*manager.GetWorkflowExecutionResponse, error) {
-	if v.enableShadowReadMode() {
-		ms, err := v.managerSelector.readManagers(request.Namespace)
-		if err != nil {
-			return nil, err
-		}
-		//nolint:errcheck // ignore error since it's shadow request
-		go ms[1].GetWorkflowExecution(ctx, request)
-		res, err := ms[0].GetWorkflowExecution(ctx, request)
-		if err != nil {
-			return nil, err
-		}
-		return res, err
+	return dualReadWrapper(
+		ctx,
+		v,
+		request,
+		request.Namespace,
+		manager.VisibilityManager.GetWorkflowExecution,
+	)
+}
+
+func (v *VisibilityManagerDual) AddSearchAttributes(
+	ctx context.Context,
+	request *manager.AddSearchAttributesRequest,
+) error {
+	if err := v.visibilityManager.AddSearchAttributes(ctx, request); err != nil {
+		return err
 	}
-	return v.managerSelector.readManager(request.Namespace).GetWorkflowExecution(ctx, request)
+	return v.secondaryVisibilityManager.AddSearchAttributes(ctx, request)
+}
+
+func dualWriteWrapper[RequestT any](
+	ctx context.Context,
+	v *VisibilityManagerDual,
+	request *RequestT,
+	fn func(manager.VisibilityManager, context.Context, *RequestT) error,
+) error {
+	ms, err := v.managerSelector.writeManagers()
+	if err != nil {
+		return err
+	}
+	errs := make([]error, len(ms))
+	wg := sync.WaitGroup{}
+	for i, m := range ms {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			errs[i] = fn(m, ctx, request)
+		}()
+	}
+	wg.Wait()
+	return errors.Join(errs...)
+}
+
+func dualReadWrapper[RequestT any, ResponseT any](
+	ctx context.Context,
+	v *VisibilityManagerDual,
+	request *RequestT,
+	nsName namespace.Name,
+	fn func(manager.VisibilityManager, context.Context, *RequestT) (*ResponseT, error),
+) (*ResponseT, error) {
+	if v.enableShadowReadMode() {
+		ms, err := v.managerSelector.readManagers(nsName)
+		if err != nil {
+			return nil, err
+		}
+
+		var shadowCtx context.Context
+		var shadowCtxCancel context.CancelFunc
+		if deadline, ok := ctx.Deadline(); ok {
+			shadowCtx, shadowCtxCancel = context.WithDeadline(v.shadowReadCtx, deadline)
+		} else {
+			shadowCtx, shadowCtxCancel = context.WithCancel(v.shadowReadCtx)
+		}
+		go func() {
+			defer shadowCtxCancel()
+			// ignore error since it's shadow request
+			_, _ = fn(ms[1], shadowCtx, request)
+		}()
+
+		return fn(ms[0], ctx, request)
+	}
+	return fn(v.managerSelector.readManager(nsName), ctx, request)
 }

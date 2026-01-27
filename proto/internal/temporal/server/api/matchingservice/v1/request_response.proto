@@ -1,25 +1,3 @@
-// The MIT License
-//
-// Copyright (c) 2019 Temporal Technologies, Inc.
-//
-// Permission is hereby granted, free of charge, to any person obtaining a copy
-// of this software and associated documentation files (the "Software"), to deal
-// in the Software without restriction, including without limitation the rights
-// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-// copies of the Software, and to permit persons to whom the Software is
-// furnished to do so, subject to the following conditions:
-//
-// The above copyright notice and this permission notice shall be included in
-// all copies or substantial portions of the Software.
-//
-// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
-// THE SOFTWARE.
-
 syntax = "proto3";
 
 package temporal.server.api.matchingservice.v1;
@@ -29,6 +7,7 @@ import "google/protobuf/duration.proto";
 import "google/protobuf/timestamp.proto";
 
 import "temporal/api/common/v1/message.proto";
+import "temporal/api/deployment/v1/message.proto";
 import "temporal/api/enums/v1/task_queue.proto";
 import "temporal/api/history/v1/message.proto";
 import "temporal/api/taskqueue/v1/message.proto";
@@ -36,19 +15,24 @@ import "temporal/api/query/v1/message.proto";
 import "temporal/api/protocol/v1/message.proto";
 
 import "temporal/server/api/clock/v1/message.proto";
+import "temporal/server/api/deployment/v1/message.proto";
 import "temporal/server/api/history/v1/message.proto";
 import "temporal/server/api/persistence/v1/nexus.proto";
 import "temporal/server/api/persistence/v1/task_queues.proto";
 import "temporal/server/api/taskqueue/v1/message.proto";
+import "temporal/server/api/enums/v1/fairness_state.proto";
 
 import "temporal/api/workflowservice/v1/request_response.proto";
 import "temporal/api/nexus/v1/message.proto";
+import "temporal/api/worker/v1/message.proto";
 
 message PollWorkflowTaskQueueRequest {
     string namespace_id = 1;
     string poller_id = 2;
     temporal.api.workflowservice.v1.PollWorkflowTaskQueueRequest poll_request = 3;
     string forwarded_source = 4;
+    // Extra conditions on this poll request. Only supported with new matcher.
+    PollConditions conditions = 5;
 }
 
 message PollWorkflowTaskQueueResponse {
@@ -75,6 +59,7 @@ message PollWorkflowTaskQueueResponse {
     // a workflow task. Sticky query tasks will not include any history.
     temporal.api.history.v1.History history = 19;
     bytes next_page_token = 20;
+    temporal.api.taskqueue.v1.PollerScalingDecision poller_scaling_decision = 21;
 }
 
 message PollActivityTaskQueueRequest {
@@ -82,6 +67,8 @@ message PollActivityTaskQueueRequest {
     string poller_id = 2;
     temporal.api.workflowservice.v1.PollActivityTaskQueueRequest poll_request = 3;
     string forwarded_source = 4;
+    // Extra conditions on this poll request. Only supported with new matcher.
+    PollConditions conditions = 5;
 }
 
 message PollActivityTaskQueueResponse {
@@ -105,6 +92,11 @@ message PollActivityTaskQueueResponse {
     temporal.api.common.v1.WorkflowType workflow_type = 14;
     string workflow_namespace = 15;
     temporal.api.common.v1.Header header = 16;
+    temporal.api.taskqueue.v1.PollerScalingDecision poller_scaling_decision = 17;
+    temporal.api.common.v1.Priority priority = 18;
+    temporal.api.common.v1.RetryPolicy retry_policy = 19;
+    // ID of the activity run (applicable for standalone activities only)
+    string activity_run_id = 20;
 }
 
 message AddWorkflowTaskRequest {
@@ -120,10 +112,14 @@ message AddWorkflowTaskRequest {
     // for TaskVersionDirective, which is unversioned.)
     temporal.server.api.taskqueue.v1.TaskVersionDirective version_directive = 10;
     temporal.server.api.taskqueue.v1.TaskForwardInfo forward_info = 11;
+    temporal.api.common.v1.Priority priority = 12;
+    // Stamp value from when the workflow task was scheduled. Used to validate the task is still relevant.
+    int32 stamp = 13;
 }
 
 message AddWorkflowTaskResponse {
     // When present, it means that the task is spooled to a versioned queue of this build ID
+    // Deprecated. [cleanup-old-wv]
     string assigned_build_id = 1;
 }
 
@@ -141,12 +137,17 @@ message AddActivityTaskRequest {
     // for TaskVersionDirective, which is unversioned.)
     temporal.server.api.taskqueue.v1.TaskVersionDirective version_directive = 10;
     temporal.server.api.taskqueue.v1.TaskForwardInfo forward_info = 11;
-
     int32 stamp = 12;
+    temporal.api.common.v1.Priority priority = 13;
+    // Reference to the Chasm component for activity execution (if applicable). For standalone activities, all
+    // necessary start information is carried within this component, obviating the need to use the fields that apply to
+    // embedded activities.
+    bytes component_ref = 14;
 }
 
 message AddActivityTaskResponse {
     // When present, it means that the task is spooled to a versioned queue of this build ID
+    // Deprecated. [cleanup-old-wv]
     string assigned_build_id = 1;
 }
 
@@ -158,6 +159,7 @@ message QueryWorkflowRequest {
     // for TaskVersionDirective, which is unversioned.)
     temporal.server.api.taskqueue.v1.TaskVersionDirective version_directive = 5;
     temporal.server.api.taskqueue.v1.TaskForwardInfo forward_info = 6;
+    temporal.api.common.v1.Priority priority = 7;
 }
 
 message QueryWorkflowResponse {
@@ -188,11 +190,43 @@ message CancelOutstandingPollResponse {
 message DescribeTaskQueueRequest {
     string namespace_id = 1;
     temporal.api.workflowservice.v1.DescribeTaskQueueRequest desc_request = 2;
+    temporal.server.api.deployment.v1.WorkerDeploymentVersion version = 3;
 }
 
 message DescribeTaskQueueResponse {
     reserved 1 to 2;
     temporal.api.workflowservice.v1.DescribeTaskQueueResponse desc_response = 3;
+}
+
+message DescribeVersionedTaskQueuesRequest {
+    string namespace_id = 1;
+
+    // This task queue is for routing purposes.
+    temporal.api.enums.v1.TaskQueueType task_queue_type = 2;
+    temporal.api.taskqueue.v1.TaskQueue task_queue = 3;
+
+    temporal.server.api.deployment.v1.WorkerDeploymentVersion version = 4;
+
+    // List of task queues to describe.
+    repeated VersionTaskQueue version_task_queues = 5;
+    // (-- api-linter: core::0123::resource-annotation=disabled --)
+    message VersionTaskQueue {
+        string name = 1;
+        temporal.api.enums.v1.TaskQueueType type = 2;
+    }
+}
+
+message DescribeVersionedTaskQueuesResponse {
+    repeated VersionTaskQueue version_task_queues = 1;
+    // (-- api-linter: core::0123::resource-annotation=disabled --)
+    message VersionTaskQueue {
+        string name = 1;
+        temporal.api.enums.v1.TaskQueueType type = 2;
+        temporal.api.taskqueue.v1.TaskQueueStats stats = 3;
+        // (-- api-linter: core::0140::prepositions=disabled
+        //     aip.dev/not-precedent: "by" is used to clarify the key. --)
+        map<int32, temporal.api.taskqueue.v1.TaskQueueStats> stats_by_priority_key = 4;
+    }
 }
 
 message DescribeTaskQueuePartitionRequest {
@@ -287,6 +321,7 @@ message GetWorkerBuildIdCompatibilityRequest {
     string namespace_id = 1;
     temporal.api.workflowservice.v1.GetWorkerBuildIdCompatibilityRequest request = 2;
 }
+
 message GetWorkerBuildIdCompatibilityResponse {
     temporal.api.workflowservice.v1.GetWorkerBuildIdCompatibilityResponse response = 1;
 }
@@ -296,22 +331,63 @@ message GetTaskQueueUserDataRequest {
     // The task queue to fetch data from. The task queue is always considered as a normal
     // queue, since sticky queues have no user data.
     string task_queue = 2;
-    // Normally task queue type should always be TASK_QUEUE_TYPE_WORKFLOW here, but querying
-    // activity task queues is useful for testing.
     temporal.api.enums.v1.TaskQueueType task_queue_type = 5;
     // The value of the last known user data version.
     // If the requester has no data, it should set this to 0.
     // This value must not be set to a negative number (note that our linter suggests avoiding uint64).
     int64 last_known_user_data_version = 3;
-    // If set and last_known_user_data_version is the current version, block until new data is
-    // available (or timeout).
+    // Same for ephemeral data.
+    int64 last_known_ephemeral_data_version = 7;
+    // If set and last_known_{user_data,ephemeral_data}_version is the current version,
+    // block until new data is available (or timeout).
     bool wait_new_data = 4;
+    // If set, do not load task queue if unloaded. (Returns FailedPrecondition error in that case.)
+    bool only_if_loaded = 6;
 }
+
 message GetTaskQueueUserDataResponse {
     reserved 1;
     // Versioned user data, set if the task queue has user data and the request's last_known_user_data_version is less
     // than the version cached in the root partition.
     temporal.server.api.persistence.v1.VersionedTaskQueueUserData user_data = 2;
+    temporal.server.api.taskqueue.v1.VersionedEphemeralData ephemeral_data = 3;
+}
+
+message SyncDeploymentUserDataRequest {
+    string namespace_id = 1;
+    string task_queue = 2;
+    // Required, unless deprecated fields are used.
+    // (-- api-linter: core::0203::required=disabled
+    //     aip.dev/not-precedent: Not following Google API format --)
+    string deployment_name = 9;
+    reserved 3, 4, 5;
+    repeated temporal.api.enums.v1.TaskQueueType task_queue_types = 8;
+
+    oneof operation {
+        // The deployment version and its data that is being updated.
+        temporal.server.api.deployment.v1.DeploymentVersionData update_version_data = 6 [deprecated = true];
+        // The version whose data should be cleaned from the task queue.
+        temporal.server.api.deployment.v1.WorkerDeploymentVersion forget_version = 7 [deprecated = true];
+    }
+
+    // Absent means no change.
+    // Ignored by the task queue if new revision number is not greater that what it has.
+    temporal.api.deployment.v1.RoutingConfig update_routing_config = 10;
+    // Optional map of build id to upsert version data.
+    // (-- api-linter: core::0203::required=disabled
+    //     aip.dev/not-precedent: Not following Google API format --)
+    map<string, temporal.server.api.deployment.v1.WorkerDeploymentVersionData> upsert_versions_data = 11;
+    // List of build ids to forget from task queue.
+    // Deprecated. Use upsert_versions_data with deleted=true.
+    repeated string forget_versions = 12;
+}
+
+message SyncDeploymentUserDataResponse {
+    // New task queue user data version. Can be used to wait for propagation.
+    int64 version = 1;
+    // If the routing config changed after applying this operation. Compared base on revision number.
+    // Deprecated. using this is not totaly safe in case of retries.
+    bool routing_config_changed = 2 [deprecated = true];
 }
 
 message ApplyTaskQueueUserDataReplicationEventRequest {
@@ -391,6 +467,15 @@ message ReplicateTaskQueueUserDataRequest {
 message ReplicateTaskQueueUserDataResponse {
 }
 
+message CheckTaskQueueUserDataPropagationRequest {
+    string namespace_id = 1;
+    string task_queue = 2;
+    int64 version = 3;
+}
+
+message CheckTaskQueueUserDataPropagationResponse {
+}
+
 message DispatchNexusTaskRequest {
     string namespace_id = 1;
     temporal.api.taskqueue.v1.TaskQueue task_queue = 2;
@@ -400,11 +485,14 @@ message DispatchNexusTaskRequest {
 }
 
 message DispatchNexusTaskResponse {
+    message Timeout {}
+
     oneof outcome {
         // Set if the worker's handler failed the nexus task.
         temporal.api.nexus.v1.HandlerError handler_error = 1;
         // Set if the worker's handler responded successfully to the nexus task.
         temporal.api.nexus.v1.Response response = 2;
+        Timeout request_timeout = 3;
     }
 }
 
@@ -416,6 +504,8 @@ message PollNexusTaskQueueRequest {
     temporal.api.workflowservice.v1.PollNexusTaskQueueRequest request = 3;
     // Non-empty if this poll was forwarded from a child partition.
     string forwarded_source = 4;
+    // Extra conditions on this poll request. Only supported with new matcher.
+    PollConditions conditions = 5;
 }
 
 message PollNexusTaskQueueResponse {
@@ -513,4 +603,86 @@ message ListNexusEndpointsResponse {
     bytes next_page_token = 1;
     int64 table_version = 2;
     repeated temporal.server.api.persistence.v1.NexusEndpointEntry entries = 3;
+}
+
+message RecordWorkerHeartbeatRequest {
+    string namespace_id = 1;
+    temporal.api.workflowservice.v1.RecordWorkerHeartbeatRequest heartbeart_request = 2;
+}
+
+message RecordWorkerHeartbeatResponse {
+
+}
+
+message ListWorkersRequest {
+    string namespace_id = 1;
+    temporal.api.workflowservice.v1.ListWorkersRequest list_request = 2;
+}
+
+message ListWorkersResponse {
+    repeated temporal.api.worker.v1.WorkerInfo workers_info = 1;
+    bytes next_page_token = 2;
+}
+
+// (-- api-linter: core::0134::request-resource-required=disabled
+//     aip.dev/not-precedent: UpdateTaskQueueConfigRequest RPC doesn't follow Google API format. --)
+// (-- api-linter: core::0134::request-mask-required=disabled
+//     aip.dev/not-precedent: UpdateTaskQueueConfigRequest RPC doesn't follow Google API format. --)
+// (-- api-linter: core::0134::method-signature=disabled
+//     aip.dev/not-precedent: UpdateTaskQueueConfigRequest RPC doesn't follow Google API format. --)
+message UpdateTaskQueueConfigRequest {
+    string namespace_id = 1;
+    temporal.api.workflowservice.v1.UpdateTaskQueueConfigRequest update_taskqueue_config = 3;
+}
+
+message UpdateTaskQueueConfigResponse {
+    temporal.api.taskqueue.v1.TaskQueueConfig updated_taskqueue_config = 1;
+}
+
+message DescribeWorkerRequest {
+    string namespace_id = 1;
+    temporal.api.workflowservice.v1.DescribeWorkerRequest request = 2;
+}
+
+message DescribeWorkerResponse {
+    temporal.api.worker.v1.WorkerInfo worker_info = 1;
+}
+
+// (-- api-linter: core::0134::request-resource-required=disabled
+//     aip.dev/not-precedent: UpdateFairnessStateRequest RPC doesn't follow Google API format. --)
+// (-- api-linter: core::0134::request-mask-required=disabled
+//     aip.dev/not-precedent: UpdateFairnessStateRequest RPC doesn't follow Google API format. --)
+// (-- api-linter: core::0134::method-signature=disabled
+//     aip.dev/not-precedent: UpdateFairnessStateRequest RPC doesn't follow Google API format. --)
+message UpdateFairnessStateRequest {
+    string namespace_id = 1;
+    string task_queue = 2;
+    temporal.api.enums.v1.TaskQueueType task_queue_type = 3;
+    temporal.server.api.enums.v1.FairnessState fairness_state = 4;
+}
+
+message UpdateFairnessStateResponse {
+}
+
+message CheckTaskQueueVersionMembershipRequest {
+    string namespace_id = 1;
+    string task_queue = 2;
+    temporal.api.enums.v1.TaskQueueType task_queue_type = 3;
+    temporal.server.api.deployment.v1.WorkerDeploymentVersion version = 4;
+}
+
+message CheckTaskQueueVersionMembershipResponse {
+    bool is_member = 1;
+}
+
+// PollConditions are extra conditions to set on the poll. Only supported with new matcher.
+message PollConditions {
+    // If set (non-zero), this poll will not match a task with lower priority than this value.
+    // Note that "min" priority is "max" numeric value, e.g. "min_priority: 3" means to match
+    // tasks with priority 1, 2, or 3.
+    int32 min_priority = 1;
+    // If true, don't block waiting for a task, just return a task immediately or an empty
+    // response. This is most useful combined with min_priority, to poll for task at a specific
+    // priority level on a partition that you think is there.
+    bool no_wait = 2;
 }

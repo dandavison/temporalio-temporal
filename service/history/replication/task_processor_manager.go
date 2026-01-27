@@ -1,27 +1,3 @@
-// The MIT License
-//
-// Copyright (c) 2020 Temporal Technologies Inc.  All rights reserved.
-//
-// Copyright (c) 2020 Uber Technologies, Inc.
-//
-// Permission is hereby granted, free of charge, to any person obtaining a copy
-// of this software and associated documentation files (the "Software"), to deal
-// in the Software without restriction, including without limitation the rights
-// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-// copies of the Software, and to permit persons to whom the Software is
-// furnished to do so, subject to the following conditions:
-//
-// The above copyright notice and this permission notice shall be included in
-// all copies or substantial portions of the Software.
-//
-// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
-// THE SOFTWARE.
-
 package replication
 
 import (
@@ -30,24 +6,21 @@ import (
 	"sync/atomic"
 	"time"
 
-	historypb "go.temporal.io/api/history/v1"
-	historyspb "go.temporal.io/server/api/history/v1"
 	persistencespb "go.temporal.io/server/api/persistence/v1"
 	"go.temporal.io/server/client"
 	"go.temporal.io/server/common"
 	"go.temporal.io/server/common/backoff"
 	"go.temporal.io/server/common/cluster"
-	"go.temporal.io/server/common/definition"
 	"go.temporal.io/server/common/headers"
 	"go.temporal.io/server/common/log"
 	"go.temporal.io/server/common/log/tag"
 	"go.temporal.io/server/common/metrics"
-	"go.temporal.io/server/common/namespace"
 	"go.temporal.io/server/common/persistence"
 	"go.temporal.io/server/common/persistence/serialization"
-	"go.temporal.io/server/common/xdc"
 	"go.temporal.io/server/service/history/configs"
 	"go.temporal.io/server/service/history/deletemanager"
+	historyi "go.temporal.io/server/service/history/interfaces"
+	"go.temporal.io/server/service/history/replication/eventhandler"
 	"go.temporal.io/server/service/history/shard"
 	"go.temporal.io/server/service/history/tasks"
 	wcache "go.temporal.io/server/service/history/workflow/cache"
@@ -62,13 +35,13 @@ type (
 	taskProcessorManagerImpl struct {
 		config                        *configs.Config
 		deleteMgr                     deletemanager.DeleteManager
-		engine                        shard.Engine
+		engine                        historyi.Engine
 		eventSerializer               serialization.Serializer
-		shard                         shard.Context
+		shard                         historyi.ShardContext
 		status                        int32
 		replicationTaskFetcherFactory TaskFetcherFactory
 		workflowCache                 wcache.Cache
-		resender                      xdc.NDCHistoryResender
+		removeHistoryFetcher          eventhandler.HistoryPaginatedFetcher
 		taskExecutorProvider          TaskExecutorProvider
 		taskPollerManager             pollerManager
 		metricsHandler                metrics.Handler
@@ -85,8 +58,8 @@ type (
 
 func NewTaskProcessorManager(
 	config *configs.Config,
-	shard shard.Context,
-	engine shard.Engine,
+	shardContext historyi.ShardContext,
+	engine historyi.Engine,
 	workflowCache wcache.Cache,
 	workflowDeleteManager deletemanager.DeleteManager,
 	clientBean client.Bean,
@@ -95,55 +68,25 @@ func NewTaskProcessorManager(
 	taskExecutorProvider TaskExecutorProvider,
 	dlqWriter DLQWriter,
 ) *taskProcessorManagerImpl {
-
+	historyFetcher := eventhandler.NewHistoryPaginatedFetcher(shardContext.GetNamespaceRegistry(), clientBean, eventSerializer, shardContext.GetLogger())
 	return &taskProcessorManagerImpl{
 		config:                        config,
 		deleteMgr:                     workflowDeleteManager,
 		engine:                        engine,
 		eventSerializer:               eventSerializer,
-		shard:                         shard,
+		shard:                         shardContext,
 		status:                        common.DaemonStatusInitialized,
 		replicationTaskFetcherFactory: replicationTaskFetcherFactory,
 		workflowCache:                 workflowCache,
-		resender: xdc.NewNDCHistoryResender(
-			shard.GetNamespaceRegistry(),
-			clientBean,
-			func(
-				ctx context.Context,
-				sourceClusterName string,
-				namespaceId namespace.ID,
-				workflowId string,
-				runId string,
-				events [][]*historypb.HistoryEvent,
-				versionHistory []*historyspb.VersionHistoryItem,
-			) error {
-				return engine.ReplicateHistoryEvents(
-					ctx,
-					definition.WorkflowKey{
-						NamespaceID: namespaceId.String(),
-						WorkflowID:  workflowId,
-						RunID:       runId,
-					},
-					nil,
-					versionHistory,
-					events,
-					nil,
-					"",
-				)
-			},
-			shard.GetPayloadSerializer(),
-			shard.GetConfig().StandbyTaskReReplicationContextTimeout,
-			shard.GetLogger(),
-			config,
-		),
-		logger:         shard.GetLogger(),
-		metricsHandler: shard.GetMetricsHandler(),
-		dlqWriter:      dlqWriter,
+		removeHistoryFetcher:          historyFetcher,
+		logger:                        shardContext.GetLogger(),
+		metricsHandler:                shardContext.GetMetricsHandler(),
+		dlqWriter:                     dlqWriter,
 
 		enableFetcher:        !config.EnableReplicationStream(),
 		taskProcessors:       make(map[string][]TaskProcessor),
 		taskExecutorProvider: taskExecutorProvider,
-		taskPollerManager:    newPollerManager(shard.GetShardID(), shard.GetClusterMetadata()),
+		taskPollerManager:    newPollerManager(shardContext.GetShardID(), shardContext.GetClusterMetadata()),
 		minTxAckedTaskID:     persistence.EmptyQueueMessageID,
 		shutdownChan:         make(chan struct{}),
 	}
@@ -243,11 +186,11 @@ func (r *taskProcessorManagerImpl) handleClusterMetadataUpdate(
 				r.shard.GetMetricsHandler(),
 				fetcher,
 				r.taskExecutorProvider(TaskExecutorParams{
-					RemoteCluster:   clusterName,
-					Shard:           r.shard,
-					HistoryResender: r.resender,
-					DeleteManager:   r.deleteMgr,
-					WorkflowCache:   r.workflowCache,
+					RemoteCluster:        clusterName,
+					Shard:                r.shard,
+					RemoteHistoryFetcher: r.removeHistoryFetcher,
+					DeleteManager:        r.deleteMgr,
+					WorkflowCache:        r.workflowCache,
 				}),
 				r.eventSerializer,
 				r.dlqWriter,

@@ -1,28 +1,4 @@
-// The MIT License
-//
-// Copyright (c) 2020 Temporal Technologies Inc.  All rights reserved.
-//
-// Copyright (c) 2020 Uber Technologies, Inc.
-//
-// Permission is hereby granted, free of charge, to any person obtaining a copy
-// of this software and associated documentation files (the "Software"), to deal
-// in the Software without restriction, including without limitation the rights
-// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-// copies of the Software, and to permit persons to whom the Software is
-// furnished to do so, subject to the following conditions:
-//
-// The above copyright notice and this permission notice shall be included in
-// all copies or substantial portions of the Software.
-//
-// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
-// THE SOFTWARE.
-
-//go:generate mockgen -copyright_file ../../../LICENSE -package $GOPACKAGE -source $GOFILE -destination activity_state_replicator_mock.go
+//go:generate mockgen -package $GOPACKAGE -source $GOFILE -destination activity_state_replicator_mock.go
 
 package ndc
 
@@ -46,7 +22,8 @@ import (
 	"go.temporal.io/server/common/persistence/versionhistory"
 	"go.temporal.io/server/common/primitives/timestamp"
 	serviceerrors "go.temporal.io/server/common/serviceerror"
-	"go.temporal.io/server/service/history/shard"
+	"go.temporal.io/server/service/history/consts"
+	historyi "go.temporal.io/server/service/history/interfaces"
 	"go.temporal.io/server/service/history/tasks"
 	"go.temporal.io/server/service/history/workflow"
 	wcache "go.temporal.io/server/service/history/workflow/cache"
@@ -70,14 +47,14 @@ type (
 	}
 
 	ActivityStateReplicatorImpl struct {
-		shardContext  shard.Context
+		shardContext  historyi.ShardContext
 		workflowCache wcache.Cache
 		logger        log.Logger
 	}
 )
 
 func NewActivityStateReplicator(
-	shardContext shard.Context,
+	shardContext historyi.ShardContext,
 	workflowCache wcache.Cache,
 	logger log.Logger,
 ) *ActivityStateReplicatorImpl {
@@ -142,6 +119,7 @@ func (r *ActivityStateReplicatorImpl) SyncActivityState(
 			ScheduledEventId:           request.ScheduledEventId,
 			ScheduledTime:              request.ScheduledTime,
 			StartedEventId:             request.StartedEventId,
+			StartVersion:               request.StartVersion,
 			StartedTime:                request.StartedTime,
 			LastHeartbeatTime:          request.LastHeartbeatTime,
 			Details:                    request.Details,
@@ -154,13 +132,18 @@ func (r *ActivityStateReplicatorImpl) SyncActivityState(
 			FirstScheduledTime:         request.FirstScheduledTime,
 			LastAttemptCompleteTime:    request.LastAttemptCompleteTime,
 			Stamp:                      request.Stamp,
+			Paused:                     request.Paused,
+			RetryInitialInterval:       request.RetryInitialInterval,
+			RetryMaximumInterval:       request.RetryMaximumInterval,
+			RetryMaximumAttempts:       request.RetryMaximumAttempts,
+			RetryBackoffCoefficient:    request.RetryBackoffCoefficient,
 		},
 	)
 	if err != nil {
 		return err
 	}
 	if !applied {
-		return nil
+		return consts.ErrDuplicate
 	}
 
 	// passive logic need to explicitly call create timer
@@ -170,6 +153,11 @@ func (r *ActivityStateReplicatorImpl) SyncActivityState(
 		return err
 	}
 
+	if r.shardContext.GetConfig().EnableUpdateWorkflowModeIgnoreCurrent() {
+		return executionContext.UpdateWorkflowExecutionAsPassive(ctx, r.shardContext)
+	}
+
+	// TODO: remove following code once EnableUpdateWorkflowModeIgnoreCurrent config is deprecated.
 	updateMode := persistence.UpdateWorkflowModeUpdateCurrent
 	if state, _ := mutableState.GetWorkflowStateStatus(); state == enumsspb.WORKFLOW_EXECUTION_STATE_ZOMBIE {
 		updateMode = persistence.UpdateWorkflowModeBypassCurrent
@@ -181,7 +169,7 @@ func (r *ActivityStateReplicatorImpl) SyncActivityState(
 		updateMode,
 		nil, // no new workflow
 		nil, // no new workflow
-		workflow.TransactionPolicyPassive,
+		historyi.TransactionPolicyPassive,
 		nil,
 	)
 }
@@ -246,7 +234,7 @@ func (r *ActivityStateReplicatorImpl) SyncActivitiesState(
 		anyEventApplied = anyEventApplied || applied
 	}
 	if !anyEventApplied {
-		return nil
+		return consts.ErrDuplicate
 	}
 
 	// passive logic need to explicitly call create timer
@@ -256,6 +244,11 @@ func (r *ActivityStateReplicatorImpl) SyncActivitiesState(
 		return err
 	}
 
+	if r.shardContext.GetConfig().EnableUpdateWorkflowModeIgnoreCurrent() {
+		return executionContext.UpdateWorkflowExecutionAsPassive(ctx, r.shardContext)
+	}
+
+	// TODO: remove following code once EnableUpdateWorkflowModeIgnoreCurrent config is deprecated.
 	updateMode := persistence.UpdateWorkflowModeUpdateCurrent
 	if state, _ := mutableState.GetWorkflowStateStatus(); state == enumsspb.WORKFLOW_EXECUTION_STATE_ZOMBIE {
 		updateMode = persistence.UpdateWorkflowModeBypassCurrent
@@ -267,14 +260,14 @@ func (r *ActivityStateReplicatorImpl) SyncActivitiesState(
 		updateMode,
 		nil, // no new workflow
 		nil, // no new workflow
-		workflow.TransactionPolicyPassive,
+		historyi.TransactionPolicyPassive,
 		nil,
 	)
 }
 
 func (r *ActivityStateReplicatorImpl) syncSingleActivityState(
 	workflowKey *definition.WorkflowKey,
-	mutableState workflow.MutableState,
+	mutableState historyi.MutableState,
 	activitySyncInfo *historyservice.ActivitySyncInfo,
 ) (applied bool, retError error) {
 	scheduledEventID := activitySyncInfo.GetScheduledEventId()
@@ -299,6 +292,7 @@ func (r *ActivityStateReplicatorImpl) syncSingleActivityState(
 	if shouldApply := r.compareActivity(
 		activitySyncInfo.GetVersion(),
 		activitySyncInfo.GetAttempt(),
+		activitySyncInfo.GetStamp(),
 		timestamp.TimeValue(activitySyncInfo.GetLastHeartbeatTime()),
 		activityInfo,
 	); !shouldApply {
@@ -337,6 +331,7 @@ func (r *ActivityStateReplicatorImpl) syncSingleActivityState(
 func (r *ActivityStateReplicatorImpl) compareActivity(
 	version int64,
 	attempt int32,
+	stamp int32,
 	lastHeartbeatTime time.Time,
 	activityInfo *persistencespb.ActivityInfo,
 ) bool {
@@ -349,6 +344,16 @@ func (r *ActivityStateReplicatorImpl) compareActivity(
 	if activityInfo.Version < version {
 		// incoming version larger then local version, should update activity
 		return true
+	}
+
+	if activityInfo.Stamp < stamp {
+		// stamp changed, should update activity
+		return true
+	}
+
+	if activityInfo.Stamp > stamp {
+		// stamp is older than we have, should not update activity
+		return false
 	}
 
 	// activityInfo.Version == version
@@ -380,7 +385,7 @@ func (r *ActivityStateReplicatorImpl) compareVersionHistory(
 	workflowID string,
 	runID string,
 	scheduledEventID int64,
-	mutableState workflow.MutableState,
+	mutableState historyi.MutableState,
 	incomingVersionHistory *historyspb.VersionHistory,
 ) (bool, error) {
 

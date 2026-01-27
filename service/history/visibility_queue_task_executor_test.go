@@ -1,47 +1,29 @@
-// The MIT License
-//
-// Copyright (c) 2020 Temporal Technologies Inc.  All rights reserved.
-//
-// Copyright (c) 2020 Uber Technologies, Inc.
-//
-// Permission is hereby granted, free of charge, to any person obtaining a copy
-// of this software and associated documentation files (the "Software"), to deal
-// in the Software without restriction, including without limitation the rights
-// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-// copies of the Software, and to permit persons to whom the Software is
-// furnished to do so, subject to the following conditions:
-//
-// The above copyright notice and this permission notice shall be included in
-// all copies or substantial portions of the Software.
-//
-// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
-// THE SOFTWARE.
-
 package history
 
 import (
 	"context"
+	"strconv"
 	"testing"
 	"time"
 
-	"github.com/pborman/uuid"
+	"github.com/google/uuid"
 	"github.com/stretchr/testify/require"
 	"github.com/stretchr/testify/suite"
 	commonpb "go.temporal.io/api/common/v1"
+	enumspb "go.temporal.io/api/enums/v1"
 	taskqueuepb "go.temporal.io/api/taskqueue/v1"
 	"go.temporal.io/api/workflowservice/v1"
+	enumsspb "go.temporal.io/server/api/enums/v1"
 	"go.temporal.io/server/api/historyservice/v1"
 	persistencespb "go.temporal.io/server/api/persistence/v1"
 	workflowspb "go.temporal.io/server/api/workflow/v1"
+	"go.temporal.io/server/chasm"
+	chasmworkflow "go.temporal.io/server/chasm/lib/workflow"
 	"go.temporal.io/server/common"
 	"go.temporal.io/server/common/clock"
 	"go.temporal.io/server/common/cluster"
 	"go.temporal.io/server/common/definition"
+	"go.temporal.io/server/common/dynamicconfig"
 	"go.temporal.io/server/common/log"
 	"go.temporal.io/server/common/metrics"
 	"go.temporal.io/server/common/namespace"
@@ -51,11 +33,15 @@ import (
 	"go.temporal.io/server/common/persistence/visibility/manager"
 	"go.temporal.io/server/common/primitives/timestamp"
 	"go.temporal.io/server/common/searchattribute"
+	"go.temporal.io/server/common/searchattribute/sadefs"
+	"go.temporal.io/server/common/tasktoken"
+	"go.temporal.io/server/common/telemetry"
 	"go.temporal.io/server/common/testing/protomock"
 	"go.temporal.io/server/common/worker_versioning"
 	"go.temporal.io/server/service/history/consts"
 	"go.temporal.io/server/service/history/events"
 	"go.temporal.io/server/service/history/hsm"
+	historyi "go.temporal.io/server/service/history/interfaces"
 	"go.temporal.io/server/service/history/queues"
 	"go.temporal.io/server/service/history/shard"
 	"go.temporal.io/server/service/history/tasks"
@@ -107,13 +93,14 @@ func (s *visibilityQueueTaskExecutorSuite) SetupTest() {
 
 	s.namespaceID = tests.NamespaceID
 	s.namespace = tests.Namespace
-	s.version = tests.GlobalNamespaceEntry.FailoverVersion()
+	s.version = tests.GlobalNamespaceEntry.FailoverVersion(namespace.EmptyBusinessID)
 	s.now = time.Now().UTC()
 	s.timeSource = clock.NewEventTimeSource().Update(s.now)
 
 	s.controller = gomock.NewController(s.T())
 
 	config := tests.NewDynamicConfig()
+	config.EnableChasm = dynamicconfig.GetBoolPropertyFnFilteredByNamespace(true)
 	s.mockShard = shard.NewTestContext(
 		s.controller,
 		&persistencespb.ShardInfo{
@@ -123,10 +110,29 @@ func (s *visibilityQueueTaskExecutorSuite) SetupTest() {
 		config,
 	)
 
+	// Set up expectations on the SearchAttributesMapper mocks created by NewTestContext
+	mockMapper := searchattribute.NewMockMapper(s.controller)
+	mockMapper.EXPECT().GetFieldName(gomock.Any(), gomock.Any()).DoAndReturn(
+		func(alias string, _ string) (string, error) {
+			return alias, nil
+		},
+	).AnyTimes()
+
+	mockMapperProvider := s.mockShard.Resource.SearchAttributesMapperProvider
+	mockMapperProvider.EXPECT().GetMapper(gomock.Any()).Return(mockMapper, nil).AnyTimes()
+
 	reg := hsm.NewRegistry()
 	err := workflow.RegisterStateMachine(reg)
 	s.NoError(err)
 	s.mockShard.SetStateMachineRegistry(reg)
+
+	chasmRegistry := s.mockShard.ChasmRegistry()
+	err = chasmRegistry.Register(&chasm.CoreLibrary{})
+	s.NoError(err)
+	err = chasmRegistry.Register(&testChasmLibrary{})
+	s.NoError(err)
+	err = chasmRegistry.Register(chasmworkflow.NewLibrary())
+	s.NoError(err)
 
 	s.mockShard.SetEventsCacheForTesting(events.NewHostLevelEventsCache(
 		s.mockShard.GetExecutionManager(),
@@ -147,7 +153,8 @@ func (s *visibilityQueueTaskExecutorSuite) SetupTest() {
 
 	mockClusterMetadata := s.mockShard.Resource.ClusterMetadata
 	mockClusterMetadata.EXPECT().GetCurrentClusterName().Return(cluster.TestCurrentClusterName).AnyTimes()
-	mockClusterMetadata.EXPECT().GetClusterID().Return(int64(1)).AnyTimes()
+	mockClusterMetadata.EXPECT().GetClusterID().Return(tests.Version).AnyTimes()
+	mockClusterMetadata.EXPECT().IsVersionFromSameCluster(tests.Version, tests.Version).Return(true).AnyTimes()
 	mockClusterMetadata.EXPECT().GetAllClusterInfo().Return(cluster.TestAllClusterInfo).AnyTimes()
 	mockClusterMetadata.EXPECT().IsGlobalNamespaceEnabled().Return(true).AnyTimes()
 	mockClusterMetadata.EXPECT().ClusterNameForFailoverVersion(true, s.version).Return(mockClusterMetadata.GetCurrentClusterName()).AnyTimes()
@@ -161,7 +168,7 @@ func (s *visibilityQueueTaskExecutorSuite) SetupTest() {
 		clusterMetadata:    mockClusterMetadata,
 		executionManager:   s.mockExecutionMgr,
 		logger:             s.logger,
-		tokenSerializer:    common.NewProtoTaskTokenSerializer(),
+		tokenSerializer:    tasktoken.NewSerializer(),
 		metricsHandler:     s.mockShard.GetMetricsHandler(),
 		eventNotifier:      events.NewNotifier(clock.NewRealTimeSource(), metrics.NoopMetricsHandler, func(namespace.ID, string) int32 { return 1 }),
 	}
@@ -177,6 +184,7 @@ func (s *visibilityQueueTaskExecutorSuite) SetupTest() {
 		config.VisibilityProcessorEnsureCloseBeforeDelete,
 		func(_ string) bool { return s.enableCloseWorkflowCleanup },
 		config.VisibilityProcessorRelocateAttributesMinBlobSize,
+		config.ExternalPayloadsEnabled,
 	)
 }
 
@@ -188,7 +196,7 @@ func (s *visibilityQueueTaskExecutorSuite) TearDownTest() {
 func (s *visibilityQueueTaskExecutorSuite) TestProcessCloseExecution() {
 	execution := &commonpb.WorkflowExecution{
 		WorkflowId: "some random workflow ID",
-		RunId:      uuid.New(),
+		RunId:      uuid.NewString(),
 	}
 	workflowType := "some random workflow type"
 	taskQueueName := "some random task queue"
@@ -199,11 +207,11 @@ func (s *visibilityQueueTaskExecutorSuite) TestProcessCloseExecution() {
 	parentNamespace := "some random parent namespace Name"
 	parentExecution := &commonpb.WorkflowExecution{
 		WorkflowId: "some random parent workflow ID",
-		RunId:      uuid.New(),
+		RunId:      uuid.NewString(),
 	}
 	rootExecution := &commonpb.WorkflowExecution{
 		WorkflowId: "some random root workflow ID",
-		RunId:      uuid.New(),
+		RunId:      uuid.NewString(),
 	}
 
 	mutableState := workflow.TestGlobalMutableState(s.mockShard, s.mockShard.GetEventsCache(), s.logger, s.version, execution.GetWorkflowId(), execution.GetRunId())
@@ -230,7 +238,7 @@ func (s *visibilityQueueTaskExecutorSuite) TestProcessCloseExecution() {
 	s.Nil(err)
 
 	wt := addWorkflowTaskScheduledEvent(mutableState)
-	event := addWorkflowTaskStartedEvent(mutableState, wt.ScheduledEventID, taskQueueName, uuid.New())
+	event := addWorkflowTaskStartedEvent(mutableState, wt.ScheduledEventID, taskQueueName, uuid.NewString())
 	wt.StartedEventID = event.GetEventId()
 	event = addWorkflowTaskCompletedEvent(&s.Suite, mutableState, wt.ScheduledEventID, wt.StartedEventID, "some random identity")
 
@@ -260,7 +268,7 @@ func (s *visibilityQueueTaskExecutorSuite) TestProcessCloseExecution() {
 			parentExecution,
 			rootExecution,
 			map[string]any{
-				searchattribute.BuildIds: []string{worker_versioning.UnversionedSearchAttribute},
+				sadefs.BuildIds: []string{worker_versioning.UnversionedSearchAttribute},
 			},
 		),
 	).Return(nil)
@@ -274,7 +282,7 @@ func (s *visibilityQueueTaskExecutorSuite) TestProcessCloseExecutionWithWorkflow
 
 	execution := &commonpb.WorkflowExecution{
 		WorkflowId: "some random workflow ID",
-		RunId:      uuid.New(),
+		RunId:      uuid.NewString(),
 	}
 	workflowType := "some random workflow type"
 	taskQueueName := "some random task queue"
@@ -285,11 +293,11 @@ func (s *visibilityQueueTaskExecutorSuite) TestProcessCloseExecutionWithWorkflow
 	parentNamespace := "some random parent namespace Name"
 	parentExecution := &commonpb.WorkflowExecution{
 		WorkflowId: "some random parent workflow ID",
-		RunId:      uuid.New(),
+		RunId:      uuid.NewString(),
 	}
 	rootExecution := &commonpb.WorkflowExecution{
 		WorkflowId: "some random root workflow ID",
-		RunId:      uuid.New(),
+		RunId:      uuid.NewString(),
 	}
 
 	mutableState := workflow.TestGlobalMutableState(s.mockShard, s.mockShard.GetEventsCache(), s.logger, s.version, execution.GetWorkflowId(), execution.GetRunId())
@@ -316,7 +324,7 @@ func (s *visibilityQueueTaskExecutorSuite) TestProcessCloseExecutionWithWorkflow
 	s.Nil(err)
 
 	wt := addWorkflowTaskScheduledEvent(mutableState)
-	event := addWorkflowTaskStartedEvent(mutableState, wt.ScheduledEventID, taskQueueName, uuid.New())
+	event := addWorkflowTaskStartedEvent(mutableState, wt.ScheduledEventID, taskQueueName, uuid.NewString())
 	wt.StartedEventID = event.GetEventId()
 	event = addWorkflowTaskCompletedEvent(&s.Suite, mutableState, wt.ScheduledEventID, wt.StartedEventID, "some random identity")
 
@@ -336,7 +344,7 @@ func (s *visibilityQueueTaskExecutorSuite) TestProcessCloseExecutionWithWorkflow
 
 	persistenceMutableState := s.createPersistenceMutableState(mutableState, event.GetEventId(), event.GetVersion())
 	s.mockExecutionMgr.EXPECT().GetWorkflowExecution(gomock.Any(), gomock.Any()).Return(&persistence.GetWorkflowExecutionResponse{State: persistenceMutableState}, nil)
-	s.mockExecutionMgr.EXPECT().SetWorkflowExecution(gomock.Any(), gomock.Any()).Return(&persistence.SetWorkflowExecutionResponse{}, nil)
+	s.mockExecutionMgr.EXPECT().UpdateWorkflowExecution(gomock.Any(), gomock.Any()).Return(tests.UpdateWorkflowExecutionResponse, nil)
 	s.mockVisibilityMgr.EXPECT().RecordWorkflowExecutionClosed(
 		gomock.Any(),
 		s.createRecordWorkflowExecutionClosedRequest(
@@ -347,7 +355,7 @@ func (s *visibilityQueueTaskExecutorSuite) TestProcessCloseExecutionWithWorkflow
 			parentExecution,
 			rootExecution,
 			map[string]any{
-				searchattribute.BuildIds: []string{worker_versioning.UnversionedSearchAttribute},
+				sadefs.BuildIds: []string{worker_versioning.UnversionedSearchAttribute},
 			},
 		),
 	).Return(nil)
@@ -359,7 +367,7 @@ func (s *visibilityQueueTaskExecutorSuite) TestProcessCloseExecutionWithWorkflow
 func (s *visibilityQueueTaskExecutorSuite) TestProcessRecordWorkflowStartedTask() {
 	execution := &commonpb.WorkflowExecution{
 		WorkflowId: "some random workflow ID",
-		RunId:      uuid.New(),
+		RunId:      uuid.NewString(),
 	}
 	workflowType := "some random workflow type"
 	taskQueueName := "some random task queue"
@@ -413,7 +421,7 @@ func (s *visibilityQueueTaskExecutorSuite) TestProcessRecordWorkflowStartedTask(
 func (s *visibilityQueueTaskExecutorSuite) TestProcessUpsertWorkflowSearchAttributes() {
 	execution := &commonpb.WorkflowExecution{
 		WorkflowId: "some random workflow ID",
-		RunId:      uuid.New(),
+		RunId:      uuid.NewString(),
 	}
 	workflowType := "some random workflow type"
 	taskQueueName := "some random task queue"
@@ -461,7 +469,7 @@ func (s *visibilityQueueTaskExecutorSuite) TestProcessUpsertWorkflowSearchAttrib
 func (s *visibilityQueueTaskExecutorSuite) TestProcessModifyWorkflowProperties() {
 	execution := &commonpb.WorkflowExecution{
 		WorkflowId: "some random workflow ID",
-		RunId:      uuid.New(),
+		RunId:      uuid.NewString(),
 	}
 	workflowType := "some random workflow type"
 	taskQueueName := "some random task queue"
@@ -526,7 +534,7 @@ func (s *visibilityQueueTaskExecutorSuite) TestProcessModifyWorkflowProperties()
 	s.Nil(resp.ExecutionErr)
 }
 
-func (s *visibilityQueueTaskExecutorSuite) TestProcessorDeleteExecution() {
+func (s *visibilityQueueTaskExecutorSuite) TestProcessDeleteExecution() {
 	s.T().SkipNow()
 	workflowKey := definition.WorkflowKey{
 		NamespaceID: s.namespaceID.String(),
@@ -574,6 +582,226 @@ func (s *visibilityQueueTaskExecutorSuite) TestProcessorDeleteExecution() {
 	})
 }
 
+func (s *visibilityQueueTaskExecutorSuite) TestProcessChasmTask_InvalidTask() {
+	key := definition.NewWorkflowKey(
+		s.namespaceID.String(),
+		"some random ID",
+		uuid.NewString(),
+	)
+	mutableState := s.buildChasmMutableState(key, 5)
+
+	// Case 1: invalid task with lower transition count than the state
+	visibilityTask := s.buildChasmVisTask(key, 3)
+
+	s.mockExecutionMgr.EXPECT().GetWorkflowExecution(gomock.Any(), gomock.Any()).Return(&persistence.GetWorkflowExecutionResponse{State: mutableState}, nil)
+
+	resp := s.visibilityQueueTaskExecutor.Execute(context.Background(), s.newTaskExecutable(visibilityTask))
+	s.Nil(resp.ExecutionErr)
+
+	// Case 2: invalid task with a different initial versioned transition
+	componentInitVT := mutableState.ChasmNodes["Visibility"].Metadata.InitialVersionedTransition
+	visibilityTask = s.buildChasmVisTask(key, 5)
+	visibilityTask.Info.ComponentInitialVersionedTransition = &persistencespb.VersionedTransition{
+		NamespaceFailoverVersion: componentInitVT.NamespaceFailoverVersion + 101,
+		TransitionCount:          componentInitVT.TransitionCount,
+	}
+
+	resp = s.visibilityQueueTaskExecutor.Execute(context.Background(), s.newTaskExecutable(visibilityTask))
+	s.Nil(resp.ExecutionErr)
+}
+
+func (s *visibilityQueueTaskExecutorSuite) TestProcessChasmTask_RunningExecution() {
+	key := definition.NewWorkflowKey(
+		s.namespaceID.String(),
+		"some random ID",
+		uuid.NewString(),
+	)
+	mutableState := s.buildChasmMutableState(key, 5)
+
+	visibilityTask := s.buildChasmVisTask(key, 5)
+
+	s.mockExecutionMgr.EXPECT().GetWorkflowExecution(gomock.Any(), gomock.Any()).Return(&persistence.GetWorkflowExecutionResponse{State: mutableState}, nil)
+	s.mockVisibilityMgr.EXPECT().UpsertWorkflowExecution(gomock.Any(), gomock.Any()).DoAndReturn(
+		func(ctx context.Context, request *manager.UpsertWorkflowExecutionRequest) error {
+
+			s.Len(request.SearchAttributes.IndexedFields, 2)
+
+			v, ok := request.SearchAttributes.IndexedFields[sadefs.TemporalNamespaceDivision]
+			s.True(ok)
+			var actualArchetypeIDStr string
+			err := payload.Decode(v, &actualArchetypeIDStr)
+			s.NoError(err)
+			expectedArchetypeID, ok := s.mockShard.ChasmRegistry().ComponentIDFor(&testComponent{})
+			s.True(ok)
+			s.Equal(strconv.FormatUint(uint64(expectedArchetypeID), 10), actualArchetypeIDStr)
+
+			var paused bool
+			// SearchAttribute now uses field name (TemporalBool01) instead of alias (PausedSA)
+			err = payload.Decode(request.SearchAttributes.IndexedFields["TemporalBool01"], &paused)
+			s.NoError(err)
+			s.True(paused)
+
+			s.Len(request.Memo.Fields, 1)
+
+			// Memo should contain "__chasm__" key with encoded proto message
+			chasmMemoPayload, ok := request.Memo.Fields[chasm.ChasmMemoKey]
+			s.True(ok, "Expected %s key in memo", chasm.ChasmMemoKey)
+
+			// Decode the chasm memo proto message
+			var chasmMemoProto persistencespb.WorkflowExecutionState
+			err = payload.Decode(chasmMemoPayload, &chasmMemoProto)
+			s.NoError(err)
+			s.NotEmpty(chasmMemoProto.RunId)
+
+			return nil
+		},
+	)
+
+	resp := s.visibilityQueueTaskExecutor.Execute(context.Background(), s.newTaskExecutable(visibilityTask))
+	s.Nil(resp.ExecutionErr)
+}
+
+func (s *visibilityQueueTaskExecutorSuite) TestProcessChasmTask_ClosedExecution() {
+	key := definition.NewWorkflowKey(
+		s.namespaceID.String(),
+		"some random ID",
+		uuid.NewString(),
+	)
+	mutableState := s.buildChasmMutableState(key, 5)
+
+	closeTime := s.now.Add(5 * time.Minute)
+	mutableState.ExecutionInfo.CloseTime = timestamppb.New(closeTime)
+	mutableState.ExecutionState.State = enumsspb.WORKFLOW_EXECUTION_STATE_COMPLETED
+	mutableState.ExecutionState.Status = enumspb.WORKFLOW_EXECUTION_STATUS_COMPLETED
+
+	visibilityTask := s.buildChasmVisTask(key, 5)
+
+	s.mockExecutionMgr.EXPECT().GetWorkflowExecution(gomock.Any(), gomock.Any()).Return(&persistence.GetWorkflowExecutionResponse{State: mutableState}, nil)
+	s.mockVisibilityMgr.EXPECT().RecordWorkflowExecutionClosed(gomock.Any(), gomock.Any()).DoAndReturn(
+		func(ctx context.Context, request *manager.RecordWorkflowExecutionClosedRequest) error {
+			s.True(closeTime.Equal(request.CloseTime))
+			s.NotEmpty(request.ExecutionDuration)
+			s.Zero(request.HistoryLength)
+			s.Zero(request.HistorySizeBytes)
+			s.NotEmpty(request.StateTransitionCount)
+
+			// Other fields are tested in TestProcessChasmTask_RunningExecution
+			return nil
+		},
+	)
+
+	resp := s.visibilityQueueTaskExecutor.Execute(context.Background(), s.newTaskExecutable(visibilityTask))
+	s.Nil(resp.ExecutionErr)
+}
+
+func (s *visibilityQueueTaskExecutorSuite) buildChasmMutableState(
+	key definition.WorkflowKey,
+	visComponentTransitionCount int64,
+) *persistencespb.WorkflowMutableState {
+	executionInfo := &persistencespb.WorkflowExecutionInfo{
+		NamespaceId:    s.namespaceID.String(),
+		WorkflowId:     key.WorkflowID,
+		LastUpdateTime: timestamp.TimeNowPtrUtc(),
+		StartTime:      timestamppb.Now(),
+		ExecutionTime:  timestamppb.Now(),
+		TransitionHistory: []*persistencespb.VersionedTransition{
+			{NamespaceFailoverVersion: s.version, TransitionCount: 1},
+		},
+		StateTransitionCount: 10,
+	}
+	executionState := &persistencespb.WorkflowExecutionState{
+		RunId:     key.RunID,
+		State:     enumsspb.WORKFLOW_EXECUTION_STATE_RUNNING,
+		Status:    enumspb.WORKFLOW_EXECUTION_STATUS_RUNNING,
+		StartTime: timestamppb.Now(),
+	}
+
+	visibilityComponentData := &persistencespb.ChasmVisibilityData{
+		TransitionCount: visComponentTransitionCount,
+	}
+	data, err := visibilityComponentData.Marshal()
+	s.NoError(err)
+
+	testComponentTypeID, ok := s.mockShard.ChasmRegistry().ComponentIDFor(&testComponent{})
+	s.True(ok)
+	visComponentTypeID, ok := s.mockShard.ChasmRegistry().ComponentIDFor(&chasm.Visibility{})
+	s.True(ok)
+
+	chasmNodes := map[string]*persistencespb.ChasmNode{
+		"": {
+			Metadata: &persistencespb.ChasmNodeMetadata{
+				InitialVersionedTransition:    &persistencespb.VersionedTransition{NamespaceFailoverVersion: s.version, TransitionCount: 1},
+				LastUpdateVersionedTransition: &persistencespb.VersionedTransition{NamespaceFailoverVersion: s.version, TransitionCount: 1},
+				Attributes: &persistencespb.ChasmNodeMetadata_ComponentAttributes{
+					ComponentAttributes: &persistencespb.ChasmComponentAttributes{
+						TypeId: testComponentTypeID,
+					},
+				},
+			},
+			Data: newTestComponentStateBlob(&persistencespb.ActivityInfo{
+				Paused:     true,
+				ActivityId: key.RunID,
+			}),
+		},
+		"Visibility": {
+			Metadata: &persistencespb.ChasmNodeMetadata{
+				InitialVersionedTransition:    &persistencespb.VersionedTransition{NamespaceFailoverVersion: s.version, TransitionCount: 1},
+				LastUpdateVersionedTransition: &persistencespb.VersionedTransition{NamespaceFailoverVersion: s.version, TransitionCount: 1},
+				Attributes: &persistencespb.ChasmNodeMetadata_ComponentAttributes{
+					ComponentAttributes: &persistencespb.ChasmComponentAttributes{
+						TypeId: visComponentTypeID,
+					},
+				},
+			},
+			Data: &commonpb.DataBlob{
+				Data:         data,
+				EncodingType: enumspb.ENCODING_TYPE_PROTO3,
+			},
+		},
+	}
+	return &persistencespb.WorkflowMutableState{
+		ExecutionInfo:  executionInfo,
+		ExecutionState: executionState,
+		ChasmNodes:     chasmNodes,
+		NextEventId:    common.FirstEventID,
+	}
+}
+
+func (s *visibilityQueueTaskExecutorSuite) buildChasmVisTask(
+	key definition.WorkflowKey,
+	taskTransitionCount int64,
+) *tasks.ChasmTask {
+	visTaskData := &persistencespb.ChasmVisibilityTaskData{
+		TransitionCount: taskTransitionCount,
+	}
+	data, err := visTaskData.Marshal()
+	s.NoError(err)
+
+	visTaskTypeID, ok := s.mockShard.ChasmRegistry().TaskIDFor(&persistencespb.ChasmVisibilityTaskData{})
+	s.True(ok)
+
+	archetypeID, ok := s.mockShard.ChasmRegistry().ComponentIDFor(&testComponent{})
+	s.True(ok)
+
+	return &tasks.ChasmTask{
+		WorkflowKey:         key,
+		VisibilityTimestamp: time.Now().UTC(),
+		TaskID:              int64(59),
+		Category:            tasks.CategoryVisibility,
+		Info: &persistencespb.ChasmTaskInfo{
+			ComponentInitialVersionedTransition:    &persistencespb.VersionedTransition{NamespaceFailoverVersion: s.version, TransitionCount: 1},
+			ComponentLastUpdateVersionedTransition: &persistencespb.VersionedTransition{NamespaceFailoverVersion: s.version, TransitionCount: 1},
+			Path:                                   []string{"Visibility"},
+			TypeId:                                 visTaskTypeID,
+			Data: &commonpb.DataBlob{
+				Data:         data,
+				EncodingType: enumspb.ENCODING_TYPE_PROTO3,
+			},
+			ArchetypeId: archetypeID,
+		},
+	}
+}
+
 func (s *visibilityQueueTaskExecutorSuite) execute(task tasks.Task) error {
 	return s.visibilityQueueTaskExecutor.Execute(context.Background(), s.newTaskExecutable(task)).ExecutionErr
 }
@@ -581,7 +809,7 @@ func (s *visibilityQueueTaskExecutorSuite) execute(task tasks.Task) error {
 func (s *visibilityQueueTaskExecutorSuite) createVisibilityRequestBase(
 	namespaceName namespace.Name,
 	task tasks.Task,
-	mutableState workflow.MutableState,
+	mutableState historyi.MutableState,
 	taskQueueName string,
 	parentExecution *commonpb.WorkflowExecution,
 	rootExecution *commonpb.WorkflowExecution,
@@ -630,7 +858,7 @@ func (s *visibilityQueueTaskExecutorSuite) createVisibilityRequestBase(
 func (s *visibilityQueueTaskExecutorSuite) createRecordWorkflowExecutionStartedRequest(
 	namespaceName namespace.Name,
 	task *tasks.StartExecutionVisibilityTask,
-	mutableState workflow.MutableState,
+	mutableState historyi.MutableState,
 	taskQueueName string,
 ) gomock.Matcher {
 	return protomock.Eq(&manager.RecordWorkflowExecutionStartedRequest{
@@ -649,7 +877,7 @@ func (s *visibilityQueueTaskExecutorSuite) createRecordWorkflowExecutionStartedR
 func (s *visibilityQueueTaskExecutorSuite) createUpsertWorkflowRequest(
 	namespaceName namespace.Name,
 	task *tasks.UpsertExecutionVisibilityTask,
-	mutableState workflow.MutableState,
+	mutableState historyi.MutableState,
 	taskQueueName string,
 ) gomock.Matcher {
 	return protomock.Eq(&manager.UpsertWorkflowExecutionRequest{
@@ -668,7 +896,7 @@ func (s *visibilityQueueTaskExecutorSuite) createUpsertWorkflowRequest(
 func (s *visibilityQueueTaskExecutorSuite) createRecordWorkflowExecutionClosedRequest(
 	namespaceName namespace.Name,
 	task *tasks.CloseExecutionVisibilityTask,
-	mutableState workflow.MutableState,
+	mutableState historyi.MutableState,
 	taskQueueName string,
 	parentExecution *commonpb.WorkflowExecution,
 	rootExecution *commonpb.WorkflowExecution,
@@ -693,7 +921,7 @@ func (s *visibilityQueueTaskExecutorSuite) createRecordWorkflowExecutionClosedRe
 }
 
 func (s *visibilityQueueTaskExecutorSuite) createPersistenceMutableState(
-	ms workflow.MutableState,
+	ms historyi.MutableState,
 	lastEventID int64,
 	lastEventVersion int64,
 ) *persistencespb.WorkflowMutableState {
@@ -703,7 +931,7 @@ func (s *visibilityQueueTaskExecutorSuite) createPersistenceMutableState(
 		lastEventID, lastEventVersion,
 	))
 	s.NoError(err)
-	return workflow.TestCloneToProto(ms)
+	return workflow.TestCloneToProto(context.Background(), ms)
 }
 
 func (s *visibilityQueueTaskExecutorSuite) newTaskExecutable(
@@ -719,8 +947,11 @@ func (s *visibilityQueueTaskExecutorSuite) newTaskExecutable(
 		s.mockShard.GetTimeSource(),
 		s.mockShard.GetNamespaceRegistry(),
 		s.mockShard.GetClusterMetadata(),
+		s.mockShard.ChasmRegistry(),
+		queues.GetTaskTypeTagValue,
 		nil,
 		metrics.NoopMetricsHandler,
+		telemetry.NoopTracer,
 	)
 }
 

@@ -1,60 +1,39 @@
-// The MIT License
-//
-// Copyright (c) 2020 Temporal Technologies Inc.  All rights reserved.
-//
-// Copyright (c) 2020 Uber Technologies, Inc.
-//
-// Permission is hereby granted, free of charge, to any person obtaining a copy
-// of this software and associated documentation files (the "Software"), to deal
-// in the Software without restriction, including without limitation the rights
-// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-// copies of the Software, and to permit persons to whom the Software is
-// furnished to do so, subject to the following conditions:
-//
-// The above copyright notice and this permission notice shall be included in
-// all copies or substantial portions of the Software.
-//
-// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
-// THE SOFTWARE.
-
 package persistence
 
 import (
 	"context"
 	"errors"
-	"fmt"
+	"strings"
 
 	commonpb "go.temporal.io/api/common/v1"
-	enumspb "go.temporal.io/api/enums/v1"
 	historypb "go.temporal.io/api/history/v1"
 	"go.temporal.io/api/serviceerror"
 	workflowpb "go.temporal.io/api/workflow/v1"
 	historyspb "go.temporal.io/server/api/history/v1"
 	persistencespb "go.temporal.io/server/api/persistence/v1"
+	"go.temporal.io/server/chasm"
 	"go.temporal.io/server/common"
 	"go.temporal.io/server/common/definition"
 	"go.temporal.io/server/common/dynamicconfig"
 	"go.temporal.io/server/common/log"
 	"go.temporal.io/server/common/log/tag"
 	"go.temporal.io/server/common/persistence/serialization"
+	"go.temporal.io/server/common/persistence/transitionhistory"
 	"go.temporal.io/server/common/persistence/versionhistory"
+	"go.temporal.io/server/common/softassert"
 	"go.temporal.io/server/service/history/tasks"
 )
 
 type (
 	// executionManagerImpl implements ExecutionManager based on ExecutionStore, statsComputer and Serializer
 	executionManagerImpl struct {
-		serializer            serialization.Serializer
-		eventBlobCache        XDCCache
-		persistence           ExecutionStore
-		logger                log.Logger
-		pagingTokenSerializer *jsonHistoryTokenSerializer
-		transactionSizeLimit  dynamicconfig.IntPropertyFn
+		serializer                                  serialization.Serializer
+		eventBlobCache                              XDCCache
+		persistence                                 ExecutionStore
+		logger                                      log.Logger
+		pagingTokenSerializer                       *jsonHistoryTokenSerializer
+		transactionSizeLimit                        dynamicconfig.IntPropertyFn
+		enableBestEffortDeleteTasksOnWorkflowUpdate dynamicconfig.BoolPropertyFn
 	}
 )
 
@@ -67,6 +46,7 @@ func NewExecutionManager(
 	eventBlobCache XDCCache,
 	logger log.Logger,
 	transactionSizeLimit dynamicconfig.IntPropertyFn,
+	enableBestEffortDeleteTasksOnWorkflowUpdate dynamicconfig.BoolPropertyFn,
 ) ExecutionManager {
 	return &executionManagerImpl{
 		serializer:            serializer,
@@ -75,6 +55,7 @@ func NewExecutionManager(
 		logger:                logger,
 		pagingTokenSerializer: newJSONHistoryTokenSerializer(),
 		transactionSizeLimit:  transactionSizeLimit,
+		enableBestEffortDeleteTasksOnWorkflowUpdate: enableBestEffortDeleteTasksOnWorkflowUpdate,
 	}
 }
 
@@ -124,12 +105,14 @@ func (m *executionManagerImpl) CreateWorkflowExecution(
 		return nil, err
 	}
 
+	archetypeID, _ := m.assertAndConvertArchetypeID(request.ArchetypeID, "CreateWorkflowExecution")
 	newRequest := &InternalCreateWorkflowExecutionRequest{
 		ShardID:                  request.ShardID,
 		RangeID:                  request.RangeID,
 		Mode:                     request.Mode,
 		PreviousRunID:            request.PreviousRunID,
 		PreviousLastWriteVersion: request.PreviousLastWriteVersion,
+		ArchetypeID:              archetypeID,
 		NewWorkflowSnapshot:      *serializedNewWorkflowSnapshot,
 		NewWorkflowNewEvents:     newWorkflowNewEvents,
 	}
@@ -207,11 +190,14 @@ func (m *executionManagerImpl) UpdateWorkflowExecution(
 		}
 	}
 
+	archetypeID, _ := m.assertAndConvertArchetypeID(request.ArchetypeID, "UpdateWorkflowExecution")
 	newRequest := &InternalUpdateWorkflowExecutionRequest{
 		ShardID: request.ShardID,
 		RangeID: request.RangeID,
 
 		Mode: request.Mode,
+
+		ArchetypeID: archetypeID,
 
 		UpdateWorkflowMutation:  *serializedWorkflowMutation,
 		UpdateWorkflowNewEvents: updateWorkflowNewEvents,
@@ -222,6 +208,7 @@ func (m *executionManagerImpl) UpdateWorkflowExecution(
 	err = m.persistence.UpdateWorkflowExecution(ctx, newRequest)
 	switch err.(type) {
 	case nil:
+		m.deleteHistoryTasks(ctx, request.ShardID, updateMutation.BestEffortDeleteTasks, updateMutation.ExecutionInfo.WorkflowId)
 		m.addXDCCacheKV(updateWorkflowXDCKVs)
 		m.addXDCCacheKV(newWorkflowXDCKVs)
 		return &UpdateWorkflowExecutionResponse{
@@ -243,10 +230,43 @@ func (m *executionManagerImpl) UpdateWorkflowExecution(
 			updateMutation.ExecutionInfo.NamespaceId,
 			updateMutation.ExecutionInfo.WorkflowId,
 			updateMutation.ExecutionState.RunId,
+			archetypeID,
 		)
 		return nil, err
 	default:
 		return nil, err
+	}
+}
+
+// deleteHistoryTasks iterates over provided task keys and completes them when the dynamic config
+// history.enableDeleteTasksOnWorkflowUpdate is enabled. Completion is best-effort and failures are logged.
+func (m *executionManagerImpl) deleteHistoryTasks(
+	ctx context.Context,
+	shardID int32,
+	toDelete map[tasks.Category][]tasks.Key,
+	workflowID string,
+) {
+	if !m.enableBestEffortDeleteTasksOnWorkflowUpdate() || len(toDelete) == 0 {
+		return
+	}
+	for category, keys := range toDelete {
+		for _, key := range keys {
+			if err := m.persistence.CompleteHistoryTask(ctx, &CompleteHistoryTaskRequest{
+				ShardID:      shardID,
+				TaskCategory: category,
+				TaskKey:      key,
+				BestEffort:   true,
+			}); err != nil {
+				m.logger.Warn("Failed to delete history task after workflow update",
+					tag.ShardID(shardID),
+					tag.WorkflowID(workflowID),
+					tag.TaskCategoryID(category.ID()),
+					tag.Timestamp(key.FireTime),
+					tag.TaskID(key.TaskID),
+					tag.Error(err),
+				)
+			}
+		}
 	}
 }
 
@@ -330,11 +350,14 @@ func (m *executionManagerImpl) ConflictResolveWorkflowExecution(
 		}
 	}
 
+	archetypeID, _ := m.assertAndConvertArchetypeID(request.ArchetypeID, "ConflictResolveWorkflowExecution")
 	newRequest := &InternalConflictResolveWorkflowExecutionRequest{
 		ShardID: request.ShardID,
 		RangeID: request.RangeID,
 
 		Mode: request.Mode,
+
+		ArchetypeID: archetypeID,
 
 		ResetWorkflowSnapshot:        *serializedResetWorkflowSnapshot,
 		ResetWorkflowEventsNewEvents: resetWorkflowEvents,
@@ -375,6 +398,7 @@ func (m *executionManagerImpl) ConflictResolveWorkflowExecution(
 			resetSnapshot.ExecutionInfo.NamespaceId,
 			resetSnapshot.ExecutionInfo.WorkflowId,
 			resetSnapshot.ExecutionState.RunId,
+			archetypeID,
 		)
 		if currentMutation != nil {
 			m.trimHistoryNode(
@@ -383,6 +407,7 @@ func (m *executionManagerImpl) ConflictResolveWorkflowExecution(
 				currentMutation.ExecutionInfo.NamespaceId,
 				currentMutation.ExecutionInfo.WorkflowId,
 				currentMutation.ExecutionState.RunId,
+				archetypeID,
 			)
 		}
 		return nil, err
@@ -395,13 +420,22 @@ func (m *executionManagerImpl) GetWorkflowExecution(
 	ctx context.Context,
 	request *GetWorkflowExecutionRequest,
 ) (*GetWorkflowExecutionResponse, error) {
+	if archetypeID, converted := m.assertAndConvertArchetypeID(request.ArchetypeID, "GetWorkflowExecution"); converted {
+		request = &GetWorkflowExecutionRequest{
+			ShardID:     request.ShardID,
+			NamespaceID: request.NamespaceID,
+			WorkflowID:  request.WorkflowID,
+			RunID:       request.RunID,
+			ArchetypeID: archetypeID,
+		}
+	}
 	response, respErr := m.persistence.GetWorkflowExecution(ctx, request)
 
 	var notFound *serviceerror.NotFound
 	if errors.As(respErr, &notFound) {
 		// strip persistence-specific error message
-		respErr = serviceerror.NewNotFound(fmt.Sprintf(
-			"workflow execution not found for workflow ID %q and run ID %q", request.WorkflowID, request.RunID))
+		respErr = serviceerror.NewNotFoundf(
+			"workflow execution not found for workflow ID %q and run ID %q", request.WorkflowID, request.RunID)
 	}
 	if respErr != nil && response == nil {
 		// try to utilize resp as much as possible, for RebuildMutableState API
@@ -434,9 +468,12 @@ func (m *executionManagerImpl) SetWorkflowExecution(
 		return nil, err
 	}
 
+	archetypeID, _ := m.assertAndConvertArchetypeID(request.ArchetypeID, "SetWorkflowExecution")
 	newRequest := &InternalSetWorkflowExecutionRequest{
 		ShardID: request.ShardID,
 		RangeID: request.RangeID,
+
+		ArchetypeID: archetypeID,
 
 		SetWorkflowSnapshot: *serializedWorkflowSnapshot,
 	}
@@ -449,7 +486,7 @@ func (m *executionManagerImpl) SetWorkflowExecution(
 }
 
 func (m *executionManagerImpl) serializeWorkflowEventBatches(
-	ctx context.Context,
+	_ context.Context,
 	shardID int32,
 	executionInfo *persistencespb.WorkflowExecutionInfo,
 	eventBatches []*WorkflowEvents,
@@ -552,7 +589,7 @@ func (m *executionManagerImpl) SerializeWorkflowMutation( // unexport
 	input *WorkflowMutation,
 ) (*InternalWorkflowMutation, error) {
 
-	tasks, err := serializeTasks(m.serializer, input.Tasks)
+	serializedTasks, err := serializeTasks(m.serializer, input.Tasks)
 	if err != nil {
 		return nil, err
 	}
@@ -577,6 +614,9 @@ func (m *executionManagerImpl) SerializeWorkflowMutation( // unexport
 		UpsertSignalInfos: make(map[int64]*commonpb.DataBlob, len(input.UpsertSignalInfos)),
 		DeleteSignalInfos: input.DeleteSignalInfos,
 
+		UpsertChasmNodes: make(map[string]InternalChasmNode, len(input.UpsertChasmNodes)),
+		DeleteChasmNodes: input.DeleteChasmNodes,
+
 		UpsertSignalRequestedIDs: input.UpsertSignalRequestedIDs,
 		DeleteSignalRequestedIDs: input.DeleteSignalRequestedIDs,
 
@@ -586,24 +626,24 @@ func (m *executionManagerImpl) SerializeWorkflowMutation( // unexport
 		ExecutionInfo:  input.ExecutionInfo,
 		ExecutionState: input.ExecutionState,
 
-		Tasks: tasks,
+		Tasks: serializedTasks,
 
 		Condition:       input.Condition,
 		DBRecordVersion: input.DBRecordVersion,
 		NextEventID:     input.NextEventID,
 	}
 
-	result.ExecutionInfoBlob, err = m.serializer.WorkflowExecutionInfoToBlob(input.ExecutionInfo, enumspb.ENCODING_TYPE_PROTO3)
+	result.ExecutionInfoBlob, err = m.serializer.WorkflowExecutionInfoToBlob(input.ExecutionInfo)
 	if err != nil {
 		return nil, err
 	}
-	result.ExecutionStateBlob, err = m.serializer.WorkflowExecutionStateToBlob(input.ExecutionState, enumspb.ENCODING_TYPE_PROTO3)
+	result.ExecutionStateBlob, err = m.serializer.WorkflowExecutionStateToBlob(input.ExecutionState)
 	if err != nil {
 		return nil, err
 	}
 
 	for key, info := range input.UpsertActivityInfos {
-		blob, err := m.serializer.ActivityInfoToBlob(info, enumspb.ENCODING_TYPE_PROTO3)
+		blob, err := m.serializer.ActivityInfoToBlob(info)
 		if err != nil {
 			return nil, err
 		}
@@ -611,7 +651,7 @@ func (m *executionManagerImpl) SerializeWorkflowMutation( // unexport
 	}
 
 	for key, info := range input.UpsertTimerInfos {
-		blob, err := m.serializer.TimerInfoToBlob(info, enumspb.ENCODING_TYPE_PROTO3)
+		blob, err := m.serializer.TimerInfoToBlob(info)
 		if err != nil {
 			return nil, err
 		}
@@ -619,7 +659,7 @@ func (m *executionManagerImpl) SerializeWorkflowMutation( // unexport
 	}
 
 	for key, info := range input.UpsertChildExecutionInfos {
-		blob, err := m.serializer.ChildExecutionInfoToBlob(info, enumspb.ENCODING_TYPE_PROTO3)
+		blob, err := m.serializer.ChildExecutionInfoToBlob(info)
 		if err != nil {
 			return nil, err
 		}
@@ -627,7 +667,7 @@ func (m *executionManagerImpl) SerializeWorkflowMutation( // unexport
 	}
 
 	for key, info := range input.UpsertRequestCancelInfos {
-		blob, err := m.serializer.RequestCancelInfoToBlob(info, enumspb.ENCODING_TYPE_PROTO3)
+		blob, err := m.serializer.RequestCancelInfoToBlob(info)
 		if err != nil {
 			return nil, err
 		}
@@ -635,25 +675,31 @@ func (m *executionManagerImpl) SerializeWorkflowMutation( // unexport
 	}
 
 	for key, info := range input.UpsertSignalInfos {
-		blob, err := m.serializer.SignalInfoToBlob(info, enumspb.ENCODING_TYPE_PROTO3)
+		blob, err := m.serializer.SignalInfoToBlob(info)
 		if err != nil {
 			return nil, err
 		}
 		result.UpsertSignalInfos[key] = blob
 	}
 
+	nodeMap, err := m.makeInternalChasmNodeMap(input.UpsertChasmNodes)
+	if err != nil {
+		return nil, err
+	}
+	result.UpsertChasmNodes = nodeMap
+
 	if len(input.NewBufferedEvents) > 0 {
-		result.NewBufferedEvents, err = m.serializer.SerializeEvents(input.NewBufferedEvents, enumspb.ENCODING_TYPE_PROTO3)
+		result.NewBufferedEvents, err = m.serializer.SerializeEvents(input.NewBufferedEvents)
 		if err != nil {
 			return nil, err
 		}
 	}
 
-	result.LastWriteVersion, err = getCurrentBranchLastWriteVersion(input.ExecutionInfo.VersionHistories)
+	result.LastWriteVersion, err = getCurrentBranchLastWriteVersion(input.ExecutionInfo.VersionHistories, input.ExecutionInfo.TransitionHistory)
 	if err != nil {
 		return nil, err
 	}
-	result.Checksum, err = m.serializer.ChecksumToBlob(input.Checksum, enumspb.ENCODING_TYPE_PROTO3)
+	result.Checksum, err = m.serializer.ChecksumToBlob(input.Checksum)
 	if err != nil {
 		return nil, err
 	}
@@ -664,8 +710,7 @@ func (m *executionManagerImpl) SerializeWorkflowMutation( // unexport
 func (m *executionManagerImpl) SerializeWorkflowSnapshot( // unexport
 	input *WorkflowSnapshot,
 ) (*InternalWorkflowSnapshot, error) {
-
-	tasks, err := serializeTasks(m.serializer, input.Tasks)
+	serializedTasks, err := serializeTasks(m.serializer, input.Tasks)
 	if err != nil {
 		return nil, err
 	}
@@ -680,61 +725,62 @@ func (m *executionManagerImpl) SerializeWorkflowSnapshot( // unexport
 		ChildExecutionInfos: make(map[int64]*commonpb.DataBlob, len(input.ChildExecutionInfos)),
 		RequestCancelInfos:  make(map[int64]*commonpb.DataBlob, len(input.RequestCancelInfos)),
 		SignalInfos:         make(map[int64]*commonpb.DataBlob, len(input.SignalInfos)),
+		ChasmNodes:          make(map[string]InternalChasmNode, len(input.ChasmNodes)),
 
 		ExecutionInfo:      input.ExecutionInfo,
 		ExecutionState:     input.ExecutionState,
 		SignalRequestedIDs: make(map[string]struct{}),
 
-		Tasks: tasks,
+		Tasks: serializedTasks,
 
 		Condition:       input.Condition,
 		DBRecordVersion: input.DBRecordVersion,
 		NextEventID:     input.NextEventID,
 	}
 
-	result.ExecutionInfoBlob, err = m.serializer.WorkflowExecutionInfoToBlob(input.ExecutionInfo, enumspb.ENCODING_TYPE_PROTO3)
+	result.ExecutionInfoBlob, err = m.serializer.WorkflowExecutionInfoToBlob(input.ExecutionInfo)
 	if err != nil {
 		return nil, err
 	}
-	result.ExecutionStateBlob, err = m.serializer.WorkflowExecutionStateToBlob(input.ExecutionState, enumspb.ENCODING_TYPE_PROTO3)
+	result.ExecutionStateBlob, err = m.serializer.WorkflowExecutionStateToBlob(input.ExecutionState)
 	if err != nil {
 		return nil, err
 	}
-	result.LastWriteVersion, err = getCurrentBranchLastWriteVersion(input.ExecutionInfo.VersionHistories)
+	result.LastWriteVersion, err = getCurrentBranchLastWriteVersion(input.ExecutionInfo.VersionHistories, input.ExecutionInfo.TransitionHistory)
 	if err != nil {
 		return nil, err
 	}
 
 	for key, info := range input.ActivityInfos {
-		blob, err := m.serializer.ActivityInfoToBlob(info, enumspb.ENCODING_TYPE_PROTO3)
+		blob, err := m.serializer.ActivityInfoToBlob(info)
 		if err != nil {
 			return nil, err
 		}
 		result.ActivityInfos[key] = blob
 	}
 	for key, info := range input.TimerInfos {
-		blob, err := m.serializer.TimerInfoToBlob(info, enumspb.ENCODING_TYPE_PROTO3)
+		blob, err := m.serializer.TimerInfoToBlob(info)
 		if err != nil {
 			return nil, err
 		}
 		result.TimerInfos[key] = blob
 	}
 	for key, info := range input.ChildExecutionInfos {
-		blob, err := m.serializer.ChildExecutionInfoToBlob(info, enumspb.ENCODING_TYPE_PROTO3)
+		blob, err := m.serializer.ChildExecutionInfoToBlob(info)
 		if err != nil {
 			return nil, err
 		}
 		result.ChildExecutionInfos[key] = blob
 	}
 	for key, info := range input.RequestCancelInfos {
-		blob, err := m.serializer.RequestCancelInfoToBlob(info, enumspb.ENCODING_TYPE_PROTO3)
+		blob, err := m.serializer.RequestCancelInfoToBlob(info)
 		if err != nil {
 			return nil, err
 		}
 		result.RequestCancelInfos[key] = blob
 	}
 	for key, info := range input.SignalInfos {
-		blob, err := m.serializer.SignalInfoToBlob(info, enumspb.ENCODING_TYPE_PROTO3)
+		blob, err := m.serializer.SignalInfoToBlob(info)
 		if err != nil {
 			return nil, err
 		}
@@ -743,8 +789,13 @@ func (m *executionManagerImpl) SerializeWorkflowSnapshot( // unexport
 	for key := range input.SignalRequestedIDs {
 		result.SignalRequestedIDs[key] = struct{}{}
 	}
+	nodeMap, err := m.makeInternalChasmNodeMap(input.ChasmNodes)
+	if err != nil {
+		return nil, err
+	}
+	result.ChasmNodes = nodeMap
 
-	result.Checksum, err = m.serializer.ChecksumToBlob(input.Checksum, enumspb.ENCODING_TYPE_PROTO3)
+	result.Checksum, err = m.serializer.ChecksumToBlob(input.Checksum)
 	if err != nil {
 		return nil, err
 	}
@@ -756,6 +807,16 @@ func (m *executionManagerImpl) DeleteWorkflowExecution(
 	ctx context.Context,
 	request *DeleteWorkflowExecutionRequest,
 ) error {
+	if archetypeID, converted := m.assertAndConvertArchetypeID(request.ArchetypeID, "DeleteWorkflowExecution"); converted {
+		request = &DeleteWorkflowExecutionRequest{
+			ShardID:     request.ShardID,
+			NamespaceID: request.NamespaceID,
+			WorkflowID:  request.WorkflowID,
+			RunID:       request.RunID,
+			ArchetypeID: archetypeID,
+		}
+	}
+
 	return m.persistence.DeleteWorkflowExecution(ctx, request)
 }
 
@@ -763,6 +824,16 @@ func (m *executionManagerImpl) DeleteCurrentWorkflowExecution(
 	ctx context.Context,
 	request *DeleteCurrentWorkflowExecutionRequest,
 ) error {
+	if archetypeID, converted := m.assertAndConvertArchetypeID(request.ArchetypeID, "DeleteCurrentWorkflowExecution"); converted {
+		request = &DeleteCurrentWorkflowExecutionRequest{
+			ShardID:     request.ShardID,
+			NamespaceID: request.NamespaceID,
+			WorkflowID:  request.WorkflowID,
+			RunID:       request.RunID,
+			ArchetypeID: archetypeID,
+		}
+	}
+
 	return m.persistence.DeleteCurrentWorkflowExecution(ctx, request)
 }
 
@@ -770,12 +841,21 @@ func (m *executionManagerImpl) GetCurrentExecution(
 	ctx context.Context,
 	request *GetCurrentExecutionRequest,
 ) (*GetCurrentExecutionResponse, error) {
+	if archetypeID, converted := m.assertAndConvertArchetypeID(request.ArchetypeID, "GetCurrentExecution"); converted {
+		request = &GetCurrentExecutionRequest{
+			ShardID:     request.ShardID,
+			NamespaceID: request.NamespaceID,
+			WorkflowID:  request.WorkflowID,
+			ArchetypeID: archetypeID,
+		}
+	}
+
 	response, respErr := m.persistence.GetCurrentExecution(ctx, request)
 
 	var notFound *serviceerror.NotFound
 	if errors.As(respErr, &notFound) {
 		// strip persistence-specific error message
-		respErr = serviceerror.NewNotFound(fmt.Sprintf("workflow not found for ID: %v", request.WorkflowID))
+		respErr = serviceerror.NewNotFoundf("workflow not found for ID: %v", request.WorkflowID)
 	}
 	if respErr != nil && response == nil {
 		// try to utilize resp as much as possible, for RebuildMutableState API
@@ -816,19 +896,21 @@ func (m *executionManagerImpl) AddHistoryTasks(
 	ctx context.Context,
 	input *AddHistoryTasksRequest,
 ) error {
-	tasks, err := serializeTasks(m.serializer, input.Tasks)
+	serializedTasks, err := serializeTasks(m.serializer, input.Tasks)
 	if err != nil {
 		return err
 	}
 
+	archetypeID, _ := m.assertAndConvertArchetypeID(input.ArchetypeID, "AddHistoryTasks")
 	return m.persistence.AddHistoryTasks(ctx, &InternalAddHistoryTasksRequest{
 		ShardID: input.ShardID,
 		RangeID: input.RangeID,
 
 		NamespaceID: input.NamespaceID,
 		WorkflowID:  input.WorkflowID,
+		ArchetypeID: archetypeID,
 
-		Tasks: tasks,
+		Tasks: serializedTasks,
 	})
 }
 
@@ -962,12 +1044,14 @@ func (m *executionManagerImpl) trimHistoryNode(
 	namespaceID string,
 	workflowID string,
 	runID string,
+	archetypeID chasm.ArchetypeID,
 ) {
 	response, err := m.GetWorkflowExecution(ctx, &GetWorkflowExecutionRequest{
 		ShardID:     shardID,
 		NamespaceID: namespaceID,
 		WorkflowID:  workflowID,
 		RunID:       runID,
+		ArchetypeID: archetypeID,
 	})
 	if err != nil {
 		m.logger.Error("ExecutionManager unable to get mutable state for trimming history branch",
@@ -1010,6 +1094,7 @@ func (m *executionManagerImpl) toWorkflowMutableState(internState *InternalWorkf
 		ChildExecutionInfos: make(map[int64]*persistencespb.ChildExecutionInfo),
 		RequestCancelInfos:  make(map[int64]*persistencespb.RequestCancelInfo),
 		SignalInfos:         make(map[int64]*persistencespb.SignalInfo),
+		ChasmNodes:          make(map[string]*persistencespb.ChasmNode),
 		SignalRequestedIds:  internState.SignalRequestedIDs,
 		NextEventId:         internState.NextEventID,
 		BufferedEvents:      make([]*historypb.HistoryEvent, len(internState.BufferedEvents)),
@@ -1049,6 +1134,21 @@ func (m *executionManagerImpl) toWorkflowMutableState(internState *InternalWorkf
 		}
 		state.SignalInfos[key] = info
 	}
+	for key, internal := range internState.ChasmNodes {
+		var node *persistencespb.ChasmNode
+		var err error
+
+		if internal.CassandraBlob != nil {
+			node, err = m.serializer.ChasmNodeFromBlob(internal.CassandraBlob)
+		} else {
+			node, err = m.serializer.ChasmNodeFromBlobs(internal.Metadata, internal.Data)
+		}
+		if err != nil {
+			return nil, err
+		}
+
+		state.ChasmNodes[key] = node
+	}
 	var err error
 	state.ExecutionInfo, err = m.serializer.WorkflowExecutionInfoFromBlob(internState.ExecutionInfo)
 	if err != nil {
@@ -1076,6 +1176,22 @@ func (m *executionManagerImpl) toWorkflowMutableState(internState *InternalWorkf
 	return state, nil
 }
 
+func (m *executionManagerImpl) assertAndConvertArchetypeID(
+	archetypeID chasm.ArchetypeID,
+	methodName string,
+) (chasm.ArchetypeID, bool) {
+	if !softassert.That(
+		m.logger,
+		archetypeID != chasm.UnspecifiedArchetypeID,
+		"ArchetypeID not specified, defaulting to Workflow.",
+		tag.Operation(methodName),
+	) {
+		return chasm.WorkflowArchetypeID, true
+	}
+
+	return archetypeID, false
+}
+
 func getCurrentBranchToken(
 	versionHistories *historyspb.VersionHistories,
 ) ([]byte, error) {
@@ -1092,6 +1208,7 @@ func getCurrentBranchToken(
 
 func getCurrentBranchLastWriteVersion(
 	versionHistories *historyspb.VersionHistories,
+	transitions []*persistencespb.VersionedTransition,
 ) (int64, error) {
 	// TODO remove this if check once legacy execution tests are removed
 	if versionHistories == nil {
@@ -1101,11 +1218,33 @@ func getCurrentBranchLastWriteVersion(
 	if err != nil {
 		return 0, err
 	}
-	versionHistoryItem, err := versionhistory.GetLastVersionHistoryItem(versionHistory)
-	if err != nil {
-		return 0, err
+
+	if !versionhistory.IsEmptyVersionHistory(versionHistory) {
+		versionHistoryItem, err := versionhistory.GetLastVersionHistoryItem(versionHistory)
+		if err != nil {
+			return 0, err
+		}
+		return versionHistoryItem.GetVersion(), nil
 	}
-	return versionHistoryItem.GetVersion(), nil
+
+	// No version history for the run, this only happens for CHASM run and we need to check the transition history.
+	//
+	// TODO: The logic should ignore version history and always use transition history, even for Workflows.
+	// We are still checking version history first here since it's the old logic and we want to minimize the risk for now
+	// and to account for the fact that transition history is not fully enabled.
+	//
+	// Theoritically, using version history here is wrong because there can be transitions (even on Workflows) that have no
+	// events (e.g. Activity Heartbeat).
+	//
+	// Although using version history has the benefit of ensuring the returned version don't change after the run is closed, using
+	// transition history is also correct here because the returned version is only used for updating mutable state current record
+	// and that record won't be updated after the run is closed.
+	//
+	// Using transition history also suits the function name LastWriteVersion better.
+	if len(transitions) != 0 {
+		return transitionhistory.LastVersionedTransition(transitions).NamespaceFailoverVersion, nil
+	}
+	return common.EmptyVersion, serviceerror.NewInternal("both version history and transition history are empty")
 }
 
 func serializeTasks(
@@ -1156,8 +1295,44 @@ func validateTaskRange(
 			return serviceerror.NewInvalidArgument("invalid task range, taskID must be empty for scheduled task category")
 		}
 	default:
-		return serviceerror.NewInvalidArgument(fmt.Sprintf("invalid task category type: %v", taskCategoryType))
+		return serviceerror.NewInvalidArgumentf("invalid task category type: %v", taskCategoryType)
 	}
 
 	return nil
+}
+
+func (m *executionManagerImpl) makeInternalChasmNodeMap(
+	nodes map[string]*persistencespb.ChasmNode,
+) (map[string]InternalChasmNode, error) {
+	res := make(map[string]InternalChasmNode, len(nodes))
+	isCassandra := strings.Contains(m.GetName(), "cassandra")
+
+	for path, node := range nodes {
+		var internal InternalChasmNode
+
+		// If we're running on Cassandra, set a single blob since that's how we store it.
+		if isCassandra {
+			blob, err := m.serializer.ChasmNodeToBlob(node)
+			if err != nil {
+				return nil, err
+			}
+			internal = InternalChasmNode{
+				CassandraBlob: blob,
+			}
+		} else {
+			// Otherwise, split the node into separate blobs.
+			metadata, data, err := m.serializer.ChasmNodeToBlobs(node)
+			if err != nil {
+				return nil, err
+			}
+			internal = InternalChasmNode{
+				Metadata: metadata,
+				Data:     data,
+			}
+		}
+
+		res[path] = internal
+	}
+
+	return res, nil
 }

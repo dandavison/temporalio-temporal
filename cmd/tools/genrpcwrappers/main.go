@@ -1,44 +1,18 @@
-// The MIT License
-//
-// Copyright (c) 2020 Temporal Technologies Inc.  All rights reserved.
-//
-// Copyright (c) 2020 Uber Technologies, Inc.
-//
-// Permission is hereby granted, free of charge, to any person obtaining a copy
-// of this software and associated documentation files (the "Software"), to deal
-// in the Software without restriction, including without limitation the rights
-// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-// copies of the Software, and to permit persons to whom the Software is
-// furnished to do so, subject to the following conditions:
-//
-// The above copyright notice and this permission notice shall be included in
-// all copies or substantial portions of the Software.
-//
-// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
-// THE SOFTWARE.
-
 package main
 
 import (
+	"cmp"
 	"flag"
 	"fmt"
 	"io"
 	"log"
-	"os"
 	"reflect"
 	"slices"
 	"strings"
-	"text/template"
 
-	"go.temporal.io/api/taskqueue/v1"
+	taskqueuepb "go.temporal.io/api/taskqueue/v1"
 	"go.temporal.io/api/workflowservice/v1"
-	"golang.org/x/text/cases"
-	"golang.org/x/text/language"
+	"go.temporal.io/server/cmd/tools/codegen"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/reflect/protoreflect"
 	"google.golang.org/protobuf/reflect/protoregistry"
@@ -52,7 +26,7 @@ type (
 	service struct {
 		name            string
 		clientType      reflect.Type
-		clientGenerator func(io.Writer, service)
+		clientGenerator func(io.Writer, service) error
 	}
 
 	fieldWithPath struct {
@@ -98,6 +72,11 @@ var (
 	}
 	largeTimeoutContext = map[string]bool{
 		"client.admin.GetReplicationMessages": true,
+	}
+	longPollRetryPolicy = map[string]string{
+		"retryableClient.matching.PollWorkflowTaskQueue": "pollPolicy",
+		"retryableClient.matching.PollActivityTaskQueue": "pollPolicy",
+		"retryableClient.matching.PollNexusTaskQueue":    "pollPolicy",
 	}
 	ignoreMethod = map[string]bool{
 		// TODO stream APIs are not supported. do not generate.
@@ -148,17 +127,11 @@ var historyRoutingProtoExtension = func() protoreflect.ExtensionType {
 	return ext
 }()
 
-func panicIfErr(err error) {
-	if err != nil {
-		panic(err)
-	}
-}
-
-func writeTemplatedCode(w io.Writer, service service, text string) {
-	panicIfErr(template.Must(template.New("code").Parse(text)).Execute(w, map[string]string{
+func writeTemplatedCode(w io.Writer, service service, tmpl string) {
+	codegen.FatalIfErr(codegen.GenerateTemplateToWriter(tmpl, map[string]string{
 		"ServiceName":        service.name,
 		"ServicePackagePath": service.clientType.Elem().PkgPath(),
-	}))
+	}, w))
 }
 
 func verifyFieldExists(t reflect.Type, path string) {
@@ -166,19 +139,19 @@ func verifyFieldExists(t reflect.Type, path string) {
 	parts := strings.Split(path, ".")
 	for i, part := range parts {
 		if t.Kind() != reflect.Struct {
-			panic(fmt.Errorf("%s is not a struct", pathPrefix))
+			codegen.Fatalf("%s is not a struct", pathPrefix)
 		}
-		fieldName := snakeToPascal(part)
+		fieldName := codegen.SnakeCaseToPascalCase(part)
 		f, ok := t.FieldByName(fieldName)
 		if !ok {
-			panic(fmt.Errorf("%s has no field named %s", pathPrefix, fieldName))
+			codegen.Fatalf("%s has no field named %s", pathPrefix, fieldName)
 		}
 		if i == len(parts)-1 {
 			return
 		}
 		ft := f.Type
 		if ft.Kind() != reflect.Pointer {
-			panic(fmt.Errorf("%s.%s is not a struct pointer", pathPrefix, fieldName))
+			codegen.Fatalf("%s.%s is not a struct pointer", pathPrefix, fieldName)
 		}
 		t = ft.Elem()
 		pathPrefix += "." + fieldName
@@ -209,9 +182,9 @@ func findNestedField(t reflect.Type, name string, path string, maxDepth int) []f
 func findOneNestedField(t reflect.Type, name string, path string, maxDepth int) fieldWithPath {
 	fields := findNestedField(t, name, path, maxDepth)
 	if len(fields) == 0 {
-		panic(fmt.Sprintf("Couldn't find %s in %s", name, t))
+		codegen.Fatalf("couldn't find %s in %s", name, t)
 	} else if len(fields) > 1 {
-		panic(fmt.Sprintf("Found more than one %s in %s (%v)", name, t, fields))
+		codegen.Fatalf("found more than one %s in %s (%v)", name, t, fields)
 	}
 	return fields[0]
 }
@@ -221,7 +194,7 @@ func tryFindOneNestedField(t reflect.Type, name string, path string, maxDepth in
 	if len(fields) == 0 {
 		return fieldWithPath{}
 	} else if len(fields) > 1 {
-		panic(fmt.Sprintf("Found more than one %s in %s (%v)", name, t, fields))
+		codegen.Fatalf("found more than one %s in %s (%v)", name, t, fields)
 	}
 	return fields[0]
 }
@@ -249,24 +222,10 @@ func historyRoutingOptions(reqType reflect.Type) *historyservice.RoutingOptions 
 	return routingOptions
 }
 
-func snakeToPascal(snake string) string {
-	// Split the string by underscores
-	words := strings.Split(snake, "_")
-
-	// Capitalize the first letter of each word
-	for i, word := range words {
-		// Convert first rune to upper and the rest to lower case
-		words[i] = cases.Title(language.AmericanEnglish).String(strings.ToLower(word))
-	}
-
-	// Join them back into a single string
-	return strings.Join(words, "")
-}
-
 func toGetter(snake string) string {
 	parts := strings.Split(snake, ".")
 	for i, part := range parts {
-		parts[i] = "Get" + snakeToPascal(part) + "()"
+		parts[i] = "Get" + codegen.SnakeCaseToPascalCase(part) + "()"
 	}
 	return "request." + strings.Join(parts, ".")
 }
@@ -274,7 +233,7 @@ func toGetter(snake string) string {
 func makeGetHistoryClient(reqType reflect.Type, routingOptions *historyservice.RoutingOptions) string {
 	t := reqType.Elem() // we know it's a pointer
 
-	if routingOptions.AnyHost && routingOptions.ShardId != "" && routingOptions.WorkflowId != "" && routingOptions.TaskToken != "" && routingOptions.TaskInfos != "" {
+	if routingOptions.AnyHost && routingOptions.ShardId != "" && routingOptions.WorkflowId != "" && routingOptions.TaskToken != "" && routingOptions.TaskInfos != "" && routingOptions.ChasmComponentRef != "" {
 		log.Fatalf("Found more than one routing directive in %s", t)
 	}
 	if routingOptions.AnyHost {
@@ -305,8 +264,30 @@ func makeGetHistoryClient(reqType reflect.Type, routingOptions *historyservice.R
 	if err != nil {
 		return nil, serviceerror.NewInvalidArgument("error deserializing task token")
 	}
-	shardID := c.shardIDFromWorkflowID(%s, taskToken.GetWorkflowId())
-`, toGetter(routingOptions.TaskToken), toGetter(namespaceIdField))
+	var namespaceID string
+	var businessID string
+	if len(taskToken.GetComponentRef()) > 0 {
+		ref, err := c.tokenSerializer.DeserializeChasmComponentRef(taskToken.GetComponentRef())
+		if err != nil {
+			return nil, err
+		}
+		namespaceID = ref.GetNamespaceId()
+		businessID = ref.GetBusinessId()
+	} else {
+		namespaceID = %s
+		businessID = taskToken.GetWorkflowId()
+	}
+	shardID := c.shardIDFromWorkflowID(namespaceID, businessID)
+	`, toGetter(routingOptions.TaskToken), toGetter(namespaceIdField))
+	}
+	if routingOptions.ChasmComponentRef != "" {
+		verifyFieldExists(t, routingOptions.ChasmComponentRef)
+		return fmt.Sprintf(`ref, err := c.tokenSerializer.DeserializeChasmComponentRef(%s)
+	if err != nil {
+		return nil, serviceerror.NewInvalidArgument("error deserializing component ref")
+	}
+	shardID := c.shardIDFromWorkflowID(ref.GetNamespaceId(), ref.GetBusinessId())
+	`, toGetter(routingOptions.ChasmComponentRef))
 	}
 	if routingOptions.TaskInfos != "" {
 		verifyFieldExists(t, routingOptions.TaskInfos)
@@ -320,7 +301,7 @@ func makeGetHistoryClient(reqType reflect.Type, routingOptions *historyservice.R
 	}
 
 	log.Fatalf("No routing directive specified on %s", t)
-	panic("unreachable")
+	return ""
 }
 
 func makeGetMatchingClient(reqType reflect.Type) string {
@@ -336,7 +317,10 @@ func makeGetMatchingClient(reqType reflect.Type) string {
 		tqt = fieldWithPath{path: "enumspb.TASK_QUEUE_TYPE_UNSPECIFIED"}
 		nsID = findOneNestedField(t, "NamespaceId", "request", 1)
 	case "UpdateTaskQueueUserDataRequest",
-		"ReplicateTaskQueueUserDataRequest":
+		"ReplicateTaskQueueUserDataRequest",
+		"RecordWorkerHeartbeatRequest",
+		"ListWorkersRequest",
+		"DescribeWorkerRequest":
 		// Always route these requests to the same matching node by namespace.
 		tq = fieldWithPath{path: "\"not-applicable\""}
 		tqt = fieldWithPath{path: "enumspb.TASK_QUEUE_TYPE_UNSPECIFIED"}
@@ -345,9 +329,13 @@ func makeGetMatchingClient(reqType reflect.Type) string {
 		"UpdateWorkerBuildIdCompatibilityRequest",
 		"RespondQueryTaskCompletedRequest",
 		"ListTaskQueuePartitionsRequest",
+		"SyncDeploymentUserDataRequest",
+		"CheckTaskQueueUserDataPropagationRequest",
 		"ApplyTaskQueueUserDataReplicationEventRequest",
 		"GetWorkerVersioningRulesRequest",
-		"UpdateWorkerVersioningRulesRequest":
+		"UpdateWorkerVersioningRulesRequest",
+		"UpdateFairnessStateRequest",
+		"UpdateTaskQueueConfigRequest":
 		tq = findOneNestedField(t, "TaskQueue", "request", 2)
 		tqt = fieldWithPath{path: "enumspb.TASK_QUEUE_TYPE_WORKFLOW"}
 		nsID = findOneNestedField(t, "NamespaceId", "request", 1)
@@ -374,7 +362,7 @@ func makeGetMatchingClient(reqType reflect.Type) string {
 	}
 
 	if !nsID.found() {
-		panic("I don't know how to get a client from a " + t.String())
+		codegen.Fatalf("I don't know how to get a client from a %s", t)
 	}
 
 	if tqp.found() {
@@ -384,11 +372,10 @@ func makeGetMatchingClient(reqType reflect.Type) string {
 	client, err := c.getClientForTaskQueuePartition(p)`,
 			tqp.path, nsID.path)
 	}
-
 	if tq.found() && tqt.found() {
 		partitionMaker := fmt.Sprintf("tqid.PartitionFromProto(%s, %s, %s)", tq.path, nsID.path, tqt.path)
 		// Some task queue fields are full messages, some are just strings
-		isTaskQueueMessage := tq.field != nil && tq.field.Type == reflect.TypeOf((*taskqueue.TaskQueue)(nil))
+		isTaskQueueMessage := tq.field != nil && tq.field.Type == reflect.TypeOf((*taskqueuepb.TaskQueue)(nil))
 		if !isTaskQueueMessage {
 			partitionMaker = fmt.Sprintf("tqid.NormalPartitionFromRpcName(%s, %s, %s)", tq.path, nsID.path, tqt.path)
 		}
@@ -406,7 +393,7 @@ func makeGetMatchingClient(reqType reflect.Type) string {
 	panic("I don't know how to get a client from a " + t.String())
 }
 
-func writeTemplatedMethod(w io.Writer, service service, impl string, m reflect.Method, text string) {
+func writeTemplatedMethod(w io.Writer, service service, impl string, m reflect.Method, tmpl string) {
 	key := fmt.Sprintf("%s.%s.%s", impl, service.name, m.Name)
 	if ignoreMethod[key] {
 		return
@@ -429,6 +416,7 @@ func writeTemplatedMethod(w io.Writer, service service, impl string, m reflect.M
 		"RequestType":  reqType.String(),
 		"ResponseType": respType.String(),
 		"MetricPrefix": fmt.Sprintf("%s%sClient", strings.ToUpper(service.name[:1]), service.name[1:]),
+		"RetryPolicy":  cmp.Or(longPollRetryPolicy[key], "policy"),
 	}
 	if longPollContext[key] {
 		fields["LongPoll"] = "LongPoll"
@@ -448,18 +436,19 @@ func writeTemplatedMethod(w io.Writer, service service, impl string, m reflect.M
 		}
 	}
 
-	panicIfErr(template.Must(template.New("code").Parse(text)).Execute(w, fields))
+	codegen.FatalIfErr(codegen.GenerateTemplateToWriter(tmpl, fields, w))
 }
 
-func writeTemplatedMethods(w io.Writer, service service, impl string, text string) {
+func writeTemplatedMethods(w io.Writer, service service, impl string, tmpl string) {
 	sType := service.clientType.Elem()
 	for n := 0; n < sType.NumMethod(); n++ {
-		writeTemplatedMethod(w, service, impl, sType.Method(n), text)
+		writeTemplatedMethod(w, service, impl, sType.Method(n), tmpl)
 	}
 }
 
-func generateFrontendOrAdminClient(w io.Writer, service service) {
-	writeTemplatedCode(w, service, `
+func generateFrontendOrAdminClient(w io.Writer, service service) error {
+	writeTemplatedCode(w, service, `// Code generated by cmd/tools/genrpcwrappers. DO NOT EDIT.
+
 package {{.ServiceName}}
 
 import (
@@ -481,10 +470,12 @@ func (c *clientImpl) {{.Method}}(
 	return c.client.{{.Method}}(ctx, request, opts...)
 }
 `)
+	return nil
 }
 
-func generateHistoryClient(w io.Writer, service service) {
-	writeTemplatedCode(w, service, `
+func generateHistoryClient(w io.Writer, service service) error {
+	writeTemplatedCode(w, service, `// Code generated by cmd/tools/genrpcwrappers. DO NOT EDIT.
+
 package {{.ServiceName}}
 
 import (
@@ -522,10 +513,13 @@ func (c *clientImpl) {{.Method}}(
 	// GetDLQMessages
 	// PurgeDLQMessages
 	// MergeDLQMessages
+
+	return nil
 }
 
-func generateMatchingClient(w io.Writer, service service) {
-	writeTemplatedCode(w, service, `
+func generateMatchingClient(w io.Writer, service service) error {
+	writeTemplatedCode(w, service, `// Code generated by cmd/tools/genrpcwrappers. DO NOT EDIT.
+
 package {{.ServiceName}}
 
 import (
@@ -556,10 +550,12 @@ func (c *clientImpl) {{.Method}}(
 	return client.{{.Method}}(ctx, request, opts...)
 }
 `)
+	return nil
 }
 
-func generateMetricClient(w io.Writer, service service) {
-	writeTemplatedCode(w, service, `
+func generateMetricClient(w io.Writer, service service) error {
+	writeTemplatedCode(w, service, `// Code generated by cmd/tools/genrpcwrappers. DO NOT EDIT.
+
 package {{.ServiceName}}
 
 import (
@@ -585,10 +581,12 @@ func (c *metricClient) {{.Method}}(
 	return c.client.{{.Method}}(ctx, request, opts...)
 }
 `)
+	return nil
 }
 
-func generateRetryableClient(w io.Writer, service service) {
-	writeTemplatedCode(w, service, `
+func generateRetryableClient(w io.Writer, service service) error {
+	writeTemplatedCode(w, service, `// Code generated by cmd/tools/genrpcwrappers. DO NOT EDIT.
+
 package {{.ServiceName}}
 
 import (
@@ -613,52 +611,24 @@ func (c *retryableClient) {{.Method}}(
 		resp, err = c.client.{{.Method}}(ctx, request, opts...)
 		return err
 	}
-	err := backoff.ThrottleRetryContext(ctx, op, c.policy, c.isRetryable)
+	err := backoff.ThrottleRetryContext(ctx, op, c.{{.RetryPolicy}}, c.isRetryable)
 	return resp, err
 }
 `)
-}
-
-func callWithFile(f func(io.Writer, service), service service, filename string, licenseText string) {
-	w, err := os.Create(filename + "_gen.go")
-	if err != nil {
-		panic(err)
-	}
-	defer func() {
-		panicIfErr(w.Close())
-	}()
-	if _, err := fmt.Fprintf(w, "%s\n// Code generated by cmd/tools/genrpcwrappers. DO NOT EDIT.\n", licenseText); err != nil {
-		panic(err)
-	}
-	f(w, service)
-}
-
-func readLicenseFile(path string) string {
-	text, err := os.ReadFile(path)
-	if err != nil {
-		panic(err)
-	}
-	var lines []string
-	for _, line := range strings.Split(string(text), "\n") {
-		lines = append(lines, strings.TrimRight("// "+line, " "))
-	}
-	return strings.Join(lines, "\n") + "\n"
+	return nil
 }
 
 func main() {
 	serviceFlag := flag.String("service", "", "which service to generate rpc client wrappers for")
-	licenseFlag := flag.String("license_file", "../../LICENSE", "path to license to copy into header")
 	flag.Parse()
 
 	i := slices.IndexFunc(services, func(s service) bool { return s.name == *serviceFlag })
 	if i < 0 {
-		panic("unknown service")
+		codegen.Fatalf("unknown service: %s", *serviceFlag)
 	}
 	svc := services[i]
 
-	licenseText := readLicenseFile(*licenseFlag)
-
-	callWithFile(svc.clientGenerator, svc, "client", licenseText)
-	callWithFile(generateMetricClient, svc, "metric_client", licenseText)
-	callWithFile(generateRetryableClient, svc, "retryable_client", licenseText)
+	codegen.GenerateToFile(svc.clientGenerator, svc, "", "client")
+	codegen.GenerateToFile(generateMetricClient, svc, "", "metric_client")
+	codegen.GenerateToFile(generateRetryableClient, svc, "", "retryable_client")
 }

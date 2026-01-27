@@ -1,27 +1,3 @@
-// The MIT License
-//
-// Copyright (c) 2020 Temporal Technologies Inc.  All rights reserved.
-//
-// Copyright (c) 2020 Uber Technologies, Inc.
-//
-// Permission is hereby granted, free of charge, to any person obtaining a copy
-// of this software and associated documentation files (the "Software"), to deal
-// in the Software without restriction, including without limitation the rights
-// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-// copies of the Software, and to permit persons to whom the Software is
-// furnished to do so, subject to the following conditions:
-//
-// The above copyright notice and this permission notice shall be included in
-// all copies or substantial portions of the Software.
-//
-// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
-// THE SOFTWARE.
-
 package workflow
 
 import (
@@ -35,7 +11,7 @@ import (
 	"go.temporal.io/server/common"
 	"go.temporal.io/server/common/definition"
 	"go.temporal.io/server/common/primitives/timestamp"
-	"go.temporal.io/server/common/testing/protomock"
+	historyi "go.temporal.io/server/service/history/interfaces"
 	"go.temporal.io/server/service/history/tasks"
 	"go.temporal.io/server/service/history/tests"
 	"go.uber.org/mock/gomock"
@@ -48,7 +24,7 @@ type (
 		*require.Assertions
 
 		controller       *gomock.Controller
-		mockMutableState *MockMutableState
+		mockMutableState *historyi.MockMutableState
 
 		workflowKey   definition.WorkflowKey
 		timerSequence *timerSequenceImpl
@@ -72,7 +48,7 @@ func (s *timerSequenceSuite) SetupTest() {
 	s.Assertions = require.New(s.T())
 
 	s.controller = gomock.NewController(s.T())
-	s.mockMutableState = NewMockMutableState(s.controller)
+	s.mockMutableState = historyi.NewMockMutableState(s.controller)
 
 	s.workflowKey = definition.NewWorkflowKey(
 		tests.NamespaceID.String(),
@@ -190,7 +166,7 @@ func (s *timerSequenceSuite) TestCreateNextUserTimer_NotCreated_BeforeWorkflowEx
 
 	var timerInfoUpdated = common.CloneProto(timerInfo) // make a copy
 	timerInfoUpdated.TaskStatus = TimerTaskStatusCreated
-	s.mockMutableState.EXPECT().UpdateUserTimer(protomock.Eq(timerInfoUpdated)).Return(nil)
+	s.mockMutableState.EXPECT().UpdateUserTimerTaskStatus(timerInfo.TimerId, timerInfoUpdated.TaskStatus).Return(nil)
 	s.mockMutableState.EXPECT().AddTasks(&tasks.UserTimerTask{
 		// TaskID is set by shard
 		WorkflowKey:         s.workflowKey,
@@ -222,7 +198,7 @@ func (s *timerSequenceSuite) TestCreateNextUserTimer_NotCreated_NoWorkflowExpiry
 
 	var timerInfoUpdated = common.CloneProto(timerInfo) // make a copy
 	timerInfoUpdated.TaskStatus = TimerTaskStatusCreated
-	s.mockMutableState.EXPECT().UpdateUserTimer(protomock.Eq(timerInfoUpdated)).Return(nil)
+	s.mockMutableState.EXPECT().UpdateUserTimerTaskStatus(timerInfoUpdated.TimerId, timerInfoUpdated.TaskStatus).Return(nil)
 	s.mockMutableState.EXPECT().AddTasks(&tasks.UserTimerTask{
 		// TaskID is set by shard
 		WorkflowKey:         s.workflowKey,
@@ -375,7 +351,7 @@ func (s *timerSequenceSuite) TestCreateNextActivityTimer_NotCreated_BeforeWorkfl
 
 	var activityInfoUpdated = common.CloneProto(activityInfo) // make a copy
 	activityInfoUpdated.TimerTaskStatus = TimerTaskStatusCreatedScheduleToStart
-	s.mockMutableState.EXPECT().UpdateActivity(protomock.Eq(activityInfoUpdated)).Return(nil)
+	s.mockMutableState.EXPECT().UpdateActivityTaskStatusWithTimerHeartbeat(activityInfoUpdated.ScheduledEventId, activityInfoUpdated.TimerTaskStatus, nil).Return(nil)
 	s.mockMutableState.EXPECT().AddTasks(&tasks.ActivityTimeoutTask{
 		// TaskID is set by shard
 		WorkflowKey:         s.workflowKey,
@@ -417,7 +393,7 @@ func (s *timerSequenceSuite) TestCreateNextActivityTimer_NotCreated_NoWorkflowEx
 
 	var activityInfoUpdated = common.CloneProto(activityInfo) // make a copy
 	activityInfoUpdated.TimerTaskStatus = TimerTaskStatusCreatedScheduleToStart
-	s.mockMutableState.EXPECT().UpdateActivity(protomock.Eq(activityInfoUpdated)).Return(nil)
+	s.mockMutableState.EXPECT().UpdateActivityTaskStatusWithTimerHeartbeat(activityInfoUpdated.ScheduledEventId, activityInfoUpdated.TimerTaskStatus, nil).Return(nil)
 	s.mockMutableState.EXPECT().AddTasks(&tasks.ActivityTimeoutTask{
 		// TaskID is set by shard
 		WorkflowKey:         s.workflowKey,
@@ -490,7 +466,7 @@ func (s *timerSequenceSuite) TestCreateNextActivityTimer_HeartbeatTimer_BeforeWo
 
 	var activityInfoUpdated = common.CloneProto(activityInfo) // make a copy
 	activityInfoUpdated.TimerTaskStatus = TimerTaskStatusCreatedHeartbeat
-	s.mockMutableState.EXPECT().UpdateActivityWithTimerHeartbeat(protomock.Eq(activityInfoUpdated), taskVisibilityTimestamp).Return(nil)
+	s.mockMutableState.EXPECT().UpdateActivityTaskStatusWithTimerHeartbeat(activityInfo.ScheduledEventId, activityInfoUpdated.TimerTaskStatus, &taskVisibilityTimestamp).Return(nil)
 	s.mockMutableState.EXPECT().AddTasks(&tasks.ActivityTimeoutTask{
 		// TaskID is set by shard
 		WorkflowKey:         s.workflowKey,
@@ -534,7 +510,7 @@ func (s *timerSequenceSuite) TestCreateNextActivityTimer_HeartbeatTimer_NoWorkfl
 
 	var activityInfoUpdated = common.CloneProto(activityInfo) // make a copy
 	activityInfoUpdated.TimerTaskStatus = TimerTaskStatusCreatedHeartbeat
-	s.mockMutableState.EXPECT().UpdateActivityWithTimerHeartbeat(protomock.Eq(activityInfoUpdated), taskVisibilityTimestamp).Return(nil)
+	s.mockMutableState.EXPECT().UpdateActivityTaskStatusWithTimerHeartbeat(activityInfo.ScheduledEventId, activityInfoUpdated.TimerTaskStatus, &taskVisibilityTimestamp).Return(nil)
 	s.mockMutableState.EXPECT().AddTasks(&tasks.ActivityTimeoutTask{
 		// TaskID is set by shard
 		WorkflowKey:         s.workflowKey,

@@ -1,27 +1,3 @@
-// The MIT License
-//
-// Copyright (c) 2020 Temporal Technologies Inc.  All rights reserved.
-//
-// Copyright (c) 2020 Uber Technologies, Inc.
-//
-// Permission is hereby granted, free of charge, to any person obtaining a copy
-// of this software and associated documentation files (the "Software"), to deal
-// in the Software without restriction, including without limitation the rights
-// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-// copies of the Software, and to permit persons to whom the Software is
-// furnished to do so, subject to the following conditions:
-//
-// The above copyright notice and this permission notice shall be included in
-// all copies or substantial portions of the Software.
-//
-// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
-// THE SOFTWARE.
-
 package resetworkflow
 
 import (
@@ -30,23 +6,29 @@ import (
 	"github.com/google/uuid"
 	enumspb "go.temporal.io/api/enums/v1"
 	"go.temporal.io/api/serviceerror"
+	workflowpb "go.temporal.io/api/workflow/v1"
 	"go.temporal.io/server/api/historyservice/v1"
+	"go.temporal.io/server/api/matchingservice/v1"
 	"go.temporal.io/server/common"
 	"go.temporal.io/server/common/definition"
 	"go.temporal.io/server/common/locks"
 	"go.temporal.io/server/common/log/tag"
+	"go.temporal.io/server/common/metrics"
 	"go.temporal.io/server/common/namespace"
 	"go.temporal.io/server/common/persistence/versionhistory"
+	"go.temporal.io/server/common/worker_versioning"
 	"go.temporal.io/server/service/history/api"
+	historyi "go.temporal.io/server/service/history/interfaces"
 	"go.temporal.io/server/service/history/ndc"
-	"go.temporal.io/server/service/history/shard"
 )
 
 func Invoke(
 	ctx context.Context,
 	resetRequest *historyservice.ResetWorkflowExecutionRequest,
-	shard shard.Context,
+	shardContext historyi.ShardContext,
 	workflowConsistencyChecker api.WorkflowConsistencyChecker,
+	matchingClient matchingservice.MatchingServiceClient,
+	versionMembershipCache worker_versioning.VersionMembershipCache,
 ) (_ *historyservice.ResetWorkflowExecutionResponse, retError error) {
 	namespaceID := namespace.ID(resetRequest.GetNamespaceId())
 	err := api.ValidateNamespaceUUID(namespaceID)
@@ -79,8 +61,15 @@ func Invoke(
 		return nil, serviceerror.NewInvalidArgument("Workflow task finish ID must be > 1 && <= workflow last event ID.")
 	}
 
+	// Validate versioning override, if any.
+	err = validatePostResetOperationInputs(ctx, request.GetPostResetOperations(), matchingClient, versionMembershipCache,
+		baseMutableState.GetExecutionInfo().GetTaskQueue(), namespaceID.String())
+	if err != nil {
+		return nil, err
+	}
+
 	// also load the current run of the workflow, it can be different from the base runID
-	currentRunID, err := workflowConsistencyChecker.GetCurrentRunID(
+	currentRunID, err := workflowConsistencyChecker.GetCurrentWorkflowRunID(
 		ctx,
 		namespaceID.String(),
 		request.WorkflowExecution.GetWorkflowId(),
@@ -115,7 +104,7 @@ func Invoke(
 
 	// dedup by requestID
 	if currentWorkflowLease.GetMutableState().GetExecutionState().CreateRequestId == request.GetRequestId() {
-		shard.GetLogger().Info("Duplicated reset request",
+		shardContext.GetLogger().Info("Duplicated reset request",
 			tag.WorkflowID(workflowID),
 			tag.WorkflowRunID(currentRunID),
 			tag.WorkflowNamespaceID(namespaceID.String()))
@@ -137,11 +126,31 @@ func Invoke(
 	}
 	baseCurrentBranchToken := baseCurrentVersionHistory.GetBranchToken()
 	baseNextEventID := baseMutableState.GetNextEventID()
+	baseWorkflow := ndc.NewWorkflow(
+		shardContext.GetClusterMetadata(),
+		baseWorkflowLease.GetContext(),
+		baseWorkflowLease.GetMutableState(),
+		baseWorkflowLease.GetReleaseFn(),
+	)
 
+	namespaceEntry, err := api.GetActiveNamespace(shardContext, namespaceID, workflowID)
+	if err != nil {
+		return nil, err
+	}
+
+	metrics.WorkflowResetCount.With(
+		shardContext.GetMetricsHandler().WithTags(
+			metrics.NamespaceTag(namespaceEntry.Name().String()),
+			metrics.OperationTag(metrics.HistoryResetWorkflowScope),
+			metrics.VersioningBehaviorTag(baseMutableState.GetEffectiveVersioningBehavior()),
+		),
+	).Record(1)
+
+	allowResetWithPendingChildren := shardContext.GetConfig().AllowResetWithPendingChildren(namespaceEntry.Name().String())
 	if err := ndc.NewWorkflowResetter(
-		shard,
+		shardContext,
 		workflowConsistencyChecker.GetWorkflowCache(),
-		shard.GetLogger(),
+		shardContext.GetLogger(),
 	).ResetWorkflow(
 		ctx,
 		namespaceID,
@@ -153,8 +162,9 @@ func Invoke(
 		baseNextEventID,
 		resetRunID,
 		request.GetRequestId(),
+		baseWorkflow,
 		ndc.NewWorkflow(
-			shard.GetClusterMetadata(),
+			shardContext.GetClusterMetadata(),
 			currentWorkflowLease.GetContext(),
 			currentWorkflowLease.GetMutableState(),
 			currentWorkflowLease.GetReleaseFn(),
@@ -162,6 +172,8 @@ func Invoke(
 		request.GetReason(),
 		nil,
 		GetResetReapplyExcludeTypes(request.GetResetReapplyExcludeTypes(), request.GetResetReapplyType()),
+		allowResetWithPendingChildren,
+		resetRequest.ResetRequest.PostResetOperations,
 	); err != nil {
 		return nil, err
 	}
@@ -196,4 +208,25 @@ func GetResetReapplyExcludeTypes(
 		exclude[e] = struct{}{}
 	}
 	return exclude
+}
+
+// validatePostResetOperationInputs validates the optional post reset operation inputs.
+func validatePostResetOperationInputs(ctx context.Context,
+	postResetOperations []*workflowpb.PostResetOperation,
+	matchingClient matchingservice.MatchingServiceClient,
+	versionMembershipCache worker_versioning.VersionMembershipCache,
+	taskQueue string,
+	namespaceID string) error {
+	for _, operation := range postResetOperations {
+		switch op := operation.GetVariant().(type) {
+		case *workflowpb.PostResetOperation_UpdateWorkflowOptions_:
+			opts := op.UpdateWorkflowOptions.GetWorkflowExecutionOptions()
+			if err := worker_versioning.ValidateVersioningOverride(ctx, opts.GetVersioningOverride(), matchingClient, versionMembershipCache, taskQueue, enumspb.TASK_QUEUE_TYPE_WORKFLOW, namespaceID); err != nil {
+				return err
+			}
+		default:
+			return serviceerror.NewInvalidArgumentf("unsupported post reset operation: %T", op)
+		}
+	}
+	return nil
 }

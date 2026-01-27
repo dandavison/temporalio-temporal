@@ -1,27 +1,3 @@
-// The MIT License
-//
-// Copyright (c) 2020 Temporal Technologies Inc.  All rights reserved.
-//
-// Copyright (c) 2020 Uber Technologies, Inc.
-//
-// Permission is hereby granted, free of charge, to any person obtaining a copy
-// of this software and associated documentation files (the "Software"), to deal
-// in the Software without restriction, including without limitation the rights
-// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-// copies of the Software, and to permit persons to whom the Software is
-// furnished to do so, subject to the following conditions:
-//
-// The above copyright notice and this permission notice shall be included in
-// all copies or substantial portions of the Software.
-//
-// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
-// THE SOFTWARE.
-
 package ndc
 
 import (
@@ -29,7 +5,7 @@ import (
 	"math/rand"
 	"testing"
 
-	"github.com/pborman/uuid"
+	"github.com/google/uuid"
 	"github.com/stretchr/testify/require"
 	"github.com/stretchr/testify/suite"
 	historyspb "go.temporal.io/server/api/history/v1"
@@ -38,9 +14,9 @@ import (
 	"go.temporal.io/server/common/log"
 	"go.temporal.io/server/common/persistence/versionhistory"
 	"go.temporal.io/server/common/util"
+	historyi "go.temporal.io/server/service/history/interfaces"
 	"go.temporal.io/server/service/history/shard"
 	"go.temporal.io/server/service/history/tests"
-	"go.temporal.io/server/service/history/workflow"
 	"go.uber.org/mock/gomock"
 )
 
@@ -51,8 +27,8 @@ type (
 
 		controller       *gomock.Controller
 		mockShard        *shard.ContextTest
-		mockContext      *workflow.MockContext
-		mockMutableState *workflow.MockMutableState
+		mockContext      *historyi.MockWorkflowContext
+		mockMutableState *historyi.MockMutableState
 		mockStateBuilder *MockStateRebuilder
 
 		logger log.Logger
@@ -75,8 +51,8 @@ func (s *conflictResolverSuite) SetupTest() {
 	s.Assertions = require.New(s.T())
 
 	s.controller = gomock.NewController(s.T())
-	s.mockContext = workflow.NewMockContext(s.controller)
-	s.mockMutableState = workflow.NewMockMutableState(s.controller)
+	s.mockContext = historyi.NewMockWorkflowContext(s.controller)
+	s.mockMutableState = historyi.NewMockMutableState(s.controller)
 	s.mockStateBuilder = NewMockStateRebuilder(s.controller)
 
 	s.mockShard = shard.NewTestContext(
@@ -90,10 +66,10 @@ func (s *conflictResolverSuite) SetupTest() {
 
 	s.logger = s.mockShard.GetLogger()
 
-	s.namespaceID = uuid.New()
+	s.namespaceID = uuid.NewString()
 	s.namespace = "some random namespace name"
 	s.workflowID = "some random workflow ID"
-	s.runID = uuid.New()
+	s.runID = uuid.NewString()
 
 	s.nDCConflictResolver = NewConflictResolver(
 		s.mockShard, s.mockContext, s.mockMutableState, s.logger,
@@ -110,9 +86,11 @@ func (s *conflictResolverSuite) TestRebuild() {
 	ctx := context.Background()
 	updateCondition := int64(59)
 	dbVersion := int64(1444)
-	requestID := uuid.New()
+	requestID := uuid.NewString()
 	version := int64(12)
 	historySize := int64(12345)
+	externalPayloadSize := int64(6789)
+	externalPayloadCount := int64(42)
 
 	branchToken0 := []byte("some random branch token")
 	lastEventID0 := int64(5)
@@ -140,13 +118,15 @@ func (s *conflictResolverSuite) TestRebuild() {
 		RunId: s.runID,
 	}).AnyTimes()
 	s.mockMutableState.EXPECT().GetHistorySize().Return(historySize).AnyTimes()
+	s.mockMutableState.EXPECT().GetExternalPayloadSize().Return(externalPayloadSize).AnyTimes()
+	s.mockMutableState.EXPECT().GetExternalPayloadCount().Return(externalPayloadCount).AnyTimes()
 
 	workflowKey := definition.NewWorkflowKey(
 		s.namespaceID,
 		s.workflowID,
 		s.runID,
 	)
-	mockRebuildMutableState := workflow.NewMockMutableState(s.controller)
+	mockRebuildMutableState := historyi.NewMockMutableState(s.controller)
 	mockRebuildMutableState.EXPECT().GetExecutionInfo().Return(
 		&persistencespb.WorkflowExecutionInfo{
 			VersionHistories: versionhistory.NewVersionHistories(
@@ -158,6 +138,8 @@ func (s *conflictResolverSuite) TestRebuild() {
 		},
 	).AnyTimes()
 	mockRebuildMutableState.EXPECT().AddHistorySize(historySize)
+	mockRebuildMutableState.EXPECT().AddExternalPayloadSize(externalPayloadSize)
+	mockRebuildMutableState.EXPECT().AddExternalPayloadCount(externalPayloadCount)
 	mockRebuildMutableState.EXPECT().SetUpdateCondition(updateCondition, dbVersion)
 
 	s.mockStateBuilder.EXPECT().Rebuild(
@@ -170,7 +152,11 @@ func (s *conflictResolverSuite) TestRebuild() {
 		workflowKey,
 		branchToken1,
 		requestID,
-	).Return(mockRebuildMutableState, rand.Int63(), nil)
+	).Return(mockRebuildMutableState, RebuildStats{
+		HistorySize:          rand.Int63(),
+		ExternalPayloadSize:  rand.Int63(),
+		ExternalPayloadCount: rand.Int63(),
+	}, nil)
 
 	s.mockContext.EXPECT().Clear()
 	rebuiltMutableState, err := s.nDCConflictResolver.rebuild(ctx, 1, requestID)
@@ -266,13 +252,17 @@ func (s *conflictResolverSuite) TestGetOrRebuildCurrentMutableState_Rebuild() {
 		RunId: s.runID,
 	}).AnyTimes()
 	s.mockMutableState.EXPECT().GetHistorySize().Return(historySize).AnyTimes()
+	externalPayloadSize := int64(6789)
+	externalPayloadCount := int64(42)
+	s.mockMutableState.EXPECT().GetExternalPayloadSize().Return(externalPayloadSize).AnyTimes()
+	s.mockMutableState.EXPECT().GetExternalPayloadCount().Return(externalPayloadCount).AnyTimes()
 
 	workflowKey := definition.NewWorkflowKey(
 		s.namespaceID,
 		s.workflowID,
 		s.runID,
 	)
-	mockRebuildMutableState := workflow.NewMockMutableState(s.controller)
+	mockRebuildMutableState := historyi.NewMockMutableState(s.controller)
 	mockRebuildMutableState.EXPECT().GetExecutionInfo().Return(
 		&persistencespb.WorkflowExecutionInfo{
 			VersionHistories: versionhistory.NewVersionHistories(
@@ -284,6 +274,8 @@ func (s *conflictResolverSuite) TestGetOrRebuildCurrentMutableState_Rebuild() {
 		},
 	).AnyTimes()
 	mockRebuildMutableState.EXPECT().AddHistorySize(historySize)
+	mockRebuildMutableState.EXPECT().AddExternalPayloadSize(externalPayloadSize)
+	mockRebuildMutableState.EXPECT().AddExternalPayloadCount(externalPayloadCount)
 	mockRebuildMutableState.EXPECT().SetUpdateCondition(updateCondition, dbVersion)
 
 	s.mockStateBuilder.EXPECT().Rebuild(
@@ -296,7 +288,11 @@ func (s *conflictResolverSuite) TestGetOrRebuildCurrentMutableState_Rebuild() {
 		workflowKey,
 		branchToken1,
 		gomock.Any(),
-	).Return(mockRebuildMutableState, rand.Int63(), nil)
+	).Return(mockRebuildMutableState, RebuildStats{
+		HistorySize:          rand.Int63(),
+		ExternalPayloadSize:  rand.Int63(),
+		ExternalPayloadCount: rand.Int63(),
+	}, nil)
 
 	s.mockContext.EXPECT().Clear()
 	rebuiltMutableState, isRebuilt, err := s.nDCConflictResolver.GetOrRebuildCurrentMutableState(ctx, 1, incomingVersion)
@@ -329,6 +325,8 @@ func (s *conflictResolverSuite) TestGetOrRebuildMutableState_Rebuild() {
 	dbVersion := int64(1444)
 	version := int64(12)
 	historySize := int64(12345)
+	externalPayloadSize := int64(6789)
+	externalPayloadCount := int64(42)
 
 	// current branch
 	branchToken0 := []byte("some random branch token")
@@ -363,13 +361,15 @@ func (s *conflictResolverSuite) TestGetOrRebuildMutableState_Rebuild() {
 		RunId: s.runID,
 	}).AnyTimes()
 	s.mockMutableState.EXPECT().GetHistorySize().Return(historySize).AnyTimes()
+	s.mockMutableState.EXPECT().GetExternalPayloadSize().Return(externalPayloadSize).AnyTimes()
+	s.mockMutableState.EXPECT().GetExternalPayloadCount().Return(externalPayloadCount).AnyTimes()
 
 	workflowKey := definition.NewWorkflowKey(
 		s.namespaceID,
 		s.workflowID,
 		s.runID,
 	)
-	mockRebuildMutableState := workflow.NewMockMutableState(s.controller)
+	mockRebuildMutableState := historyi.NewMockMutableState(s.controller)
 	mockRebuildMutableState.EXPECT().GetExecutionInfo().Return(
 		&persistencespb.WorkflowExecutionInfo{
 			VersionHistories: versionhistory.NewVersionHistories(
@@ -381,6 +381,8 @@ func (s *conflictResolverSuite) TestGetOrRebuildMutableState_Rebuild() {
 		},
 	).AnyTimes()
 	mockRebuildMutableState.EXPECT().AddHistorySize(historySize)
+	mockRebuildMutableState.EXPECT().AddExternalPayloadSize(externalPayloadSize)
+	mockRebuildMutableState.EXPECT().AddExternalPayloadCount(externalPayloadCount)
 	mockRebuildMutableState.EXPECT().SetUpdateCondition(updateCondition, dbVersion)
 
 	s.mockStateBuilder.EXPECT().Rebuild(
@@ -393,7 +395,11 @@ func (s *conflictResolverSuite) TestGetOrRebuildMutableState_Rebuild() {
 		workflowKey,
 		branchToken1,
 		gomock.Any(),
-	).Return(mockRebuildMutableState, rand.Int63(), nil)
+	).Return(mockRebuildMutableState, RebuildStats{
+		HistorySize:          rand.Int63(),
+		ExternalPayloadSize:  rand.Int63(),
+		ExternalPayloadCount: rand.Int63(),
+	}, nil)
 
 	s.mockContext.EXPECT().Clear()
 	rebuiltMutableState, isRebuilt, err := s.nDCConflictResolver.GetOrRebuildMutableState(ctx, 1)

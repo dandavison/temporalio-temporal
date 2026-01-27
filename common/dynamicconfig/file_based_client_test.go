@@ -1,27 +1,3 @@
-// The MIT License
-//
-// Copyright (c) 2020 Temporal Technologies Inc.  All rights reserved.
-//
-// Copyright (c) 2020 Uber Technologies, Inc.
-//
-// Permission is hereby granted, free of charge, to any person obtaining a copy
-// of this software and associated documentation files (the "Software"), to deal
-// in the Software without restriction, including without limitation the rights
-// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-// copies of the Software, and to permit persons to whom the Software is
-// furnished to do so, subject to the following conditions:
-//
-// The above copyright notice and this permission notice shall be included in
-// all copies or substantial portions of the Software.
-//
-// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
-// THE SOFTWARE.
-
 package dynamicconfig_test
 
 import (
@@ -78,7 +54,7 @@ func (s *fileBasedClientSuite) SetupTest() {
 }
 
 func (s *fileBasedClientSuite) TestGetValue() {
-	cvs := s.client.GetValue(testGetBoolPropertyKey)
+	cvs := s.client.GetValue(dynamicconfig.MakeKey(testGetBoolPropertyKey))
 	s.Equal(3, len(cvs))
 	s.ElementsMatch([]dynamicconfig.ConstrainedValue{
 		{Constraints: dynamicconfig.Constraints{}, Value: false},
@@ -88,7 +64,7 @@ func (s *fileBasedClientSuite) TestGetValue() {
 }
 
 func (s *fileBasedClientSuite) TestGetValue_NonExistKey() {
-	cvs := s.client.GetValue(unknownKey)
+	cvs := s.client.GetValue(dynamicconfig.MakeKey(unknownKey))
 	s.Nil(cvs)
 
 	defaultValue := true
@@ -97,7 +73,7 @@ func (s *fileBasedClientSuite) TestGetValue_NonExistKey() {
 }
 
 func (s *fileBasedClientSuite) TestGetValue_CaseInsensitie() {
-	cvs := s.client.GetValue(testCaseInsensitivePropertyKey)
+	cvs := s.client.GetValue(dynamicconfig.MakeKey(testCaseInsensitivePropertyKey))
 	s.Equal(1, len(cvs))
 
 	v := dynamicconfig.NewGlobalBoolSetting(testCaseInsensitivePropertyKey, false, "").Get(s.collection)()
@@ -567,7 +543,7 @@ testGetFloat64PropertyKey:
 func (s *fileBasedClientSuite) TestWarnUnregisteredKey() {
 	dynamicconfig.NewGlobalIntSetting(testGetIntPropertyKey, 0, "")
 
-	lr := dynamicconfig.ValidateFile([]byte(`
+	lr := dynamicconfig.LoadYamlFile([]byte(`
 testGetIntPropertyKey:
 - value: 2000
 testGetFloat64PropertyKey:
@@ -575,25 +551,25 @@ testGetFloat64PropertyKey:
 `))
 	s.Empty(lr.Errors)
 	s.Equal(1, len(lr.Warnings))
-	s.ErrorContains(lr.Warnings[0], `unregistered key "testGetFloat64PropertyKey"`)
+	s.ErrorContains(lr.Warnings[0], `unregistered key "testgetfloat64propertykey"`)
 }
 
 func (s *fileBasedClientSuite) TestWarnValidationInt() {
 	dynamicconfig.NewGlobalIntSetting(testGetIntPropertyKey, 0, "")
 
-	lr := dynamicconfig.ValidateFile([]byte(`
+	lr := dynamicconfig.LoadYamlFile([]byte(`
 testGetIntPropertyKey:
 - value: not a number
 `))
 	s.Empty(lr.Errors)
 	s.Equal(1, len(lr.Warnings))
-	s.ErrorContains(lr.Warnings[0], `validation failed: key "testGetIntPropertyKey" value not a number: value type is not int`)
+	s.ErrorContains(lr.Warnings[0], `validation failed: key "testgetintpropertykey" value not a number: value type is not int`)
 }
 
 func (s *fileBasedClientSuite) TestWarnConstraint() {
 	dynamicconfig.NewGlobalIntSetting(testGetIntPropertyKey, 0, "")
 
-	lr := dynamicconfig.ValidateFile([]byte(`
+	lr := dynamicconfig.LoadYamlFile([]byte(`
 testGetIntPropertyKey:
 - value: 5005
   constraints:
@@ -601,13 +577,13 @@ testGetIntPropertyKey:
 `))
 	s.Empty(lr.Errors)
 	s.Equal(1, len(lr.Warnings))
-	s.ErrorContains(lr.Warnings[0], `constraint "namespace" isn't valid for dynamic config key "testGetIntPropertyKey"`)
+	s.ErrorContains(lr.Warnings[0], `constraint "namespace" isn't valid for dynamic config key "testgetintpropertykey"`)
 }
 
 func (s *fileBasedClientSuite) TestWarnMultiple() {
 	dynamicconfig.NewGlobalIntSetting(testGetIntPropertyKey, 0, "")
 
-	lr := dynamicconfig.ValidateFile([]byte(`
+	lr := dynamicconfig.LoadYamlFile([]byte(`
 unknownKey:
 - value: "5d"
 testGetIntPropertyKey:
@@ -620,7 +596,7 @@ testGetIntPropertyKey:
 }
 
 func (s *fileBasedClientSuite) TestErrorYamlDecode() {
-	lr := dynamicconfig.ValidateFile([]byte(`}}}}}}}}}`))
+	lr := dynamicconfig.LoadYamlFile([]byte(`}}}}}}}}}`))
 	s.Equal(1, len(lr.Errors))
 	s.ErrorContains(lr.Errors[0], "decode error")
 }
@@ -628,7 +604,7 @@ func (s *fileBasedClientSuite) TestErrorYamlDecode() {
 func (s *fileBasedClientSuite) TestErrorBadConstraint() {
 	dynamicconfig.NewNamespaceBoolSetting(testGetBoolPropertyKey, true, "")
 
-	lr := dynamicconfig.ValidateFile([]byte(`
+	lr := dynamicconfig.LoadYamlFile([]byte(`
 testGetBoolPropertyKey:
 - value: false
   constraints:
@@ -641,7 +617,7 @@ testGetBoolPropertyKey:
 func (s *fileBasedClientSuite) TestErrorBadConstraints() {
 	dynamicconfig.NewTaskQueueBoolSetting(testGetBoolPropertyKey, true, "")
 
-	lr := dynamicconfig.ValidateFile([]byte(`
+	lr := dynamicconfig.LoadYamlFile([]byte(`
 testGetBoolPropertyKey:
 - value: false
   constraints:

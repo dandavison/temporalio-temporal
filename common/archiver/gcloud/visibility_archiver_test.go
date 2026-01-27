@@ -1,27 +1,3 @@
-// The MIT License
-//
-// Copyright (c) 2020 Temporal Technologies Inc.  All rights reserved.
-//
-// Copyright (c) 2020 Uber Technologies, Inc.
-//
-// Permission is hereby granted, free of charge, to any person obtaining a copy
-// of this software and associated documentation files (the "Software"), to deal
-// in the Software without restriction, including without limitation the rights
-// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-// copies of the Software, and to permit persons to whom the Software is
-// furnished to do so, subject to the following conditions:
-//
-// The above copyright notice and this permission notice shall be included in
-// all copies or substantial portions of the Software.
-//
-// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
-// THE SOFTWARE.
-
 package gcloud
 
 import (
@@ -34,7 +10,7 @@ import (
 	"github.com/stretchr/testify/suite"
 	enumspb "go.temporal.io/api/enums/v1"
 	"go.temporal.io/api/serviceerror"
-	"go.temporal.io/api/workflow/v1"
+	workflowpb "go.temporal.io/api/workflow/v1"
 	archiverspb "go.temporal.io/server/api/archiver/v1"
 	"go.temporal.io/server/common/archiver"
 	"go.temporal.io/server/common/archiver/gcloud/connector"
@@ -58,10 +34,8 @@ const (
 func (s *visibilityArchiverSuite) SetupTest() {
 	s.Assertions = require.New(s.T())
 	s.controller = gomock.NewController(s.T())
-	s.container = &archiver.VisibilityBootstrapContainer{
-		Logger:         log.NewNoopLogger(),
-		MetricsHandler: metrics.NoopMetricsHandler,
-	}
+	s.logger = log.NewNoopLogger()
+	s.metricsHandler = metrics.NoopMetricsHandler
 	s.expectedVisibilityRecords = []*archiverspb.VisibilityRecord{
 		{
 			NamespaceId:      testNamespaceID,
@@ -90,7 +64,8 @@ type visibilityArchiverSuite struct {
 	protorequire.ProtoAssertions
 	suite.Suite
 	controller                *gomock.Controller
-	container                 *archiver.VisibilityBootstrapContainer
+	logger                    log.Logger
+	metricsHandler            metrics.Handler
 	expectedVisibilityRecords []*archiverspb.VisibilityRecord
 }
 
@@ -142,7 +117,7 @@ func (s *visibilityArchiverSuite) TestArchive_Fail_InvalidVisibilityURI() {
 	s.NoError(err)
 	storageWrapper := connector.NewMockClient(s.controller)
 
-	visibilityArchiver := newVisibilityArchiver(s.container, storageWrapper)
+	visibilityArchiver := newVisibilityArchiver(s.logger, s.metricsHandler, storageWrapper)
 	s.NoError(err)
 	request := &archiverspb.VisibilityRecord{
 		NamespaceId: testNamespaceID,
@@ -161,7 +136,7 @@ func (s *visibilityArchiverSuite) TestQuery_Fail_InvalidVisibilityURI() {
 	s.NoError(err)
 	storageWrapper := connector.NewMockClient(s.controller)
 
-	visibilityArchiver := newVisibilityArchiver(s.container, storageWrapper)
+	visibilityArchiver := newVisibilityArchiver(s.logger, s.metricsHandler, storageWrapper)
 	s.NoError(err)
 	request := &archiver.QueryVisibilityRequest{
 		NamespaceID: testNamespaceID,
@@ -169,7 +144,7 @@ func (s *visibilityArchiverSuite) TestQuery_Fail_InvalidVisibilityURI() {
 		Query:       "WorkflowType='type::example' AND CloseTime='2020-02-05T11:00:00Z' AND SearchPrecision='Day'",
 	}
 
-	_, err = visibilityArchiver.Query(ctx, URI, request, searchattribute.TestNameTypeMap)
+	_, err = visibilityArchiver.Query(ctx, URI, request, searchattribute.TestNameTypeMap())
 	s.Error(err)
 }
 
@@ -181,7 +156,7 @@ func (s *visibilityArchiverSuite) TestVisibilityArchive() {
 	storageWrapper.EXPECT().Exist(gomock.Any(), URI, gomock.Any()).Return(false, nil)
 	storageWrapper.EXPECT().Upload(gomock.Any(), URI, gomock.Any(), gomock.Any()).Return(nil).Times(2)
 
-	visibilityArchiver := newVisibilityArchiver(s.container, storageWrapper)
+	visibilityArchiver := newVisibilityArchiver(s.logger, s.metricsHandler, storageWrapper)
 	s.NoError(err)
 
 	request := &archiverspb.VisibilityRecord{
@@ -207,7 +182,7 @@ func (s *visibilityArchiverSuite) TestQuery_Fail_InvalidQuery() {
 	s.NoError(err)
 	storageWrapper := connector.NewMockClient(s.controller)
 	storageWrapper.EXPECT().Exist(gomock.Any(), URI, gomock.Any()).Return(false, nil)
-	visibilityArchiver := newVisibilityArchiver(s.container, storageWrapper)
+	visibilityArchiver := newVisibilityArchiver(s.logger, s.metricsHandler, storageWrapper)
 	s.NoError(err)
 
 	mockParser := NewMockQueryParser(s.controller)
@@ -217,7 +192,7 @@ func (s *visibilityArchiverSuite) TestQuery_Fail_InvalidQuery() {
 		NamespaceID: "some random namespaceID",
 		PageSize:    10,
 		Query:       "some invalid query",
-	}, searchattribute.TestNameTypeMap)
+	}, searchattribute.TestNameTypeMap())
 	s.Error(err)
 	s.Nil(response)
 }
@@ -227,7 +202,7 @@ func (s *visibilityArchiverSuite) TestQuery_Fail_InvalidToken() {
 	s.NoError(err)
 	storageWrapper := connector.NewMockClient(s.controller)
 	storageWrapper.EXPECT().Exist(gomock.Any(), URI, gomock.Any()).Return(false, nil)
-	visibilityArchiver := newVisibilityArchiver(s.container, storageWrapper)
+	visibilityArchiver := newVisibilityArchiver(s.logger, s.metricsHandler, storageWrapper)
 	s.NoError(err)
 
 	mockParser := NewMockQueryParser(s.controller)
@@ -246,7 +221,7 @@ func (s *visibilityArchiverSuite) TestQuery_Fail_InvalidToken() {
 		PageSize:      1,
 		NextPageToken: []byte{1, 2, 3},
 	}
-	response, err := visibilityArchiver.Query(context.Background(), URI, request, searchattribute.TestNameTypeMap)
+	response, err := visibilityArchiver.Query(context.Background(), URI, request, searchattribute.TestNameTypeMap())
 	s.Error(err)
 	s.Nil(response)
 }
@@ -260,7 +235,7 @@ func (s *visibilityArchiverSuite) TestQuery_Success_NoNextPageToken() {
 	storageWrapper.EXPECT().QueryWithFilters(gomock.Any(), URI, gomock.Any(), 10, 0, gomock.Any()).Return([]string{"closeTimeout_2020-02-05T09:56:14Z_test-workflow-id_MobileOnlyWorkflow::processMobileOnly_test-run-id.visibility"}, true, 1, nil)
 	storageWrapper.EXPECT().Get(gomock.Any(), URI, "test-namespace-id/closeTimeout_2020-02-05T09:56:14Z_test-workflow-id_MobileOnlyWorkflow::processMobileOnly_test-run-id.visibility").Return([]byte(exampleVisibilityRecord), nil)
 
-	visibilityArchiver := newVisibilityArchiver(s.container, storageWrapper)
+	visibilityArchiver := newVisibilityArchiver(s.logger, s.metricsHandler, storageWrapper)
 	s.NoError(err)
 
 	mockParser := NewMockQueryParser(s.controller)
@@ -280,12 +255,12 @@ func (s *visibilityArchiverSuite) TestQuery_Success_NoNextPageToken() {
 		Query:       "parsed by mockParser",
 	}
 
-	response, err := visibilityArchiver.Query(ctx, URI, request, searchattribute.TestNameTypeMap)
+	response, err := visibilityArchiver.Query(ctx, URI, request, searchattribute.TestNameTypeMap())
 	s.NoError(err)
 	s.NotNil(response)
 	s.Nil(response.NextPageToken)
 	s.Len(response.Executions, 1)
-	ei, err := convertToExecutionInfo(s.expectedVisibilityRecords[0], searchattribute.TestNameTypeMap)
+	ei, err := convertToExecutionInfo(s.expectedVisibilityRecords[0], searchattribute.TestNameTypeMap())
 	s.NoError(err)
 	s.ProtoEqual(ei, response.Executions[0])
 }
@@ -303,7 +278,7 @@ func (s *visibilityArchiverSuite) TestQuery_Success_SmallPageSize() {
 	storageWrapper.EXPECT().Get(gomock.Any(), URI, "test-namespace-id/closeTimeout_2020-02-05T09:56:15Z_test-workflow-id_MobileOnlyWorkflow::processMobileOnly_test-run-id.visibility").Return([]byte(exampleVisibilityRecord), nil)
 	storageWrapper.EXPECT().Get(gomock.Any(), URI, "test-namespace-id/closeTimeout_2020-02-05T09:56:16Z_test-workflow-id_MobileOnlyWorkflow::processMobileOnly_test-run-id.visibility").Return([]byte(exampleVisibilityRecord), nil)
 
-	visibilityArchiver := newVisibilityArchiver(s.container, storageWrapper)
+	visibilityArchiver := newVisibilityArchiver(s.logger, s.metricsHandler, storageWrapper)
 	s.NoError(err)
 
 	mockParser := NewMockQueryParser(s.controller)
@@ -323,25 +298,25 @@ func (s *visibilityArchiverSuite) TestQuery_Success_SmallPageSize() {
 		Query:       "parsed by mockParser",
 	}
 
-	response, err := visibilityArchiver.Query(ctx, URI, request, searchattribute.TestNameTypeMap)
+	response, err := visibilityArchiver.Query(ctx, URI, request, searchattribute.TestNameTypeMap())
 	s.NoError(err)
 	s.NotNil(response)
 	s.NotNil(response.NextPageToken)
 	s.Len(response.Executions, 2)
-	ei, err := convertToExecutionInfo(s.expectedVisibilityRecords[0], searchattribute.TestNameTypeMap)
+	ei, err := convertToExecutionInfo(s.expectedVisibilityRecords[0], searchattribute.TestNameTypeMap())
 	s.NoError(err)
 	s.ProtoEqual(ei, response.Executions[0])
-	ei, err = convertToExecutionInfo(s.expectedVisibilityRecords[0], searchattribute.TestNameTypeMap)
+	ei, err = convertToExecutionInfo(s.expectedVisibilityRecords[0], searchattribute.TestNameTypeMap())
 	s.NoError(err)
 	s.ProtoEqual(ei, response.Executions[1])
 
 	request.NextPageToken = response.NextPageToken
-	response, err = visibilityArchiver.Query(ctx, URI, request, searchattribute.TestNameTypeMap)
+	response, err = visibilityArchiver.Query(ctx, URI, request, searchattribute.TestNameTypeMap())
 	s.NoError(err)
 	s.NotNil(response)
 	s.Nil(response.NextPageToken)
 	s.Len(response.Executions, 1)
-	ei, err = convertToExecutionInfo(s.expectedVisibilityRecords[0], searchattribute.TestNameTypeMap)
+	ei, err = convertToExecutionInfo(s.expectedVisibilityRecords[0], searchattribute.TestNameTypeMap())
 	s.NoError(err)
 	s.ProtoEqual(ei, response.Executions[0])
 }
@@ -351,14 +326,14 @@ func (s *visibilityArchiverSuite) TestQuery_EmptyQuery_InvalidNamespace() {
 	s.NoError(err)
 	storageWrapper := connector.NewMockClient(s.controller)
 	storageWrapper.EXPECT().Exist(gomock.Any(), URI, gomock.Any()).Return(false, nil)
-	arc := newVisibilityArchiver(s.container, storageWrapper)
+	arc := newVisibilityArchiver(s.logger, s.metricsHandler, storageWrapper)
 	req := &archiver.QueryVisibilityRequest{
 		NamespaceID:   "",
 		PageSize:      1,
 		NextPageToken: nil,
 		Query:         "",
 	}
-	_, err = arc.Query(context.Background(), URI, req, searchattribute.TestNameTypeMap)
+	_, err = arc.Query(context.Background(), URI, req, searchattribute.TestNameTypeMap())
 
 	var svcErr *serviceerror.InvalidArgument
 
@@ -370,7 +345,7 @@ func (s *visibilityArchiverSuite) TestQuery_EmptyQuery_ZeroPageSize() {
 	s.NoError(err)
 	storageWrapper := connector.NewMockClient(s.controller)
 	storageWrapper.EXPECT().Exist(gomock.Any(), URI, gomock.Any()).Return(false, nil)
-	arc := newVisibilityArchiver(s.container, storageWrapper)
+	arc := newVisibilityArchiver(s.logger, s.metricsHandler, storageWrapper)
 
 	req := &archiver.QueryVisibilityRequest{
 		NamespaceID:   testNamespaceID,
@@ -378,7 +353,7 @@ func (s *visibilityArchiverSuite) TestQuery_EmptyQuery_ZeroPageSize() {
 		NextPageToken: nil,
 		Query:         "",
 	}
-	_, err = arc.Query(context.Background(), URI, req, searchattribute.TestNameTypeMap)
+	_, err = arc.Query(context.Background(), URI, req, searchattribute.TestNameTypeMap())
 
 	var svcErr *serviceerror.InvalidArgument
 
@@ -426,7 +401,7 @@ func (s *visibilityArchiverSuite) TestQuery_EmptyQuery_Pagination() {
 		"test-namespace-id/closeTimeout_2020-02-05T09:56:14Z_test-workflow-id2_MobileOnlyWorkflow"+
 			"::processMobileOnly_test-run-id.visibility").Return([]byte(exampleVisibilityRecord2), nil)
 
-	arc := newVisibilityArchiver(s.container, storageWrapper)
+	arc := newVisibilityArchiver(s.logger, s.metricsHandler, storageWrapper)
 
 	response := &archiver.QueryVisibilityResponse{
 		Executions:    nil,
@@ -434,7 +409,7 @@ func (s *visibilityArchiverSuite) TestQuery_EmptyQuery_Pagination() {
 	}
 
 	limit := 10
-	executions := make(map[string]*workflow.WorkflowExecutionInfo, limit)
+	executions := make(map[string]*workflowpb.WorkflowExecutionInfo, limit)
 
 	numPages := 2
 	for i := 0; i < numPages; i++ {
@@ -444,7 +419,7 @@ func (s *visibilityArchiverSuite) TestQuery_EmptyQuery_Pagination() {
 			NextPageToken: response.NextPageToken,
 			Query:         "",
 		}
-		response, err = arc.Query(context.Background(), URI, req, searchattribute.TestNameTypeMap)
+		response, err = arc.Query(context.Background(), URI, req, searchattribute.TestNameTypeMap())
 		s.NoError(err)
 		s.NotNil(response)
 		s.Len(response.Executions, 1)

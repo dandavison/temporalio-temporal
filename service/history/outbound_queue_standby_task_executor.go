@@ -1,31 +1,11 @@
-// The MIT License
-//
-// Copyright (c) 2024 Temporal Technologies Inc.  All rights reserved.
-//
-// Permission is hereby granted, free of charge, to any person obtaining a copy
-// of this software and associated documentation files (the "Software"), to deal
-// in the Software without restriction, including without limitation the rights
-// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-// copies of the Software, and to permit persons to whom the Software is
-// furnished to do so, subject to the following conditions:
-//
-// The above copyright notice and this permission notice shall be included in
-// all copies or substantial portions of the Software.
-//
-// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
-// THE SOFTWARE.
-
 package history
 
 import (
 	"context"
 	"errors"
+	"fmt"
 
+	"go.temporal.io/server/chasm"
 	"go.temporal.io/server/common/log"
 	"go.temporal.io/server/common/log/tag"
 	"go.temporal.io/server/common/metrics"
@@ -33,15 +13,17 @@ import (
 	"go.temporal.io/server/service/history/configs"
 	"go.temporal.io/server/service/history/consts"
 	"go.temporal.io/server/service/history/hsm"
+	historyi "go.temporal.io/server/service/history/interfaces"
 	"go.temporal.io/server/service/history/queues"
-	"go.temporal.io/server/service/history/shard"
+	queueserrors "go.temporal.io/server/service/history/queues/errors"
 	"go.temporal.io/server/service/history/tasks"
 	wcache "go.temporal.io/server/service/history/workflow/cache"
 )
 
 type outboundQueueStandbyTaskExecutor struct {
 	stateMachineEnvironment
-	config *configs.Config
+	chasmEngine chasm.Engine
+	config      *configs.Config
 
 	clusterName string
 }
@@ -49,11 +31,12 @@ type outboundQueueStandbyTaskExecutor struct {
 var _ queues.Executor = &outboundQueueStandbyTaskExecutor{}
 
 func newOutboundQueueStandbyTaskExecutor(
-	shardCtx shard.Context,
+	shardCtx historyi.ShardContext,
 	workflowCache wcache.Cache,
 	clusterName string,
 	logger log.Logger,
 	metricsHandler metrics.Handler,
+	chasmEngine chasm.Engine,
 ) *outboundQueueStandbyTaskExecutor {
 	return &outboundQueueStandbyTaskExecutor{
 		stateMachineEnvironment: stateMachineEnvironment{
@@ -66,6 +49,7 @@ func newOutboundQueueStandbyTaskExecutor(
 		},
 		config:      shardCtx.GetConfig(),
 		clusterName: clusterName,
+		chasmEngine: chasmEngine,
 	}
 }
 
@@ -74,10 +58,14 @@ func (e *outboundQueueStandbyTaskExecutor) Execute(
 	executable queues.Executable,
 ) queues.ExecuteResponse {
 	task := executable.GetTask()
-	taskType := queues.GetOutboundTaskTypeTagValue(task, false)
+	taskType := queues.GetOutboundTaskTypeTagValue(task, false, e.shardContext.ChasmRegistry())
+	namespaceTag, _ := getNamespaceTagAndReplicationStateByID(
+		e.shardContext.GetNamespaceRegistry(),
+		task.GetNamespaceID(),
+	)
 	respond := func(err error) queues.ExecuteResponse {
 		metricsTags := []metrics.Tag{
-			getNamespaceTagByID(e.shardContext.GetNamespaceRegistry(), task.GetNamespaceID()),
+			namespaceTag,
 			metrics.TaskTypeTag(taskType),
 			metrics.OperationTag(taskType),
 		}
@@ -88,33 +76,45 @@ func (e *outboundQueueStandbyTaskExecutor) Execute(
 		}
 	}
 
-	return respond(e.processTask(ctx, task))
-}
-
-func (e *outboundQueueStandbyTaskExecutor) processTask(
-	ctx context.Context,
-	task tasks.Task,
-) error {
-	ctx, cancel := context.WithTimeout(ctx, taskTimeout)
-	defer cancel()
-
 	nsRecord, err := e.shardContext.GetNamespaceRegistry().GetNamespaceByID(
 		namespace.ID(task.GetNamespaceID()),
 	)
 	if err != nil {
-		return err
+		return respond(err)
 	}
 
 	if !nsRecord.IsOnCluster(e.clusterName) {
 		// namespace is not replicated to local cluster, ignore corresponding tasks
-		return nil
+		return respond(nil)
 	}
 
 	if err := validateTaskByClock(e.shardContext, task); err != nil {
-		return err
+		return respond(err)
 	}
 
-	ref, _, err := stateMachineTask(e.shardContext, task)
+	nsName := nsRecord.Name().String()
+
+	switch task := task.(type) {
+	case *tasks.StateMachineOutboundTask:
+		return respond(e.executeStateMachineTask(ctx, task, nsName))
+	case *tasks.ChasmTask:
+		return respond(e.executeChasmSideEffectTask(ctx, task))
+	}
+
+	return respond(queueserrors.NewUnprocessableTaskError(fmt.Sprintf("unknown task type '%T'", task)))
+}
+
+func (e *outboundQueueStandbyTaskExecutor) executeStateMachineTask(
+	ctx context.Context,
+	task tasks.Task,
+	nsName string,
+) error {
+	destination := ""
+	if dtask, ok := task.(tasks.HasDestination); ok {
+		destination = dtask.GetDestination()
+	}
+
+	ref, _, err := StateMachineTask(e.shardContext.StateMachineRegistry(), task)
 	if err != nil {
 		return err
 	}
@@ -139,12 +139,7 @@ func (e *outboundQueueStandbyTaskExecutor) processTask(
 	// The *likely* reasons are: a) delay in the replication stack; b) destination is down.
 	// In any case, the task needs to be retried (or discarded, based on the configured discard delay).
 
-	destination := ""
-	if dtask, ok := task.(tasks.HasDestination); ok {
-		destination = dtask.GetDestination()
-	}
-
-	discardTime := task.GetVisibilityTime().Add(e.config.OutboundStandbyTaskMissingEventsDiscardDelay(nsRecord.Name().String(), destination))
+	discardTime := task.GetVisibilityTime().Add(e.config.OutboundStandbyTaskMissingEventsDiscardDelay(nsName, destination))
 	// now > task start time + discard delay
 	if e.Now().After(discardTime) {
 		e.logger.Warn("Discarding standby outbound task due to task being pending for too long.", tag.Task(task))
@@ -152,16 +147,45 @@ func (e *outboundQueueStandbyTaskExecutor) processTask(
 	}
 
 	err = consts.ErrTaskRetry
-	if e.config.OutboundStandbyTaskMissingEventsDestinationDownErr(nsRecord.Name().String(), destination) {
+	if e.config.OutboundStandbyTaskMissingEventsDestinationDownErr(nsName, destination) {
 		// Wrap the retry error with DestinationDownError so it can trigger the circuit breaker on
 		// the standby side. This won't do any harm, at most some delay processing the standby task.
 		// Assuming the dynamic config OutboundStandbyTaskMissingEventsDiscardDelay is long enough,
 		// it should give enough time for the active side to execute the task successfully, and the
 		// standby side to process it as well without discarding the task.
-		err = queues.NewDestinationDownError(
+		err = queueserrors.NewDestinationDownError(
 			"standby task executor returned retryable error",
 			err,
 		)
+		return err
 	}
+
+	return nil
+}
+
+func (e *outboundQueueStandbyTaskExecutor) executeChasmSideEffectTask(
+	ctx context.Context,
+	task *tasks.ChasmTask,
+) error {
+	weContext, release, err := getWorkflowExecutionContextForTask(ctx, e.shardContext, e.cache, task)
+	if err != nil {
+		return err
+	}
+	defer func() { release(err) }()
+
+	ms, err := weContext.LoadMutableState(ctx, e.shardContext)
+	if err != nil {
+		return err
+	}
+
+	shouldRetry, err := validateChasmSideEffectTask(
+		ctx,
+		ms,
+		task,
+	)
+	if shouldRetry != nil {
+		err = consts.ErrTaskRetry
+	}
+
 	return err
 }

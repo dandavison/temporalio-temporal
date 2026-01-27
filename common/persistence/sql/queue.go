@@ -1,27 +1,3 @@
-// The MIT License
-//
-// Copyright (c) 2020 Temporal Technologies Inc.  All rights reserved.
-//
-// Copyright (c) 2020 Uber Technologies, Inc.
-//
-// Permission is hereby granted, free of charge, to any person obtaining a copy
-// of this software and associated documentation files (the "Software"), to deal
-// in the Software without restriction, including without limitation the rights
-// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-// copies of the Software, and to permit persons to whom the Software is
-// furnished to do so, subject to the following conditions:
-//
-// The above copyright notice and this permission notice shall be included in
-// all copies or substantial portions of the Software.
-//
-// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
-// THE SOFTWARE.
-
 package sql
 
 import (
@@ -33,6 +9,7 @@ import (
 	"go.temporal.io/api/serviceerror"
 	"go.temporal.io/server/common/log"
 	"go.temporal.io/server/common/persistence"
+	"go.temporal.io/server/common/persistence/serialization"
 	"go.temporal.io/server/common/persistence/sql/sqlplugin"
 )
 
@@ -48,9 +25,10 @@ func newQueue(
 	db sqlplugin.DB,
 	logger log.Logger,
 	queueType persistence.QueueType,
+	serializer serialization.Serializer,
 ) (persistence.Queue, error) {
 	queue := &sqlQueue{
-		SqlStore:  NewSqlStore(db, logger),
+		SqlStore:  NewSQLStore(db, logger, serializer),
 		queueType: queueType,
 		logger:    logger,
 	}
@@ -99,7 +77,7 @@ func (q *sqlQueue) ReadMessages(
 	lastMessageID int64,
 	pageSize int,
 ) ([]*persistence.QueueMessage, error) {
-	rows, err := q.Db.RangeSelectFromMessages(ctx, sqlplugin.QueueMessagesRangeFilter{
+	rows, err := q.DB.RangeSelectFromMessages(ctx, sqlplugin.QueueMessagesRangeFilter{
 		QueueType:    q.queueType,
 		MinMessageID: lastMessageID,
 		MaxMessageID: persistence.MaxQueueMessageID,
@@ -125,13 +103,13 @@ func (q *sqlQueue) DeleteMessagesBefore(
 	ctx context.Context,
 	messageID int64,
 ) error {
-	_, err := q.Db.RangeDeleteFromMessages(ctx, sqlplugin.QueueMessagesRangeFilter{
+	_, err := q.DB.RangeDeleteFromMessages(ctx, sqlplugin.QueueMessagesRangeFilter{
 		QueueType:    q.queueType,
 		MinMessageID: persistence.EmptyQueueMessageID,
 		MaxMessageID: messageID - 1,
 	})
 	if err != nil {
-		return serviceerror.NewUnavailable(fmt.Sprintf("DeleteMessagesBefore operation failed. Error %v", err))
+		return serviceerror.NewUnavailablef("DeleteMessagesBefore operation failed. Error %v", err)
 	}
 	return nil
 }
@@ -148,7 +126,7 @@ func (q *sqlQueue) UpdateAckLevel(
 			Version:      metadata.Version,
 		})
 		if err != nil {
-			return serviceerror.NewUnavailable(fmt.Sprintf("UpdateAckLevel operation failed. Error %v", err))
+			return serviceerror.NewUnavailablef("UpdateAckLevel operation failed. Error %v", err)
 		}
 		rowsAffected, err := result.RowsAffected()
 		if err != nil {
@@ -169,11 +147,11 @@ func (q *sqlQueue) UpdateAckLevel(
 func (q *sqlQueue) GetAckLevels(
 	ctx context.Context,
 ) (*persistence.InternalQueueMetadata, error) {
-	row, err := q.Db.SelectFromQueueMetadata(ctx, sqlplugin.QueueMetadataFilter{
+	row, err := q.DB.SelectFromQueueMetadata(ctx, sqlplugin.QueueMetadataFilter{
 		QueueType: q.queueType,
 	})
 	if err != nil {
-		return nil, serviceerror.NewUnavailable(fmt.Sprintf("GetAckLevels operation failed. Error %v", err))
+		return nil, serviceerror.NewUnavailablef("GetAckLevels operation failed. Error %v", err)
 	}
 
 	return &persistence.InternalQueueMetadata{
@@ -221,19 +199,19 @@ func (q *sqlQueue) ReadMessagesFromDLQ(
 	if len(pageToken) != 0 {
 		lastReadMessageID, err := deserializePageToken(pageToken)
 		if err != nil {
-			return nil, nil, serviceerror.NewInternal(fmt.Sprintf("invalid next page token %v", pageToken))
+			return nil, nil, serviceerror.NewInternalf("invalid next page token %v", pageToken)
 		}
 		firstMessageID = lastReadMessageID
 	}
 
-	rows, err := q.Db.RangeSelectFromMessages(ctx, sqlplugin.QueueMessagesRangeFilter{
+	rows, err := q.DB.RangeSelectFromMessages(ctx, sqlplugin.QueueMessagesRangeFilter{
 		QueueType:    q.getDLQTypeFromQueueType(),
 		MinMessageID: firstMessageID,
 		MaxMessageID: lastMessageID,
 		PageSize:     pageSize,
 	})
 	if err != nil {
-		return nil, nil, serviceerror.NewUnavailable(fmt.Sprintf("ReadMessagesFromDLQ operation failed. Error %v", err))
+		return nil, nil, serviceerror.NewUnavailablef("ReadMessagesFromDLQ operation failed. Error %v", err)
 	}
 
 	var messages []*persistence.QueueMessage
@@ -258,12 +236,12 @@ func (q *sqlQueue) DeleteMessageFromDLQ(
 	ctx context.Context,
 	messageID int64,
 ) error {
-	_, err := q.Db.DeleteFromMessages(ctx, sqlplugin.QueueMessagesFilter{
+	_, err := q.DB.DeleteFromMessages(ctx, sqlplugin.QueueMessagesFilter{
 		QueueType: q.getDLQTypeFromQueueType(),
 		MessageID: messageID,
 	})
 	if err != nil {
-		return serviceerror.NewUnavailable(fmt.Sprintf("DeleteMessageFromDLQ operation failed. Error %v", err))
+		return serviceerror.NewUnavailablef("DeleteMessageFromDLQ operation failed. Error %v", err)
 	}
 	return nil
 }
@@ -273,13 +251,13 @@ func (q *sqlQueue) RangeDeleteMessagesFromDLQ(
 	firstMessageID int64,
 	lastMessageID int64,
 ) error {
-	_, err := q.Db.RangeDeleteFromMessages(ctx, sqlplugin.QueueMessagesRangeFilter{
+	_, err := q.DB.RangeDeleteFromMessages(ctx, sqlplugin.QueueMessagesRangeFilter{
 		QueueType:    q.getDLQTypeFromQueueType(),
 		MinMessageID: firstMessageID,
 		MaxMessageID: lastMessageID,
 	})
 	if err != nil {
-		return serviceerror.NewUnavailable(fmt.Sprintf("RangeDeleteMessagesFromDLQ operation failed. Error %v", err))
+		return serviceerror.NewUnavailablef("RangeDeleteMessagesFromDLQ operation failed. Error %v", err)
 	}
 	return nil
 }
@@ -296,7 +274,7 @@ func (q *sqlQueue) UpdateDLQAckLevel(
 			DataEncoding: metadata.Blob.EncodingType.String(),
 		})
 		if err != nil {
-			return serviceerror.NewUnavailable(fmt.Sprintf("UpdateDLQAckLevel operation failed. Error %v", err))
+			return serviceerror.NewUnavailablef("UpdateDLQAckLevel operation failed. Error %v", err)
 		}
 		rowsAffected, err := result.RowsAffected()
 		if err != nil {
@@ -317,11 +295,11 @@ func (q *sqlQueue) UpdateDLQAckLevel(
 func (q *sqlQueue) GetDLQAckLevels(
 	ctx context.Context,
 ) (*persistence.InternalQueueMetadata, error) {
-	row, err := q.Db.SelectFromQueueMetadata(ctx, sqlplugin.QueueMetadataFilter{
+	row, err := q.DB.SelectFromQueueMetadata(ctx, sqlplugin.QueueMetadataFilter{
 		QueueType: q.getDLQTypeFromQueueType(),
 	})
 	if err != nil {
-		return nil, serviceerror.NewUnavailable(fmt.Sprintf("GetDLQAckLevels operation failed. Error %v", err))
+		return nil, serviceerror.NewUnavailablef("GetDLQAckLevels operation failed. Error %v", err)
 	}
 
 	return &persistence.InternalQueueMetadata{
@@ -338,20 +316,20 @@ func (q *sqlQueue) initializeQueueMetadata(
 	ctx context.Context,
 	blob *commonpb.DataBlob,
 ) error {
-	_, err := q.Db.SelectFromQueueMetadata(ctx, sqlplugin.QueueMetadataFilter{
+	_, err := q.DB.SelectFromQueueMetadata(ctx, sqlplugin.QueueMetadataFilter{
 		QueueType: q.queueType,
 	})
 	switch err {
 	case nil:
 		return nil
 	case sql.ErrNoRows:
-		result, err := q.Db.InsertIntoQueueMetadata(ctx, &sqlplugin.QueueMetadataRow{
+		result, err := q.DB.InsertIntoQueueMetadata(ctx, &sqlplugin.QueueMetadataRow{
 			QueueType:    q.queueType,
 			Data:         blob.Data,
 			DataEncoding: blob.EncodingType.String(),
 		})
 		if err != nil {
-			return serviceerror.NewUnavailable(fmt.Sprintf("initializeQueueMetadata operation failed. Error %v", err))
+			return serviceerror.NewUnavailablef("initializeQueueMetadata operation failed. Error %v", err)
 		}
 		rowsAffected, err := result.RowsAffected()
 		if err != nil {
@@ -370,20 +348,20 @@ func (q *sqlQueue) initializeDLQMetadata(
 	ctx context.Context,
 	blob *commonpb.DataBlob,
 ) error {
-	_, err := q.Db.SelectFromQueueMetadata(ctx, sqlplugin.QueueMetadataFilter{
+	_, err := q.DB.SelectFromQueueMetadata(ctx, sqlplugin.QueueMetadataFilter{
 		QueueType: q.getDLQTypeFromQueueType(),
 	})
 	switch err {
 	case nil:
 		return nil
 	case sql.ErrNoRows:
-		result, err := q.Db.InsertIntoQueueMetadata(ctx, &sqlplugin.QueueMetadataRow{
+		result, err := q.DB.InsertIntoQueueMetadata(ctx, &sqlplugin.QueueMetadataRow{
 			QueueType:    q.getDLQTypeFromQueueType(),
 			Data:         blob.Data,
 			DataEncoding: blob.EncodingType.String(),
 		})
 		if err != nil {
-			return serviceerror.NewUnavailable(fmt.Sprintf("initializeDLQMetadata operation failed. Error %v", err))
+			return serviceerror.NewUnavailablef("initializeDLQMetadata operation failed. Error %v", err)
 		}
 		rowsAffected, err := result.RowsAffected()
 		if err != nil {

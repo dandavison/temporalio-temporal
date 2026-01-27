@@ -1,35 +1,11 @@
-// The MIT License
-//
-// Copyright (c) 2020 Temporal Technologies Inc.  All rights reserved.
-//
-// Copyright (c) 2020 Uber Technologies, Inc.
-//
-// Permission is hereby granted, free of charge, to any person obtaining a copy
-// of this software and associated documentation files (the "Software"), to deal
-// in the Software without restriction, including without limitation the rights
-// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-// copies of the Software, and to permit persons to whom the Software is
-// furnished to do so, subject to the following conditions:
-//
-// The above copyright notice and this permission notice shall be included in
-// all copies or substantial portions of the Software.
-//
-// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
-// THE SOFTWARE.
-
 package shard
 
 import (
 	"time"
 
+	"go.temporal.io/server/common"
 	"go.temporal.io/server/common/clock"
 	"go.temporal.io/server/common/log"
-	"go.temporal.io/server/common/persistence"
 	"go.temporal.io/server/service/history/configs"
 	"go.temporal.io/server/service/history/tasks"
 )
@@ -121,7 +97,7 @@ func (m *taskKeyManager) getExclusiveReaderHighWatermark(
 	m.setTaskMinScheduledTime(
 		// TODO: Truncation here is just to make sure task scheduled time has the same precision as the old logic.
 		// Remove this truncation once we validate the rest of the code can worker correctly with higher precision.
-		m.timeSource.Now().Add(m.config.TimerProcessorMaxTimeShift()).Truncate(persistence.ScheduledTaskMinPrecision),
+		m.timeSource.Now().Add(m.config.TimerProcessorMaxTimeShift()).Truncate(common.ScheduledTaskMinPrecision),
 	)
 
 	nextTaskKey := m.generator.peekTaskKey(category)
@@ -136,7 +112,7 @@ func (m *taskKeyManager) getExclusiveReaderHighWatermark(
 		// TODO: Truncation here is just to make sure task scheduled time has the same precision as the old logic.
 		// Remove this truncation once we validate the rest of the code can worker correctly with higher precision.
 		exclusiveReaderHighWatermark.FireTime = exclusiveReaderHighWatermark.FireTime.
-			Truncate(persistence.ScheduledTaskMinPrecision)
+			Truncate(common.ScheduledTaskMinPrecision)
 	}
 
 	return exclusiveReaderHighWatermark

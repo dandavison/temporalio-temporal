@@ -1,27 +1,3 @@
-// The MIT License
-//
-// Copyright (c) 2020 Temporal Technologies Inc.  All rights reserved.
-//
-// Copyright (c) 2020 Uber Technologies, Inc.
-//
-// Permission is hereby granted, free of charge, to any person obtaining a copy
-// of this software and associated documentation files (the "Software"), to deal
-// in the Software without restriction, including without limitation the rights
-// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-// copies of the Software, and to permit persons to whom the Software is
-// furnished to do so, subject to the following conditions:
-//
-// The above copyright notice and this permission notice shall be included in
-// all copies or substantial portions of the Software.
-//
-// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
-// THE SOFTWARE.
-
 package tests
 
 import (
@@ -29,11 +5,14 @@ import (
 	"testing"
 	"time"
 
-	"github.com/pborman/uuid"
+	"github.com/google/uuid"
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 	"github.com/stretchr/testify/suite"
 	commandpb "go.temporal.io/api/command/v1"
 	commonpb "go.temporal.io/api/common/v1"
 	enumspb "go.temporal.io/api/enums/v1"
+	failurepb "go.temporal.io/api/failure/v1"
 	taskqueuepb "go.temporal.io/api/taskqueue/v1"
 	"go.temporal.io/api/workflowservice/v1"
 	"go.temporal.io/sdk/client"
@@ -45,7 +24,7 @@ import (
 )
 
 type EagerWorkflowTestSuite struct {
-	testcore.FunctionalSuite
+	testcore.FunctionalTestBase
 }
 
 func TestEagerWorkflowTestSuite(t *testing.T) {
@@ -67,7 +46,7 @@ func (s *EagerWorkflowTestSuite) startEagerWorkflow(baseOptions *workflowservice
 	options.RequestEagerExecution = true
 
 	if options.GetNamespace() == "" {
-		options.Namespace = s.Namespace()
+		options.Namespace = s.Namespace().String()
 	}
 	if options.Identity == "" {
 		options.Identity = "test"
@@ -82,7 +61,7 @@ func (s *EagerWorkflowTestSuite) startEagerWorkflow(baseOptions *workflowservice
 		options.TaskQueue = s.defaultTaskQueue()
 	}
 	if options.RequestId == "" {
-		options.RequestId = uuid.New()
+		options.RequestId = uuid.NewString()
 	}
 
 	response, err := s.FrontendClient().StartWorkflowExecution(testcore.NewContext(), options)
@@ -96,7 +75,7 @@ func (s *EagerWorkflowTestSuite) respondWorkflowTaskCompleted(task *workflowserv
 	payloads, err := dataConverter.ToPayloads(result)
 	s.Require().NoError(err)
 	completion := workflowservice.RespondWorkflowTaskCompletedRequest{
-		Namespace: s.Namespace(),
+		Namespace: s.Namespace().String(),
 		Identity:  "test",
 		TaskToken: task.TaskToken,
 		Commands: []*commandpb.Command{{CommandType: enumspb.COMMAND_TYPE_COMPLETE_WORKFLOW_EXECUTION, Attributes: &commandpb.Command_CompleteWorkflowExecutionCommandAttributes{
@@ -109,9 +88,29 @@ func (s *EagerWorkflowTestSuite) respondWorkflowTaskCompleted(task *workflowserv
 	s.Require().NoError(err)
 }
 
+func (s *EagerWorkflowTestSuite) failWorkflow(task *workflowservice.PollWorkflowTaskQueueResponse, msg string) {
+	completion := workflowservice.RespondWorkflowTaskCompletedRequest{
+		Namespace: s.Namespace().String(),
+		Identity:  "test",
+		TaskToken: task.TaskToken,
+		Commands: []*commandpb.Command{{
+			CommandType: enumspb.COMMAND_TYPE_FAIL_WORKFLOW_EXECUTION,
+			Attributes: &commandpb.Command_FailWorkflowExecutionCommandAttributes{
+				FailWorkflowExecutionCommandAttributes: &commandpb.FailWorkflowExecutionCommandAttributes{
+					Failure: &failurepb.Failure{
+						Message: msg,
+					},
+				},
+			},
+		}},
+	}
+	_, err := s.FrontendClient().RespondWorkflowTaskCompleted(testcore.NewContext(), &completion)
+	s.Require().NoError(err)
+}
+
 func (s *EagerWorkflowTestSuite) pollWorkflowTaskQueue() *workflowservice.PollWorkflowTaskQueueResponse {
 	task, err := s.FrontendClient().PollWorkflowTaskQueue(testcore.NewContext(), &workflowservice.PollWorkflowTaskQueueRequest{
-		Namespace: s.Namespace(),
+		Namespace: s.Namespace().String(),
 		TaskQueue: s.defaultTaskQueue(),
 		Identity:  "test",
 	})
@@ -121,7 +120,7 @@ func (s *EagerWorkflowTestSuite) pollWorkflowTaskQueue() *workflowservice.PollWo
 }
 
 func (s *EagerWorkflowTestSuite) getWorkflowStringResult(workflowID, runID string) string {
-	c, err := client.Dial(client.Options{HostPort: s.FrontendGRPCAddress(), Namespace: s.Namespace()})
+	c, err := client.Dial(client.Options{HostPort: s.FrontendGRPCAddress(), Namespace: s.Namespace().String()})
 	s.Require().NoError(err)
 	run := c.GetWorkflow(testcore.NewContext(), workflowID, runID)
 	var result string
@@ -145,7 +144,9 @@ func (s *EagerWorkflowTestSuite) TestEagerWorkflowStart_StartNew() {
 	})
 	task := response.GetEagerWorkflowTask()
 	s.Require().NotNil(task, "StartWorkflowExecution response did not contain a workflow task")
-	kwData := task.History.Events[0].GetWorkflowExecutionStartedEventAttributes().SearchAttributes.IndexedFields["CustomKeywordField"].Data
+	startedEventAttrs := task.History.Events[0].GetWorkflowExecutionStartedEventAttributes()
+	s.Require().True(startedEventAttrs.GetEagerExecutionAccepted(), "Eager execution should be accepted")
+	kwData := startedEventAttrs.SearchAttributes.IndexedFields["CustomKeywordField"].Data
 	s.Require().Equal(`"value"`, string(kwData))
 	s.respondWorkflowTaskCompleted(task, "ok")
 	// Verify workflow completes and client can get the result
@@ -172,7 +173,7 @@ func (s *EagerWorkflowTestSuite) TestEagerWorkflowStart_RetryStartAfterTimeout()
 	request := &workflowservice.StartWorkflowExecutionRequest{
 		// Should give enough grace time even in slow CI
 		WorkflowTaskTimeout: durationpb.New(2 * time.Second),
-		RequestId:           uuid.New(),
+		RequestId:           uuid.NewString(),
 	}
 	response := s.startEagerWorkflow(request)
 	task := response.GetEagerWorkflowTask()
@@ -192,7 +193,7 @@ func (s *EagerWorkflowTestSuite) TestEagerWorkflowStart_RetryStartAfterTimeout()
 }
 
 func (s *EagerWorkflowTestSuite) TestEagerWorkflowStart_RetryStartImmediately() {
-	request := &workflowservice.StartWorkflowExecutionRequest{RequestId: uuid.New()}
+	request := &workflowservice.StartWorkflowExecutionRequest{RequestId: uuid.NewString()}
 	response := s.startEagerWorkflow(request)
 	task := response.GetEagerWorkflowTask()
 	s.Require().NotNil(task, "StartWorkflowExecution response did not contain a workflow task")
@@ -223,4 +224,51 @@ func (s *EagerWorkflowTestSuite) TestEagerWorkflowStart_TerminateDuplicate() {
 	// Verify workflow completes and client can get the result
 	result := s.getWorkflowStringResult(s.defaultWorkflowID(), response.RunId)
 	s.Require().Equal("ok", result)
+}
+
+func (s *EagerWorkflowTestSuite) TestEagerWorkflowStart_WorkflowRetry() {
+	// Add a search attribute to verify that per namespace search attribute mapping is properly applied in the
+	// response.
+	response := s.startEagerWorkflow(&workflowservice.StartWorkflowExecutionRequest{
+		RequestId: uuid.NewString(),
+		SearchAttributes: &commonpb.SearchAttributes{
+			IndexedFields: map[string]*commonpb.Payload{
+				"CustomKeywordField": {
+					Metadata: map[string][]byte{"encoding": []byte("json/plain")},
+					Data:     []byte(`"value"`),
+				},
+			},
+		},
+		RetryPolicy: &commonpb.RetryPolicy{
+			MaximumAttempts: 2,
+		},
+	})
+	task := response.GetEagerWorkflowTask()
+	s.Require().NotNil(task, "StartWorkflowExecution response did not contain a workflow task")
+	startedEventAttrs := task.History.Events[0].GetWorkflowExecutionStartedEventAttributes()
+	s.Require().True(startedEventAttrs.GetEagerExecutionAccepted(), "Eager execution should be accepted")
+	kwData := startedEventAttrs.SearchAttributes.IndexedFields["CustomKeywordField"].GetData()
+	s.Require().Equal(`"value"`, string(kwData))
+
+	// fail workflow
+	s.failWorkflow(task, "failure 1")
+	// fail retry workflow
+	task = s.pollWorkflowTaskQueue()
+	s.failWorkflow(task, "failure 2")
+
+	s.Require().EventuallyWithT(
+		func(c *assert.CollectT) {
+			resp, err := s.FrontendClient().CountWorkflowExecutions(
+				testcore.NewContext(),
+				&workflowservice.CountWorkflowExecutionsRequest{
+					Namespace: s.Namespace().String(),
+					Query:     fmt.Sprintf("WorkflowId = '%s' AND ExecutionStatus = 'Failed'", s.defaultWorkflowID()),
+				},
+			)
+			require.NoError(c, err)
+			require.Equal(c, int64(2), resp.Count)
+		},
+		testcore.WaitForESToSettle,
+		200*time.Millisecond,
+	)
 }

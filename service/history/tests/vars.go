@@ -1,27 +1,3 @@
-// The MIT License
-//
-// Copyright (c) 2020 Temporal Technologies Inc.  All rights reserved.
-//
-// Copyright (c) 2020 Uber Technologies, Inc.
-//
-// Permission is hereby granted, free of charge, to any person obtaining a copy
-// of this software and associated documentation files (the "Software"), to deal
-// in the Software without restriction, including without limitation the rights
-// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-// copies of the Software, and to permit persons to whom the Software is
-// furnished to do so, subject to the following conditions:
-//
-// The above copyright notice and this permission notice shall be included in
-// all copies or substantial portions of the Software.
-//
-// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
-// THE SOFTWARE.
-
 package tests
 
 import (
@@ -30,6 +6,7 @@ import (
 	enumspb "go.temporal.io/api/enums/v1"
 	namespacepb "go.temporal.io/api/namespace/v1"
 	persistencespb "go.temporal.io/server/api/persistence/v1"
+	"go.temporal.io/server/chasm"
 	"go.temporal.io/server/common/cluster"
 	"go.temporal.io/server/common/definition"
 	"go.temporal.io/server/common/dynamicconfig"
@@ -55,9 +32,11 @@ var (
 	StandbyWithVisibilityArchivalNamespaceID = namespace.ID("deadbeef-0123-4567-890a-bcdef0123461")
 	StandbyWithVisibilityArchivalNamespace   = namespace.Name("mock standby with visibility archival namespace name")
 	MissedNamespaceID                        = namespace.ID("missed-namespace-id")
+	MissedNamespace                          = namespace.Name("missed-namespace-name")
 	WorkflowID                               = "mock-workflow-id"
 	RunID                                    = "0d00698f-08e1-4d36-a3e2-3bf109f5d2d6"
 	WorkflowKey                              = definition.NewWorkflowKey(NamespaceID.String(), WorkflowID, RunID)
+	ArchetypeID                              = chasm.ArchetypeID(1234)
 
 	LocalNamespaceEntry = namespace.NewLocalNamespaceForTest(
 		&persistencespb.NamespaceInfo{Id: NamespaceID.String(), Name: Namespace.String()},
@@ -182,11 +161,10 @@ func NewDynamicConfig() *configs.Config {
 	dc := dynamicconfig.NewNoopCollection()
 	config := configs.NewConfig(dc, 1)
 	config.EnableActivityEagerExecution = dynamicconfig.GetBoolPropertyFnFilteredByNamespace(true)
-	config.EnableEagerWorkflowStart = dynamicconfig.GetBoolPropertyFnFilteredByNamespace(true)
 	config.NamespaceCacheRefreshInterval = dynamicconfig.GetDurationPropertyFn(time.Second)
-	config.EnableNexus = dynamicconfig.GetBoolPropertyFn(true)
 	config.ReplicationEnableUpdateWithNewTaskMerge = dynamicconfig.GetBoolPropertyFn(true)
-	config.EnableWorkflowExecutionTimeoutTimer = dynamicconfig.GetBoolPropertyFn(true)
 	config.EnableWorkflowIdReuseStartTimeValidation = dynamicconfig.GetBoolPropertyFnFilteredByNamespace(true)
+	config.EnableTransitionHistory = dynamicconfig.GetBoolPropertyFn(true)
+	config.EnableChasm = dynamicconfig.GetBoolPropertyFnFilteredByNamespace(false)
 	return config
 }

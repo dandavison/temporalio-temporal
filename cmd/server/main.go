@@ -1,27 +1,3 @@
-// The MIT License
-//
-// Copyright (c) 2020 Temporal Technologies Inc.  All rights reserved.
-//
-// Copyright (c) 2020 Uber Technologies, Inc.
-//
-// Permission is hereby granted, free of charge, to any person obtaining a copy
-// of this software and associated documentation files (the "Software"), to deal
-// in the Software without restriction, including without limitation the rights
-// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-// copies of the Software, and to permit persons to whom the Software is
-// furnished to do so, subject to the following conditions:
-//
-// The above copyright notice and this permission notice shall be included in
-// all copies or substantial portions of the Software.
-//
-// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
-// THE SOFTWARE.
-
 package main
 
 import (
@@ -46,7 +22,6 @@ import (
 	_ "go.temporal.io/server/common/persistence/sql/sqlplugin/postgresql" // needed to load postgresql plugin
 	_ "go.temporal.io/server/common/persistence/sql/sqlplugin/sqlite"     // needed to load sqlite plugin
 	"go.temporal.io/server/temporal"
-	"go.uber.org/automaxprocs/maxprocs"
 )
 
 // main entry point for the temporal server
@@ -67,28 +42,33 @@ func buildCLI() *cli.App {
 			Name:    "root",
 			Aliases: []string{"r"},
 			Value:   ".",
-			Usage:   "root directory of execution environment",
+			Usage:   "root directory of execution environment (deprecated)",
 			EnvVars: []string{config.EnvKeyRoot},
 		},
 		&cli.StringFlag{
 			Name:    "config",
 			Aliases: []string{"c"},
 			Value:   "config",
-			Usage:   "config dir path relative to root",
+			Usage:   "config dir path relative to root (deprecated)",
 			EnvVars: []string{config.EnvKeyConfigDir},
 		},
 		&cli.StringFlag{
 			Name:    "env",
 			Aliases: []string{"e"},
 			Value:   "development",
-			Usage:   "runtime environment",
+			Usage:   "runtime environment (deprecated)",
 			EnvVars: []string{config.EnvKeyEnvironment},
 		},
 		&cli.StringFlag{
 			Name:    "zone",
 			Aliases: []string{"az"},
-			Usage:   "availability zone",
+			Usage:   "availability zone (deprecated)",
 			EnvVars: []string{config.EnvKeyAvailabilityZone, config.EnvKeyAvailabilityZoneTypo},
+		},
+		&cli.StringFlag{
+			Name:    "config-file",
+			Usage:   "path to config file (absolute or relative to current working directory)",
+			EnvVars: []string{config.EnvKeyConfigFile},
 		},
 		&cli.BoolFlag{
 			Name:    "allow-no-auth",
@@ -109,7 +89,7 @@ func buildCLI() *cli.App {
 					if err != nil {
 						return err
 					}
-					result := dynamicconfig.ValidateFile(contents)
+					result := dynamicconfig.LoadYamlFile(contents)
 					total += len(result.Errors)
 					fmt.Println(fileName)
 					t := template.Must(template.New("").Parse(
@@ -122,6 +102,23 @@ func buildCLI() *cli.App {
 				if total > 0 {
 					return fmt.Errorf("%d total errors", total)
 				}
+				return nil
+			},
+		},
+		{
+			Name:      "render-config",
+			Usage:     "Render server config template",
+			ArgsUsage: " ",
+			Action: func(c *cli.Context) error {
+				cfg, err := config.Load(
+					config.WithEnv(c.String("env")),
+					config.WithConfigDir(c.String("config")),
+					config.WithZone(c.String("zone")),
+				)
+				if err != nil {
+					return cli.Exit(fmt.Errorf("Unable to load configuration: %w", err), 1)
+				}
+				fmt.Println(cfg.String())
 				return nil
 			},
 		},
@@ -141,6 +138,7 @@ func buildCLI() *cli.App {
 					Aliases: []string{"svc"},
 					Value:   cli.NewStringSlice(temporal.DefaultServices...),
 					Usage:   "service(s) to start",
+					EnvVars: []string{"TEMPORAL_SERVICES"},
 				},
 			},
 			Before: func(c *cli.Context) error {
@@ -148,15 +146,12 @@ func buildCLI() *cli.App {
 					return cli.Exit("ERROR: start command doesn't support arguments. Use --service flag instead.", 1)
 				}
 
-				if _, err := maxprocs.Set(); err != nil {
-					stdlog.Println(fmt.Sprintf("WARNING: failed to set GOMAXPROCS: %v.", err))
+				if c.IsSet("config-file") && (c.IsSet("config") || c.IsSet("env") || c.IsSet("zone") || c.IsSet("root")) {
+					return cli.Exit("ERROR: can not use --config, --env, --zone, or --root with --config-file", 1)
 				}
 				return nil
 			},
 			Action: func(c *cli.Context) error {
-				env := c.String("env")
-				zone := c.String("zone")
-				configDir := path.Join(c.String("root"), c.String("config"))
 				services := c.StringSlice("service")
 				allowNoAuth := c.Bool("allow-no-auth")
 
@@ -166,7 +161,22 @@ func buildCLI() *cli.App {
 					services = strings.Split(c.String("services"), ",")
 				}
 
-				cfg, err := config.LoadConfig(env, configDir, zone)
+				var cfg *config.Config
+				var err error
+
+				switch {
+				case c.IsSet("config-file"):
+					cfg, err = config.Load(config.WithConfigFile(c.String("config-file")))
+				case c.IsSet("config") || c.IsSet("env") || c.IsSet("zone"):
+					cfg, err = config.Load(
+						config.WithEnv(c.String("env")),
+						config.WithConfigDir(path.Join(c.String("root"), c.String("config"))),
+						config.WithZone(c.String("zone")),
+					)
+				default:
+					cfg, err = config.Load(config.WithEmbedded())
+				}
+
 				if err != nil {
 					return cli.Exit(fmt.Sprintf("Unable to load configuration: %v.", err), 1)
 				}
@@ -209,10 +219,17 @@ func buildCLI() *cli.App {
 					)
 				}
 
+				// Authorization mappers: claim and audience
 				claimMapper, err := authorization.GetClaimMapperFromConfig(&cfg.Global.Authorization, logger)
 				if err != nil {
 					return cli.Exit(fmt.Sprintf("Unable to instantiate claim mapper: %v.", err), 1)
 				}
+
+				audienceMapper, err := authorization.GetAudienceMapperFromConfig(&cfg.Global.Authorization)
+				if err != nil {
+					return cli.Exit(fmt.Sprintf("Unable to instantiate audience mapper: %v.", err), 1)
+				}
+
 				s, err := temporal.NewServer(
 					temporal.ForServices(services),
 					temporal.WithConfig(cfg),
@@ -222,6 +239,9 @@ func buildCLI() *cli.App {
 					temporal.WithAuthorizer(authorizer),
 					temporal.WithClaimMapper(func(cfg *config.Config) authorization.ClaimMapper {
 						return claimMapper
+					}),
+					temporal.WithAudienceGetter(func(cfg *config.Config) authorization.JWTAudienceMapper {
+						return audienceMapper
 					}),
 				)
 				if err != nil {

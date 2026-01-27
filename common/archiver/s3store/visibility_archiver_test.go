@@ -1,27 +1,3 @@
-// The MIT License
-//
-// Copyright (c) 2020 Temporal Technologies Inc.  All rights reserved.
-//
-// Copyright (c) 2020 Uber Technologies, Inc.
-//
-// Permission is hereby granted, free of charge, to any person obtaining a copy
-// of this software and associated documentation files (the "Software"), to deal
-// in the Software without restriction, including without limitation the rights
-// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-// copies of the Software, and to permit persons to whom the Software is
-// furnished to do so, subject to the following conditions:
-//
-// The above copyright notice and this permission notice shall be included in
-// all copies or substantial portions of the Software.
-//
-// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
-// THE SOFTWARE.
-
 package s3store
 
 import (
@@ -60,7 +36,8 @@ type visibilityArchiverSuite struct {
 	suite.Suite
 	s3cli *mocks.MockS3API
 
-	container         *archiver.VisibilityBootstrapContainer
+	logger            log.Logger
+	metricsHandler    metrics.Handler
 	visibilityRecords []*archiverspb.VisibilityRecord
 
 	controller      *gomock.Controller
@@ -117,9 +94,10 @@ func (s *visibilityArchiverSuite) TestValidateURI() {
 
 func (s *visibilityArchiverSuite) newTestVisibilityArchiver() *visibilityArchiver {
 	return &visibilityArchiver{
-		container:   s.container,
-		s3cli:       s.s3cli,
-		queryParser: NewQueryParser(),
+		logger:         s.logger,
+		metricsHandler: s.metricsHandler,
+		s3cli:          s.s3cli,
+		queryParser:    NewQueryParser(),
 	}
 }
 
@@ -132,10 +110,8 @@ func (s *visibilityArchiverSuite) SetupSuite() {
 
 	s.testArchivalURI, err = archiver.NewURI(testBucketURI)
 	s.Require().NoError(err)
-	s.container = &archiver.VisibilityBootstrapContainer{
-		Logger:         log.NewNoopLogger(),
-		MetricsHandler: metrics.NoopMetricsHandler,
-	}
+	s.logger = log.NewNoopLogger()
+	s.metricsHandler = metrics.NoopMetricsHandler
 }
 
 func (s *visibilityArchiverSuite) TearDownSuite() {
@@ -241,14 +217,14 @@ func (s *visibilityArchiverSuite) TestQuery_Fail_InvalidURI() {
 		NamespaceID: testNamespaceID,
 		PageSize:    1,
 	}
-	response, err := visibilityArchiver.Query(context.Background(), URI, request, searchattribute.TestNameTypeMap)
+	response, err := visibilityArchiver.Query(context.Background(), URI, request, searchattribute.TestNameTypeMap())
 	s.Error(err)
 	s.Nil(response)
 }
 
 func (s *visibilityArchiverSuite) TestQuery_Fail_InvalidRequest() {
 	visibilityArchiver := s.newTestVisibilityArchiver()
-	response, err := visibilityArchiver.Query(context.Background(), s.testArchivalURI, &archiver.QueryVisibilityRequest{}, searchattribute.TestNameTypeMap)
+	response, err := visibilityArchiver.Query(context.Background(), s.testArchivalURI, &archiver.QueryVisibilityRequest{}, searchattribute.TestNameTypeMap())
 	s.Error(err)
 	s.Nil(response)
 }
@@ -262,7 +238,7 @@ func (s *visibilityArchiverSuite) TestQuery_Fail_InvalidQuery() {
 		NamespaceID: "some random namespaceID",
 		PageSize:    10,
 		Query:       "some invalid query",
-	}, searchattribute.TestNameTypeMap)
+	}, searchattribute.TestNameTypeMap())
 	s.Error(err)
 	s.Nil(response)
 }
@@ -281,7 +257,7 @@ func (s *visibilityArchiverSuite) TestQuery_Success_DirectoryNotExist() {
 		Query:       "parsed by mockParser",
 		PageSize:    1,
 	}
-	response, err := visibilityArchiver.Query(context.Background(), s.testArchivalURI, request, searchattribute.TestNameTypeMap)
+	response, err := visibilityArchiver.Query(context.Background(), s.testArchivalURI, request, searchattribute.TestNameTypeMap())
 	s.NoError(err)
 	s.NotNil(response)
 	s.Empty(response.Executions)
@@ -304,12 +280,12 @@ func (s *visibilityArchiverSuite) TestQuery_Success_NoNextPageToken() {
 	}
 	URI, err := archiver.NewURI(testBucketURI)
 	s.NoError(err)
-	response, err := visibilityArchiver.Query(context.Background(), URI, request, searchattribute.TestNameTypeMap)
+	response, err := visibilityArchiver.Query(context.Background(), URI, request, searchattribute.TestNameTypeMap())
 	s.NoError(err)
 	s.NotNil(response)
 	s.Nil(response.NextPageToken)
 	s.Len(response.Executions, 2)
-	ei, err := convertToExecutionInfo(s.visibilityRecords[0], searchattribute.TestNameTypeMap)
+	ei, err := convertToExecutionInfo(s.visibilityRecords[0], searchattribute.TestNameTypeMap())
 	s.NoError(err)
 	s.Equal(response.Executions[0], ei)
 }
@@ -330,25 +306,25 @@ func (s *visibilityArchiverSuite) TestQuery_Success_SmallPageSize() {
 	}
 	URI, err := archiver.NewURI(testBucketURI)
 	s.NoError(err)
-	response, err := visibilityArchiver.Query(context.Background(), URI, request, searchattribute.TestNameTypeMap)
+	response, err := visibilityArchiver.Query(context.Background(), URI, request, searchattribute.TestNameTypeMap())
 	s.NoError(err)
 	s.NotNil(response)
 	s.NotNil(response.NextPageToken)
 	s.Len(response.Executions, 2)
-	ei, err := convertToExecutionInfo(s.visibilityRecords[0], searchattribute.TestNameTypeMap)
+	ei, err := convertToExecutionInfo(s.visibilityRecords[0], searchattribute.TestNameTypeMap())
 	s.NoError(err)
 	s.Equal(ei, response.Executions[0])
-	ei, err = convertToExecutionInfo(s.visibilityRecords[1], searchattribute.TestNameTypeMap)
+	ei, err = convertToExecutionInfo(s.visibilityRecords[1], searchattribute.TestNameTypeMap())
 	s.NoError(err)
 	s.Equal(ei, response.Executions[1])
 
 	request.NextPageToken = response.NextPageToken
-	response, err = visibilityArchiver.Query(context.Background(), URI, request, searchattribute.TestNameTypeMap)
+	response, err = visibilityArchiver.Query(context.Background(), URI, request, searchattribute.TestNameTypeMap())
 	s.NoError(err)
 	s.NotNil(response)
 	s.Nil(response.NextPageToken)
 	s.Len(response.Executions, 1)
-	ei, err = convertToExecutionInfo(s.visibilityRecords[2], searchattribute.TestNameTypeMap)
+	ei, err = convertToExecutionInfo(s.visibilityRecords[2], searchattribute.TestNameTypeMap())
 	s.NoError(err)
 	s.Equal(ei, response.Executions[0])
 }
@@ -363,7 +339,7 @@ func (s *visibilityArchiverSuite) TestQuery_EmptyQuery_InvalidNamespace() {
 		NextPageToken: nil,
 		Query:         "",
 	}
-	_, err = arc.Query(context.Background(), uri, req, searchattribute.TestNameTypeMap)
+	_, err = arc.Query(context.Background(), uri, req, searchattribute.TestNameTypeMap())
 
 	var svcErr *serviceerror.InvalidArgument
 
@@ -382,7 +358,7 @@ func (s *visibilityArchiverSuite) TestQuery_EmptyQuery_ZeroPageSize() {
 		NextPageToken: nil,
 		Query:         "",
 	}
-	_, err = arc.Query(context.Background(), uri, req, searchattribute.TestNameTypeMap)
+	_, err = arc.Query(context.Background(), uri, req, searchattribute.TestNameTypeMap())
 
 	var svcErr *serviceerror.InvalidArgument
 
@@ -404,7 +380,7 @@ func (s *visibilityArchiverSuite) TestQuery_EmptyQuery_Pagination() {
 			NextPageToken: nextPageToken,
 			Query:         "",
 		}
-		response, err := arc.Query(context.Background(), uri, req, searchattribute.TestNameTypeMap)
+		response, err := arc.Query(context.Background(), uri, req, searchattribute.TestNameTypeMap())
 		s.NoError(err)
 		s.NotNil(response)
 		nextPageToken = response.NextPageToken
@@ -540,7 +516,7 @@ func (s *visibilityArchiverSuite) TestArchiveAndQueryPrecisions() {
 		}, nil).AnyTimes()
 		visibilityArchiver.queryParser = mockParser
 
-		response, err := visibilityArchiver.Query(context.Background(), URI, request, searchattribute.TestNameTypeMap)
+		response, err := visibilityArchiver.Query(context.Background(), URI, request, searchattribute.TestNameTypeMap())
 		s.NoError(err)
 		s.NotNil(response)
 		s.Len(response.Executions, 2, "Iteration ", i)
@@ -553,7 +529,7 @@ func (s *visibilityArchiverSuite) TestArchiveAndQueryPrecisions() {
 		}, nil).AnyTimes()
 		visibilityArchiver.queryParser = mockParser
 
-		response, err = visibilityArchiver.Query(context.Background(), URI, request, searchattribute.TestNameTypeMap)
+		response, err = visibilityArchiver.Query(context.Background(), URI, request, searchattribute.TestNameTypeMap())
 		s.NoError(err)
 		s.NotNil(response)
 		s.Len(response.Executions, 2, "Iteration ", i)
@@ -566,7 +542,7 @@ func (s *visibilityArchiverSuite) TestArchiveAndQueryPrecisions() {
 		}, nil).AnyTimes()
 		visibilityArchiver.queryParser = mockParser
 
-		response, err = visibilityArchiver.Query(context.Background(), URI, request, searchattribute.TestNameTypeMap)
+		response, err = visibilityArchiver.Query(context.Background(), URI, request, searchattribute.TestNameTypeMap())
 		s.NoError(err)
 		s.NotNil(response)
 		s.Len(response.Executions, 2, "Iteration ", i)
@@ -579,7 +555,7 @@ func (s *visibilityArchiverSuite) TestArchiveAndQueryPrecisions() {
 		}, nil).AnyTimes()
 		visibilityArchiver.queryParser = mockParser
 
-		response, err = visibilityArchiver.Query(context.Background(), URI, request, searchattribute.TestNameTypeMap)
+		response, err = visibilityArchiver.Query(context.Background(), URI, request, searchattribute.TestNameTypeMap())
 		s.NoError(err)
 		s.NotNil(response)
 		s.Len(response.Executions, 2, "Iteration ", i)
@@ -608,7 +584,7 @@ func (s *visibilityArchiverSuite) TestArchiveAndQuery() {
 	executions := []*workflowpb.WorkflowExecutionInfo{}
 	first := true
 	for first || request.NextPageToken != nil {
-		response, err := visibilityArchiver.Query(context.Background(), URI, request, searchattribute.TestNameTypeMap)
+		response, err := visibilityArchiver.Query(context.Background(), URI, request, searchattribute.TestNameTypeMap())
 		s.NoError(err)
 		s.NotNil(response)
 		executions = append(executions, response.Executions...)
@@ -616,13 +592,13 @@ func (s *visibilityArchiverSuite) TestArchiveAndQuery() {
 		first = false
 	}
 	s.Len(executions, 3)
-	ei, err := convertToExecutionInfo(s.visibilityRecords[0], searchattribute.TestNameTypeMap)
+	ei, err := convertToExecutionInfo(s.visibilityRecords[0], searchattribute.TestNameTypeMap())
 	s.NoError(err)
 	s.Equal(ei, executions[0])
-	ei, err = convertToExecutionInfo(s.visibilityRecords[1], searchattribute.TestNameTypeMap)
+	ei, err = convertToExecutionInfo(s.visibilityRecords[1], searchattribute.TestNameTypeMap())
 	s.NoError(err)
 	s.Equal(ei, executions[1])
-	ei, err = convertToExecutionInfo(s.visibilityRecords[2], searchattribute.TestNameTypeMap)
+	ei, err = convertToExecutionInfo(s.visibilityRecords[2], searchattribute.TestNameTypeMap())
 	s.NoError(err)
 	s.Equal(ei, executions[2])
 
@@ -639,7 +615,7 @@ func (s *visibilityArchiverSuite) TestArchiveAndQuery() {
 	executions = []*workflowpb.WorkflowExecutionInfo{}
 	first = true
 	for first || request.NextPageToken != nil {
-		response, err := visibilityArchiver.Query(context.Background(), URI, request, searchattribute.TestNameTypeMap)
+		response, err := visibilityArchiver.Query(context.Background(), URI, request, searchattribute.TestNameTypeMap())
 		s.NoError(err)
 		s.NotNil(response)
 		executions = append(executions, response.Executions...)
@@ -647,13 +623,13 @@ func (s *visibilityArchiverSuite) TestArchiveAndQuery() {
 		first = false
 	}
 	s.Len(executions, 3)
-	ei, err = convertToExecutionInfo(s.visibilityRecords[0], searchattribute.TestNameTypeMap)
+	ei, err = convertToExecutionInfo(s.visibilityRecords[0], searchattribute.TestNameTypeMap())
 	s.NoError(err)
 	s.Equal(ei, executions[0])
-	ei, err = convertToExecutionInfo(s.visibilityRecords[1], searchattribute.TestNameTypeMap)
+	ei, err = convertToExecutionInfo(s.visibilityRecords[1], searchattribute.TestNameTypeMap())
 	s.NoError(err)
 	s.Equal(ei, executions[1])
-	ei, err = convertToExecutionInfo(s.visibilityRecords[2], searchattribute.TestNameTypeMap)
+	ei, err = convertToExecutionInfo(s.visibilityRecords[2], searchattribute.TestNameTypeMap())
 	s.NoError(err)
 	s.Equal(ei, executions[2])
 }

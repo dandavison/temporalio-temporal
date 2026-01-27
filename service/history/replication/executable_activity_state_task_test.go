@@ -1,27 +1,3 @@
-// The MIT License
-//
-// Copyright (c) 2020 Temporal Technologies Inc.  All rights reserved.
-//
-// Copyright (c) 2020 Uber Technologies, Inc.
-//
-// Permission is hereby granted, free of charge, to any person obtaining a copy
-// of this software and associated documentation files (the "Software"), to deal
-// in the Software without restriction, including without limitation the rights
-// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-// copies of the Software, and to permit persons to whom the Software is
-// furnished to do so, subject to the following conditions:
-//
-// The above copyright notice and this permission notice shall be included in
-// all copies or substantial portions of the Software.
-//
-// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
-// THE SOFTWARE.
-
 package replication
 
 import (
@@ -37,7 +13,7 @@ import (
 	failurepb "go.temporal.io/api/failure/v1"
 	"go.temporal.io/api/serviceerror"
 	enumsspb "go.temporal.io/server/api/enums/v1"
-	"go.temporal.io/server/api/history/v1"
+	historyspb "go.temporal.io/server/api/history/v1"
 	"go.temporal.io/server/api/historyservice/v1"
 	persistencespb "go.temporal.io/server/api/persistence/v1"
 	replicationspb "go.temporal.io/server/api/replication/v1"
@@ -49,8 +25,8 @@ import (
 	"go.temporal.io/server/common/namespace"
 	"go.temporal.io/server/common/persistence"
 	serviceerrors "go.temporal.io/server/common/serviceerror"
-	"go.temporal.io/server/common/xdc"
 	"go.temporal.io/server/service/history/configs"
+	historyi "go.temporal.io/server/service/history/interfaces"
 	"go.temporal.io/server/service/history/shard"
 	"go.temporal.io/server/service/history/tests"
 	"go.uber.org/mock/gomock"
@@ -67,7 +43,6 @@ type (
 		clientBean              *client.MockBean
 		shardController         *shard.MockController
 		namespaceCache          *namespace.MockRegistry
-		ndcHistoryResender      *xdc.MockNDCHistoryResender
 		metricsHandler          metrics.Handler
 		logger                  log.Logger
 		executableTask          *MockExecutableTask
@@ -103,7 +78,6 @@ func (s *executableActivityStateTaskSuite) SetupTest() {
 	s.clientBean = client.NewMockBean(s.controller)
 	s.shardController = shard.NewMockController(s.controller)
 	s.namespaceCache = namespace.NewMockRegistry(s.controller)
-	s.ndcHistoryResender = xdc.NewMockNDCHistoryResender(s.controller)
 	s.metricsHandler = metrics.NoopMetricsHandler
 	s.logger = log.NewNoopLogger()
 	s.executableTask = NewMockExecutableTask(s.controller)
@@ -124,7 +98,7 @@ func (s *executableActivityStateTaskSuite) SetupTest() {
 		LastFailure:        &failurepb.Failure{},
 		LastWorkerIdentity: uuid.NewString(),
 		BaseExecutionInfo:  &workflowspb.BaseExecutionInfo{},
-		VersionHistory:     &history.VersionHistory{},
+		VersionHistory:     &historyspb.VersionHistory{},
 	}
 	s.sourceClusterName = cluster.TestCurrentClusterName
 	s.sourceShardKey = ClusterShardKey{
@@ -135,27 +109,28 @@ func (s *executableActivityStateTaskSuite) SetupTest() {
 	s.mockExecutionManager = persistence.NewMockExecutionManager(s.controller)
 	s.task = NewExecutableActivityStateTask(
 		ProcessToolBox{
-			ClusterMetadata:    s.clusterMetadata,
-			ClientBean:         s.clientBean,
-			ShardController:    s.shardController,
-			NamespaceCache:     s.namespaceCache,
-			NDCHistoryResender: s.ndcHistoryResender,
-			MetricsHandler:     s.metricsHandler,
-			Logger:             s.logger,
-			DLQWriter:          NewExecutionManagerDLQWriter(s.mockExecutionManager),
-			Config:             s.config,
+			ClusterMetadata: s.clusterMetadata,
+			ClientBean:      s.clientBean,
+			ShardController: s.shardController,
+			NamespaceCache:  s.namespaceCache,
+			MetricsHandler:  s.metricsHandler,
+			Logger:          s.logger,
+			DLQWriter:       NewExecutionManagerDLQWriter(s.mockExecutionManager),
+			Config:          s.config,
 		},
 		s.taskID,
 		time.Unix(0, rand.Int63()),
 		s.replicationTask,
 		s.sourceClusterName,
 		s.sourceShardKey,
-		enumsspb.TASK_PRIORITY_HIGH,
-		nil,
+		&replicationspb.ReplicationTask{
+			Priority: enumsspb.TASK_PRIORITY_HIGH,
+		},
 	)
 	s.task.ExecutableTask = s.executableTask
 	s.executableTask.EXPECT().TaskID().Return(s.taskID).AnyTimes()
 	s.executableTask.EXPECT().SourceClusterName().Return(s.sourceClusterName).AnyTimes()
+	s.executableTask.EXPECT().GetPriority().Return(enumsspb.TASK_PRIORITY_HIGH).AnyTimes()
 }
 
 func (s *executableActivityStateTaskSuite) TearDownTest() {
@@ -164,12 +139,13 @@ func (s *executableActivityStateTaskSuite) TearDownTest() {
 
 func (s *executableActivityStateTaskSuite) TestExecute_Process() {
 	s.executableTask.EXPECT().TerminalState().Return(false)
-	s.executableTask.EXPECT().GetNamespaceInfo(gomock.Any(), s.task.NamespaceID).Return(
+	s.executableTask.EXPECT().MarkExecutionStart()
+	s.executableTask.EXPECT().GetNamespaceInfo(gomock.Any(), s.task.NamespaceID, gomock.Any()).Return(
 		uuid.NewString(), true, nil,
 	).AnyTimes()
 
-	shardContext := shard.NewMockContext(s.controller)
-	engine := shard.NewMockEngine(s.controller)
+	shardContext := historyi.NewMockShardContext(s.controller)
+	engine := historyi.NewMockEngine(s.controller)
 	s.shardController.EXPECT().GetShardByNamespaceWorkflow(
 		namespace.ID(s.task.NamespaceID),
 		s.task.WorkflowID,
@@ -183,6 +159,7 @@ func (s *executableActivityStateTaskSuite) TestExecute_Process() {
 		ScheduledEventId:   s.replicationTask.ScheduledEventId,
 		ScheduledTime:      s.replicationTask.ScheduledTime,
 		StartedEventId:     s.replicationTask.StartedEventId,
+		StartVersion:       s.replicationTask.StartVersion,
 		StartedTime:        s.replicationTask.StartedTime,
 		LastHeartbeatTime:  s.replicationTask.LastHeartbeatTime,
 		Details:            s.replicationTask.Details,
@@ -206,7 +183,8 @@ func (s *executableActivityStateTaskSuite) TestExecute_Skip_TerminalState() {
 
 func (s *executableActivityStateTaskSuite) TestExecute_Skip_Namespace() {
 	s.executableTask.EXPECT().TerminalState().Return(false)
-	s.executableTask.EXPECT().GetNamespaceInfo(gomock.Any(), s.task.NamespaceID).Return(
+	s.executableTask.EXPECT().MarkExecutionStart()
+	s.executableTask.EXPECT().GetNamespaceInfo(gomock.Any(), s.task.NamespaceID, gomock.Any()).Return(
 		uuid.NewString(), false, nil,
 	).AnyTimes()
 
@@ -217,7 +195,8 @@ func (s *executableActivityStateTaskSuite) TestExecute_Skip_Namespace() {
 func (s *executableActivityStateTaskSuite) TestExecute_Err() {
 	err := errors.New("OwO")
 	s.executableTask.EXPECT().TerminalState().Return(false)
-	s.executableTask.EXPECT().GetNamespaceInfo(gomock.Any(), s.task.NamespaceID).Return(
+	s.executableTask.EXPECT().MarkExecutionStart()
+	s.executableTask.EXPECT().GetNamespaceInfo(gomock.Any(), s.task.NamespaceID, gomock.Any()).Return(
 		"", false, err,
 	).AnyTimes()
 
@@ -225,12 +204,14 @@ func (s *executableActivityStateTaskSuite) TestExecute_Err() {
 }
 
 func (s *executableActivityStateTaskSuite) TestHandleErr_Resend_Success() {
+	s.executableTask.EXPECT().NamespaceName().Return("test-namespace").AnyTimes()
 	s.executableTask.EXPECT().TerminalState().Return(false)
-	s.executableTask.EXPECT().GetNamespaceInfo(gomock.Any(), s.task.NamespaceID).Return(
+	s.executableTask.EXPECT().MarkExecutionStart()
+	s.executableTask.EXPECT().GetNamespaceInfo(gomock.Any(), s.task.NamespaceID, gomock.Any()).Return(
 		uuid.NewString(), true, nil,
 	).AnyTimes()
-	shardContext := shard.NewMockContext(s.controller)
-	engine := shard.NewMockEngine(s.controller)
+	shardContext := historyi.NewMockShardContext(s.controller)
+	engine := historyi.NewMockEngine(s.controller)
 	s.shardController.EXPECT().GetShardByNamespaceWorkflow(
 		namespace.ID(s.task.NamespaceID),
 		s.task.WorkflowID,
@@ -244,6 +225,7 @@ func (s *executableActivityStateTaskSuite) TestHandleErr_Resend_Success() {
 		ScheduledEventId:   s.replicationTask.ScheduledEventId,
 		ScheduledTime:      s.replicationTask.ScheduledTime,
 		StartedEventId:     s.replicationTask.StartedEventId,
+		StartVersion:       s.replicationTask.StartVersion,
 		StartedTime:        s.replicationTask.StartedTime,
 		LastHeartbeatTime:  s.replicationTask.LastHeartbeatTime,
 		Details:            s.replicationTask.Details,
@@ -270,7 +252,8 @@ func (s *executableActivityStateTaskSuite) TestHandleErr_Resend_Success() {
 }
 
 func (s *executableActivityStateTaskSuite) TestHandleErr_Resend_Error() {
-	s.executableTask.EXPECT().GetNamespaceInfo(gomock.Any(), s.task.NamespaceID).Return(
+	s.executableTask.EXPECT().NamespaceName().Return("test-namespace").AnyTimes()
+	s.executableTask.EXPECT().GetNamespaceInfo(gomock.Any(), s.task.NamespaceID, gomock.Any()).Return(
 		uuid.NewString(), true, nil,
 	).AnyTimes()
 	err := serviceerrors.NewRetryReplication(
@@ -289,6 +272,7 @@ func (s *executableActivityStateTaskSuite) TestHandleErr_Resend_Error() {
 }
 
 func (s *executableActivityStateTaskSuite) TestHandleErr_Other() {
+	s.executableTask.EXPECT().NamespaceName().Return("test-namespace").AnyTimes()
 	err := errors.New("OwO")
 	s.Equal(err, s.task.HandleErr(err))
 
@@ -336,46 +320,46 @@ func (s *executableActivityStateTaskSuite) TestBatchedTask_ShouldBatchTogether_A
 	}
 	task1 := NewExecutableActivityStateTask(
 		ProcessToolBox{
-			ClusterMetadata:    s.clusterMetadata,
-			ClientBean:         s.clientBean,
-			ShardController:    s.shardController,
-			NamespaceCache:     s.namespaceCache,
-			NDCHistoryResender: s.ndcHistoryResender,
-			MetricsHandler:     s.metricsHandler,
-			Logger:             s.logger,
-			DLQWriter:          NewExecutionManagerDLQWriter(s.mockExecutionManager),
-			Config:             config,
+			ClusterMetadata: s.clusterMetadata,
+			ClientBean:      s.clientBean,
+			ShardController: s.shardController,
+			NamespaceCache:  s.namespaceCache,
+			MetricsHandler:  s.metricsHandler,
+			Logger:          s.logger,
+			DLQWriter:       NewExecutionManagerDLQWriter(s.mockExecutionManager),
+			Config:          config,
 		},
 		1,
 		time.Unix(0, rand.Int63()),
 		replicationAttribute1,
 		s.sourceClusterName,
 		s.sourceShardKey,
-		enumsspb.TASK_PRIORITY_HIGH,
-		nil,
+		&replicationspb.ReplicationTask{
+			Priority: enumsspb.TASK_PRIORITY_HIGH,
+		},
 	)
 	task1.ExecutableTask = s.executableTask
 
 	replicationAttribute2 := s.generateReplicationAttribute(namespaceId, workflowId, runId)
 	task2 := NewExecutableActivityStateTask(
 		ProcessToolBox{
-			ClusterMetadata:    s.clusterMetadata,
-			ClientBean:         s.clientBean,
-			ShardController:    s.shardController,
-			NamespaceCache:     s.namespaceCache,
-			NDCHistoryResender: s.ndcHistoryResender,
-			MetricsHandler:     s.metricsHandler,
-			Logger:             s.logger,
-			DLQWriter:          NewExecutionManagerDLQWriter(s.mockExecutionManager),
-			Config:             s.config,
+			ClusterMetadata: s.clusterMetadata,
+			ClientBean:      s.clientBean,
+			ShardController: s.shardController,
+			NamespaceCache:  s.namespaceCache,
+			MetricsHandler:  s.metricsHandler,
+			Logger:          s.logger,
+			DLQWriter:       NewExecutionManagerDLQWriter(s.mockExecutionManager),
+			Config:          s.config,
 		},
 		2,
 		time.Unix(0, rand.Int63()),
 		replicationAttribute2,
 		s.sourceClusterName,
 		s.sourceShardKey,
-		enumsspb.TASK_PRIORITY_HIGH,
-		nil,
+		&replicationspb.ReplicationTask{
+			Priority: enumsspb.TASK_PRIORITY_HIGH,
+		},
 	)
 	task2.ExecutableTask = s.executableTask
 
@@ -387,11 +371,12 @@ func (s *executableActivityStateTaskSuite) TestBatchedTask_ShouldBatchTogether_A
 	s.assertAttributeEqual(replicationAttribute2, activityTask.activityInfos[1])
 
 	s.executableTask.EXPECT().TerminalState().Return(false)
-	s.executableTask.EXPECT().GetNamespaceInfo(gomock.Any(), namespaceId).Return(
+	s.executableTask.EXPECT().MarkExecutionStart()
+	s.executableTask.EXPECT().GetNamespaceInfo(gomock.Any(), namespaceId, gomock.Any()).Return(
 		uuid.NewString(), true, nil,
 	).AnyTimes()
-	shardContext := shard.NewMockContext(s.controller)
-	engine := shard.NewMockEngine(s.controller)
+	shardContext := historyi.NewMockShardContext(s.controller)
+	engine := historyi.NewMockEngine(s.controller)
 	s.shardController.EXPECT().GetShardByNamespaceWorkflow(
 		namespace.ID(namespaceId),
 		workflowId,
@@ -414,45 +399,45 @@ func (s *executableActivityStateTaskSuite) TestBatchWith_InvalidBatchTask_Should
 	replicationAttribute1 := s.generateReplicationAttribute(namespaceId, "wf_1", runId)
 	task1 := NewExecutableActivityStateTask(
 		ProcessToolBox{
-			ClusterMetadata:    s.clusterMetadata,
-			ClientBean:         s.clientBean,
-			ShardController:    s.shardController,
-			NamespaceCache:     s.namespaceCache,
-			NDCHistoryResender: s.ndcHistoryResender,
-			MetricsHandler:     s.metricsHandler,
-			Logger:             s.logger,
-			DLQWriter:          NewExecutionManagerDLQWriter(s.mockExecutionManager),
-			Config:             s.config,
+			ClusterMetadata: s.clusterMetadata,
+			ClientBean:      s.clientBean,
+			ShardController: s.shardController,
+			NamespaceCache:  s.namespaceCache,
+			MetricsHandler:  s.metricsHandler,
+			Logger:          s.logger,
+			DLQWriter:       NewExecutionManagerDLQWriter(s.mockExecutionManager),
+			Config:          s.config,
 		},
 		1,
 		time.Unix(0, rand.Int63()),
 		replicationAttribute1,
 		s.sourceClusterName,
 		s.sourceShardKey,
-		enumsspb.TASK_PRIORITY_HIGH,
-		nil,
+		&replicationspb.ReplicationTask{
+			Priority: enumsspb.TASK_PRIORITY_HIGH,
+		},
 	)
 
 	replicationAttribute2 := s.generateReplicationAttribute(namespaceId, "wf_2", runId) //
 	task2 := NewExecutableActivityStateTask(
 		ProcessToolBox{
-			ClusterMetadata:    s.clusterMetadata,
-			ClientBean:         s.clientBean,
-			ShardController:    s.shardController,
-			NamespaceCache:     s.namespaceCache,
-			NDCHistoryResender: s.ndcHistoryResender,
-			MetricsHandler:     s.metricsHandler,
-			Logger:             s.logger,
-			DLQWriter:          NewExecutionManagerDLQWriter(s.mockExecutionManager),
-			Config:             s.config,
+			ClusterMetadata: s.clusterMetadata,
+			ClientBean:      s.clientBean,
+			ShardController: s.shardController,
+			NamespaceCache:  s.namespaceCache,
+			MetricsHandler:  s.metricsHandler,
+			Logger:          s.logger,
+			DLQWriter:       NewExecutionManagerDLQWriter(s.mockExecutionManager),
+			Config:          s.config,
 		},
 		2,
 		time.Unix(0, rand.Int63()),
 		replicationAttribute2,
 		s.sourceClusterName,
 		s.sourceShardKey,
-		enumsspb.TASK_PRIORITY_HIGH,
-		nil,
+		&replicationspb.ReplicationTask{
+			Priority: enumsspb.TASK_PRIORITY_HIGH,
+		},
 	)
 	batchResult, batched := task1.BatchWith(task2)
 	s.False(batched)
@@ -479,7 +464,7 @@ func (s *executableActivityStateTaskSuite) generateReplicationAttribute(
 		LastFailure:        &failurepb.Failure{},
 		LastWorkerIdentity: uuid.NewString(),
 		BaseExecutionInfo:  &workflowspb.BaseExecutionInfo{},
-		VersionHistory:     &history.VersionHistory{},
+		VersionHistory:     &historyspb.VersionHistory{},
 	}
 }
 

@@ -1,42 +1,22 @@
-// The MIT License
-//
-// Copyright (c) 2020 Temporal Technologies Inc.  All rights reserved.
-//
-// Copyright (c) 2020 Uber Technologies, Inc.
-//
-// Permission is hereby granted, free of charge, to any person obtaining a copy
-// of this software and associated documentation files (the "Software"), to deal
-// in the Software without restriction, including without limitation the rights
-// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-// copies of the Software, and to permit persons to whom the Software is
-// furnished to do so, subject to the following conditions:
-//
-// The above copyright notice and this permission notice shall be included in
-// all copies or substantial portions of the Software.
-//
-// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
-// THE SOFTWARE.
-
 package history
 
 import (
 	"go.opentelemetry.io/otel/trace"
+	"go.temporal.io/server/chasm"
 	"go.temporal.io/server/client"
 	"go.temporal.io/server/common/persistence"
 	"go.temporal.io/server/common/persistence/serialization"
 	"go.temporal.io/server/common/persistence/visibility/manager"
 	"go.temporal.io/server/common/resource"
 	"go.temporal.io/server/common/sdk"
+	"go.temporal.io/server/common/testing/testhooks"
+	"go.temporal.io/server/common/worker_versioning"
 	"go.temporal.io/server/service/history/api"
+	"go.temporal.io/server/service/history/circuitbreakerpool"
 	"go.temporal.io/server/service/history/configs"
 	"go.temporal.io/server/service/history/events"
+	historyi "go.temporal.io/server/service/history/interfaces"
 	"go.temporal.io/server/service/history/replication"
-	"go.temporal.io/server/service/history/shard"
 	"go.temporal.io/server/service/history/tasks"
 	"go.temporal.io/server/service/history/workflow"
 	wcache "go.temporal.io/server/service/history/workflow/cache"
@@ -55,8 +35,7 @@ type (
 		RawMatchingClient               resource.MatchingRawClient
 		WorkflowCache                   wcache.Cache
 		ReplicationProgressCache        replication.ProgressCache
-		NewCacheFn                      wcache.NewCacheFn
-		EventSerializer                 serialization.Serializer
+		Serializer                      serialization.Serializer
 		QueueFactories                  []QueueFactory `group:"queueFactory"`
 		ReplicationTaskFetcherFactory   replication.TaskFetcherFactory
 		ReplicationTaskExecutorProvider replication.TaskExecutorProvider
@@ -66,6 +45,11 @@ type (
 		TaskCategoryRegistry            tasks.TaskCategoryRegistry
 		ReplicationDLQWriter            replication.DLQWriter
 		CommandHandlerRegistry          *workflow.CommandHandlerRegistry
+		OutboundQueueCBPool             *circuitbreakerpool.OutboundQueueCircuitBreakerPool
+		PersistenceRateLimiter          replication.PersistenceRateLimiter
+		TestHooks                       testhooks.TestHooks
+		ChasmEngine                     chasm.Engine
+		VersionMembershipCache          worker_versioning.VersionMembershipCache
 	}
 
 	historyEngineFactory struct {
@@ -74,16 +58,8 @@ type (
 )
 
 func (f *historyEngineFactory) CreateEngine(
-	shard shard.Context,
-) shard.Engine {
-	var wfCache wcache.Cache
-	if shard.GetConfig().EnableHostLevelHistoryCache() {
-		wfCache = f.WorkflowCache
-	} else {
-		wfCache = f.NewCacheFn(shard.GetConfig(), shard.GetLogger(), shard.GetMetricsHandler())
-	}
-
-	workflowConsistencyChecker := api.NewWorkflowConsistencyChecker(shard, wfCache)
+	shard historyi.ShardContext,
+) historyi.Engine {
 	return NewEngineWithShardContext(
 		shard,
 		f.ClientBean,
@@ -91,19 +67,24 @@ func (f *historyEngineFactory) CreateEngine(
 		f.SdkClientFactory,
 		f.EventNotifier,
 		f.Config,
+		f.VersionMembershipCache,
 		f.RawMatchingClient,
-		wfCache,
+		f.WorkflowCache,
 		f.ReplicationProgressCache,
-		f.EventSerializer,
+		f.Serializer,
 		f.QueueFactories,
 		f.ReplicationTaskFetcherFactory,
 		f.ReplicationTaskExecutorProvider,
-		workflowConsistencyChecker,
+		api.NewWorkflowConsistencyChecker(shard, f.WorkflowCache),
 		f.TracerProvider,
 		f.PersistenceVisibilityMgr,
 		f.EventBlobCache,
 		f.TaskCategoryRegistry,
 		f.ReplicationDLQWriter,
 		f.CommandHandlerRegistry,
+		f.OutboundQueueCBPool,
+		f.PersistenceRateLimiter,
+		f.TestHooks,
+		f.ChasmEngine,
 	)
 }

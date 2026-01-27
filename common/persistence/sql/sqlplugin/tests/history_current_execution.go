@@ -1,37 +1,18 @@
-// The MIT License
-//
-// Copyright (c) 2020 Temporal Technologies Inc.  All rights reserved.
-//
-// Copyright (c) 2020 Uber Technologies, Inc.
-//
-// Permission is hereby granted, free of charge, to any person obtaining a copy
-// of this software and associated documentation files (the "Software"), to deal
-// in the Software without restriction, including without limitation the rights
-// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-// copies of the Software, and to permit persons to whom the Software is
-// furnished to do so, subject to the following conditions:
-//
-// The above copyright notice and this permission notice shall be included in
-// all copies or substantial portions of the Software.
-//
-// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
-// THE SOFTWARE.
-
 package tests
 
 import (
 	"math/rand"
 	"testing"
 
+	"github.com/google/uuid"
 	"github.com/stretchr/testify/require"
 	"github.com/stretchr/testify/suite"
 	enumspb "go.temporal.io/api/enums/v1"
 	enumsspb "go.temporal.io/server/api/enums/v1"
+	persistencespb "go.temporal.io/server/api/persistence/v1"
+	"go.temporal.io/server/chasm"
+	"go.temporal.io/server/common"
+	"go.temporal.io/server/common/persistence/serialization"
 	"go.temporal.io/server/common/persistence/sql/sqlplugin"
 	"go.temporal.io/server/common/primitives"
 	"go.temporal.io/server/common/shuffle"
@@ -43,6 +24,8 @@ type (
 		*require.Assertions
 
 		store sqlplugin.HistoryExecution
+
+		archetypeID chasm.ArchetypeID
 	}
 )
 
@@ -71,10 +54,12 @@ var (
 func NewHistoryCurrentExecutionSuite(
 	t *testing.T,
 	store sqlplugin.HistoryExecution,
+	archetypeID chasm.ArchetypeID,
 ) *historyCurrentExecutionSuite {
 	return &historyCurrentExecutionSuite{
-		Assertions: require.New(t),
-		store:      store,
+		Assertions:  require.New(t),
+		store:       store,
+		archetypeID: archetypeID,
 	}
 }
 
@@ -150,6 +135,7 @@ func (s *historyCurrentExecutionSuite) TestInsertSelect() {
 		NamespaceID: namespaceID,
 		WorkflowID:  workflowID,
 		RunID:       nil,
+		ArchetypeID: s.archetypeID,
 	}
 	row, err := s.store.SelectFromCurrentExecutions(newExecutionContext(), filter)
 	s.NoError(err)
@@ -222,6 +208,7 @@ func (s *historyCurrentExecutionSuite) TestInsertUpdateSelect() {
 		NamespaceID: namespaceID,
 		WorkflowID:  workflowID,
 		RunID:       nil,
+		ArchetypeID: s.archetypeID,
 	}
 	row, err := s.store.SelectFromCurrentExecutions(newExecutionContext(), filter)
 	s.NoError(err)
@@ -248,6 +235,7 @@ func (s *historyCurrentExecutionSuite) TestInsertDeleteSelect_Success() {
 		NamespaceID: namespaceID,
 		WorkflowID:  workflowID,
 		RunID:       runID,
+		ArchetypeID: s.archetypeID,
 	}
 	result, err = s.store.DeleteFromCurrentExecutions(newExecutionContext(), filter)
 	s.NoError(err)
@@ -280,6 +268,7 @@ func (s *historyCurrentExecutionSuite) TestInsertDeleteSelect_Fail() {
 		NamespaceID: namespaceID,
 		WorkflowID:  workflowID,
 		RunID:       primitives.NewUUID(),
+		ArchetypeID: s.archetypeID,
 	}
 	result, err = s.store.DeleteFromCurrentExecutions(newExecutionContext(), filter)
 	s.NoError(err)
@@ -315,6 +304,7 @@ func (s *historyCurrentExecutionSuite) TestLock() {
 		NamespaceID: namespaceID,
 		WorkflowID:  workflowID,
 		RunID:       nil,
+		ArchetypeID: s.archetypeID,
 	}
 	row, err := s.store.LockCurrentExecutions(newExecutionContext(), filter)
 	s.NoError(err)
@@ -331,14 +321,30 @@ func (s *historyCurrentExecutionSuite) newRandomCurrentExecutionRow(
 ) sqlplugin.CurrentExecutionsRow {
 	state := testHistoryExecutionStates[rand.Intn(len(testHistoryExecutionStates))]
 	status := testHistoryExecutionStatus[state][rand.Intn(len(testHistoryExecutionStatus[state]))]
+	executionState := &persistencespb.WorkflowExecutionState{
+		CreateRequestId: requestID,
+		RunId:           runID.String(),
+		State:           state,
+		Status:          status,
+		RequestIds: map[string]*persistencespb.RequestIDInfo{
+			uuid.NewString(): {
+				EventType: enumspb.EVENT_TYPE_WORKFLOW_EXECUTION_OPTIONS_UPDATED,
+				EventId:   common.BufferedEventID,
+			},
+		},
+	}
+	executionStateBlob, _ := serialization.NewSerializer().WorkflowExecutionStateToBlob(executionState)
 	return sqlplugin.CurrentExecutionsRow{
 		ShardID:          shardID,
 		NamespaceID:      namespaceID,
 		WorkflowID:       workflowID,
 		RunID:            runID,
+		ArchetypeID:      s.archetypeID,
 		CreateRequestID:  requestID,
 		LastWriteVersion: lastWriteVersion,
 		State:            state,
 		Status:           status,
+		Data:             executionStateBlob.Data,
+		DataEncoding:     executionStateBlob.EncodingType.String(),
 	}
 }

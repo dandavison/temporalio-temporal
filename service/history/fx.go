@@ -1,32 +1,14 @@
-// The MIT License
-//
-// Copyright (c) 2020 Temporal Technologies Inc.  All rights reserved.
-//
-// Copyright (c) 2020 Uber Technologies, Inc.
-//
-// Permission is hereby granted, free of charge, to any person obtaining a copy
-// of this software and associated documentation files (the "Software"), to deal
-// in the Software without restriction, including without limitation the rights
-// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-// copies of the Software, and to permit persons to whom the Software is
-// furnished to do so, subject to the following conditions:
-//
-// The above copyright notice and this permission notice shall be included in
-// all copies or substantial portions of the Software.
-//
-// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
-// THE SOFTWARE.
-
 package history
 
 import (
+	"context"
+	"time"
+
 	"go.temporal.io/server/api/historyservice/v1"
+	"go.temporal.io/server/chasm"
+	"go.temporal.io/server/chasm/lib/activity"
 	"go.temporal.io/server/common"
+	commoncache "go.temporal.io/server/common/cache"
 	"go.temporal.io/server/common/clock"
 	"go.temporal.io/server/common/config"
 	"go.temporal.io/server/common/dynamicconfig"
@@ -36,20 +18,21 @@ import (
 	"go.temporal.io/server/common/metrics"
 	"go.temporal.io/server/common/namespace"
 	persistenceClient "go.temporal.io/server/common/persistence/client"
+	"go.temporal.io/server/common/persistence/serialization"
 	"go.temporal.io/server/common/persistence/visibility"
 	"go.temporal.io/server/common/persistence/visibility/manager"
 	"go.temporal.io/server/common/persistence/visibility/store/elasticsearch"
-	esclient "go.temporal.io/server/common/persistence/visibility/store/elasticsearch/client"
 	"go.temporal.io/server/common/primitives"
 	"go.temporal.io/server/common/quotas/calculator"
 	"go.temporal.io/server/common/resolver"
 	"go.temporal.io/server/common/resource"
 	"go.temporal.io/server/common/rpc/interceptor"
 	"go.temporal.io/server/common/searchattribute"
+	"go.temporal.io/server/common/tasktoken"
+	"go.temporal.io/server/common/worker_versioning"
 	"go.temporal.io/server/components/callbacks"
 	"go.temporal.io/server/components/nexusoperations"
 	nexusworkflow "go.temporal.io/server/components/nexusoperations/workflow"
-	schedulerhsm "go.temporal.io/server/components/scheduler"
 	"go.temporal.io/server/service"
 	"go.temporal.io/server/service/history/api"
 	"go.temporal.io/server/service/history/archival"
@@ -74,15 +57,23 @@ var Module = fx.Options(
 	events.Module,
 	cache.Module,
 	archival.Module,
-	dynamicconfig.Module,
+	ChasmEngineModule,
 	fx.Provide(ConfigProvider), // might be worth just using provider for configs.Config directly
 	fx.Provide(workflow.NewCommandHandlerRegistry),
 	fx.Provide(RetryableInterceptorProvider),
+	fx.Provide(ErrorHandlerProvider),
 	fx.Provide(TelemetryInterceptorProvider),
 	fx.Provide(RateLimitInterceptorProvider),
+	fx.Provide(HealthSignalAggregatorProvider),
+	fx.Provide(HealthCheckInterceptorProvider),
+	fx.Provide(MetadataContextInterceptorProvider),
+	fx.Provide(chasm.ChasmEngineInterceptorProvider),
+	fx.Provide(chasm.ChasmVisibilityInterceptorProvider),
+	fx.Provide(HistoryAdditionalInterceptorsProvider),
 	fx.Provide(service.GrpcServerOptionsProvider),
 	fx.Provide(ESProcessorConfigProvider),
 	fx.Provide(VisibilityManagerProvider),
+	fx.Provide(visibility.ChasmVisibilityManagerProvider),
 	fx.Provide(ThrottledLoggerRpsFnProvider),
 	fx.Provide(PersistenceRateLimitingParamsProvider),
 	service.PersistenceLazyLoadedServiceResolverModule,
@@ -93,12 +84,13 @@ var Module = fx.Options(
 	fx.Provide(ServerProvider),
 	fx.Provide(NewService),
 	fx.Provide(ReplicationProgressCacheProvider),
+	fx.Provide(VersionMembershipCacheProvider),
 	fx.Invoke(ServiceLifetimeHooks),
 
 	callbacks.Module,
-	schedulerhsm.Module,
 	nexusoperations.Module,
 	fx.Invoke(nexusworkflow.RegisterCommandHandlers),
+	activity.HistoryModule,
 )
 
 func ServerProvider(grpcServerOptions []grpc.ServerOption) *grpc.Server {
@@ -115,13 +107,15 @@ func HandlerProvider(args NewHandlerArgs) *Handler {
 	handler := &Handler{
 		status:                       common.DaemonStatusInitialized,
 		config:                       args.Config,
-		tokenSerializer:              common.NewProtoTaskTokenSerializer(),
+		tokenSerializer:              tasktoken.NewSerializer(),
 		logger:                       args.Logger,
 		throttledLogger:              args.ThrottledLogger,
 		persistenceExecutionManager:  args.PersistenceExecutionManager,
 		persistenceShardManager:      args.PersistenceShardManager,
 		persistenceVisibilityManager: args.PersistenceVisibilityManager,
 		persistenceHealthSignal:      args.PersistenceHealthSignal,
+		healthServer:                 args.HealthServer,
+		historyHealthSignal:          args.HistoryHealthSignal,
 		historyServiceResolver:       args.HistoryServiceResolver,
 		metricsHandler:               args.MetricsHandler,
 		payloadSerializer:            args.PayloadSerializer,
@@ -137,14 +131,15 @@ func HandlerProvider(args NewHandlerArgs) *Handler {
 		taskQueueManager:             args.TaskQueueManager,
 		taskCategoryRegistry:         args.TaskCategoryRegistry,
 		dlqMetricsEmitter:            args.DLQMetricsEmitter,
+		chasmEngine:                  args.ChasmEngine,
+		chasmRegistry:                args.ChasmRegistry,
 
 		replicationTaskFetcherFactory:    args.ReplicationTaskFetcherFactory,
 		replicationTaskConverterProvider: args.ReplicationTaskConverterFactory,
 		streamReceiverMonitor:            args.StreamReceiverMonitor,
+		replicationServerRateLimiter:     args.ReplicationServerRateLimiter,
 	}
 
-	// prevent us from trying to serve requests before shard controller is started and ready
-	handler.startWG.Add(1)
 	return handler
 }
 
@@ -159,7 +154,6 @@ func HistoryEngineFactoryProvider(
 func ConfigProvider(
 	dc *dynamicconfig.Collection,
 	persistenceConfig config.Persistence,
-	esConfig *esclient.Config,
 ) *configs.Config {
 	return configs.NewConfig(
 		dc,
@@ -178,18 +172,68 @@ func RetryableInterceptorProvider() *interceptor.RetryableInterceptor {
 	)
 }
 
+func ErrorHandlerProvider(
+	logger log.Logger,
+	serviceConfig *configs.Config,
+) *interceptor.RequestErrorHandler {
+	return interceptor.NewRequestErrorHandler(
+		logger,
+		serviceConfig.LogAllReqErrors,
+	)
+}
+
 func TelemetryInterceptorProvider(
 	logger log.Logger,
 	namespaceRegistry namespace.Registry,
 	metricsHandler metrics.Handler,
 	serviceConfig *configs.Config,
+	requestErrorHandler *interceptor.RequestErrorHandler,
 ) *interceptor.TelemetryInterceptor {
 	return interceptor.NewTelemetryInterceptor(
 		namespaceRegistry,
 		metricsHandler,
 		logger,
 		serviceConfig.LogAllReqErrors,
+		requestErrorHandler,
 	)
+}
+
+func HealthSignalAggregatorProvider(
+	dynamicCollection *dynamicconfig.Collection,
+	logger log.ThrottledLogger,
+) interceptor.HealthSignalAggregator {
+	return interceptor.NewHealthSignalAggregator(
+		logger,
+		dynamicconfig.HistoryHealthSignalMetricsEnabled.Get(dynamicCollection),
+		dynamicconfig.PersistenceHealthSignalWindowSize.Get(dynamicCollection)(),
+		dynamicconfig.PersistenceHealthSignalBufferSize.Get(dynamicCollection)(),
+	)
+}
+
+func HealthCheckInterceptorProvider(
+	healthSignalAggregator interceptor.HealthSignalAggregator,
+) *interceptor.HealthCheckInterceptor {
+	return interceptor.NewHealthCheckInterceptor(
+		healthSignalAggregator,
+	)
+}
+
+func MetadataContextInterceptorProvider() *interceptor.MetadataContextInterceptor {
+	return interceptor.NewMetadataContextInterceptor()
+}
+
+func HistoryAdditionalInterceptorsProvider(
+	healthCheckInterceptor *interceptor.HealthCheckInterceptor,
+	metadataContextInterceptor *interceptor.MetadataContextInterceptor,
+	chasmRequestEngineInterceptor *chasm.ChasmEngineInterceptor,
+	chasmRequestVisibilityInterceptor *chasm.ChasmVisibilityInterceptor,
+) []grpc.UnaryServerInterceptor {
+	return []grpc.UnaryServerInterceptor{
+		metadataContextInterceptor.Intercept,
+		healthCheckInterceptor.UnaryIntercept,
+		chasmRequestEngineInterceptor.Intercept,
+		chasmRequestVisibilityInterceptor.Intercept,
+	}
 }
 
 func RateLimitInterceptorProvider(
@@ -266,6 +310,8 @@ func VisibilityManagerProvider(
 	searchAttributesMapperProvider searchattribute.MapperProvider,
 	saProvider searchattribute.Provider,
 	namespaceRegistry namespace.Registry,
+	chasmRegistry *chasm.Registry,
+	serializer serialization.Serializer,
 ) (manager.VisibilityManager, error) {
 	return visibility.NewManager(
 		*persistenceConfig,
@@ -275,16 +321,30 @@ func VisibilityManagerProvider(
 		saProvider,
 		searchAttributesMapperProvider,
 		namespaceRegistry,
+		chasmRegistry,
 		serviceConfig.VisibilityPersistenceMaxReadQPS,
 		serviceConfig.VisibilityPersistenceMaxWriteQPS,
 		serviceConfig.OperatorRPSRatio,
+		serviceConfig.VisibilityPersistenceSlowQueryThreshold,
 		serviceConfig.EnableReadFromSecondaryVisibility,
 		serviceConfig.VisibilityEnableShadowReadMode,
 		serviceConfig.SecondaryVisibilityWritingMode,
 		serviceConfig.VisibilityDisableOrderByClause,
 		serviceConfig.VisibilityEnableManualPagination,
+		serviceConfig.VisibilityEnableUnifiedQueryConverter,
 		metricsHandler,
 		logger,
+		serializer,
+	)
+}
+
+func ChasmVisibilityManagerProvider(
+	chasmRegistry *chasm.Registry,
+	visibilityManager manager.VisibilityManager,
+) chasm.VisibilityManager {
+	return visibility.NewChasmVisibilityManager(
+		chasmRegistry,
+		visibilityManager,
 	)
 }
 
@@ -310,4 +370,21 @@ func ReplicationProgressCacheProvider(
 	handler metrics.Handler,
 ) replication.ProgressCache {
 	return replication.NewProgressCache(serviceConfig, logger, handler)
+}
+
+func VersionMembershipCacheProvider(
+	lc fx.Lifecycle,
+	serviceConfig *configs.Config,
+	metricsHandler metrics.Handler,
+) worker_versioning.VersionMembershipCache {
+	c := commoncache.New(serviceConfig.VersionMembershipCacheMaxSize(), &commoncache.Options{
+		TTL: max(1*time.Second, serviceConfig.VersionMembershipCacheTTL()),
+	})
+	lc.Append(fx.Hook{
+		OnStop: func(context.Context) error {
+			c.Stop()
+			return nil
+		},
+	})
+	return worker_versioning.NewVersionMembershipCache(c, metricsHandler)
 }

@@ -1,27 +1,3 @@
-// The MIT License
-//
-// Copyright (c) 2020 Temporal Technologies Inc.  All rights reserved.
-//
-// Copyright (c) 2020 Uber Technologies, Inc.
-//
-// Permission is hereby granted, free of charge, to any person obtaining a copy
-// of this software and associated documentation files (the "Software"), to deal
-// in the Software without restriction, including without limitation the rights
-// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-// copies of the Software, and to permit persons to whom the Software is
-// furnished to do so, subject to the following conditions:
-//
-// The above copyright notice and this permission notice shall be included in
-// all copies or substantial portions of the Software.
-//
-// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
-// THE SOFTWARE.
-
 package queues
 
 import (
@@ -30,6 +6,8 @@ import (
 	"github.com/stretchr/testify/require"
 	"github.com/stretchr/testify/suite"
 	enumsspb "go.temporal.io/server/api/enums/v1"
+	persistencespb "go.temporal.io/server/api/persistence/v1"
+	"go.temporal.io/server/common/namespace"
 	"go.temporal.io/server/common/tasks"
 	"go.uber.org/mock/gomock"
 )
@@ -40,6 +18,7 @@ type (
 		suite.Suite
 
 		controller *gomock.Controller
+		nsRegistry *namespace.MockRegistry
 
 		priorityAssigner *priorityAssignerImpl
 	}
@@ -54,8 +33,12 @@ func (s *priorityAssignerSuite) SetupTest() {
 	s.Assertions = require.New(s.T())
 
 	s.controller = gomock.NewController(s.T())
+	s.nsRegistry = namespace.NewMockRegistry(s.controller)
 
-	s.priorityAssigner = NewPriorityAssigner().(*priorityAssignerImpl)
+	s.priorityAssigner = NewPriorityAssigner(
+		s.nsRegistry,
+		"current",
+	).(*priorityAssignerImpl)
 }
 
 func (s *priorityAssignerSuite) TearDownTest() {
@@ -64,26 +47,61 @@ func (s *priorityAssignerSuite) TearDownTest() {
 
 func (s *priorityAssignerSuite) TestAssign_SelectedTaskTypes() {
 	mockExecutable := NewMockExecutable(s.controller)
+	mockExecutable.EXPECT().GetNamespaceID().Return("test-namespace-id").Times(1)
 	mockExecutable.EXPECT().GetType().Return(enumsspb.TASK_TYPE_DELETE_HISTORY_EVENT).Times(1)
 
-	s.Equal(tasks.PriorityLow, s.priorityAssigner.Assign(mockExecutable))
+	// Create a local namespace that is active in "current" cluster
+	ns := namespace.NewLocalNamespaceForTest(
+		&persistencespb.NamespaceInfo{Id: "test-namespace-id"},
+		nil,
+		"current",
+	)
+	s.nsRegistry.EXPECT().GetNamespaceByID(namespace.ID("test-namespace-id")).Return(ns, nil).Times(1)
+
+	s.Equal(tasks.PriorityPreemptable, s.priorityAssigner.Assign(mockExecutable))
 }
 
 func (s *priorityAssignerSuite) TestAssign_UnknownTaskTypes() {
 	mockExecutable := NewMockExecutable(s.controller)
+	mockExecutable.EXPECT().GetNamespaceID().Return("test-namespace-id").Times(1)
 	mockExecutable.EXPECT().GetType().Return(enumsspb.TaskType(1234)).Times(1)
 
-	s.Equal(tasks.PriorityLow, s.priorityAssigner.Assign(mockExecutable))
+	// Create a local namespace that is active in "current" cluster
+	ns := namespace.NewLocalNamespaceForTest(
+		&persistencespb.NamespaceInfo{Id: "test-namespace-id"},
+		nil,
+		"current",
+	)
+	s.nsRegistry.EXPECT().GetNamespaceByID(namespace.ID("test-namespace-id")).Return(ns, nil).Times(1)
+
+	s.Equal(tasks.PriorityPreemptable, s.priorityAssigner.Assign(mockExecutable))
 }
 
 func (s *priorityAssignerSuite) TestAssign_HighPriorityTaskTypes() {
-	mockExecutable := NewMockExecutable(s.controller)
-	mockExecutable.EXPECT().GetType().Return(enumsspb.TASK_TYPE_ACTIVITY_RETRY_TIMER).Times(1)
+	for _, taskType := range []enumsspb.TaskType{
+		enumsspb.TASK_TYPE_ACTIVITY_RETRY_TIMER,
+		enumsspb.TASK_TYPE_USER_TIMER,
+		enumsspb.TASK_TYPE_WORKFLOW_BACKOFF_TIMER,
+		enumsspb.TASK_TYPE_TRANSFER_WORKFLOW_TASK,
+		enumsspb.TASK_TYPE_TRANSFER_ACTIVITY_TASK,
+	} {
+		mockExecutable := NewMockExecutable(s.controller)
+		mockExecutable.EXPECT().GetNamespaceID().Return("test-namespace-id").Times(1)
+		mockExecutable.EXPECT().GetType().Return(taskType).Times(1)
 
-	s.Equal(tasks.PriorityHigh, s.priorityAssigner.Assign(mockExecutable))
+		// Create a local namespace that is active in "current" cluster
+		ns := namespace.NewLocalNamespaceForTest(
+			&persistencespb.NamespaceInfo{Id: "test-namespace-id"},
+			nil,
+			"current",
+		)
+		s.nsRegistry.EXPECT().GetNamespaceByID(namespace.ID("test-namespace-id")).Return(ns, nil).Times(1)
+
+		s.Equal(tasks.PriorityHigh, s.priorityAssigner.Assign(mockExecutable))
+	}
 }
 
-func (s *priorityAssignerSuite) TestAssign_LowPriorityTaskTypes() {
+func (s *priorityAssignerSuite) TestAssign_BackgroundPriorityTaskTypes() {
 	for _, taskType := range []enumsspb.TaskType{
 		enumsspb.TASK_TYPE_DELETE_HISTORY_EVENT,
 		enumsspb.TASK_TYPE_TRANSFER_DELETE_EXECUTION,
@@ -92,8 +110,89 @@ func (s *priorityAssignerSuite) TestAssign_LowPriorityTaskTypes() {
 		enumsspb.TASK_TYPE_UNSPECIFIED,
 	} {
 		mockExecutable := NewMockExecutable(s.controller)
+		mockExecutable.EXPECT().GetNamespaceID().Return("test-namespace-id").Times(1)
 		mockExecutable.EXPECT().GetType().Return(taskType).Times(1)
+
+		// Create a local namespace that is active in "current" cluster
+		ns := namespace.NewLocalNamespaceForTest(
+			&persistencespb.NamespaceInfo{Id: "test-namespace-id"},
+			nil,
+			"current",
+		)
+		s.nsRegistry.EXPECT().GetNamespaceByID(namespace.ID("test-namespace-id")).Return(ns, nil).Times(1)
+
+		s.Equal(tasks.PriorityPreemptable, s.priorityAssigner.Assign(mockExecutable))
+	}
+}
+
+func (s *priorityAssignerSuite) TestAssign_LowPriorityTaskTypes() {
+	for _, taskType := range []enumsspb.TaskType{
+		enumsspb.TASK_TYPE_ACTIVITY_TIMEOUT,
+		enumsspb.TASK_TYPE_WORKFLOW_TASK_TIMEOUT,
+		enumsspb.TASK_TYPE_WORKFLOW_RUN_TIMEOUT,
+		enumsspb.TASK_TYPE_WORKFLOW_EXECUTION_TIMEOUT,
+	} {
+		mockExecutable := NewMockExecutable(s.controller)
+		mockExecutable.EXPECT().GetNamespaceID().Return("test-namespace-id").Times(1)
+		mockExecutable.EXPECT().GetType().Return(taskType).Times(1)
+
+		// Create a local namespace that is active in "current" cluster
+		ns := namespace.NewLocalNamespaceForTest(
+			&persistencespb.NamespaceInfo{Id: "test-namespace-id"},
+			nil,
+			"current",
+		)
+		s.nsRegistry.EXPECT().GetNamespaceByID(namespace.ID("test-namespace-id")).Return(ns, nil).Times(1)
 
 		s.Equal(tasks.PriorityLow, s.priorityAssigner.Assign(mockExecutable))
 	}
+}
+
+func (s *priorityAssignerSuite) TestAssign_StandbyNamespace() {
+	mockExecutable := NewMockExecutable(s.controller)
+	mockExecutable.EXPECT().GetNamespaceID().Return("test-namespace-id").Times(1)
+
+	// Create a global namespace with active cluster as "other", not "current"
+	ns := namespace.NewGlobalNamespaceForTest(
+		&persistencespb.NamespaceInfo{Id: "test-namespace-id"},
+		nil,
+		&persistencespb.NamespaceReplicationConfig{
+			ActiveClusterName: "other",
+			Clusters:          []string{"current", "other"},
+		},
+		1,
+	)
+	s.nsRegistry.EXPECT().GetNamespaceByID(namespace.ID("test-namespace-id")).Return(ns, nil).Times(1)
+
+	s.Equal(tasks.PriorityPreemptable, s.priorityAssigner.Assign(mockExecutable))
+}
+
+func (s *priorityAssignerSuite) TestAssign_NamespaceNotFound() {
+	mockExecutable := NewMockExecutable(s.controller)
+	mockExecutable.EXPECT().GetNamespaceID().Return("test-namespace-id").Times(1)
+	mockExecutable.EXPECT().GetType().Return(enumsspb.TASK_TYPE_TRANSFER_WORKFLOW_TASK).Times(1)
+
+	s.nsRegistry.EXPECT().GetNamespaceByID(namespace.ID("test-namespace-id")).Return(nil, nil).Times(1)
+
+	s.Equal(tasks.PriorityHigh, s.priorityAssigner.Assign(mockExecutable))
+}
+
+func (s *priorityAssignerSuite) TestAssign_ActiveNamespaceHighPriority() {
+	mockExecutable := NewMockExecutable(s.controller)
+	mockExecutable.EXPECT().GetNamespaceID().Return("test-namespace-id").Times(1)
+	mockExecutable.EXPECT().GetType().Return(enumsspb.TASK_TYPE_TRANSFER_WORKFLOW_TASK).Times(1)
+
+	// Create a global namespace with active cluster as "current"
+	ns := namespace.NewGlobalNamespaceForTest(
+		&persistencespb.NamespaceInfo{Id: "test-namespace-id"},
+		nil,
+		&persistencespb.NamespaceReplicationConfig{
+			ActiveClusterName: "current",
+			Clusters:          []string{"current", "other"},
+		},
+		1,
+	)
+	s.nsRegistry.EXPECT().GetNamespaceByID(namespace.ID("test-namespace-id")).Return(ns, nil).Times(1)
+
+	s.Equal(tasks.PriorityHigh, s.priorityAssigner.Assign(mockExecutable))
 }

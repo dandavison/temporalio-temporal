@@ -1,27 +1,3 @@
-// The MIT License
-//
-// Copyright (c) 2020 Temporal Technologies Inc.  All rights reserved.
-//
-// Copyright (c) 2020 Uber Technologies, Inc.
-//
-// Permission is hereby granted, free of charge, to any person obtaining a copy
-// of this software and associated documentation files (the "Software"), to deal
-// in the Software without restriction, including without limitation the rights
-// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-// copies of the Software, and to permit persons to whom the Software is
-// furnished to do so, subject to the following conditions:
-//
-// The above copyright notice and this permission notice shall be included in
-// all copies or substantial portions of the Software.
-//
-// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
-// THE SOFTWARE.
-
 package tdbg
 
 import (
@@ -30,7 +6,7 @@ import (
 
 	"github.com/urfave/cli/v2"
 	enumspb "go.temporal.io/api/enums/v1"
-	"go.temporal.io/api/taskqueue/v1"
+	taskqueuepb "go.temporal.io/api/taskqueue/v1"
 	"go.temporal.io/server/api/adminservice/v1"
 	taskqueuespb "go.temporal.io/server/api/taskqueue/v1"
 )
@@ -52,13 +28,16 @@ func AdminListTaskQueueTasks(c *cli.Context, clientFactory ClientFactory) error 
 	}
 	minTaskID := c.Int64(FlagMinTaskID)
 	maxTaskID := c.Int64(FlagMaxTaskID)
-	pageSize := defaultPageSize
-	if c.IsSet(FlagPageSize) {
-		pageSize = c.Int(FlagPageSize)
-	}
+	pageSize := c.Int(FlagPageSize)
 	workflowID := c.String(FlagWorkflowID)
 	runID := c.String(FlagRunID)
-
+	subqueue := c.Int(FlagSubqueue)
+	var minPass int64
+	if c.Bool(FlagFair) {
+		minPass = c.Int64(FlagMinPass)
+	} else if c.IsSet(FlagMinPass) {
+		return fmt.Errorf("flag --%s is only valid with --%s", FlagMinPass, FlagFair)
+	}
 	client := clientFactory.AdminClient(c)
 
 	req := &adminservice.GetTaskQueueTasksRequest{
@@ -68,11 +47,14 @@ func AdminListTaskQueueTasks(c *cli.Context, clientFactory ClientFactory) error 
 		MinTaskId:     minTaskID,
 		MaxTaskId:     maxTaskID,
 		BatchSize:     int32(pageSize),
+		Subqueue:      int32(subqueue),
+		MinPass:       minPass,
 	}
 
-	ctx, cancel := newContext(c)
-	defer cancel()
 	paginationFunc := func(paginationToken []byte) ([]interface{}, []byte, error) {
+		ctx, cancel := newContext(c)
+		defer cancel()
+
 		req.NextPageToken = paginationToken
 		response, err := client.GetTaskQueueTasks(ctx, req)
 		if err != nil {
@@ -100,7 +82,7 @@ func AdminListTaskQueueTasks(c *cli.Context, clientFactory ClientFactory) error 
 		for _, task := range tasks {
 			items = append(items, task)
 		}
-		return items, nil, nil
+		return items, response.NextPageToken, nil
 	}
 
 	if err := paginate(c, paginationFunc, pageSize); err != nil {
@@ -182,7 +164,7 @@ func AdminDescribeTaskQueuePartition(c *cli.Context, clientFactory ClientFactory
 	req := &adminservice.DescribeTaskQueuePartitionRequest{
 		Namespace:          namespace,
 		TaskQueuePartition: tqPartition,
-		BuildIds: &taskqueue.TaskQueueVersionSelection{
+		BuildIds: &taskqueuepb.TaskQueueVersionSelection{
 			BuildIds:    buildIDs,
 			Unversioned: unversioned,
 			AllActive:   allActive,

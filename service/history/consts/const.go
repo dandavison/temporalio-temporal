@@ -1,27 +1,3 @@
-// The MIT License
-//
-// Copyright (c) 2020 Temporal Technologies Inc.  All rights reserved.
-//
-// Copyright (c) 2020 Uber Technologies, Inc.
-//
-// Permission is hereby granted, free of charge, to any person obtaining a copy
-// of this software and associated documentation files (the "Software"), to deal
-// in the Software without restriction, including without limitation the rights
-// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-// copies of the Software, and to permit persons to whom the Software is
-// furnished to do so, subject to the following conditions:
-//
-// The above copyright notice and this permission notice shall be included in
-// all copies or substantial portions of the Software.
-//
-// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
-// THE SOFTWARE.
-
 package consts
 
 import (
@@ -115,6 +91,8 @@ var (
 	ErrChildExecutionNotFound = serviceerror.NewNotFound("Pending child execution not found.")
 	// ErrWorkflowNotReady is error indicating workflow mutable state is missing necessary information for handling the request
 	ErrWorkflowNotReady = serviceerror.NewWorkflowNotReady("Workflow state is not ready to handle the request.")
+	// ErrWorkflowTaskNotFound is error indicating workflow task is not found, either due to it has already completed or attempt/stamp mismatch
+	ErrWorkflowTaskNotFound = serviceerror.NewNotFound("workflow task not found.")
 	// ErrWorkflowTaskNotScheduled is error indicating workflow task is not scheduled yet.
 	ErrWorkflowTaskNotScheduled = serviceerror.NewWorkflowNotReady("Workflow task is not scheduled yet.")
 	// ErrNamespaceHandover is error indicating namespace is in handover state and cannot process request.
@@ -156,6 +134,9 @@ var (
 		enumspb.WORKFLOW_EXECUTION_STATUS_TERMINATED: {},
 		enumspb.WORKFLOW_EXECUTION_STATUS_TIMED_OUT:  {},
 	}
+
+	// ErrResetRedirectLimitReached indicates a possible long chain (or a loop) of resets that cannot be handled.
+	ErrResetRedirectLimitReached = serviceerror.NewInternal("The chain of resets is too long to iterate.")
 )
 
 // StaleStateError is an indicator that after loading the state for a task it was detected as stale. It's possible that

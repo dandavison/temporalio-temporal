@@ -1,42 +1,19 @@
-// The MIT License
-//
-// Copyright (c) 2020 Temporal Technologies Inc.  All rights reserved.
-//
-// Copyright (c) 2020 Uber Technologies, Inc.
-//
-// Permission is hereby granted, free of charge, to any person obtaining a copy
-// of this software and associated documentation files (the "Software"), to deal
-// in the Software without restriction, including without limitation the rights
-// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-// copies of the Software, and to permit persons to whom the Software is
-// furnished to do so, subject to the following conditions:
-//
-// The above copyright notice and this permission notice shall be included in
-// all copies or substantial portions of the Software.
-//
-// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
-// THE SOFTWARE.
-
 package persistence
 
 import (
 	"context"
+	"errors"
 	"fmt"
 
-	"github.com/pborman/uuid"
+	"github.com/google/uuid"
 	commonpb "go.temporal.io/api/common/v1"
-	enumspb "go.temporal.io/api/enums/v1"
 	historypb "go.temporal.io/api/history/v1"
 	"go.temporal.io/api/serviceerror"
 	persistencespb "go.temporal.io/server/api/persistence/v1"
 	"go.temporal.io/server/common"
 	"go.temporal.io/server/common/log/tag"
 	"go.temporal.io/server/common/primitives/timestamp"
+	"go.temporal.io/server/common/softassert"
 )
 
 const (
@@ -45,9 +22,13 @@ const (
 
 	// TrimHistoryBranch will only dump metadata, relatively cheap
 	trimHistoryBranchPageSize = 1000
-	errNonContiguousEventID   = "corrupted history event batch, eventID is not contiguous"
-	errWrongVersion           = "corrupted history event batch, wrong version and IDs"
-	errEmptyEvents            = "corrupted history event batch, empty events"
+	dataLossMsg               = "Potential data loss"
+)
+
+var (
+	errNonContiguousEventID = errors.New("corrupted history event batch, eventID is not contiguous")
+	errWrongVersion         = errors.New("corrupted history event batch, wrong version and IDs")
+	errEmptyEvents          = errors.New("corrupted history event batch, empty events")
 )
 
 var _ ExecutionManager = (*executionManagerImpl)(nil)
@@ -66,7 +47,7 @@ func (m *executionManagerImpl) ForkHistoryBranch(
 
 	forkBranch, err := m.GetHistoryBranchUtil().ParseHistoryBranchInfo(request.ForkBranchToken)
 	if err != nil {
-		return nil, err
+		return nil, serviceerror.NewInvalidArgument(fmt.Sprintf("unable to parse branch token: %v", err))
 	}
 
 	newAncestors := make([]*persistencespb.HistoryBranchRange, 0, len(forkBranch.Ancestors)+1)
@@ -97,7 +78,7 @@ func (m *executionManagerImpl) ForkHistoryBranch(
 	}
 	newBranchInfo := &persistencespb.HistoryBranch{
 		TreeId:    forkBranch.TreeId,
-		BranchId:  uuid.New(),
+		BranchId:  uuid.NewString(),
 		Ancestors: newAncestors,
 	}
 
@@ -120,7 +101,7 @@ func (m *executionManagerImpl) ForkHistoryBranch(
 		Info:        request.Info,
 	}
 
-	treeInfoBlob, err := m.serializer.HistoryTreeInfoToBlob(treeInfo, enumspb.ENCODING_TYPE_PROTO3)
+	treeInfoBlob, err := m.serializer.HistoryTreeInfoToBlob(treeInfo)
 	if err != nil {
 		return nil, err
 	}
@@ -153,7 +134,7 @@ func (m *executionManagerImpl) DeleteHistoryBranch(
 
 	branch, err := m.GetHistoryBranchUtil().ParseHistoryBranchInfo(request.BranchToken)
 	if err != nil {
-		return err
+		return serviceerror.NewInvalidArgument(fmt.Sprintf("unable to parse branch token: %v", err))
 	}
 
 	// We need to delete the target branch and its ancestors if they are not referenced by any other branches.
@@ -345,7 +326,7 @@ func (m *executionManagerImpl) serializeAppendHistoryNodesRequest(
 ) (*InternalAppendHistoryNodesRequest, error) {
 	branch, err := m.GetHistoryBranchUtil().ParseHistoryBranchInfo(request.BranchToken)
 	if err != nil {
-		return nil, err
+		return nil, serviceerror.NewInvalidArgument(fmt.Sprintf("unable to parse branch token: %v", err))
 	}
 
 	if len(request.Events) == 0 {
@@ -379,7 +360,7 @@ func (m *executionManagerImpl) serializeAppendHistoryNodesRequest(
 	}
 
 	// nodeID will be the first eventID
-	blob, err := m.serializer.SerializeEvents(request.Events, enumspb.ENCODING_TYPE_PROTO3)
+	blob, err := m.serializer.SerializeEvents(request.Events)
 	if err != nil {
 		return nil, err
 	}
@@ -412,7 +393,7 @@ func (m *executionManagerImpl) serializeAppendHistoryNodesRequest(
 			BranchInfo:  branch,
 			ForkTime:    timestamp.TimeNowPtrUtc(),
 			Info:        request.Info,
-		}, enumspb.ENCODING_TYPE_PROTO3)
+		})
 		if err != nil {
 			return nil, err
 		}
@@ -434,7 +415,7 @@ func (m *executionManagerImpl) serializeAppendRawHistoryNodesRequest(
 ) (*InternalAppendHistoryNodesRequest, error) {
 	branch, err := m.GetHistoryBranchUtil().ParseHistoryBranchInfo(request.BranchToken)
 	if err != nil {
-		return nil, err
+		return nil, serviceerror.NewInvalidArgument(fmt.Sprintf("unable to parse branch token: %v", err))
 	}
 
 	if len(request.History.Data) == 0 {
@@ -480,7 +461,7 @@ func (m *executionManagerImpl) serializeAppendRawHistoryNodesRequest(
 			BranchInfo:  branch,
 			ForkTime:    timestamp.TimeNowPtrUtc(),
 			Info:        request.Info,
-		}, enumspb.ENCODING_TYPE_PROTO3)
+		})
 		if err != nil {
 			return nil, err
 		}
@@ -654,7 +635,7 @@ func (m *executionManagerImpl) readRawHistoryBranch(
 		}
 
 		if token.CurrentRangeIndex == notStartedIndex {
-			return nil, nil, serviceerror.NewDataLoss("branchRange is corrupted")
+			return nil, nil, softassert.UnexpectedDataLoss(m.logger, "branchRange is corrupted", nil)
 		}
 	}
 
@@ -713,7 +694,7 @@ func (m *executionManagerImpl) readRawHistoryBranchReverse(
 		}
 
 		if token.CurrentRangeIndex == notStartedIndex {
-			return nil, nil, serviceerror.NewDataLoss("branchRange is corrupted")
+			return nil, nil, softassert.UnexpectedDataLoss(m.logger, "branchRange is corrupted", nil)
 		}
 	}
 
@@ -755,7 +736,7 @@ func (m *executionManagerImpl) readRawHistoryBranchAndFilter(
 
 	branch, err := m.GetHistoryBranchUtil().ParseHistoryBranchInfo(branchToken)
 	if err != nil {
-		return nil, nil, nil, nil, 0, err
+		return nil, nil, nil, nil, 0, serviceerror.NewInvalidArgument(fmt.Sprintf("unable to parse branch token: %v", err))
 	}
 	branchID := branch.BranchId
 	branchAncestors := branch.Ancestors
@@ -815,6 +796,9 @@ func (m *executionManagerImpl) readRawHistoryBranchAndFilter(
 		dataBlobs = make([]*commonpb.DataBlob, len(nodes))
 		for index, node := range nodes {
 			dataBlobs[index] = node.Events
+			if node.Events == nil {
+				return nil, nil, nil, nil, 0, softassert.UnexpectedDataLoss(m.logger, "no events in history node", nil)
+			}
 			dataSize += len(node.Events.Data)
 			transactionIDs = append(transactionIDs, node.TransactionID)
 			nodeIDs = append(nodeIDs, node.NodeID)
@@ -823,7 +807,6 @@ func (m *executionManagerImpl) readRawHistoryBranchAndFilter(
 		token.LastNodeID = lastNode.NodeID
 		token.LastTransactionID = lastNode.TransactionID
 	}
-
 	return dataBlobs, transactionIDs, nodeIDs, token, dataSize, nil
 }
 
@@ -844,7 +827,7 @@ func (m *executionManagerImpl) readRawHistoryBranchReverseAndFilter(
 
 	branch, err := m.GetHistoryBranchUtil().ParseHistoryBranchInfo(branchToken)
 	if err != nil {
-		return nil, nil, nil, 0, err
+		return nil, nil, nil, 0, serviceerror.NewInvalidArgumentf("unable to parse branch token: %v", err)
 	}
 	treeID := branch.TreeId
 	branchID := branch.BranchId
@@ -930,37 +913,42 @@ func (m *executionManagerImpl) readHistoryBranch(
 	historyEvents := make([]*historypb.HistoryEvent, 0, request.PageSize)
 	historyEventBatches := make([]*historypb.History, 0, request.PageSize)
 
+	var firstEvent, lastEvent *historypb.HistoryEvent
+	var eventCount int
+
+	dataLossTags := func(cause error) []tag.Tag {
+		return []tag.Tag{
+			tag.Cause(cause.Error()),
+			tag.ShardID(request.ShardID),
+			tag.WorkflowBranchToken(request.BranchToken),
+			tag.WorkflowFirstEventID(firstEvent.GetEventId()),
+			tag.FirstEventVersion(firstEvent.GetVersion()),
+			tag.WorkflowNextEventID(lastEvent.GetEventId()),
+			tag.LastEventVersion(lastEvent.GetVersion()),
+			tag.Counter(eventCount),
+			tag.TokenLastEventID(token.LastEventID),
+		}
+	}
+
 	for _, batch := range dataBlobs {
 		events, err := m.serializer.DeserializeEvents(batch)
 		if err != nil {
 			return nil, nil, nil, nil, dataSize, err
 		}
 		if len(events) == 0 {
-			m.logger.Error(errEmptyEvents)
-			return nil, nil, nil, nil, dataSize, serviceerror.NewDataLoss(errEmptyEvents)
+			return nil, nil, nil, nil, dataSize, softassert.UnexpectedDataLoss(m.logger, dataLossMsg, errEmptyEvents, dataLossTags(errEmptyEvents)...)
 		}
 
-		firstEvent := events[0]           // first
-		eventCount := len(events)         // length
-		lastEvent := events[eventCount-1] // last
+		firstEvent = events[0]
+		eventCount = len(events)
+		lastEvent = events[eventCount-1]
 
 		if firstEvent.GetVersion() != lastEvent.GetVersion() || firstEvent.GetEventId()+int64(eventCount-1) != lastEvent.GetEventId() {
 			// in a single batch, version should be the same, and ID should be contiguous
-			m.logger.Error("Potential data loss",
-				tag.Cause(errWrongVersion),
-				tag.FirstEventVersion(firstEvent.GetVersion()), tag.WorkflowFirstEventID(firstEvent.GetEventId()),
-				tag.LastEventVersion(lastEvent.GetVersion()), tag.WorkflowNextEventID(lastEvent.GetEventId()),
-				tag.Counter(eventCount))
-			return historyEvents, historyEventBatches, transactionIDs, nil, dataSize, serviceerror.NewDataLoss(errWrongVersion)
+			return historyEvents, historyEventBatches, transactionIDs, nil, dataSize, softassert.UnexpectedDataLoss(m.logger, dataLossMsg, errWrongVersion, dataLossTags(errWrongVersion)...)
 		}
 		if firstEvent.GetEventId() != token.LastEventID+1 {
-			m.logger.Error("Potential data loss",
-				tag.Cause(errNonContiguousEventID),
-				tag.WorkflowFirstEventID(firstEvent.GetEventId()),
-				tag.WorkflowNextEventID(lastEvent.GetEventId()),
-				tag.TokenLastEventID(token.LastEventID),
-				tag.Counter(eventCount))
-			return historyEvents, historyEventBatches, transactionIDs, nil, dataSize, serviceerror.NewDataLoss(errNonContiguousEventID)
+			return historyEvents, historyEventBatches, transactionIDs, nil, dataSize, softassert.UnexpectedDataLoss(m.logger, dataLossMsg, errNonContiguousEventID, dataLossTags(errNonContiguousEventID)...)
 		}
 
 		if byBatch {
@@ -990,35 +978,41 @@ func (m *executionManagerImpl) readHistoryBranchReverse(
 
 	historyEvents := make([]*historypb.HistoryEvent, 0, request.PageSize)
 
+	var firstEvent, lastEvent *historypb.HistoryEvent
+	var eventCount int
+
+	datalossTags := func(cause error) []tag.Tag {
+		return []tag.Tag{
+			tag.Cause(cause.Error()),
+			tag.WorkflowBranchToken(request.BranchToken),
+			tag.WorkflowFirstEventID(firstEvent.GetEventId()),
+			tag.FirstEventVersion(firstEvent.GetVersion()),
+			tag.WorkflowNextEventID(lastEvent.GetEventId()),
+			tag.LastEventVersion(lastEvent.GetVersion()),
+			tag.Counter(eventCount),
+			tag.TokenLastEventID(token.LastEventID),
+		}
+	}
+
 	for _, batch := range dataBlobs {
 		events, err := m.serializer.DeserializeEvents(batch)
 		if err != nil {
 			return nil, nil, nil, dataSize, err
 		}
 		if len(events) == 0 {
-			m.logger.Error(errEmptyEvents)
-			return nil, nil, nil, dataSize, serviceerror.NewDataLoss(errEmptyEvents)
+			return nil, nil, nil, dataSize, softassert.UnexpectedDataLoss(m.logger, dataLossMsg, errEmptyEvents, datalossTags(errEmptyEvents)...)
 		}
 
-		firstEvent := events[0]           // first
-		eventCount := len(events)         // length
-		lastEvent := events[eventCount-1] // last
+		firstEvent = events[0]
+		eventCount = len(events)
+		lastEvent = events[eventCount-1]
 
 		if firstEvent.GetVersion() != lastEvent.GetVersion() || firstEvent.GetEventId()+int64(eventCount-1) != lastEvent.GetEventId() {
 			// in a single batch, version should be the same, and ID should be contiguous
-			m.logger.Error(errWrongVersion,
-				tag.FirstEventVersion(firstEvent.GetVersion()), tag.WorkflowFirstEventID(firstEvent.GetEventId()),
-				tag.LastEventVersion(lastEvent.GetVersion()), tag.WorkflowNextEventID(lastEvent.GetEventId()),
-				tag.Counter(eventCount))
-			return historyEvents, transactionIDs, nil, dataSize, serviceerror.NewDataLoss(errWrongVersion)
+			return historyEvents, transactionIDs, nil, dataSize, softassert.UnexpectedDataLoss(m.logger, dataLossMsg, errWrongVersion, datalossTags(errWrongVersion)...)
 		}
 		if (token.LastEventID != common.EmptyEventID) && (lastEvent.GetEventId() != token.LastEventID-1) {
-			m.logger.Error(errNonContiguousEventID,
-				tag.WorkflowFirstEventID(firstEvent.GetEventId()),
-				tag.WorkflowNextEventID(lastEvent.GetEventId()),
-				tag.TokenLastEventID(token.LastEventID),
-				tag.Counter(eventCount))
-			return historyEvents, transactionIDs, nil, dataSize, serviceerror.NewDataLoss(errNonContiguousEventID)
+			return historyEvents, transactionIDs, nil, dataSize, softassert.UnexpectedDataLoss(m.logger, dataLossMsg, errNonContiguousEventID, datalossTags(errNonContiguousEventID)...)
 		}
 
 		events = m.reverseSlice(events)
@@ -1064,9 +1058,9 @@ func (m *executionManagerImpl) filterHistoryNodes(
 
 		switch {
 		case node.NodeID < lastNodeID:
-			return nil, serviceerror.NewDataLoss("corrupted data, nodeID cannot decrease")
+			return nil, softassert.UnexpectedDataLoss(m.logger, "corrupted data, nodeID cannot decrease", nil)
 		case node.NodeID == lastNodeID:
-			return nil, serviceerror.NewDataLoss("corrupted data, same nodeID must have smaller txnID")
+			return nil, softassert.UnexpectedDataLoss(m.logger, "corrupted data, same nodeID must have smaller txnID", nil)
 		default: // row.NodeID > lastNodeID:
 			// NOTE: when row.nodeID > lastNodeID, we expect the one with largest txnID comes first
 			lastTransactionID = node.TransactionID
@@ -1087,13 +1081,17 @@ func (m *executionManagerImpl) filterHistoryNodesReverse(
 		if lastNodeID == defaultLastNodeID {
 			lastNodeID = node.NodeID
 		}
-		if node.TransactionID != lastTransactionID {
+		if lastTransactionID == 0 {
+			m.logger.Warn("lastTransactionID is not set, this should not happen")
+		}
+		if lastTransactionID != 0 && // in the case where the lastTransactionID is not set, we will not compare
+			node.TransactionID != lastTransactionID {
 			continue
 		}
 
 		switch {
 		case node.NodeID > lastNodeID:
-			return nil, serviceerror.NewDataLoss("corrupted data, nodeID cannot decrease")
+			return nil, softassert.UnexpectedDataLoss(m.logger, "corrupted data, nodeID cannot decrease", nil)
 		default:
 			lastTransactionID = node.PrevTransactionID
 			lastNodeID = node.NodeID

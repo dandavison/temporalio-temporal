@@ -1,25 +1,3 @@
-// The MIT License
-//
-// Copyright (c) 2024 Temporal Technologies Inc.  All rights reserved.
-//
-// Permission is hereby granted, free of charge, to any person obtaining a copy
-// of this software and associated documentation files (the "Software"), to deal
-// in the Software without restriction, including without limitation the rights
-// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-// copies of the Software, and to permit persons to whom the Software is
-// furnished to do so, subject to the following conditions:
-//
-// The above copyright notice and this permission notice shall be included in
-// all copies or substantial portions of the Software.
-//
-// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
-// THE SOFTWARE.
-
 package tests
 
 import (
@@ -47,7 +25,7 @@ var (
 )
 
 type UpdateWorkflowSdkSuite struct {
-	testcore.ClientFunctionalSuite
+	testcore.FunctionalTestBase
 }
 
 func TestUpdateWorkflowSdkSuite(t *testing.T) {
@@ -56,10 +34,12 @@ func TestUpdateWorkflowSdkSuite(t *testing.T) {
 	suite.Run(t, s)
 }
 
-func (s *UpdateWorkflowSdkSuite) TestUpdateWorkflow_TerminateWorkflowAfterUpdateAdmitted() {
+func (s *UpdateWorkflowSdkSuite) TestTerminateWorkflowAfterUpdateAdmitted() {
 	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
 	defer cancel()
-	tv := testvars.New(s.T()).WithTaskQueue(s.TaskQueue()).WithNamespaceName(namespace.Name(s.Namespace()))
+	tv := testvars.New(s.T()).
+		WithTaskQueue(s.TaskQueue()).
+		WithNamespaceName(s.Namespace())
 
 	workflowFn := func(ctx workflow.Context) error {
 		s.NoError(workflow.SetUpdateHandler(ctx, tv.HandlerName(), func(ctx workflow.Context, arg string) error {
@@ -82,7 +62,7 @@ func (s *UpdateWorkflowSdkSuite) TestUpdateWorkflow_TerminateWorkflowAfterUpdate
 	var notFound *serviceerror.NotFound
 	s.ErrorAs(err, &notFound)
 
-	hist := s.GetHistory(s.Namespace(), tv.WorkflowExecution())
+	hist := s.GetHistory(s.Namespace().String(), tv.WorkflowExecution())
 	s.EqualHistoryEventsPrefix(`
   1 WorkflowExecutionStarted
   2 WorkflowTaskScheduled`, hist)
@@ -94,10 +74,12 @@ WorkflowExecutionTerminated // This can be EventID=3 if WF is terminated before 
 // TestUpdateWorkflow_TimeoutWorkflowAfterUpdateAccepted executes an update, and while WF awaits
 // server times out the WF after the update has been accepted but before it has been completed. It checks
 // that the client gets a NotFound error when attempting to fetch the update result (rather than a timeout).
-func (s *UpdateWorkflowSdkSuite) TestUpdateWorkflow_TimeoutWorkflowAfterUpdateAccepted() {
+func (s *UpdateWorkflowSdkSuite) TestTimeoutWorkflowAfterUpdateAccepted() {
 	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
 	defer cancel()
-	tv := testvars.New(s.T()).WithTaskQueue(s.TaskQueue()).WithNamespaceName(namespace.Name(s.Namespace()))
+	tv := testvars.New(s.T()).
+		WithTaskQueue(s.TaskQueue()).
+		WithNamespaceName(s.Namespace())
 
 	workflowFn := func(ctx workflow.Context) error {
 		s.NoError(workflow.SetUpdateHandler(ctx, tv.HandlerName(), func(ctx workflow.Context, arg string) error {
@@ -150,16 +132,18 @@ func (s *UpdateWorkflowSdkSuite) TestUpdateWorkflow_TimeoutWorkflowAfterUpdateAc
   6 WorkflowTaskStarted
   7 WorkflowTaskCompleted
   8 WorkflowExecutionUpdateAccepted
-  9 WorkflowExecutionTimedOut`, s.GetHistory(s.Namespace(), tv.WorkflowExecution()))
+  9 WorkflowExecutionTimedOut`, s.GetHistory(s.Namespace().String(), tv.WorkflowExecution()))
 }
 
 // TestUpdateWorkflow_TerminateWorkflowAfterUpdateAccepted executes an update, and while WF awaits
 // server terminates the WF after the update has been accepted but before it has been completed. It checks
 // that the client gets a NotFound error when attempting to fetch the update result (rather than a timeout).
-func (s *UpdateWorkflowSdkSuite) TestUpdateWorkflow_TerminateWorkflowAfterUpdateAccepted() {
+func (s *UpdateWorkflowSdkSuite) TestTerminateWorkflowAfterUpdateAccepted() {
 	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
 	defer cancel()
-	tv := testvars.New(s.T()).WithTaskQueue(s.TaskQueue()).WithNamespaceName(namespace.Name(s.Namespace()))
+	tv := testvars.New(s.T()).
+		WithTaskQueue(s.TaskQueue()).
+		WithNamespaceName(namespace.Name(s.Namespace().String()))
 
 	workflowFn := func(ctx workflow.Context) error {
 		s.NoError(workflow.SetUpdateHandler(ctx, tv.HandlerName(), func(ctx workflow.Context, arg string) error {
@@ -208,10 +192,10 @@ func (s *UpdateWorkflowSdkSuite) TestUpdateWorkflow_TerminateWorkflowAfterUpdate
 	6 WorkflowTaskStarted
 	7 WorkflowTaskCompleted
 	8 WorkflowExecutionUpdateAccepted
-	9 WorkflowExecutionTerminated`, s.GetHistory(s.Namespace(), tv.WorkflowExecution()))
+	9 WorkflowExecutionTerminated`, s.GetHistory(s.Namespace().String(), tv.WorkflowExecution()))
 }
 
-func (s *UpdateWorkflowSdkSuite) TestUpdateWorkflow_ContinueAsNewAfterUpdateAdmitted() {
+func (s *UpdateWorkflowSdkSuite) TestContinueAsNewAfterUpdateAdmitted() {
 	/*
 		Start Workflow and send Update to itself from LA to make sure it is admitted
 		by server while WFT is running. This WFT does CAN. For test simplicity,
@@ -221,7 +205,9 @@ func (s *UpdateWorkflowSdkSuite) TestUpdateWorkflow_ContinueAsNewAfterUpdateAdmi
 		starts 2nd run, Update is delivered to it, and processed by registered handler.
 	*/
 
-	tv := testvars.New(s.T()).WithTaskQueue(s.TaskQueue()).WithNamespaceName(namespace.Name(s.Namespace()))
+	tv := testvars.New(s.T()).
+		WithTaskQueue(s.TaskQueue()).
+		WithNamespaceName(namespace.Name(s.Namespace().String()))
 
 	rootCtx, cancel := context.WithTimeout(context.Background(), time.Minute)
 	defer cancel()
@@ -279,9 +265,9 @@ func (s *UpdateWorkflowSdkSuite) TestUpdateWorkflow_ContinueAsNewAfterUpdateAdmi
   3 WorkflowTaskStarted
   4 WorkflowTaskCompleted
   5 MarkerRecorded
-  6 WorkflowExecutionContinuedAsNew`, s.GetHistory(s.Namespace(), tv.WithRunID(firstRun.GetRunID()).WorkflowExecution()))
+  6 WorkflowExecutionContinuedAsNew`, s.GetHistory(s.Namespace().String(), tv.WithRunID(firstRun.GetRunID()).WorkflowExecution()))
 
-	hist2 := s.GetHistory(s.Namespace(), tv.WithRunID(secondRunID).WorkflowExecution())
+	hist2 := s.GetHistory(s.Namespace().String(), tv.WithRunID(secondRunID).WorkflowExecution())
 	s.EqualHistoryEventsPrefix(`
   1 WorkflowExecutionStarted
   2 WorkflowTaskScheduled
@@ -295,7 +281,7 @@ WorkflowExecutionUpdateAccepted
 WorkflowExecutionUpdateCompleted`, hist2)
 }
 
-func (s *UpdateWorkflowSdkSuite) TestUpdateWorkflow_TimeoutWithRetryAfterUpdateAdmitted() {
+func (s *UpdateWorkflowSdkSuite) TestTimeoutWithRetryAfterUpdateAdmitted() {
 	/*
 		Test ensures that admitted Updates are aborted with retriable error
 		when WF times out with retries and carried over to the new run.
@@ -306,7 +292,9 @@ func (s *UpdateWorkflowSdkSuite) TestUpdateWorkflow_TimeoutWithRetryAfterUpdateA
 		and catch up the second run.
 	*/
 
-	tv := testvars.New(s.T()).WithTaskQueue(s.TaskQueue()).WithNamespaceName(namespace.Name(s.Namespace()))
+	tv := testvars.New(s.T()).
+		WithTaskQueue(s.TaskQueue()).
+		WithNamespaceName(namespace.Name(s.Namespace().String()))
 
 	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
 	defer cancel()
@@ -359,14 +347,14 @@ func (s *UpdateWorkflowSdkSuite) TestUpdateWorkflow_TimeoutWithRetryAfterUpdateA
   2 WorkflowTaskScheduled
   3 WorkflowTaskStarted
   4 WorkflowTaskFailed
-  5 WorkflowExecutionTimedOut`, s.GetHistory(s.Namespace(), tv.WithRunID(firstRun.GetRunID()).WorkflowExecution()))
+  5 WorkflowExecutionTimedOut`, s.GetHistory(s.Namespace().String(), tv.WithRunID(firstRun.GetRunID()).WorkflowExecution()))
 	s.EqualHistoryEvents(`
   1 WorkflowExecutionStarted
   2 WorkflowTaskScheduled
   3 WorkflowTaskStarted
   4 WorkflowTaskCompleted
   5 WorkflowExecutionUpdateAccepted
-  6 WorkflowExecutionUpdateCompleted`, s.GetHistory(s.Namespace(), tv.WithRunID(secondRunID).WorkflowExecution()))
+  6 WorkflowExecutionUpdateCompleted`, s.GetHistory(s.Namespace().String(), tv.WithRunID(secondRunID).WorkflowExecution()))
 }
 
 func (s *UpdateWorkflowSdkSuite) startWorkflow(ctx context.Context, tv *testvars.TestVars, workflowFn any) sdkclient.WorkflowRun {

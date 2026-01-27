@@ -1,25 +1,3 @@
-// The MIT License
-//
-// Copyright (c) 2024 Temporal Technologies Inc.  All rights reserved.
-//
-// Permission is hereby granted, free of charge, to any person obtaining a copy
-// of this software and associated documentation files (the "Software"), to deal
-// in the Software without restriction, including without limitation the rights
-// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-// copies of the Software, and to permit persons to whom the Software is
-// furnished to do so, subject to the following conditions:
-//
-// The above copyright notice and this permission notice shall be included in
-// all copies or substantial portions of the Software.
-//
-// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
-// THE SOFTWARE.
-
 package sqlplugin
 
 import (
@@ -27,7 +5,6 @@ import (
 	"database/sql"
 	"database/sql/driver"
 	"errors"
-	"fmt"
 	"io"
 	"sync"
 	"sync/atomic"
@@ -47,9 +24,7 @@ const (
 	sessionRefreshMinInternal = 1 * time.Second
 )
 
-var (
-	DatabaseUnavailableError = serviceerror.NewUnavailable("no usable database connection found")
-)
+var DatabaseUnavailableError = serviceerror.NewUnavailable("no usable database connection found")
 
 type DatabaseHandle struct {
 	running      bool
@@ -61,6 +36,9 @@ type DatabaseHandle struct {
 	metrics     metrics.Handler
 	logger      log.Logger
 	timeSource  clock.TimeSource
+
+	reporter *DBMetricsReporter
+
 	// Ensures only one refresh call happens at a time
 	sync.Mutex
 }
@@ -69,6 +47,7 @@ type DatabaseHandle struct {
 type invalidConn struct{}
 
 func NewDatabaseHandle(
+	dbKind DbKind,
 	connect func() (*sqlx.DB, error),
 	needsRefresh func(error) bool,
 	logger log.Logger,
@@ -83,6 +62,8 @@ func NewDatabaseHandle(
 		logger:       logger,
 		timeSource:   timeSource,
 	}
+	handle.reporter = newDBMetricReporter(dbKind, handle)
+	handle.reporter.Start()
 	handle.reconnect(true)
 	return handle
 }
@@ -141,6 +122,9 @@ func (h *DatabaseHandle) Close() {
 
 	if h.running {
 		h.running = false
+		if h.reporter != nil {
+			h.reporter.Stop()
+		}
 		db := h.db.Swap(nil)
 		if db != nil {
 			db.Close()
@@ -179,7 +163,7 @@ func (h *DatabaseHandle) ConvertError(err error) error {
 		errors.Is(err, syscall.ECONNABORTED) ||
 		errors.Is(err, syscall.ECONNREFUSED) {
 		h.reconnect(true)
-		return serviceerror.NewUnavailable(fmt.Sprintf("database connection lost: %s", err.Error()))
+		return serviceerror.NewUnavailablef("database connection lost: %s", err.Error())
 	}
 	return err
 }

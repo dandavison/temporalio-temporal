@@ -1,27 +1,3 @@
-// The MIT License
-//
-// Copyright (c) 2020 Temporal Technologies Inc.  All rights reserved.
-//
-// Copyright (c) 2020 Uber Technologies, Inc.
-//
-// Permission is hereby granted, free of charge, to any person obtaining a copy
-// of this software and associated documentation files (the "Software"), to deal
-// in the Software without restriction, including without limitation the rights
-// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-// copies of the Software, and to permit persons to whom the Software is
-// furnished to do so, subject to the following conditions:
-//
-// The above copyright notice and this permission notice shall be included in
-// all copies or substantial portions of the Software.
-//
-// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
-// THE SOFTWARE.
-
 package frontend
 
 import (
@@ -33,7 +9,7 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/pborman/uuid"
+	"github.com/google/uuid"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"github.com/stretchr/testify/suite"
@@ -55,6 +31,8 @@ import (
 	"go.temporal.io/server/api/matchingservicemock/v1"
 	persistencespb "go.temporal.io/server/api/persistence/v1"
 	taskqueuespb "go.temporal.io/server/api/taskqueue/v1"
+	"go.temporal.io/server/chasm"
+	chasmworkflow "go.temporal.io/server/chasm/lib/workflow"
 	clientmocks "go.temporal.io/server/client"
 	historyclient "go.temporal.io/server/client/history"
 	"go.temporal.io/server/common/clock"
@@ -71,6 +49,7 @@ import (
 	"go.temporal.io/server/common/primitives/timestamp"
 	"go.temporal.io/server/common/resourcetest"
 	"go.temporal.io/server/common/searchattribute"
+	serviceerror2 "go.temporal.io/server/common/serviceerror"
 	test "go.temporal.io/server/common/testing"
 	"go.temporal.io/server/common/testing/historyrequire"
 	"go.temporal.io/server/common/testing/mocksdk"
@@ -168,14 +147,19 @@ func (s *adminHandlerSuite) SetupTest() {
 		VisibilityAllowList:                   dynamicconfig.GetBoolPropertyFnFilteredByNamespace(false),
 		SuppressErrorSetSystemSearchAttribute: dynamicconfig.GetBoolPropertyFnFilteredByNamespace(false),
 	}
+
+	chasmRegistry := chasm.NewRegistry(s.mockResource.GetLogger())
+	err := chasmRegistry.Register(chasmworkflow.NewLibrary())
+	s.NoError(err)
+
 	args := NewAdminHandlerArgs{
 		persistenceConfig,
 		cfg,
 		s.mockResource.GetNamespaceReplicationQueue(),
 		s.mockProducer,
-		s.mockResource.ESClient,
 		s.mockVisibilityMgr,
 		s.mockResource.GetLogger(),
+		s.mockResource.GetTaskManager(),
 		s.mockResource.GetTaskManager(),
 		s.mockResource.GetExecutionManager(),
 		s.mockResource.GetClusterMetadataManager(),
@@ -195,10 +179,11 @@ func (s *adminHandlerSuite) SetupTest() {
 		health.NewServer(),
 		serialization.NewSerializer(),
 		clock.NewRealTimeSource(),
+		chasmRegistry,
 		tasks.NewDefaultTaskCategoryRegistry(),
 		s.mockResource.GetMatchingClient(),
 	}
-	s.mockMetadata.EXPECT().GetCurrentClusterName().Return(uuid.New()).AnyTimes()
+	s.mockMetadata.EXPECT().GetCurrentClusterName().Return(uuid.NewString()).AnyTimes()
 	s.mockExecutionMgr.EXPECT().GetName().Return("mock-execution-manager").AnyTimes()
 	s.mockVisibilityMgr.EXPECT().GetStoreNames().Return([]string{"mock-vis-store"})
 	s.handler = NewAdminHandler(args)
@@ -242,7 +227,7 @@ func (s *adminHandlerSuite) Test_AddSearchAttributes() {
 
 	// Elasticsearch is not configured
 	s.mockVisibilityMgr.EXPECT().GetIndexName().Return("").AnyTimes()
-	s.mockResource.SearchAttributesProvider.EXPECT().GetSearchAttributes("", true).Return(searchattribute.TestNameTypeMap, nil).AnyTimes()
+	s.mockResource.SearchAttributesProvider.EXPECT().GetSearchAttributes("", true).Return(searchattribute.TestEsNameTypeMap(), nil).AnyTimes()
 	testCases3 := []test{
 		{
 			Name: "reserved key (empty index)",
@@ -273,7 +258,7 @@ func (s *adminHandlerSuite) Test_AddSearchAttributes() {
 
 	// Configure Elasticsearch: add advanced visibility store config with index name.
 	s.mockVisibilityMgr.EXPECT().GetIndexName().Return("random-index-name").AnyTimes()
-	s.mockResource.SearchAttributesProvider.EXPECT().GetSearchAttributes("random-index-name", true).Return(searchattribute.TestNameTypeMap, nil).AnyTimes()
+	s.mockResource.SearchAttributesProvider.EXPECT().GetSearchAttributes("random-index-name", true).Return(searchattribute.TestEsNameTypeMap(), nil).AnyTimes()
 	testCases2 := []test{
 		{
 			Name: "reserved key (ES configured)",
@@ -361,8 +346,7 @@ func (s *adminHandlerSuite) Test_GetSearchAttributes_EmptyIndexName() {
 	s.mockVisibilityMgr.EXPECT().GetIndexName().Return("").AnyTimes()
 	mockSdkClient.EXPECT().DescribeWorkflowExecution(gomock.Any(), "temporal-sys-add-search-attributes-workflow", "").Return(
 		&workflowservice.DescribeWorkflowExecutionResponse{}, nil)
-	s.mockResource.ESClient.EXPECT().GetMapping(gomock.Any(), "").Return(map[string]string{"col": "type"}, nil)
-	s.mockResource.SearchAttributesProvider.EXPECT().GetSearchAttributes("", true).Return(searchattribute.TestNameTypeMap, nil).AnyTimes()
+	s.mockResource.SearchAttributesProvider.EXPECT().GetSearchAttributes("", true).Return(searchattribute.TestEsNameTypeMap(), nil).AnyTimes()
 
 	resp, err = handler.GetSearchAttributes(ctx, &adminservice.GetSearchAttributesRequest{Namespace: s.namespace.String()})
 	s.NoError(err)
@@ -382,24 +366,21 @@ func (s *adminHandlerSuite) Test_GetSearchAttributes_NonEmptyIndexName() {
 
 	mockSdkClient.EXPECT().DescribeWorkflowExecution(gomock.Any(), "temporal-sys-add-search-attributes-workflow", "").Return(
 		&workflowservice.DescribeWorkflowExecutionResponse{}, nil)
-	s.mockResource.ESClient.EXPECT().GetMapping(gomock.Any(), "random-index-name").Return(map[string]string{"col": "type"}, nil)
-	s.mockResource.SearchAttributesProvider.EXPECT().GetSearchAttributes("random-index-name", true).Return(searchattribute.TestNameTypeMap, nil).AnyTimes()
+	s.mockResource.SearchAttributesProvider.EXPECT().GetSearchAttributes("random-index-name", true).Return(searchattribute.TestEsNameTypeMap(), nil).AnyTimes()
 	resp, err := handler.GetSearchAttributes(ctx, &adminservice.GetSearchAttributesRequest{})
 	s.NoError(err)
 	s.NotNil(resp)
 
 	mockSdkClient.EXPECT().DescribeWorkflowExecution(gomock.Any(), "temporal-sys-add-search-attributes-workflow", "").Return(
 		&workflowservice.DescribeWorkflowExecutionResponse{}, nil)
-	s.mockResource.ESClient.EXPECT().GetMapping(gomock.Any(), "another-index-name").Return(map[string]string{"col": "type"}, nil)
-	s.mockResource.SearchAttributesProvider.EXPECT().GetSearchAttributes("another-index-name", true).Return(searchattribute.TestNameTypeMap, nil).AnyTimes()
+	s.mockResource.SearchAttributesProvider.EXPECT().GetSearchAttributes("another-index-name", true).Return(searchattribute.TestEsNameTypeMap(), nil).AnyTimes()
 	resp, err = handler.GetSearchAttributes(ctx, &adminservice.GetSearchAttributesRequest{IndexName: "another-index-name"})
 	s.NoError(err)
 	s.NotNil(resp)
 
 	mockSdkClient.EXPECT().DescribeWorkflowExecution(gomock.Any(), "temporal-sys-add-search-attributes-workflow", "").Return(
 		nil, errors.New("random error"))
-	s.mockResource.ESClient.EXPECT().GetMapping(gomock.Any(), "random-index-name").Return(map[string]string{"col": "type"}, nil)
-	s.mockResource.SearchAttributesProvider.EXPECT().GetSearchAttributes("random-index-name", true).Return(searchattribute.TestNameTypeMap, nil).AnyTimes()
+	s.mockResource.SearchAttributesProvider.EXPECT().GetSearchAttributes("random-index-name", true).Return(searchattribute.TestEsNameTypeMap(), nil).AnyTimes()
 	resp, err = handler.GetSearchAttributes(ctx, &adminservice.GetSearchAttributesRequest{Namespace: s.namespace.String()})
 	s.Error(err)
 	s.Nil(resp)
@@ -438,7 +419,7 @@ func (s *adminHandlerSuite) Test_RemoveSearchAttributes_EmptyIndexName() {
 	// Elasticsearch is not configured
 	s.mockVisibilityMgr.EXPECT().HasStoreName(elasticsearch.PersistenceName).Return(true).AnyTimes()
 	s.mockVisibilityMgr.EXPECT().GetIndexName().Return("").AnyTimes()
-	s.mockResource.SearchAttributesProvider.EXPECT().GetSearchAttributes("", true).Return(searchattribute.TestNameTypeMap, nil).AnyTimes()
+	s.mockResource.SearchAttributesProvider.EXPECT().GetSearchAttributes("", true).Return(searchattribute.TestNameTypeMap(), nil).AnyTimes()
 	testCases2 := []test{
 		{
 			Name: "reserved search attribute (empty index)",
@@ -501,7 +482,7 @@ func (s *adminHandlerSuite) Test_RemoveSearchAttributes_NonEmptyIndexName() {
 	// Configure Elasticsearch: add advanced visibility store config with index name.
 	s.mockVisibilityMgr.EXPECT().HasStoreName(elasticsearch.PersistenceName).Return(true).AnyTimes()
 	s.mockVisibilityMgr.EXPECT().GetIndexName().Return("random-index-name").AnyTimes()
-	s.mockResource.SearchAttributesProvider.EXPECT().GetSearchAttributes("random-index-name", true).Return(searchattribute.TestNameTypeMap, nil).AnyTimes()
+	s.mockResource.SearchAttributesProvider.EXPECT().GetSearchAttributes("random-index-name", true).Return(searchattribute.TestEsNameTypeMap(), nil).AnyTimes()
 	for _, testCase := range testCases {
 		s.T().Run(testCase.Name, func(t *testing.T) {
 			resp, err := handler.RemoveSearchAttributes(ctx, testCase.Request)
@@ -545,10 +526,10 @@ func (s *adminHandlerSuite) Test_RemoveRemoteCluster_Error() {
 }
 
 func (s *adminHandlerSuite) Test_AddOrUpdateRemoteCluster_RecordFound_Success() {
-	var rpcAddress = uuid.New()
-	var FrontendHttpAddress = uuid.New()
-	var clusterName = uuid.New()
-	var clusterId = uuid.New()
+	var rpcAddress = uuid.NewString()
+	var frontendHTTPAddress = uuid.NewString()
+	var clusterName = uuid.NewString()
+	var clusterID = uuid.NewString()
 	var recordVersion int64 = 5
 
 	s.mockMetadata.EXPECT().GetFailoverVersionIncrement().Return(int64(0))
@@ -558,10 +539,10 @@ func (s *adminHandlerSuite) Test_AddOrUpdateRemoteCluster_RecordFound_Success() 
 	)
 	s.mockAdminClient.EXPECT().DescribeCluster(gomock.Any(), &adminservice.DescribeClusterRequest{}).Return(
 		&adminservice.DescribeClusterResponse{
-			ClusterId:                clusterId,
+			ClusterId:                clusterID,
 			ClusterName:              clusterName,
 			HistoryShardCount:        4,
-			HttpAddress:              FrontendHttpAddress,
+			HttpAddress:              frontendHTTPAddress,
 			FailoverVersionIncrement: 0,
 			InitialFailoverVersion:   0,
 			IsGlobalNamespaceEnabled: true,
@@ -574,9 +555,9 @@ func (s *adminHandlerSuite) Test_AddOrUpdateRemoteCluster_RecordFound_Success() 
 		ClusterMetadata: &persistencespb.ClusterMetadata{
 			ClusterName:              clusterName,
 			HistoryShardCount:        4,
-			ClusterId:                clusterId,
+			ClusterId:                clusterID,
 			ClusterAddress:           rpcAddress,
-			HttpAddress:              FrontendHttpAddress,
+			HttpAddress:              frontendHTTPAddress,
 			FailoverVersionIncrement: 0,
 			InitialFailoverVersion:   0,
 			IsGlobalNamespaceEnabled: true,
@@ -590,10 +571,10 @@ func (s *adminHandlerSuite) Test_AddOrUpdateRemoteCluster_RecordFound_Success() 
 }
 
 func (s *adminHandlerSuite) Test_AddOrUpdateRemoteCluster_RecordNotFound_Success() {
-	var rpcAddress = uuid.New()
-	var FrontendHttpAddress = uuid.New()
-	var clusterName = uuid.New()
-	var clusterId = uuid.New()
+	var rpcAddress = uuid.NewString()
+	var frontendHTTPAddress = uuid.NewString()
+	var clusterName = uuid.NewString()
+	var clusterID = uuid.NewString()
 
 	s.mockMetadata.EXPECT().GetFailoverVersionIncrement().Return(int64(0))
 	s.mockMetadata.EXPECT().GetAllClusterInfo().Return(make(map[string]cluster.ClusterInformation))
@@ -602,11 +583,11 @@ func (s *adminHandlerSuite) Test_AddOrUpdateRemoteCluster_RecordNotFound_Success
 	)
 	s.mockAdminClient.EXPECT().DescribeCluster(gomock.Any(), &adminservice.DescribeClusterRequest{}).Return(
 		&adminservice.DescribeClusterResponse{
-			ClusterId:                clusterId,
+			ClusterId:                clusterID,
 			ClusterName:              clusterName,
 			HistoryShardCount:        4,
 			FailoverVersionIncrement: 0,
-			HttpAddress:              FrontendHttpAddress,
+			HttpAddress:              frontendHTTPAddress,
 			InitialFailoverVersion:   0,
 			IsGlobalNamespaceEnabled: true,
 		}, nil)
@@ -618,9 +599,9 @@ func (s *adminHandlerSuite) Test_AddOrUpdateRemoteCluster_RecordNotFound_Success
 		ClusterMetadata: &persistencespb.ClusterMetadata{
 			ClusterName:              clusterName,
 			HistoryShardCount:        4,
-			ClusterId:                clusterId,
+			ClusterId:                clusterID,
 			ClusterAddress:           rpcAddress,
-			HttpAddress:              FrontendHttpAddress,
+			HttpAddress:              frontendHTTPAddress,
 			FailoverVersionIncrement: 0,
 			InitialFailoverVersion:   0,
 			IsGlobalNamespaceEnabled: true,
@@ -634,15 +615,15 @@ func (s *adminHandlerSuite) Test_AddOrUpdateRemoteCluster_RecordNotFound_Success
 }
 
 func (s *adminHandlerSuite) Test_AddOrUpdateRemoteCluster_ValidationError_ClusterNameConflict() {
-	var rpcAddress = uuid.New()
-	var clusterId = uuid.New()
+	var rpcAddress = uuid.NewString()
+	var clusterID = uuid.NewString()
 
 	s.mockClientFactory.EXPECT().NewRemoteAdminClientWithTimeout(rpcAddress, gomock.Any(), gomock.Any()).Return(
 		s.mockAdminClient,
 	)
 	s.mockAdminClient.EXPECT().DescribeCluster(gomock.Any(), &adminservice.DescribeClusterRequest{}).Return(
 		&adminservice.DescribeClusterResponse{
-			ClusterId:                clusterId,
+			ClusterId:                clusterID,
 			ClusterName:              s.mockMetadata.GetCurrentClusterName(),
 			HistoryShardCount:        0,
 			FailoverVersionIncrement: 0,
@@ -655,9 +636,9 @@ func (s *adminHandlerSuite) Test_AddOrUpdateRemoteCluster_ValidationError_Cluste
 }
 
 func (s *adminHandlerSuite) Test_AddOrUpdateRemoteCluster_ValidationError_FailoverVersionIncrementMismatch() {
-	var rpcAddress = uuid.New()
-	var clusterName = uuid.New()
-	var clusterId = uuid.New()
+	var rpcAddress = uuid.NewString()
+	var clusterName = uuid.NewString()
+	var clusterID = uuid.NewString()
 
 	s.mockMetadata.EXPECT().GetFailoverVersionIncrement().Return(int64(1))
 	s.mockClientFactory.EXPECT().NewRemoteAdminClientWithTimeout(rpcAddress, gomock.Any(), gomock.Any()).Return(
@@ -665,7 +646,7 @@ func (s *adminHandlerSuite) Test_AddOrUpdateRemoteCluster_ValidationError_Failov
 	)
 	s.mockAdminClient.EXPECT().DescribeCluster(gomock.Any(), &adminservice.DescribeClusterRequest{}).Return(
 		&adminservice.DescribeClusterResponse{
-			ClusterId:                clusterId,
+			ClusterId:                clusterID,
 			ClusterName:              clusterName,
 			HistoryShardCount:        0,
 			FailoverVersionIncrement: 0,
@@ -678,9 +659,9 @@ func (s *adminHandlerSuite) Test_AddOrUpdateRemoteCluster_ValidationError_Failov
 }
 
 func (s *adminHandlerSuite) Test_AddOrUpdateRemoteCluster_ValidationError_ShardCount_Invalid() {
-	var rpcAddress = uuid.New()
-	var clusterName = uuid.New()
-	var clusterId = uuid.New()
+	var rpcAddress = uuid.NewString()
+	var clusterName = uuid.NewString()
+	var clusterID = uuid.NewString()
 
 	s.mockMetadata.EXPECT().GetFailoverVersionIncrement().Return(int64(0))
 	s.mockClientFactory.EXPECT().NewRemoteAdminClientWithTimeout(rpcAddress, gomock.Any(), gomock.Any()).Return(
@@ -688,7 +669,7 @@ func (s *adminHandlerSuite) Test_AddOrUpdateRemoteCluster_ValidationError_ShardC
 	)
 	s.mockAdminClient.EXPECT().DescribeCluster(gomock.Any(), &adminservice.DescribeClusterRequest{}).Return(
 		&adminservice.DescribeClusterResponse{
-			ClusterId:                clusterId,
+			ClusterId:                clusterID,
 			ClusterName:              clusterName,
 			HistoryShardCount:        5,
 			FailoverVersionIncrement: 0,
@@ -701,9 +682,9 @@ func (s *adminHandlerSuite) Test_AddOrUpdateRemoteCluster_ValidationError_ShardC
 }
 
 func (s *adminHandlerSuite) Test_AddOrUpdateRemoteCluster_ShardCount_Multiple() {
-	var rpcAddress = uuid.New()
-	var clusterName = uuid.New()
-	var clusterId = uuid.New()
+	var rpcAddress = uuid.NewString()
+	var clusterName = uuid.NewString()
+	var clusterID = uuid.NewString()
 	var recordVersion int64 = 5
 
 	s.mockMetadata.EXPECT().GetFailoverVersionIncrement().Return(int64(0))
@@ -713,7 +694,7 @@ func (s *adminHandlerSuite) Test_AddOrUpdateRemoteCluster_ShardCount_Multiple() 
 	)
 	s.mockAdminClient.EXPECT().DescribeCluster(gomock.Any(), &adminservice.DescribeClusterRequest{}).Return(
 		&adminservice.DescribeClusterResponse{
-			ClusterId:                clusterId,
+			ClusterId:                clusterID,
 			ClusterName:              clusterName,
 			HistoryShardCount:        16,
 			FailoverVersionIncrement: 0,
@@ -728,7 +709,7 @@ func (s *adminHandlerSuite) Test_AddOrUpdateRemoteCluster_ShardCount_Multiple() 
 		ClusterMetadata: &persistencespb.ClusterMetadata{
 			ClusterName:              clusterName,
 			HistoryShardCount:        16,
-			ClusterId:                clusterId,
+			ClusterId:                clusterID,
 			ClusterAddress:           rpcAddress,
 			FailoverVersionIncrement: 0,
 			InitialFailoverVersion:   0,
@@ -743,9 +724,9 @@ func (s *adminHandlerSuite) Test_AddOrUpdateRemoteCluster_ShardCount_Multiple() 
 }
 
 func (s *adminHandlerSuite) Test_AddOrUpdateRemoteCluster_ValidationError_GlobalNamespaceDisabled() {
-	var rpcAddress = uuid.New()
-	var clusterName = uuid.New()
-	var clusterId = uuid.New()
+	var rpcAddress = uuid.NewString()
+	var clusterName = uuid.NewString()
+	var clusterID = uuid.NewString()
 
 	s.mockMetadata.EXPECT().GetFailoverVersionIncrement().Return(int64(0))
 	s.mockClientFactory.EXPECT().NewRemoteAdminClientWithTimeout(rpcAddress, gomock.Any(), gomock.Any()).Return(
@@ -753,7 +734,7 @@ func (s *adminHandlerSuite) Test_AddOrUpdateRemoteCluster_ValidationError_Global
 	)
 	s.mockAdminClient.EXPECT().DescribeCluster(gomock.Any(), &adminservice.DescribeClusterRequest{}).Return(
 		&adminservice.DescribeClusterResponse{
-			ClusterId:                clusterId,
+			ClusterId:                clusterID,
 			ClusterName:              clusterName,
 			HistoryShardCount:        4,
 			FailoverVersionIncrement: 0,
@@ -766,20 +747,20 @@ func (s *adminHandlerSuite) Test_AddOrUpdateRemoteCluster_ValidationError_Global
 }
 
 func (s *adminHandlerSuite) Test_AddOrUpdateRemoteCluster_ValidationError_InitialFailoverVersionConflict() {
-	var rpcAddress = uuid.New()
-	var clusterName = uuid.New()
-	var clusterId = uuid.New()
+	var rpcAddress = uuid.NewString()
+	var clusterName = uuid.NewString()
+	var clusterID = uuid.NewString()
 
 	s.mockMetadata.EXPECT().GetFailoverVersionIncrement().Return(int64(0))
 	s.mockMetadata.EXPECT().GetAllClusterInfo().Return(map[string]cluster.ClusterInformation{
-		uuid.New(): {InitialFailoverVersion: 0},
+		uuid.NewString(): {InitialFailoverVersion: 0},
 	})
 	s.mockClientFactory.EXPECT().NewRemoteAdminClientWithTimeout(rpcAddress, gomock.Any(), gomock.Any()).Return(
 		s.mockAdminClient,
 	)
 	s.mockAdminClient.EXPECT().DescribeCluster(gomock.Any(), &adminservice.DescribeClusterRequest{}).Return(
 		&adminservice.DescribeClusterResponse{
-			ClusterId:                clusterId,
+			ClusterId:                clusterID,
 			ClusterName:              clusterName,
 			HistoryShardCount:        4,
 			FailoverVersionIncrement: 0,
@@ -792,7 +773,7 @@ func (s *adminHandlerSuite) Test_AddOrUpdateRemoteCluster_ValidationError_Initia
 }
 
 func (s *adminHandlerSuite) Test_AddOrUpdateRemoteCluster_DescribeCluster_Error() {
-	var rpcAddress = uuid.New()
+	var rpcAddress = uuid.NewString()
 
 	s.mockClientFactory.EXPECT().NewRemoteAdminClientWithTimeout(rpcAddress, gomock.Any(), gomock.Any()).Return(
 		s.mockAdminClient,
@@ -806,9 +787,9 @@ func (s *adminHandlerSuite) Test_AddOrUpdateRemoteCluster_DescribeCluster_Error(
 }
 
 func (s *adminHandlerSuite) Test_AddOrUpdateRemoteCluster_GetClusterMetadata_Error() {
-	var rpcAddress = uuid.New()
-	var clusterName = uuid.New()
-	var clusterId = uuid.New()
+	var rpcAddress = uuid.NewString()
+	var clusterName = uuid.NewString()
+	var clusterID = uuid.NewString()
 
 	s.mockMetadata.EXPECT().GetFailoverVersionIncrement().Return(int64(0))
 	s.mockMetadata.EXPECT().GetAllClusterInfo().Return(make(map[string]cluster.ClusterInformation))
@@ -817,7 +798,7 @@ func (s *adminHandlerSuite) Test_AddOrUpdateRemoteCluster_GetClusterMetadata_Err
 	)
 	s.mockAdminClient.EXPECT().DescribeCluster(gomock.Any(), &adminservice.DescribeClusterRequest{}).Return(
 		&adminservice.DescribeClusterResponse{
-			ClusterId:                clusterId,
+			ClusterId:                clusterID,
 			ClusterName:              clusterName,
 			HistoryShardCount:        4,
 			FailoverVersionIncrement: 0,
@@ -833,10 +814,10 @@ func (s *adminHandlerSuite) Test_AddOrUpdateRemoteCluster_GetClusterMetadata_Err
 }
 
 func (s *adminHandlerSuite) Test_AddOrUpdateRemoteCluster_SaveClusterMetadata_Error() {
-	var rpcAddress = uuid.New()
-	var FrontendHttpAddress = uuid.New()
-	var clusterName = uuid.New()
-	var clusterId = uuid.New()
+	var rpcAddress = uuid.NewString()
+	var frontendHTTPAddress = uuid.NewString()
+	var clusterName = uuid.NewString()
+	var clusterID = uuid.NewString()
 
 	s.mockMetadata.EXPECT().GetFailoverVersionIncrement().Return(int64(0))
 	s.mockMetadata.EXPECT().GetAllClusterInfo().Return(make(map[string]cluster.ClusterInformation))
@@ -845,10 +826,10 @@ func (s *adminHandlerSuite) Test_AddOrUpdateRemoteCluster_SaveClusterMetadata_Er
 	)
 	s.mockAdminClient.EXPECT().DescribeCluster(gomock.Any(), &adminservice.DescribeClusterRequest{}).Return(
 		&adminservice.DescribeClusterResponse{
-			ClusterId:                clusterId,
+			ClusterId:                clusterID,
 			ClusterName:              clusterName,
 			HistoryShardCount:        4,
-			HttpAddress:              FrontendHttpAddress,
+			HttpAddress:              frontendHTTPAddress,
 			FailoverVersionIncrement: 0,
 			InitialFailoverVersion:   0,
 			IsGlobalNamespaceEnabled: true,
@@ -861,9 +842,9 @@ func (s *adminHandlerSuite) Test_AddOrUpdateRemoteCluster_SaveClusterMetadata_Er
 		ClusterMetadata: &persistencespb.ClusterMetadata{
 			ClusterName:              clusterName,
 			HistoryShardCount:        4,
-			ClusterId:                clusterId,
+			ClusterId:                clusterID,
 			ClusterAddress:           rpcAddress,
-			HttpAddress:              FrontendHttpAddress,
+			HttpAddress:              frontendHTTPAddress,
 			FailoverVersionIncrement: 0,
 			InitialFailoverVersion:   0,
 			IsGlobalNamespaceEnabled: true,
@@ -877,10 +858,10 @@ func (s *adminHandlerSuite) Test_AddOrUpdateRemoteCluster_SaveClusterMetadata_Er
 }
 
 func (s *adminHandlerSuite) Test_AddOrUpdateRemoteCluster_SaveClusterMetadata_NotApplied_Error() {
-	var rpcAddress = uuid.New()
-	var FrontendHttpAddress = uuid.New()
-	var clusterName = uuid.New()
-	var clusterId = uuid.New()
+	var rpcAddress = uuid.NewString()
+	var frontendHTTPAddress = uuid.NewString()
+	var clusterName = uuid.NewString()
+	var clusterID = uuid.NewString()
 
 	s.mockMetadata.EXPECT().GetFailoverVersionIncrement().Return(int64(0))
 	s.mockMetadata.EXPECT().GetAllClusterInfo().Return(make(map[string]cluster.ClusterInformation))
@@ -889,10 +870,10 @@ func (s *adminHandlerSuite) Test_AddOrUpdateRemoteCluster_SaveClusterMetadata_No
 	)
 	s.mockAdminClient.EXPECT().DescribeCluster(gomock.Any(), &adminservice.DescribeClusterRequest{}).Return(
 		&adminservice.DescribeClusterResponse{
-			ClusterId:                clusterId,
+			ClusterId:                clusterID,
 			ClusterName:              clusterName,
 			HistoryShardCount:        4,
-			HttpAddress:              FrontendHttpAddress,
+			HttpAddress:              frontendHTTPAddress,
 			FailoverVersionIncrement: 0,
 			InitialFailoverVersion:   0,
 			IsGlobalNamespaceEnabled: true,
@@ -905,9 +886,9 @@ func (s *adminHandlerSuite) Test_AddOrUpdateRemoteCluster_SaveClusterMetadata_No
 		ClusterMetadata: &persistencespb.ClusterMetadata{
 			ClusterName:              clusterName,
 			HistoryShardCount:        4,
-			ClusterId:                clusterId,
+			ClusterId:                clusterID,
 			ClusterAddress:           rpcAddress,
-			HttpAddress:              FrontendHttpAddress,
+			HttpAddress:              frontendHTTPAddress,
 			FailoverVersionIncrement: 0,
 			InitialFailoverVersion:   0,
 			IsGlobalNamespaceEnabled: true,
@@ -922,7 +903,7 @@ func (s *adminHandlerSuite) Test_AddOrUpdateRemoteCluster_SaveClusterMetadata_No
 }
 
 func (s *adminHandlerSuite) Test_DescribeCluster_CurrentCluster_Success() {
-	var clusterId = uuid.New()
+	var clusterID = uuid.NewString()
 	clusterName := s.mockMetadata.GetCurrentClusterName()
 	s.mockResource.HostInfoProvider.EXPECT().HostInfo().Return(membership.NewHostInfoFromAddress("test"))
 	s.mockResource.MembershipMonitor.EXPECT().GetReachableMembers().Return(nil, nil)
@@ -940,7 +921,7 @@ func (s *adminHandlerSuite) Test_DescribeCluster_CurrentCluster_Success() {
 			ClusterMetadata: &persistencespb.ClusterMetadata{
 				ClusterName:              clusterName,
 				HistoryShardCount:        0,
-				ClusterId:                clusterId,
+				ClusterId:                clusterID,
 				FailoverVersionIncrement: 0,
 				InitialFailoverVersion:   0,
 				IsGlobalNamespaceEnabled: true,
@@ -951,7 +932,7 @@ func (s *adminHandlerSuite) Test_DescribeCluster_CurrentCluster_Success() {
 	resp, err := s.handler.DescribeCluster(context.Background(), &adminservice.DescribeClusterRequest{})
 	s.NoError(err)
 	s.Equal(resp.GetClusterName(), clusterName)
-	s.Equal(resp.GetClusterId(), clusterId)
+	s.Equal(resp.GetClusterId(), clusterID)
 	s.Equal(resp.GetHistoryShardCount(), int32(0))
 	s.Equal(resp.GetFailoverVersionIncrement(), int64(0))
 	s.Equal(resp.GetInitialFailoverVersion(), int64(0))
@@ -959,8 +940,8 @@ func (s *adminHandlerSuite) Test_DescribeCluster_CurrentCluster_Success() {
 }
 
 func (s *adminHandlerSuite) Test_DescribeCluster_NonCurrentCluster_Success() {
-	var clusterName = uuid.New()
-	var clusterId = uuid.New()
+	var clusterName = uuid.NewString()
+	var clusterID = uuid.NewString()
 
 	s.mockResource.HostInfoProvider.EXPECT().HostInfo().Return(membership.NewHostInfoFromAddress("test"))
 	s.mockResource.MembershipMonitor.EXPECT().GetReachableMembers().Return(nil, nil)
@@ -978,7 +959,7 @@ func (s *adminHandlerSuite) Test_DescribeCluster_NonCurrentCluster_Success() {
 			ClusterMetadata: &persistencespb.ClusterMetadata{
 				ClusterName:              clusterName,
 				HistoryShardCount:        0,
-				ClusterId:                clusterId,
+				ClusterId:                clusterID,
 				FailoverVersionIncrement: 0,
 				InitialFailoverVersion:   0,
 				IsGlobalNamespaceEnabled: true,
@@ -989,7 +970,7 @@ func (s *adminHandlerSuite) Test_DescribeCluster_NonCurrentCluster_Success() {
 	resp, err := s.handler.DescribeCluster(context.Background(), &adminservice.DescribeClusterRequest{ClusterName: clusterName})
 	s.NoError(err)
 	s.Equal(resp.GetClusterName(), clusterName)
-	s.Equal(resp.GetClusterId(), clusterId)
+	s.Equal(resp.GetClusterId(), clusterID)
 	s.Equal(resp.GetHistoryShardCount(), int32(0))
 	s.Equal(resp.GetFailoverVersionIncrement(), int64(0))
 	s.Equal(resp.GetInitialFailoverVersion(), int64(0))
@@ -1056,7 +1037,7 @@ func (s *adminHandlerSuite) TestStreamWorkflowReplicationMessages_ClientToServer
 
 		defer waitGroupEnd.Done()
 		<-channel
-		return nil, serviceerror.NewUnavailable("random error")
+		return nil, serviceerror.NewInternal("random error")
 	})
 	_ = s.handler.StreamWorkflowReplicationMessages(clientCluster)
 	close(channel)
@@ -1097,12 +1078,14 @@ func (s *adminHandlerSuite) TestStreamWorkflowReplicationMessages_ServerToClient
 		<-channel
 		return nil, serviceerror.NewUnavailable("random error")
 	})
+
+	s.mockHistoryClient.EXPECT().DescribeHistoryHost(gomock.Any(), &historyservice.DescribeHistoryHostRequest{ShardId: serverClusterShardID.ShardID}).Return(&historyservice.DescribeHistoryHostResponse{}, nil)
 	serverCluster.EXPECT().Recv().DoAndReturn(func() (*historyservice.StreamWorkflowReplicationMessagesResponse, error) {
 		waitGroupStart.Done()
 		waitGroupStart.Wait()
 
 		defer waitGroupEnd.Done()
-		return nil, serviceerror.NewUnavailable("random error")
+		return nil, serviceerror2.NewShardOwnershipLost("host1", "host2")
 	})
 	_ = s.handler.StreamWorkflowReplicationMessages(clientCluster)
 	close(channel)
@@ -1805,15 +1788,15 @@ func (s *adminHandlerSuite) TestDescribeTaskQueuePartition() {
 			TasksAddRate:            0,
 			TasksDispatchRate:       0,
 		},
-		InternalTaskQueueStatus: &taskqueuespb.InternalTaskQueueStatus{
+		InternalTaskQueueStatus: []*taskqueuespb.InternalTaskQueueStatus{&taskqueuespb.InternalTaskQueueStatus{
 			ReadLevel: 0,
 			AckLevel:  0,
 			TaskIdBlock: &taskqueuepb.TaskIdBlock{
 				StartId: 0,
 				EndId:   0,
 			},
-			ReadBufferLength: 0,
-		},
+			LoadedTasks: 0,
+		}},
 	}
 	versionedPhysicalTaskQueueInfo := &taskqueuespb.PhysicalTaskQueueInfo{
 		Pollers: []*taskqueuepb.PollerInfo(nil),
@@ -1823,15 +1806,15 @@ func (s *adminHandlerSuite) TestDescribeTaskQueuePartition() {
 			TasksAddRate:            10.21,
 			TasksDispatchRate:       10.50,
 		},
-		InternalTaskQueueStatus: &taskqueuespb.InternalTaskQueueStatus{
+		InternalTaskQueueStatus: []*taskqueuespb.InternalTaskQueueStatus{&taskqueuespb.InternalTaskQueueStatus{
 			ReadLevel: 1,
 			AckLevel:  1,
 			TaskIdBlock: &taskqueuepb.TaskIdBlock{
 				StartId: 1,
 				EndId:   1000,
 			},
-			ReadBufferLength: 10,
-		},
+			LoadedTasks: 10,
+		}},
 	}
 
 	matchingMockResponse := &matchingservice.DescribeTaskQueuePartitionResponse{
@@ -1874,7 +1857,7 @@ func (s *adminHandlerSuite) TestImportWorkflowExecution_NoSearchAttributes() {
 			historyEvent := event.GetData().(*historypb.HistoryEvent)
 			historyEvents = append(historyEvents, historyEvent)
 		}
-		historyBatch, err := serializer.SerializeEvents(historyEvents, enumspb.ENCODING_TYPE_PROTO3)
+		historyBatch, err := serializer.SerializeEvents(historyEvents)
 		s.NoError(err)
 		historyBatches = append(historyBatches, historyBatch)
 	}
@@ -1908,7 +1891,7 @@ func (s *adminHandlerSuite) TestImportWorkflowExecution_WithAliasedSearchAttribu
 	}{
 		{
 			Name:        "valid SA alias",
-			SaName:      "AliasOfCustomKeywordField",
+			SaName:      "AliasOfKeyword01",
 			ExpectedErr: nil,
 		},
 		{
@@ -1944,7 +1927,7 @@ func (s *adminHandlerSuite) TestImportWorkflowExecution_WithAliasedSearchAttribu
 					}
 					historyEvents = append(historyEvents, historyEvent)
 				}
-				historyBatch, err := serializer.SerializeEvents(historyEvents, enumspb.ENCODING_TYPE_PROTO3)
+				historyBatch, err := serializer.SerializeEvents(historyEvents)
 				s.NoError(err)
 				historyBatches = append(historyBatches, historyBatch)
 			}
@@ -1964,7 +1947,7 @@ func (s *adminHandlerSuite) TestImportWorkflowExecution_WithAliasedSearchAttribu
 				return "", serviceerror.NewInvalidArgument("unknown alias")
 			}).Times(eventsWithSasCount)
 
-			s.mockResource.SearchAttributesProvider.EXPECT().GetSearchAttributes(tv.IndexName(), gomock.Any()).Return(searchattribute.TestNameTypeMap, nil).Times(eventsWithSasCount)
+			s.mockResource.SearchAttributesProvider.EXPECT().GetSearchAttributes(tv.IndexName(), gomock.Any()).Return(searchattribute.TestNameTypeMap(), nil).Times(eventsWithSasCount)
 
 			if subTest.ExpectedErr != nil {
 				s.mockSaMapper.EXPECT().GetAlias(gomock.Any(), tv.NamespaceName().String()).Return("", serviceerror.NewInvalidArgument(""))
@@ -1980,7 +1963,7 @@ func (s *adminHandlerSuite) TestImportWorkflowExecution_WithAliasedSearchAttribu
 							if eventHasSas {
 								s.NotNil(unaliasedSas, "search attributes must be set on every event with search_attributes field")
 								s.Len(unaliasedSas.GetIndexedFields(), 1, "only 1 search attribute must be set")
-								s.ProtoEqual(saValue, unaliasedSas.GetIndexedFields()["CustomKeywordField"])
+								s.ProtoEqual(saValue, unaliasedSas.GetIndexedFields()["Keyword01"])
 							}
 						}
 					}
@@ -2046,7 +2029,7 @@ func (s *adminHandlerSuite) TestImportWorkflowExecution_WithNonAliasedSearchAttr
 					}
 					historyEvents = append(historyEvents, historyEvent)
 				}
-				historyBatch, err := serializer.SerializeEvents(historyEvents, enumspb.ENCODING_TYPE_PROTO3)
+				historyBatch, err := serializer.SerializeEvents(historyEvents)
 				s.NoError(err)
 				historyBatches = append(historyBatches, historyBatch)
 			}
@@ -2058,7 +2041,7 @@ func (s *adminHandlerSuite) TestImportWorkflowExecution_WithNonAliasedSearchAttr
 			s.mockNamespaceCache.EXPECT().GetNamespaceID(tv.NamespaceName()).Return(tv.NamespaceID(), nil)
 			s.mockVisibilityMgr.EXPECT().GetIndexName().Return(tv.IndexName()).Times(eventsWithSasCount)
 
-			s.mockResource.SearchAttributesProvider.EXPECT().GetSearchAttributes(tv.IndexName(), gomock.Any()).Return(searchattribute.TestNameTypeMap, nil).Times(eventsWithSasCount)
+			s.mockResource.SearchAttributesProvider.EXPECT().GetSearchAttributes(tv.IndexName(), gomock.Any()).Return(searchattribute.TestEsNameTypeMap(), nil).Times(eventsWithSasCount)
 
 			// Mock mapper returns error because field name is not an alias.
 			s.mockSaMapper.EXPECT().GetFieldName(gomock.Any(), tv.NamespaceName().String()).DoAndReturn(func(alias string, nsName string) (string, error) {

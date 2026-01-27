@@ -1,27 +1,3 @@
-// The MIT License
-//
-// Copyright (c) 2020 Temporal Technologies Inc.  All rights reserved.
-//
-// Copyright (c) 2020 Uber Technologies, Inc.
-//
-// Permission is hereby granted, free of charge, to any person obtaining a copy
-// of this software and associated documentation files (the "Software"), to deal
-// in the Software without restriction, including without limitation the rights
-// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-// copies of the Software, and to permit persons to whom the Software is
-// furnished to do so, subject to the following conditions:
-//
-// The above copyright notice and this permission notice shall be included in
-// all copies or substantial portions of the Software.
-//
-// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
-// THE SOFTWARE.
-
 package elasticsearch
 
 import (
@@ -29,9 +5,11 @@ import (
 
 	"github.com/stretchr/testify/require"
 	"github.com/stretchr/testify/suite"
+	"go.temporal.io/server/chasm"
 	"go.temporal.io/server/common/persistence/visibility/store/query"
 	"go.temporal.io/server/common/primitives"
 	"go.temporal.io/server/common/searchattribute"
+	"go.temporal.io/server/common/searchattribute/sadefs"
 	"go.uber.org/mock/gomock"
 )
 
@@ -59,17 +37,18 @@ func (s *QueryInterceptorSuite) TearDownTest() {
 func (s *QueryInterceptorSuite) TestTimeProcessFunc() {
 	vi := NewValuesInterceptor(
 		"test-namespace",
-		searchattribute.TestNameTypeMap,
+		searchattribute.TestEsNameTypeMap(),
+		nil,
 	)
 
 	cases := []struct {
 		key   string
 		value interface{}
 	}{
-		{key: searchattribute.StartTime, value: int64(1528358645123456789)},
-		{key: searchattribute.CloseTime, value: "2018-06-07T15:04:05+07:00"},
-		{key: searchattribute.ExecutionTime, value: "some invalid time string"},
-		{key: searchattribute.WorkflowID, value: "should not be modified"},
+		{key: sadefs.StartTime, value: int64(1528358645123456789)},
+		{key: sadefs.CloseTime, value: "2018-06-07T15:04:05+07:00"},
+		{key: sadefs.ExecutionTime, value: "some invalid time string"},
+		{key: sadefs.WorkflowID, value: "should not be modified"},
 	}
 	expected := []struct {
 		value     string
@@ -96,20 +75,21 @@ func (s *QueryInterceptorSuite) TestTimeProcessFunc() {
 func (s *QueryInterceptorSuite) TestStatusProcessFunc() {
 	vi := NewValuesInterceptor(
 		"test-namespace",
-		searchattribute.TestNameTypeMap,
+		searchattribute.TestEsNameTypeMap(),
+		nil,
 	)
 
 	cases := []struct {
 		key   string
 		value interface{}
 	}{
-		{key: searchattribute.ExecutionStatus, value: "Completed"},
-		{key: searchattribute.ExecutionStatus, value: int64(1)},
-		{key: searchattribute.ExecutionStatus, value: "1"},
-		{key: searchattribute.ExecutionStatus, value: int64(100)},
-		{key: searchattribute.ExecutionStatus, value: "100"},
-		{key: searchattribute.ExecutionStatus, value: "BadStatus"},
-		{key: searchattribute.WorkflowID, value: "should not be modified"},
+		{key: sadefs.ExecutionStatus, value: "Completed"},
+		{key: sadefs.ExecutionStatus, value: int64(1)},
+		{key: sadefs.ExecutionStatus, value: "1"},
+		{key: sadefs.ExecutionStatus, value: int64(100)},
+		{key: sadefs.ExecutionStatus, value: "100"},
+		{key: sadefs.ExecutionStatus, value: "BadStatus"},
+		{key: sadefs.WorkflowID, value: "should not be modified"},
 	}
 	expected := []struct {
 		value     string
@@ -139,20 +119,21 @@ func (s *QueryInterceptorSuite) TestStatusProcessFunc() {
 func (s *QueryInterceptorSuite) TestDurationProcessFunc() {
 	vi := NewValuesInterceptor(
 		"test-namespace",
-		searchattribute.TestNameTypeMap,
+		searchattribute.TestEsNameTypeMap(),
+		nil,
 	)
 
 	cases := []struct {
 		key   string
 		value interface{}
 	}{
-		{key: searchattribute.ExecutionDuration, value: "1"},
-		{key: searchattribute.ExecutionDuration, value: int64(1)},
-		{key: searchattribute.ExecutionDuration, value: "5h3m"},
-		{key: searchattribute.ExecutionDuration, value: "00:00:01"},
-		{key: searchattribute.ExecutionDuration, value: "00:00:61"},
-		{key: searchattribute.ExecutionDuration, value: "bad value"},
-		{key: searchattribute.WorkflowID, value: "should not be modified"},
+		{key: sadefs.ExecutionDuration, value: "1"},
+		{key: sadefs.ExecutionDuration, value: int64(1)},
+		{key: sadefs.ExecutionDuration, value: "5h3m"},
+		{key: sadefs.ExecutionDuration, value: "00:00:01"},
+		{key: sadefs.ExecutionDuration, value: "00:00:61"},
+		{key: sadefs.ExecutionDuration, value: "bad value"},
+		{key: sadefs.WorkflowID, value: "should not be modified"},
 	}
 	expected := []struct {
 		value     interface{}
@@ -185,9 +166,9 @@ func (s *QueryInterceptorSuite) TestDurationProcessFunc() {
 func (s *QueryInterceptorSuite) TestNameInterceptor_ScheduleIDToWorkflowID() {
 	ni := s.createMockNameInterceptor(nil)
 
-	fieldName, err := ni.Name(searchattribute.ScheduleID, query.FieldNameFilter)
+	fieldName, err := ni.Name(sadefs.ScheduleID, query.FieldNameFilter)
 	s.NoError(err)
-	s.Equal(searchattribute.WorkflowID, fieldName)
+	s.Equal(sadefs.WorkflowID, fieldName)
 }
 
 // Ensures the valuesInterceptor applies the ScheduleID to WorkflowID transformation,
@@ -195,16 +176,17 @@ func (s *QueryInterceptorSuite) TestNameInterceptor_ScheduleIDToWorkflowID() {
 func (s *QueryInterceptorSuite) TestValuesInterceptor_ScheduleIDToWorkflowID() {
 	vi := NewValuesInterceptor(
 		"test-namespace",
-		searchattribute.TestNameTypeMap,
+		searchattribute.TestEsNameTypeMap(),
+		nil,
 	)
 
-	values, err := vi.Values(searchattribute.ScheduleID, searchattribute.WorkflowID, "test-schedule-id")
+	values, err := vi.Values(sadefs.ScheduleID, sadefs.WorkflowID, "test-schedule-id")
 	s.NoError(err)
 	s.Len(values, 1)
 	s.Equal(primitives.ScheduleWorkflowIDPrefix+"test-schedule-id", values[0])
 
-	values, err = vi.Values(searchattribute.ScheduleID,
-		searchattribute.WorkflowID,
+	values, err = vi.Values(sadefs.ScheduleID,
+		sadefs.WorkflowID,
 		"test-schedule-id-1",
 		"test-schedule-id-2")
 	s.NoError(err)
@@ -217,16 +199,17 @@ func (s *QueryInterceptorSuite) TestValuesInterceptor_ScheduleIDToWorkflowID() {
 func (s *QueryInterceptorSuite) TestValuesInterceptor_NoTransformation() {
 	vi := NewValuesInterceptor(
 		"test-namespace",
-		searchattribute.TestNameTypeMapWithScheduleId,
+		searchattribute.TestEsNameTypeMapWithScheduleID(),
+		nil,
 	)
 
-	values, err := vi.Values(searchattribute.ScheduleID, searchattribute.ScheduleID, "test-workflow-id")
+	values, err := vi.Values(sadefs.ScheduleID, sadefs.ScheduleID, "test-workflow-id")
 	s.NoError(err)
 	s.Len(values, 1)
 	s.Equal("test-workflow-id", values[0])
 
-	values, err = vi.Values(searchattribute.ScheduleID,
-		searchattribute.ScheduleID,
+	values, err = vi.Values(sadefs.ScheduleID,
+		sadefs.ScheduleID,
 		"test-workflow-id-1",
 		"test-workflow-id-2")
 	s.NoError(err)
@@ -238,7 +221,34 @@ func (s *QueryInterceptorSuite) TestValuesInterceptor_NoTransformation() {
 func (s *QueryInterceptorSuite) createMockNameInterceptor(mapper searchattribute.Mapper) *nameInterceptor {
 	return &nameInterceptor{
 		namespace:                      "test-namespace",
-		searchAttributesTypeMap:        searchattribute.TestNameTypeMap,
+		searchAttributesTypeMap:        searchattribute.TestEsNameTypeMap(),
 		searchAttributesMapperProvider: searchattribute.NewTestMapperProvider(mapper),
 	}
+}
+
+// TestNameInterceptor_TemporalSystemExecutionStatus tests that TemporalSystemExecutionStatus
+// maps to ExecutionStatus only when SchedulerArchetypeID is set.
+func (s *QueryInterceptorSuite) TestNameInterceptor_TemporalSystemExecutionStatus() {
+	// With SchedulerArchetypeID, TemporalSystemExecutionStatus should map to ExecutionStatus
+	ni := &nameInterceptor{
+		namespace:                      "test-namespace",
+		searchAttributesTypeMap:        searchattribute.TestEsNameTypeMap(),
+		searchAttributesMapperProvider: searchattribute.NewTestMapperProvider(nil),
+		archetypeID:                    chasm.SchedulerArchetypeID,
+	}
+
+	fieldName, err := ni.Name("TemporalSystemExecutionStatus", query.FieldNameFilter)
+	s.NoError(err)
+	s.Equal(sadefs.ExecutionStatus, fieldName)
+
+	// Without SchedulerArchetypeID, TemporalSystemExecutionStatus should fail
+	ni2 := &nameInterceptor{
+		namespace:                      "test-namespace",
+		searchAttributesTypeMap:        searchattribute.TestEsNameTypeMap(),
+		searchAttributesMapperProvider: searchattribute.NewTestMapperProvider(nil),
+		archetypeID:                    chasm.UnspecifiedArchetypeID,
+	}
+
+	_, err = ni2.Name("TemporalSystemExecutionStatus", query.FieldNameFilter)
+	s.Error(err)
 }

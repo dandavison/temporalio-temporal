@@ -1,28 +1,4 @@
-// The MIT License
-//
-// Copyright (c) 2020 Temporal Technologies Inc.  All rights reserved.
-//
-// Copyright (c) 2020 Uber Technologies, Inc.
-//
-// Permission is hereby granted, free of charge, to any person obtaining a copy
-// of this software and associated documentation files (the "Software"), to deal
-// in the Software without restriction, including without limitation the rights
-// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-// copies of the Software, and to permit persons to whom the Software is
-// furnished to do so, subject to the following conditions:
-//
-// The above copyright notice and this permission notice shall be included in
-// all copies or substantial portions of the Software.
-//
-// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
-// THE SOFTWARE.
-
-//go:generate mockgen -copyright_file ../../../../../../LICENSE -package $GOPACKAGE -source $GOFILE -destination client_mock.go
+//go:generate mockgen -package $GOPACKAGE -source $GOFILE -destination client_mock.go
 
 package client
 
@@ -56,19 +32,15 @@ type (
 		CreateIndex(ctx context.Context, index string, body map[string]any) (bool, error)
 		DeleteIndex(ctx context.Context, indexName string) (bool, error)
 		CatIndices(ctx context.Context, target string) (elastic.CatIndicesResponse, error)
-
-		OpenScroll(ctx context.Context, p *SearchParameters, keepAliveInterval string) (*elastic.SearchResult, error)
-		Scroll(ctx context.Context, id string, keepAliveInterval string) (*elastic.SearchResult, error)
-		CloseScroll(ctx context.Context, id string) error
-
-		IsPointInTimeSupported(ctx context.Context) bool
-		OpenPointInTime(ctx context.Context, index string, keepAliveInterval string) (string, error)
-		ClosePointInTime(ctx context.Context, id string) (bool, error)
 	}
 
 	CLIClient interface {
 		Client
 		Delete(ctx context.Context, indexName string, docID string, version int64) error
+		IndexPutTemplate(ctx context.Context, templateName string, bodyString string) (bool, error)
+		IndexPutMapping(ctx context.Context, indexName string, bodyString string) (bool, error)
+		ClusterPutSettings(ctx context.Context, bodyString string) (bool, error)
+		Ping(ctx context.Context) error
 	}
 
 	IntegrationTestsClient interface {
@@ -81,13 +53,10 @@ type (
 
 	// SearchParameters holds all required and optional parameters for executing a search.
 	SearchParameters struct {
-		Index    string
-		Query    elastic.Query
-		PageSize int
-		Sorter   []elastic.Sorter
-
+		Index       string
+		Query       elastic.Query
+		PageSize    int
+		Sorter      []elastic.Sorter
 		SearchAfter []interface{}
-		ScrollID    string
-		PointInTime *elastic.PointInTime
 	}
 )

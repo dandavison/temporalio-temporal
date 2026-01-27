@@ -1,27 +1,3 @@
-// The MIT License
-//
-// Copyright (c) 2020 Temporal Technologies Inc.  All rights reserved.
-//
-// Copyright (c) 2020 Uber Technologies, Inc.
-//
-// Permission is hereby granted, free of charge, to any person obtaining a copy
-// of this software and associated documentation files (the "Software"), to deal
-// in the Software without restriction, including without limitation the rights
-// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-// copies of the Software, and to permit persons to whom the Software is
-// furnished to do so, subject to the following conditions:
-//
-// The above copyright notice and this permission notice shall be included in
-// all copies or substantial portions of the Software.
-//
-// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
-// THE SOFTWARE.
-
 package tdbg
 
 import (
@@ -30,7 +6,7 @@ import (
 	"os"
 	"runtime/debug"
 
-	"github.com/temporalio/tctl-kit/pkg/color"
+	"github.com/fatih/color"
 	"github.com/urfave/cli/v2"
 	"go.temporal.io/server/common/headers"
 	"go.temporal.io/server/service/history/tasks"
@@ -125,12 +101,24 @@ func NewCliApp(opts ...Option) *cli.App {
 			EnvVars: []string{"TEMPORAL_CLI_TLS_SERVER_NAME"},
 		},
 		&cli.StringFlag{
-			Name:  color.FlagColor,
-			Usage: fmt.Sprintf("When to use color: %v, %v, %v.", color.Auto, color.Always, color.Never),
-			Value: string(color.Auto),
+			Name:  "color",
+			Usage: fmt.Sprintf("When to use color: %v, %v, %v.", "auto", "always", "never"),
+			Value: "auto",
 		},
 	}
 	prompterFactory := NewPrompterFactory()
+	app.Before = func(ctx *cli.Context) error {
+		colorFlag := ctx.String("color")
+		switch colorFlag {
+		case "always":
+			color.NoColor = false
+		case "never":
+			color.NoColor = true
+		default:
+			// fatih/color will inspect the enviroment and terminal and set a reasonable default.
+		}
+		return nil
+	}
 	app.Commands = getCommands(
 		params.ClientFactory,
 		NewDLQServiceProvider(
@@ -156,9 +144,9 @@ func handleError(c *cli.Context, err error) {
 		return
 	}
 
-	_, _ = fmt.Fprintf(c.App.ErrWriter, "%s %+v\n", color.Red(c, "Error:"), err)
+	_, _ = fmt.Fprintf(c.App.ErrWriter, "%s %+v\n", color.RedString("Error:"), err)
 	if os.Getenv(showErrorStackEnv) != `` {
-		_, _ = fmt.Fprintln(c.App.ErrWriter, color.Magenta(c, "Stack trace:"))
+		_, _ = fmt.Fprintln(c.App.ErrWriter, color.MagentaString("Stack trace:"))
 		debug.PrintStack()
 	} else {
 		_, _ = fmt.Fprintf(c.App.ErrWriter, "('export %s=1' to see stack traces)\n", showErrorStackEnv)

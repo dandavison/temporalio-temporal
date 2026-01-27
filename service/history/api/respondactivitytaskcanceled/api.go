@@ -1,69 +1,49 @@
-// The MIT License
-//
-// Copyright (c) 2020 Temporal Technologies Inc.  All rights reserved.
-//
-// Copyright (c) 2020 Uber Technologies, Inc.
-//
-// Permission is hereby granted, free of charge, to any person obtaining a copy
-// of this software and associated documentation files (the "Software"), to deal
-// in the Software without restriction, including without limitation the rights
-// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-// copies of the Software, and to permit persons to whom the Software is
-// furnished to do so, subject to the following conditions:
-//
-// The above copyright notice and this permission notice shall be included in
-// all copies or substantial portions of the Software.
-//
-// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
-// THE SOFTWARE.
-
 package respondactivitytaskcanceled
 
 import (
 	"context"
 	"time"
 
+	enumspb "go.temporal.io/api/enums/v1"
 	"go.temporal.io/server/api/historyservice/v1"
 	"go.temporal.io/server/common"
 	"go.temporal.io/server/common/definition"
 	"go.temporal.io/server/common/metrics"
 	"go.temporal.io/server/common/namespace"
+	"go.temporal.io/server/common/tasktoken"
 	"go.temporal.io/server/service/history/api"
 	"go.temporal.io/server/service/history/consts"
-	"go.temporal.io/server/service/history/shard"
+	historyi "go.temporal.io/server/service/history/interfaces"
 	"go.temporal.io/server/service/history/workflow"
 )
 
 func Invoke(
 	ctx context.Context,
 	req *historyservice.RespondActivityTaskCanceledRequest,
-	shard shard.Context,
+	shard historyi.ShardContext,
 	workflowConsistencyChecker api.WorkflowConsistencyChecker,
 ) (resp *historyservice.RespondActivityTaskCanceledResponse, retError error) {
-	namespaceEntry, err := api.GetActiveNamespace(shard, namespace.ID(req.GetNamespaceId()))
-	if err != nil {
-		return nil, err
-	}
-	namespace := namespaceEntry.Name()
-
 	request := req.CancelRequest
-	tokenSerializer := common.NewProtoTaskTokenSerializer()
+	tokenSerializer := tasktoken.NewSerializer()
 	token, err0 := tokenSerializer.Deserialize(request.TaskToken)
 	if err0 != nil {
 		return nil, consts.ErrDeserializingToken
 	}
+
+	namespaceEntry, err := api.GetActiveNamespace(shard, namespace.ID(req.GetNamespaceId()), token.WorkflowId)
+	if err != nil {
+		return nil, err
+	}
+	namespaceName := namespaceEntry.Name()
 	if err := api.SetActivityTaskRunID(ctx, token, workflowConsistencyChecker); err != nil {
 		return nil, err
 	}
 
-	var activityStartedTime time.Time
+	var attemptStartedTime time.Time
+	var firstScheduledTime time.Time
 	var taskQueue string
 	var workflowTypeName string
+	var versioningBehavior enumspb.VersioningBehavior
 	err = api.GetAndUpdateWorkflowWithNew(
 		ctx,
 		token.Clock,
@@ -97,10 +77,7 @@ func Invoke(
 				return nil, consts.ErrStaleState
 			}
 
-			if !isRunning ||
-				ai.StartedEventId == common.EmptyEventID ||
-				(token.GetScheduledEventId() != common.EmptyEventID && token.Attempt != ai.Attempt) ||
-				(token.GetVersion() != common.EmptyVersion && token.Version != ai.Version) {
+			if !isRunning || api.IsActivityTaskNotFoundForToken(token, ai, nil) {
 				return nil, consts.ErrActivityTaskNotFound
 			}
 
@@ -119,8 +96,10 @@ func Invoke(
 				return nil, err
 			}
 
-			activityStartedTime = ai.StartedTime.AsTime()
+			attemptStartedTime = ai.StartedTime.AsTime()
+			firstScheduledTime = ai.FirstScheduledTime.AsTime()
 			taskQueue = ai.TaskQueue
+			versioningBehavior = mutableState.GetEffectiveVersioningBehavior()
 			return &api.UpdateWorkflowAction{
 				Noop:               false,
 				CreateWorkflowTask: true,
@@ -131,15 +110,21 @@ func Invoke(
 		workflowConsistencyChecker,
 	)
 
-	if err == nil && !activityStartedTime.IsZero() {
-		metrics.ActivityE2ELatency.With(
-			workflow.GetPerTaskQueueFamilyScope(
-				shard.GetMetricsHandler(), namespace, taskQueue, shard.GetConfig(),
-				metrics.OperationTag(metrics.HistoryRespondActivityTaskCanceledScope),
-				metrics.WorkflowTypeTag(workflowTypeName),
-				metrics.ActivityTypeTag(token.ActivityType),
-			),
-		).Record(time.Since(activityStartedTime))
+	if err == nil {
+		workflow.RecordActivityCompletionMetrics(
+			shard,
+			namespaceName,
+			taskQueue,
+			workflow.ActivityCompletionMetrics{
+				Status:             workflow.ActivityStatusCanceled,
+				AttemptStartedTime: attemptStartedTime,
+				FirstScheduledTime: firstScheduledTime,
+				Closed:             true,
+			},
+			metrics.OperationTag(metrics.HistoryRespondActivityTaskCanceledScope),
+			metrics.WorkflowTypeTag(workflowTypeName),
+			metrics.ActivityTypeTag(token.ActivityType),
+			metrics.VersioningBehaviorTag(versioningBehavior))
 	}
 	return &historyservice.RespondActivityTaskCanceledResponse{}, err
 }

@@ -1,30 +1,7 @@
-// The MIT License
-//
-// Copyright (c) 2020 Temporal Technologies Inc.  All rights reserved.
-//
-// Copyright (c) 2020 Uber Technologies, Inc.
-//
-// Permission is hereby granted, free of charge, to any person obtaining a copy
-// of this software and associated documentation files (the "Software"), to deal
-// in the Software without restriction, including without limitation the rights
-// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-// copies of the Software, and to permit persons to whom the Software is
-// furnished to do so, subject to the following conditions:
-//
-// The above copyright notice and this permission notice shall be included in
-// all copies or substantial portions of the Software.
-//
-// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
-// THE SOFTWARE.
-
 package tasks
 
 import (
+	"fmt"
 	"time"
 
 	enumsspb "go.temporal.io/server/api/enums/v1"
@@ -36,11 +13,15 @@ var _ Task = (*CancelExecutionTask)(nil)
 type (
 	CancelExecutionTask struct {
 		definition.WorkflowKey
-		VisibilityTimestamp     time.Time
-		TaskID                  int64
-		TargetNamespaceID       string
-		TargetWorkflowID        string
-		TargetRunID             string
+		VisibilityTimestamp time.Time
+		TaskID              int64
+		// Deprecated: the TargetNamespaceID from event instead.
+		TargetNamespaceID string
+		// Deprecated: the TargetWorkflowID from event instead.
+		TargetWorkflowID string
+		// Deprecated: the TargetRunID from event instead.
+		TargetRunID string
+		// Deprecated: the TargetChildWorkflowOnly from event instead.
 		TargetChildWorkflowOnly bool
 		InitiatedEventID        int64
 		Version                 int64
@@ -81,4 +62,18 @@ func (u *CancelExecutionTask) GetCategory() Category {
 
 func (u *CancelExecutionTask) GetType() enumsspb.TaskType {
 	return enumsspb.TASK_TYPE_TRANSFER_CANCEL_EXECUTION
+}
+
+func (u *CancelExecutionTask) String() string {
+	return fmt.Sprintf("CancelExecutionTask{WorkflowKey: %s, VisibilityTimestamp: %v, TaskID: %v, TargetNamespaceID: %v, TargetWorkflowID: %v, TargetRunID: %v, TargetChildWorkflowOnly: %v, InitiatedEventID: %v, Version: %v}",
+		u.WorkflowKey.String(),
+		u.VisibilityTimestamp,
+		u.TaskID,
+		u.TargetNamespaceID,
+		u.TargetWorkflowID,
+		u.TargetRunID,
+		u.TargetChildWorkflowOnly,
+		u.InitiatedEventID,
+		u.Version,
+	)
 }

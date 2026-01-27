@@ -1,30 +1,8 @@
-// The MIT License
-//
-// Copyright (c) 2020 Temporal Technologies Inc.  All rights reserved.
-//
-// Copyright (c) 2020 Uber Technologies, Inc.
-//
-// Permission is hereby granted, free of charge, to any person obtaining a copy
-// of this software and associated documentation files (the "Software"), to deal
-// in the Software without restriction, including without limitation the rights
-// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-// copies of the Software, and to permit persons to whom the Software is
-// furnished to do so, subject to the following conditions:
-//
-// The above copyright notice and this permission notice shall be included in
-// all copies or substantial portions of the Software.
-//
-// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
-// THE SOFTWARE.
-
 package workflow
 
 import (
+	"time"
+
 	enumspb "go.temporal.io/api/enums/v1"
 	enumsspb "go.temporal.io/server/api/enums/v1"
 	"go.temporal.io/server/common/metrics"
@@ -32,6 +10,7 @@ import (
 	"go.temporal.io/server/common/persistence"
 	"go.temporal.io/server/common/tqid"
 	"go.temporal.io/server/service/history/configs"
+	historyi "go.temporal.io/server/service/history/interfaces"
 )
 
 func emitWorkflowHistoryStats(
@@ -86,6 +65,7 @@ func emitMutableStateStatus(
 	metrics.TotalSignalCount.With(batchHandler).Record(stats.TotalSignalCount)
 	metrics.BufferedEventsSize.With(batchHandler).Record(int64(stats.BufferedEventsSize))
 	metrics.BufferedEventsCount.With(batchHandler).Record(int64(stats.BufferedEventsCount))
+	metrics.ChasmTotalSize.With(batchHandler).Record(int64(stats.ChasmTotalSize))
 
 	if stats.HistoryStatistics != nil {
 		metrics.HistorySize.With(batchHandler).Record(int64(stats.HistoryStatistics.SizeDiff))
@@ -100,17 +80,22 @@ func emitMutableStateStatus(
 func emitWorkflowCompletionStats(
 	metricsHandler metrics.Handler,
 	namespace namespace.Name,
-	namespaceState string,
-	taskQueue string,
-	status enumspb.WorkflowExecutionStatus,
+	completion completionMetric,
 	config *configs.Config,
 ) {
-	handler := GetPerTaskQueueFamilyScope(metricsHandler, namespace, taskQueue, config,
+	// Only emit metrics for Workflows, not other Chasm archetypes
+	if !completion.isWorkflow {
+		return
+	}
+
+	handler := GetPerTaskQueueFamilyScope(metricsHandler, namespace, completion.taskQueue, config,
 		metrics.OperationTag(metrics.WorkflowCompletionStatsScope),
-		metrics.NamespaceStateTag(namespaceState),
+		metrics.NamespaceStateTag(completion.namespaceState),
+		metrics.WorkflowTypeTag(completion.workflowTypeName),
 	)
 
-	switch status {
+	closed := true
+	switch completion.status {
 	case enumspb.WORKFLOW_EXECUTION_STATUS_COMPLETED:
 		metrics.WorkflowSuccessCount.With(handler).Record(1)
 	case enumspb.WORKFLOW_EXECUTION_STATUS_CANCELED:
@@ -123,6 +108,15 @@ func emitWorkflowCompletionStats(
 		metrics.WorkflowTerminateCount.With(handler).Record(1)
 	case enumspb.WORKFLOW_EXECUTION_STATUS_CONTINUED_AS_NEW:
 		metrics.WorkflowContinuedAsNewCount.With(handler).Record(1)
+	case enumspb.WORKFLOW_EXECUTION_STATUS_UNSPECIFIED, enumspb.WORKFLOW_EXECUTION_STATUS_RUNNING:
+		closed = false
+	}
+	if closed && completion.startTime != nil && completion.closeTime != nil {
+		startTime := completion.startTime.AsTime()
+		closeTime := completion.closeTime.AsTime()
+		if closeTime.After(startTime) {
+			metrics.WorkflowScheduleToCloseLatency.With(handler).Record(closeTime.Sub(startTime))
+		}
 	}
 }
 
@@ -139,4 +133,75 @@ func GetPerTaskQueueFamilyScope(
 		config.BreakdownMetricsByTaskQueue(namespaceName.String(), taskQueueFamily, enumspb.TASK_QUEUE_TYPE_WORKFLOW),
 		tags...,
 	)
+}
+
+type ActivityExecutionStatus int
+
+const (
+	ActivityStatusUnknown ActivityExecutionStatus = iota
+	ActivityStatusSucceeded
+	ActivityStatusFailed
+	ActivityStatusCanceled
+	ActivityStatusTimeout
+)
+
+type ActivityCompletionMetrics struct {
+	// Status determines whether the activity succeeded, and whether it is/will be retried
+	Status ActivityExecutionStatus
+	// AttemptStartedTime is the start time of the current attempt
+	AttemptStartedTime time.Time
+	// FirstScheduledTime is the scheduled time of the first attempt
+	FirstScheduledTime time.Time
+	// Closed is true if no more attempts will be made to execute the activity.
+	Closed bool
+	// TimerType is the type of timer that caused the activity execution to timeout.
+	TimerType enumspb.TimeoutType
+}
+
+func RecordActivityCompletionMetrics(
+	shard historyi.ShardContext,
+	namespaceName namespace.Name,
+	taskQueue string,
+	completion ActivityCompletionMetrics,
+	tags ...metrics.Tag,
+) {
+	metricsHandler := GetPerTaskQueueFamilyScope(
+		shard.GetMetricsHandler(),
+		namespaceName,
+		taskQueue,
+		shard.GetConfig(),
+		tags...,
+	)
+
+	if !completion.AttemptStartedTime.IsZero() && completion.Status != ActivityStatusTimeout {
+		latency := time.Since(completion.AttemptStartedTime)
+		// ActivityE2ELatency is deprecated due to its inaccurate naming. It captures the attempt duration instead of an end-to-end duration as its name suggests. For now record both metrics
+		metrics.ActivityE2ELatency.With(metricsHandler).Record(latency)
+		metrics.ActivityStartToCloseLatency.With(metricsHandler).Record(latency)
+	}
+
+	// Record true end-to-end duration only for terminal states (includes retries and backoffs)
+	if completion.Closed && !completion.FirstScheduledTime.IsZero() {
+		scheduleToCloseLatency := time.Since(completion.FirstScheduledTime)
+		metrics.ActivityScheduleToCloseLatency.With(metricsHandler).Record(scheduleToCloseLatency)
+	}
+
+	switch completion.Status {
+	case ActivityStatusFailed:
+		metrics.ActivityTaskFail.With(metricsHandler).Record(1)
+		if completion.Closed {
+			metrics.ActivityFail.With(metricsHandler).Record(1)
+		}
+	case ActivityStatusCanceled:
+		metrics.ActivityCancel.With(metricsHandler).Record(1)
+	case ActivityStatusSucceeded:
+		metrics.ActivitySuccess.With(metricsHandler).Record(1)
+	case ActivityStatusTimeout:
+		metrics.ActivityTaskTimeout.With(metricsHandler).Record(1, metrics.StringTag("timeout_type", completion.TimerType.String()))
+		if completion.Closed {
+			metrics.ActivityTimeout.With(metricsHandler).Record(1, metrics.StringTag("timeout_type", completion.TimerType.String()))
+		}
+	default:
+		// Do nothing
+	}
 }

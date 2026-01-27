@@ -1,30 +1,8 @@
-// The MIT License
-//
-// Copyright (c) 2020 Temporal Technologies Inc.  All rights reserved.
-//
-// Copyright (c) 2020 Uber Technologies, Inc.
-//
-// Permission is hereby granted, free of charge, to any person obtaining a copy
-// of this software and associated documentation files (the "Software"), to deal
-// in the Software without restriction, including without limitation the rights
-// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-// copies of the Software, and to permit persons to whom the Software is
-// furnished to do so, subject to the following conditions:
-//
-// The above copyright notice and this permission notice shall be included in
-// all copies or substantial portions of the Software.
-//
-// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
-// THE SOFTWARE.
-
 package queues
 
 import (
+	"go.opentelemetry.io/otel/trace"
+	"go.temporal.io/server/chasm"
 	"go.temporal.io/server/common/clock"
 	"go.temporal.io/server/common/cluster"
 	"go.temporal.io/server/common/dynamicconfig"
@@ -50,8 +28,11 @@ type (
 		timeSource                 clock.TimeSource
 		namespaceRegistry          namespace.Registry
 		clusterMetadata            cluster.Metadata
+		chasmRegistry              *chasm.Registry
+		taskTypeTagProvider        TaskTypeTagProvider
 		logger                     log.Logger
 		metricsHandler             metrics.Handler
+		tracer                     trace.Tracer
 		dlqWriter                  *DLQWriter
 		dlqEnabled                 dynamicconfig.BoolPropertyFn
 		attemptsBeforeSendingToDlq dynamicconfig.IntPropertyFn
@@ -72,8 +53,11 @@ func NewExecutableFactory(
 	timeSource clock.TimeSource,
 	namespaceRegistry namespace.Registry,
 	clusterMetadata cluster.Metadata,
+	chasmRegistry *chasm.Registry,
+	taskTypeTagProvider TaskTypeTagProvider,
 	logger log.Logger,
 	metricsHandler metrics.Handler,
+	tracer trace.Tracer,
 	dlqWriter *DLQWriter,
 	dlqEnabled dynamicconfig.BoolPropertyFn,
 	attemptsBeforeSendingToDlq dynamicconfig.IntPropertyFn,
@@ -88,8 +72,11 @@ func NewExecutableFactory(
 		timeSource:                 timeSource,
 		namespaceRegistry:          namespaceRegistry,
 		clusterMetadata:            clusterMetadata,
+		chasmRegistry:              chasmRegistry,
+		taskTypeTagProvider:        taskTypeTagProvider,
 		logger:                     logger,
-		metricsHandler:             metricsHandler,
+		metricsHandler:             metricsHandler.WithTags(defaultExecutableMetricsTags...),
+		tracer:                     tracer,
 		dlqWriter:                  dlqWriter,
 		dlqEnabled:                 dlqEnabled,
 		attemptsBeforeSendingToDlq: attemptsBeforeSendingToDlq,
@@ -109,8 +96,11 @@ func (f *executableFactoryImpl) NewExecutable(task tasks.Task, readerID int64) E
 		f.timeSource,
 		f.namespaceRegistry,
 		f.clusterMetadata,
+		f.chasmRegistry,
+		f.taskTypeTagProvider,
 		f.logger,
 		f.metricsHandler,
+		f.tracer,
 		func(params *ExecutableParams) {
 			params.DLQEnabled = f.dlqEnabled
 			params.DLQWriter = f.dlqWriter

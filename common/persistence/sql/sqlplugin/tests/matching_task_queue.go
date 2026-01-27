@@ -1,27 +1,3 @@
-// The MIT License
-//
-// Copyright (c) 2020 Temporal Technologies Inc.  All rights reserved.
-//
-// Copyright (c) 2020 Uber Technologies, Inc.
-//
-// Permission is hereby granted, free of charge, to any person obtaining a copy
-// of this software and associated documentation files (the "Software"), to deal
-// in the Software without restriction, including without limitation the rights
-// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-// copies of the Software, and to permit persons to whom the Software is
-// furnished to do so, subject to the following conditions:
-//
-// The above copyright notice and this permission notice shall be included in
-// all copies or substantial portions of the Software.
-//
-// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
-// THE SOFTWARE.
-
 package tests
 
 import (
@@ -49,7 +25,8 @@ type (
 		suite.Suite
 		*require.Assertions
 
-		store sqlplugin.MatchingTaskQueue
+		store   sqlplugin.MatchingTaskQueue
+		version sqlplugin.MatchingTaskVersion
 	}
 )
 
@@ -59,10 +36,12 @@ type (
 func NewMatchingTaskQueueSuite(
 	t *testing.T,
 	store sqlplugin.MatchingTaskQueue,
+	version sqlplugin.MatchingTaskVersion,
 ) *matchingTaskQueueSuite {
 	return &matchingTaskQueueSuite{
 		Assertions: require.New(t),
 		store:      store,
+		version:    version,
 	}
 }
 
@@ -87,7 +66,7 @@ func (s *matchingTaskQueueSuite) TestInsert_Success() {
 	rangeID := int64(1)
 
 	taskQueue := s.newRandomTasksQueueRow(queueID, rangeID)
-	result, err := s.store.InsertIntoTaskQueues(newExecutionContext(), &taskQueue)
+	result, err := s.store.InsertIntoTaskQueues(newExecutionContext(), &taskQueue, s.version)
 	s.NoError(err)
 	rowsAffected, err := result.RowsAffected()
 	s.NoError(err)
@@ -99,14 +78,14 @@ func (s *matchingTaskQueueSuite) TestInsert_Fail_Duplicate() {
 	rangeID := int64(1)
 
 	taskQueue := s.newRandomTasksQueueRow(queueID, rangeID)
-	result, err := s.store.InsertIntoTaskQueues(newExecutionContext(), &taskQueue)
+	result, err := s.store.InsertIntoTaskQueues(newExecutionContext(), &taskQueue, s.version)
 	s.NoError(err)
 	rowsAffected, err := result.RowsAffected()
 	s.NoError(err)
 	s.Equal(1, int(rowsAffected))
 
 	taskQueue = s.newRandomTasksQueueRow(queueID, rangeID)
-	_, err = s.store.InsertIntoTaskQueues(newExecutionContext(), &taskQueue)
+	_, err = s.store.InsertIntoTaskQueues(newExecutionContext(), &taskQueue, s.version)
 	s.Error(err) // TODO persistence layer should do proper error translation
 }
 
@@ -115,7 +94,7 @@ func (s *matchingTaskQueueSuite) TestInsertSelect() {
 	rangeID := int64(1)
 
 	taskQueue := s.newRandomTasksQueueRow(queueID, rangeID)
-	result, err := s.store.InsertIntoTaskQueues(newExecutionContext(), &taskQueue)
+	result, err := s.store.InsertIntoTaskQueues(newExecutionContext(), &taskQueue, s.version)
 	s.NoError(err)
 	rowsAffected, err := result.RowsAffected()
 	s.NoError(err)
@@ -125,7 +104,7 @@ func (s *matchingTaskQueueSuite) TestInsertSelect() {
 		RangeHash:   testMatchingTaskQueueRangeHash,
 		TaskQueueID: queueID,
 	}
-	rows, err := s.store.SelectFromTaskQueues(newExecutionContext(), filter)
+	rows, err := s.store.SelectFromTaskQueues(newExecutionContext(), filter, s.version)
 	s.NoError(err)
 	s.Equal([]sqlplugin.TaskQueuesRow{taskQueue}, rows)
 }
@@ -136,14 +115,14 @@ func (s *matchingTaskQueueSuite) TestInsertUpdate_Success() {
 
 	taskQueue := s.newRandomTasksQueueRow(queueID, rangeID)
 	rangeID++
-	result, err := s.store.InsertIntoTaskQueues(newExecutionContext(), &taskQueue)
+	result, err := s.store.InsertIntoTaskQueues(newExecutionContext(), &taskQueue, s.version)
 	s.NoError(err)
 	rowsAffected, err := result.RowsAffected()
 	s.NoError(err)
 	s.Equal(1, int(rowsAffected))
 
 	taskQueue = s.newRandomTasksQueueRow(queueID, rangeID)
-	result, err = s.store.UpdateTaskQueues(newExecutionContext(), &taskQueue)
+	result, err = s.store.UpdateTaskQueues(newExecutionContext(), &taskQueue, s.version)
 	s.NoError(err)
 	rowsAffected, err = result.RowsAffected()
 	s.NoError(err)
@@ -155,7 +134,7 @@ func (s *matchingTaskQueueSuite) TestUpdate_Fail() {
 	rangeID := int64(1)
 
 	taskQueue := s.newRandomTasksQueueRow(queueID, rangeID)
-	result, err := s.store.UpdateTaskQueues(newExecutionContext(), &taskQueue)
+	result, err := s.store.UpdateTaskQueues(newExecutionContext(), &taskQueue, s.version)
 	s.NoError(err)
 	rowsAffected, err := result.RowsAffected()
 	s.NoError(err)
@@ -168,14 +147,14 @@ func (s *matchingTaskQueueSuite) TestInsertUpdateSelect() {
 
 	taskQueue := s.newRandomTasksQueueRow(queueID, rangeID)
 	rangeID++
-	result, err := s.store.InsertIntoTaskQueues(newExecutionContext(), &taskQueue)
+	result, err := s.store.InsertIntoTaskQueues(newExecutionContext(), &taskQueue, s.version)
 	s.NoError(err)
 	rowsAffected, err := result.RowsAffected()
 	s.NoError(err)
 	s.Equal(1, int(rowsAffected))
 
 	taskQueue = s.newRandomTasksQueueRow(queueID, rangeID)
-	result, err = s.store.UpdateTaskQueues(newExecutionContext(), &taskQueue)
+	result, err = s.store.UpdateTaskQueues(newExecutionContext(), &taskQueue, s.version)
 	s.NoError(err)
 	rowsAffected, err = result.RowsAffected()
 	s.NoError(err)
@@ -185,7 +164,7 @@ func (s *matchingTaskQueueSuite) TestInsertUpdateSelect() {
 		RangeHash:   testMatchingTaskQueueRangeHash,
 		TaskQueueID: queueID,
 	}
-	rows, err := s.store.SelectFromTaskQueues(newExecutionContext(), filter)
+	rows, err := s.store.SelectFromTaskQueues(newExecutionContext(), filter, s.version)
 	s.NoError(err)
 	s.Equal([]sqlplugin.TaskQueuesRow{taskQueue}, rows)
 }
@@ -199,7 +178,7 @@ func (s *matchingTaskQueueSuite) TestDeleteSelect() {
 		TaskQueueID: queueID,
 		RangeID:     util.Ptr(rangeID),
 	}
-	result, err := s.store.DeleteFromTaskQueues(newExecutionContext(), filter)
+	result, err := s.store.DeleteFromTaskQueues(newExecutionContext(), filter, s.version)
 	s.NoError(err)
 	rowsAffected, err := result.RowsAffected()
 	s.NoError(err)
@@ -210,7 +189,7 @@ func (s *matchingTaskQueueSuite) TestDeleteSelect() {
 		TaskQueueID: queueID,
 	}
 	// TODO the behavior is weird
-	_, err = s.store.SelectFromTaskQueues(newExecutionContext(), filter)
+	_, err = s.store.SelectFromTaskQueues(newExecutionContext(), filter, s.version)
 	s.Error(err) // TODO persistence layer should do proper error translation
 }
 
@@ -219,7 +198,7 @@ func (s *matchingTaskQueueSuite) TestInsertDeleteSelect_Success() {
 	rangeID := int64(1)
 
 	taskQueue := s.newRandomTasksQueueRow(queueID, rangeID)
-	result, err := s.store.InsertIntoTaskQueues(newExecutionContext(), &taskQueue)
+	result, err := s.store.InsertIntoTaskQueues(newExecutionContext(), &taskQueue, s.version)
 	s.NoError(err)
 	rowsAffected, err := result.RowsAffected()
 	s.NoError(err)
@@ -230,7 +209,7 @@ func (s *matchingTaskQueueSuite) TestInsertDeleteSelect_Success() {
 		TaskQueueID: queueID,
 		RangeID:     util.Ptr(rangeID),
 	}
-	result, err = s.store.DeleteFromTaskQueues(newExecutionContext(), filter)
+	result, err = s.store.DeleteFromTaskQueues(newExecutionContext(), filter, s.version)
 	s.NoError(err)
 	rowsAffected, err = result.RowsAffected()
 	s.NoError(err)
@@ -240,7 +219,7 @@ func (s *matchingTaskQueueSuite) TestInsertDeleteSelect_Success() {
 		RangeHash:   testMatchingTaskQueueRangeHash,
 		TaskQueueID: queueID,
 	}
-	rows, err := s.store.SelectFromTaskQueues(newExecutionContext(), filter)
+	rows, err := s.store.SelectFromTaskQueues(newExecutionContext(), filter, s.version)
 	s.Error(err) // TODO persistence layer should do proper error translation
 	s.Nil(rows)
 }
@@ -250,7 +229,7 @@ func (s *matchingTaskQueueSuite) TestInsertDeleteSelect_Fail() {
 	rangeID := int64(1)
 
 	taskQueue := s.newRandomTasksQueueRow(queueID, rangeID)
-	result, err := s.store.InsertIntoTaskQueues(newExecutionContext(), &taskQueue)
+	result, err := s.store.InsertIntoTaskQueues(newExecutionContext(), &taskQueue, s.version)
 	s.NoError(err)
 	rowsAffected, err := result.RowsAffected()
 	s.NoError(err)
@@ -261,7 +240,7 @@ func (s *matchingTaskQueueSuite) TestInsertDeleteSelect_Fail() {
 		TaskQueueID: queueID,
 		RangeID:     util.Ptr(rangeID + 1),
 	}
-	result, err = s.store.DeleteFromTaskQueues(newExecutionContext(), filter)
+	result, err = s.store.DeleteFromTaskQueues(newExecutionContext(), filter, s.version)
 	s.NoError(err)
 	rowsAffected, err = result.RowsAffected()
 	s.NoError(err)
@@ -271,7 +250,7 @@ func (s *matchingTaskQueueSuite) TestInsertDeleteSelect_Fail() {
 		RangeHash:   testMatchingTaskQueueRangeHash,
 		TaskQueueID: queueID,
 	}
-	rows, err := s.store.SelectFromTaskQueues(newExecutionContext(), filter)
+	rows, err := s.store.SelectFromTaskQueues(newExecutionContext(), filter, s.version)
 	s.NoError(err)
 	s.Equal([]sqlplugin.TaskQueuesRow{taskQueue}, rows)
 }
@@ -281,7 +260,7 @@ func (s *matchingTaskQueueSuite) TestInsertLock() {
 	rangeID := int64(2)
 
 	taskQueue := s.newRandomTasksQueueRow(queueID, rangeID)
-	result, err := s.store.InsertIntoTaskQueues(newExecutionContext(), &taskQueue)
+	result, err := s.store.InsertIntoTaskQueues(newExecutionContext(), &taskQueue, s.version)
 	s.NoError(err)
 	rowsAffected, err := result.RowsAffected()
 	s.NoError(err)
@@ -293,7 +272,7 @@ func (s *matchingTaskQueueSuite) TestInsertLock() {
 		RangeHash:   testMatchingTaskQueueRangeHash,
 		TaskQueueID: queueID,
 	}
-	rangeIDInDB, err := s.store.LockTaskQueues(newExecutionContext(), filter)
+	rangeIDInDB, err := s.store.LockTaskQueues(newExecutionContext(), filter, s.version)
 	s.NoError(err)
 	s.Equal(rangeID, rangeIDInDB)
 }

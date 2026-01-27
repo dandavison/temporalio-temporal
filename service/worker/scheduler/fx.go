@@ -1,27 +1,3 @@
-// The MIT License
-//
-// Copyright (c) 2020 Temporal Technologies Inc.  All rights reserved.
-//
-// Copyright (c) 2020 Uber Technologies, Inc.
-//
-// Permission is hereby granted, free of charge, to any person obtaining a copy
-// of this software and associated documentation files (the "Software"), to deal
-// in the Software without restriction, including without limitation the rights
-// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-// copies of the Software, and to permit persons to whom the Software is
-// furnished to do so, subject to the following conditions:
-//
-// The above copyright notice and this permission notice shall be included in
-// all copies or substantial portions of the Software.
-//
-// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
-// THE SOFTWARE.
-
 package scheduler
 
 import (
@@ -29,18 +5,18 @@ import (
 	"math"
 	"time"
 
-	enumspb "go.temporal.io/api/enums/v1"
 	"go.temporal.io/api/workflowservice/v1"
 	sdkworker "go.temporal.io/sdk/worker"
 	"go.temporal.io/sdk/workflow"
-	schedspb "go.temporal.io/server/api/schedule/v1"
+	schedulespb "go.temporal.io/server/api/schedule/v1"
+	"go.temporal.io/server/chasm"
 	"go.temporal.io/server/common/dynamicconfig"
 	"go.temporal.io/server/common/log"
 	"go.temporal.io/server/common/metrics"
 	"go.temporal.io/server/common/namespace"
 	"go.temporal.io/server/common/quotas"
 	"go.temporal.io/server/common/resource"
-	"go.temporal.io/server/common/searchattribute"
+	"go.temporal.io/server/common/searchattribute/sadefs"
 	workercommon "go.temporal.io/server/service/worker/common"
 	"go.uber.org/fx"
 )
@@ -50,16 +26,24 @@ const (
 	NamespaceDivision = "TemporalScheduler"
 )
 
-var (
-	VisibilityBaseListQuery = fmt.Sprintf(
-		"%s = '%s' AND %s = '%s' AND %s = '%s'",
-		searchattribute.WorkflowType,
-		WorkflowType,
-		searchattribute.TemporalNamespaceDivision,
-		NamespaceDivision,
-		searchattribute.ExecutionStatus,
-		enumspb.WORKFLOW_EXECUTION_STATUS_RUNNING.String(),
-	)
+// VisibilityListQueryV1 selects only V1 scheduler workflows.
+// Used by listSchedulesWorkflow which calls ListWorkflowExecutions without archetype ID.
+var VisibilityListQueryV1 = fmt.Sprintf(
+	"%s = '%s' AND %s = 'Running'",
+	sadefs.TemporalNamespaceDivision,
+	NamespaceDivision,
+	sadefs.ExecutionStatus,
+)
+
+// VisibilityListQueryChasm selects both V1 scheduler and CHASM scheduler.
+// Used by listSchedulesChasm which calls chasm.ListExecutions with archetype ID set,
+// allowing TemporalSystemExecutionStatus to be translated to ExecutionStatus.
+var VisibilityListQueryChasm = fmt.Sprintf(
+	"((%s = '%s' AND TemporalSystemExecutionStatus = 'Running') OR (%s = '%d' AND ExecutionStatus = 'Running'))",
+	sadefs.TemporalNamespaceDivision,
+	NamespaceDivision,
+	sadefs.TemporalNamespaceDivision,
+	chasm.SchedulerArchetypeID,
 )
 
 type (
@@ -88,7 +72,7 @@ type (
 
 var Module = fx.Options(
 	fx.Provide(NewResult),
-	fx.Provide(NewSpecBuilder),
+	// SpecBuilder is provided as part of chasm Scheduler module at top level.
 )
 
 func NewResult(
@@ -115,7 +99,7 @@ func (s *workerComponent) DedicatedWorkerOptions(ns *namespace.Namespace) *worke
 }
 
 func (s *workerComponent) Register(registry sdkworker.Registry, ns *namespace.Namespace, details workercommon.RegistrationDetails) func() {
-	wfFunc := func(ctx workflow.Context, args *schedspb.StartScheduleArgs) error {
+	wfFunc := func(ctx workflow.Context, args *schedulespb.StartScheduleArgs) error {
 		return schedulerWorkflowWithSpecBuilder(ctx, args, s.specBuilder)
 	}
 	registry.RegisterWorkflowWithOptions(wfFunc, workflow.RegisterOptions{Name: WorkflowType})

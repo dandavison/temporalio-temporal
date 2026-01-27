@@ -1,29 +1,3 @@
-// The MIT License
-//
-// Copyright (c) 2021 Datadog, Inc.
-//
-// Copyright (c) 2020 Temporal Technologies Inc.  All rights reserved.
-//
-// Copyright (c) 2020 Uber Technologies, Inc.
-//
-// Permission is hereby granted, free of charge, to any person obtaining a copy
-// of this software and associated documentation files (the "Software"), to deal
-// in the Software without restriction, including without limitation the rights
-// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-// copies of the Software, and to permit persons to whom the Software is
-// furnished to do so, subject to the following conditions:
-//
-// The above copyright notice and this permission notice shall be included in
-// all copies or substantial portions of the Software.
-//
-// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
-// THE SOFTWARE.
-
 package sqlite
 
 import (
@@ -63,14 +37,19 @@ var queryParameters = map[string]struct{}{
 }
 
 type plugin struct {
-	connPool *connPool
+	queryConverter sqlplugin.VisibilityQueryConverter
+	connPool       *connPool
 }
 
-var sqlitePlugin = &plugin{}
-
 func init() {
-	sqlitePlugin.connPool = newConnPool()
-	sql.RegisterPlugin(PluginName, sqlitePlugin)
+	sql.RegisterPlugin(PluginName, &plugin{
+		queryConverter: &queryConverter{},
+		connPool:       newConnPool(),
+	})
+}
+
+func (p *plugin) GetVisibilityQueryConverter() sqlplugin.VisibilityQueryConverter {
+	return p.queryConverter
 }
 
 // CreateDB initialize the db object
@@ -78,36 +57,15 @@ func (p *plugin) CreateDB(
 	dbKind sqlplugin.DbKind,
 	cfg *config.SQL,
 	r resolver.ServiceResolver,
-	_ log.Logger,
+	logger log.Logger,
 	_ metrics.Handler,
-) (sqlplugin.DB, error) {
-	conn, err := p.connPool.Allocate(cfg, r, p.createDBConnection)
+) (sqlplugin.GenericDB, error) {
+	conn, err := p.connPool.Allocate(cfg, r, logger, p.createDBConnection)
 	if err != nil {
 		return nil, err
 	}
-
-	db := newDB(dbKind, cfg.DatabaseName, conn, nil)
+	db := newDB(dbKind, cfg.DatabaseName, conn, nil, logger)
 	db.OnClose(func() { p.connPool.Close(cfg) }) // remove reference
-
-	return db, nil
-}
-
-// CreateAdminDB initialize the db object
-func (p *plugin) CreateAdminDB(
-	dbKind sqlplugin.DbKind,
-	cfg *config.SQL,
-	r resolver.ServiceResolver,
-	_ log.Logger,
-	_ metrics.Handler,
-) (sqlplugin.AdminDB, error) {
-	conn, err := p.connPool.Allocate(cfg, r, p.createDBConnection)
-	if err != nil {
-		return nil, err
-	}
-
-	db := newDB(dbKind, cfg.DatabaseName, conn, nil)
-	db.OnClose(func() { p.connPool.Close(cfg) }) // remove reference
-
 	return db, nil
 }
 
@@ -118,13 +76,14 @@ func (p *plugin) CreateAdminDB(
 func (p *plugin) createDBConnection(
 	cfg *config.SQL,
 	_ resolver.ServiceResolver,
+	logger log.Logger,
 ) (*sqlx.DB, error) {
 	dsn, err := buildDSN(cfg)
 	if err != nil {
 		return nil, fmt.Errorf("error building DSN: %w", err)
 	}
 
-	db, err := sqlx.Connect(goSqlDriverName, dsn)
+	db, err := sqlx.Connect(goSQLDriverName, dsn)
 	if err != nil {
 		return nil, err
 	}
@@ -146,23 +105,22 @@ func (p *plugin) createDBConnection(
 	switch {
 	case cfg.ConnectAttributes["mode"] == "memory":
 		// creates temporary DB overlay in order to configure database and schemas
-		if err := p.setupSQLiteDatabase(cfg, db); err != nil {
+		if err := p.setupSQLiteDatabase(cfg, db, logger); err != nil {
 			_ = db.Close()
 			return nil, err
 		}
 	case cfg.ConnectAttributes["setup"] == "true": // file mode, optional setting to setup the schema
-		if err := p.setupSQLiteDatabase(cfg, db); err != nil && !isTableExistsError(err) { // benign error indicating tables already exist
+		if err := p.setupSQLiteDatabase(cfg, db, logger); err != nil && !isTableExistsError(err) { // benign error indicating tables already exist
 			_ = db.Close()
 			return nil, err
 		}
-
 	}
 
 	return db, nil
 }
 
-func (p *plugin) setupSQLiteDatabase(cfg *config.SQL, conn *sqlx.DB) error {
-	db := newDB(sqlplugin.DbKindUnknown, cfg.DatabaseName, conn, nil)
+func (p *plugin) setupSQLiteDatabase(cfg *config.SQL, conn *sqlx.DB, logger log.Logger) error {
+	db := newDB(sqlplugin.DbKindUnknown, cfg.DatabaseName, conn, nil, logger)
 	defer func() { _ = db.Close() }()
 
 	err := db.CreateDatabase(cfg.DatabaseName)

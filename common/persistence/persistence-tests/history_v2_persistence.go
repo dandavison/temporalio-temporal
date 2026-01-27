@@ -1,27 +1,3 @@
-// The MIT License
-//
-// Copyright (c) 2020 Temporal Technologies Inc.  All rights reserved.
-//
-// Copyright (c) 2020 Uber Technologies, Inc.
-//
-// Permission is hereby granted, free of charge, to any person obtaining a copy
-// of this software and associated documentation files (the "Software"), to deal
-// in the Software without restriction, including without limitation the rights
-// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-// copies of the Software, and to permit persons to whom the Software is
-// furnished to do so, subject to the following conditions:
-//
-// The above copyright notice and this permission notice shall be included in
-// all copies or substantial portions of the Software.
-//
-// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
-// THE SOFTWARE.
-
 package persistencetests
 
 import (
@@ -31,7 +7,7 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/pborman/uuid"
+	"github.com/google/uuid"
 	"github.com/stretchr/testify/require"
 	historypb "go.temporal.io/api/history/v1"
 	"go.temporal.io/api/serviceerror"
@@ -98,7 +74,7 @@ func (s *HistoryV2PersistenceSuite) TearDownTest() {
 	s.cancel()
 }
 
-// TestGenUUIDs testing  uuid.New() can generate unique UUID
+// TestGenUUIDs testing  uuid.NewString() can generate unique UUID
 func (s *HistoryV2PersistenceSuite) TestGenUUIDs() {
 	wg := sync.WaitGroup{}
 	m := sync.Map{}
@@ -107,7 +83,7 @@ func (s *HistoryV2PersistenceSuite) TestGenUUIDs() {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			u := uuid.New()
+			u := uuid.NewString()
 			m.Store(u, true)
 		}()
 	}
@@ -133,7 +109,7 @@ func (s *HistoryV2PersistenceSuite) TestScanAllTrees() {
 	pgSize := 100
 
 	for i := 0; i < totalTrees; i++ {
-		treeID := uuid.NewRandom().String()
+		treeID := uuid.NewString()
 		bi, err := s.newHistoryBranch(treeID)
 		s.Nil(err)
 
@@ -174,7 +150,7 @@ func (s *HistoryV2PersistenceSuite) TestScanAllTrees() {
 
 // TestReadBranchByPagination test
 func (s *HistoryV2PersistenceSuite) TestReadBranchByPagination() {
-	treeID := uuid.NewRandom().String()
+	treeID := uuid.NewString()
 	bi, err := s.newHistoryBranch(treeID)
 	s.Nil(err)
 
@@ -363,7 +339,7 @@ func (s *HistoryV2PersistenceSuite) TestReadBranchByPagination() {
 
 // TestConcurrentlyCreateAndAppendBranches test
 func (s *HistoryV2PersistenceSuite) TestConcurrentlyCreateAndAppendBranches() {
-	treeID := uuid.NewRandom().String()
+	treeID := uuid.NewString()
 	wg := sync.WaitGroup{}
 	concurrency := 1
 	m := &sync.Map{}
@@ -485,7 +461,7 @@ func (s *HistoryV2PersistenceSuite) TestConcurrentlyCreateAndAppendBranches() {
 
 // TestConcurrentlyForkAndAppendBranches test
 func (s *HistoryV2PersistenceSuite) TestConcurrentlyForkAndAppendBranches() {
-	treeID := uuid.NewRandom().String()
+	treeID := uuid.NewString()
 	wg := sync.WaitGroup{}
 	concurrency := 10
 	masterBr, err := s.newHistoryBranch(treeID)
@@ -705,9 +681,9 @@ func (s *HistoryV2PersistenceSuite) genRandomEvents(eventIDs []int64, version in
 // persistence helper
 func (s *HistoryV2PersistenceSuite) newHistoryBranch(treeID string) ([]byte, error) {
 	return s.ExecutionManager.GetHistoryBranchUtil().NewHistoryBranch(
-		uuid.New(),
-		uuid.New(),
-		uuid.New(),
+		uuid.NewString(),
+		uuid.NewString(),
+		uuid.NewString(),
 		treeID,
 		nil,
 		[]*persistencespb.HistoryBranchRange{},
@@ -852,8 +828,8 @@ func (s *HistoryV2PersistenceSuite) fork(forkBranch []byte, forkNodeID int64) ([
 			ForkNodeID:      forkNodeID,
 			Info:            testForkRunID,
 			ShardID:         s.ShardInfo.GetShardId(),
-			NamespaceID:     uuid.New(),
-			NewRunID:        uuid.New(),
+			NamespaceID:     uuid.NewString(),
+			NewRunID:        uuid.NewString(),
 		})
 		if resp != nil {
 			bi = resp.NewBranchToken

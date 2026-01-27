@@ -1,27 +1,3 @@
-// The MIT License
-//
-// Copyright (c) 2020 Temporal Technologies Inc.  All rights reserved.
-//
-// Copyright (c) 2020 Uber Technologies, Inc.
-//
-// Permission is hereby granted, free of charge, to any person obtaining a copy
-// of this software and associated documentation files (the "Software"), to deal
-// in the Software without restriction, including without limitation the rights
-// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-// copies of the Software, and to permit persons to whom the Software is
-// furnished to do so, subject to the following conditions:
-//
-// The above copyright notice and this permission notice shall be included in
-// all copies or substantial portions of the Software.
-//
-// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
-// THE SOFTWARE.
-
 package queues
 
 import (
@@ -30,17 +6,22 @@ import (
 	"testing"
 	"time"
 
-	"github.com/pborman/uuid"
+	"github.com/google/uuid"
 	"github.com/stretchr/testify/require"
 	"github.com/stretchr/testify/suite"
+	"go.temporal.io/server/chasm"
+	"go.temporal.io/server/common"
 	"go.temporal.io/server/common/clock"
+	"go.temporal.io/server/common/cluster"
 	"go.temporal.io/server/common/collection"
 	"go.temporal.io/server/common/dynamicconfig"
 	"go.temporal.io/server/common/log"
 	"go.temporal.io/server/common/metrics"
-	"go.temporal.io/server/common/persistence"
+	"go.temporal.io/server/common/namespace"
 	"go.temporal.io/server/common/predicates"
+	"go.temporal.io/server/common/telemetry"
 	"go.temporal.io/server/service/history/tasks"
+	"go.temporal.io/server/service/history/tests"
 	"go.uber.org/mock/gomock"
 )
 
@@ -49,9 +30,11 @@ type (
 		suite.Suite
 		*require.Assertions
 
-		controller      *gomock.Controller
-		mockScheduler   *MockScheduler
-		mockRescheduler *MockRescheduler
+		controller            *gomock.Controller
+		mockScheduler         *MockScheduler
+		mockRescheduler       *MockRescheduler
+		mockClusterMetadata   *cluster.MockMetadata
+		mockNamespaceRegistry *namespace.MockRegistry
 
 		logger            log.Logger
 		metricsHandler    metrics.Handler
@@ -71,6 +54,10 @@ func (s *readerSuite) SetupTest() {
 	s.controller = gomock.NewController(s.T())
 	s.mockScheduler = NewMockScheduler(s.controller)
 	s.mockRescheduler = NewMockRescheduler(s.controller)
+	s.mockClusterMetadata = cluster.NewMockMetadata(s.controller)
+	s.mockClusterMetadata.EXPECT().GetCurrentClusterName().Return(cluster.TestCurrentClusterName).AnyTimes()
+	s.mockNamespaceRegistry = namespace.NewMockRegistry(s.controller)
+	s.mockNamespaceRegistry.EXPECT().GetNamespaceByID(gomock.Any()).Return(tests.LocalNamespaceEntry, nil).AnyTimes()
 
 	s.logger = log.NewTestLogger()
 	s.metricsHandler = metrics.NoopMetricsHandler
@@ -84,10 +71,13 @@ func (s *readerSuite) SetupTest() {
 			nil,
 			NewNoopPriorityAssigner(),
 			clock.NewRealTimeSource(),
-			nil,
-			nil,
+			s.mockNamespaceRegistry,
+			s.mockClusterMetadata,
+			chasm.NewRegistry(log.NewTestLogger()),
+			testTaskTagValueProvider,
 			nil,
 			metrics.NoopMetricsHandler,
+			telemetry.NoopTracer,
 		)
 	})
 	s.monitor = newMonitor(tasks.CategoryTypeScheduled, clock.NewRealTimeSource(), &MonitorOptions{
@@ -110,7 +100,8 @@ func (s *readerSuite) TestStartLoadStop() {
 		return func(paginationToken []byte) ([]tasks.Task, []byte, error) {
 			mockTask := tasks.NewMockTask(s.controller)
 			mockTask.EXPECT().GetKey().Return(NewRandomKeyInRange(r)).AnyTimes()
-			mockTask.EXPECT().GetNamespaceID().Return(uuid.New()).AnyTimes()
+			mockTask.EXPECT().GetNamespaceID().Return(uuid.NewString()).AnyTimes()
+			mockTask.EXPECT().GetVisibilityTime().Return(time.Now()).AnyTimes()
 			return []tasks.Task{mockTask}, nil, nil
 		}
 	}
@@ -176,7 +167,10 @@ func (s *readerSuite) TestSplitSlices() {
 
 	splitter = func(s Slice) ([]Slice, bool) {
 		left, right := s.SplitByRange(NewRandomKeyInRange(s.Scope().Range))
-		return []Slice{left, right}, true
+
+		// empty slices should be ignored
+		left, empty := left.SplitByRange(left.Scope().Range.ExclusiveMax)
+		return []Slice{left, empty, right}, true
 	}
 	reader.SplitSlices(splitter)
 	s.Len(reader.Scopes(), 6)
@@ -187,7 +181,11 @@ func (s *readerSuite) TestMergeSlices() {
 	scopes := NewRandomScopes(rand.Intn(10))
 	reader := s.newTestReader(scopes, nil, NoopReaderCompletionFn)
 
-	incomingScopes := NewRandomScopes(rand.Intn(10))
+	incomingScopes := NewRandomScopes(10)
+	// manually set some scopes to be empty and verify they are ignored during merge
+	incomingScopes[2].Predicate = predicates.Empty[tasks.Task]()
+	incomingScopes[7].Predicate = predicates.Empty[tasks.Task]()
+
 	incomingSlices := make([]Slice, 0, len(incomingScopes))
 	for _, incomingScope := range incomingScopes {
 		incomingSlices = append(incomingSlices, NewSlice(nil, s.executableFactory, s.monitor, incomingScope, GrouperNamespaceID{}, noPredicateSizeLimit))
@@ -197,6 +195,7 @@ func (s *readerSuite) TestMergeSlices() {
 
 	mergedScopes := reader.Scopes()
 	for idx, scope := range mergedScopes[:len(mergedScopes)-1] {
+		s.False(scope.IsEmpty())
 		nextScope := mergedScopes[idx+1]
 		if scope.Range.ExclusiveMax.CompareTo(nextScope.Range.InclusiveMin) > 0 {
 			panic(fmt.Sprintf(
@@ -215,6 +214,7 @@ func (s *readerSuite) TestAppendSlices() {
 	reader := s.newTestReader(currentScopes, nil, NoopReaderCompletionFn)
 
 	incomingScopes := scopes[totalScopes/2:]
+	incomingScopes[2].Predicate = predicates.Empty[tasks.Task]()
 	incomingSlices := make([]Slice, 0, len(incomingScopes))
 	for _, incomingScope := range incomingScopes {
 		incomingSlices = append(incomingSlices, NewSlice(nil, s.executableFactory, s.monitor, incomingScope, GrouperNamespaceID{}, noPredicateSizeLimit))
@@ -222,10 +222,11 @@ func (s *readerSuite) TestAppendSlices() {
 
 	reader.AppendSlices(incomingSlices...)
 
-	appendedScopes := reader.Scopes()
-	s.Len(appendedScopes, totalScopes)
-	for idx, scope := range appendedScopes[:len(appendedScopes)-1] {
-		nextScope := appendedScopes[idx+1]
+	scopesAfterAppend := reader.Scopes()
+	s.Len(scopesAfterAppend, totalScopes-1) // one empty scope should be ignored
+	for idx, scope := range scopesAfterAppend[:len(scopesAfterAppend)-1] {
+		s.False(scope.IsEmpty())
+		nextScope := scopesAfterAppend[idx+1]
 		if scope.Range.ExclusiveMax.CompareTo(nextScope.Range.InclusiveMin) > 0 {
 			panic(fmt.Sprintf(
 				"Found overlapping scope in appended slices, left: %v, right: %v",
@@ -290,7 +291,8 @@ func (s *readerSuite) TestPause() {
 		return func(paginationToken []byte) ([]tasks.Task, []byte, error) {
 			mockTask := tasks.NewMockTask(s.controller)
 			mockTask.EXPECT().GetKey().Return(NewRandomKeyInRange(scopes[0].Range)).AnyTimes()
-			mockTask.EXPECT().GetNamespaceID().Return(uuid.New()).AnyTimes()
+			mockTask.EXPECT().GetNamespaceID().Return(uuid.NewString()).AnyTimes()
+			mockTask.EXPECT().GetVisibilityTime().Return(time.Now()).AnyTimes()
 			return []tasks.Task{mockTask}, nil, nil
 		}
 	}
@@ -359,7 +361,8 @@ func (s *readerSuite) TestLoadAndSubmitTasks_MoreTasks() {
 			for i := 0; i != 100; i++ {
 				mockTask := tasks.NewMockTask(s.controller)
 				mockTask.EXPECT().GetKey().Return(NewRandomKeyInRange(scopes[0].Range)).AnyTimes()
-				mockTask.EXPECT().GetNamespaceID().Return(uuid.New()).AnyTimes()
+				mockTask.EXPECT().GetNamespaceID().Return(uuid.NewString()).AnyTimes()
+				mockTask.EXPECT().GetVisibilityTime().Return(time.Now()).AnyTimes()
 				result = append(result, mockTask)
 			}
 
@@ -394,7 +397,8 @@ func (s *readerSuite) TestLoadAndSubmitTasks_NoMoreTasks_HasNextSlice() {
 		return func(paginationToken []byte) ([]tasks.Task, []byte, error) {
 			mockTask := tasks.NewMockTask(s.controller)
 			mockTask.EXPECT().GetKey().Return(NewRandomKeyInRange(scopes[0].Range)).AnyTimes()
-			mockTask.EXPECT().GetNamespaceID().Return(uuid.New()).AnyTimes()
+			mockTask.EXPECT().GetNamespaceID().Return(uuid.NewString()).AnyTimes()
+			mockTask.EXPECT().GetVisibilityTime().Return(time.Now()).AnyTimes()
 			return []tasks.Task{mockTask}, nil, nil
 		}
 	}
@@ -426,7 +430,8 @@ func (s *readerSuite) TestLoadAndSubmitTasks_NoMoreTasks_NoNextSlice() {
 		return func(paginationToken []byte) ([]tasks.Task, []byte, error) {
 			mockTask := tasks.NewMockTask(s.controller)
 			mockTask.EXPECT().GetKey().Return(NewRandomKeyInRange(scopes[0].Range)).AnyTimes()
-			mockTask.EXPECT().GetNamespaceID().Return(uuid.New()).AnyTimes()
+			mockTask.EXPECT().GetNamespaceID().Return(uuid.NewString()).AnyTimes()
+			mockTask.EXPECT().GetVisibilityTime().Return(time.Now()).AnyTimes()
 			return []tasks.Task{mockTask}, nil, nil
 		}
 	}
@@ -477,7 +482,7 @@ func (s *readerSuite) TestSubmitTask() {
 
 	futureFireTime := reader.timeSource.Now().Add(time.Minute)
 	mockExecutable.EXPECT().GetKey().Return(tasks.NewKey(futureFireTime, rand.Int63())).Times(1)
-	s.mockRescheduler.EXPECT().Add(mockExecutable, futureFireTime.Add(persistence.ScheduledTaskMinPrecision)).Times(1)
+	s.mockRescheduler.EXPECT().Add(mockExecutable, futureFireTime.Add(common.ScheduledTaskMinPrecision)).Times(1)
 	reader.submit(mockExecutable)
 }
 
@@ -523,4 +528,8 @@ func (s *readerSuite) newTestReader(
 		s.logger,
 		s.metricsHandler,
 	)
+}
+
+func testTaskTagValueProvider(_ tasks.Task, _ bool, _ *chasm.Registry) string {
+	return "testTaskType"
 }

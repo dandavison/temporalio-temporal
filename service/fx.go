@@ -1,27 +1,3 @@
-// The MIT License
-//
-// Copyright (c) 2020 Temporal Technologies Inc.  All rights reserved.
-//
-// Copyright (c) 2020 Uber Technologies, Inc.
-//
-// Permission is hereby granted, free of charge, to any person obtaining a copy
-// of this software and associated documentation files (the "Software"), to deal
-// in the Software without restriction, including without limitation the rights
-// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-// copies of the Software, and to permit persons to whom the Software is
-// furnished to do so, subject to the following conditions:
-//
-// The above copyright notice and this permission notice shall be included in
-// all copies or substantial portions of the Software.
-//
-// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
-// THE SOFTWARE.
-
 package service
 
 import (
@@ -62,13 +38,15 @@ type (
 	GrpcServerOptionsParams struct {
 		fx.In
 
-		Logger                 log.Logger
-		RpcFactory             common.RPCFactory
-		RetryableInterceptor   *interceptor.RetryableInterceptor
-		TelemetryInterceptor   *interceptor.TelemetryInterceptor
-		RateLimitInterceptor   *interceptor.RateLimitInterceptor
-		TracingInterceptor     telemetry.ServerTraceInterceptor
-		AdditionalInterceptors []grpc.UnaryServerInterceptor `optional:"true"`
+		Logger                       log.Logger
+		RPCFactory                   common.RPCFactory
+		RetryableInterceptor         *interceptor.RetryableInterceptor
+		TelemetryInterceptor         *interceptor.TelemetryInterceptor
+		RateLimitInterceptor         *interceptor.RateLimitInterceptor
+		TracingStatsHandler          telemetry.ServerStatsHandler
+		MetricsStatsHandler          metrics.ServerStatsHandler
+		AdditionalInterceptors       []grpc.UnaryServerInterceptor  `optional:"true"`
+		AdditionalStreamInterceptors []grpc.StreamServerInterceptor `optional:"true"`
 	}
 )
 
@@ -144,22 +122,40 @@ func GrpcServerOptionsProvider(
 	params GrpcServerOptionsParams,
 ) []grpc.ServerOption {
 
-	grpcServerOptions, err := params.RpcFactory.GetInternodeGRPCServerOptions()
+	grpcServerOptions, err := params.RPCFactory.GetInternodeGRPCServerOptions()
 	if err != nil {
 		params.Logger.Fatal("creating gRPC server options failed", tag.Error(err))
+	}
+
+	multiStats := rpc.MultiStatsHandler{}
+	if params.TracingStatsHandler != nil {
+		multiStats = append(multiStats, params.TracingStatsHandler)
+	}
+	if params.MetricsStatsHandler != nil {
+		multiStats = append(multiStats, params.MetricsStatsHandler)
+	}
+	if len(multiStats) > 0 {
+		grpcServerOptions = append(grpcServerOptions, grpc.StatsHandler(multiStats))
+	}
+
+	streamInterceptors := []grpc.StreamServerInterceptor{
+		params.TelemetryInterceptor.StreamIntercept,
+		interceptor.CustomErrorStreamInterceptor,
+	}
+	if len(params.AdditionalStreamInterceptors) > 0 {
+		streamInterceptors = append(streamInterceptors, params.AdditionalStreamInterceptors...)
 	}
 
 	return append(
 		grpcServerOptions,
 		grpc.ChainUnaryInterceptor(getUnaryInterceptors(params)...),
-		grpc.ChainStreamInterceptor(params.TelemetryInterceptor.StreamIntercept),
+		grpc.ChainStreamInterceptor(streamInterceptors...),
 	)
 }
 
 func getUnaryInterceptors(params GrpcServerOptionsParams) []grpc.UnaryServerInterceptor {
 	interceptors := []grpc.UnaryServerInterceptor{
-		rpc.ServiceErrorInterceptor,
-		grpc.UnaryServerInterceptor(params.TracingInterceptor),
+		interceptor.ServiceErrorInterceptor,
 		metrics.NewServerMetricsContextInjectorInterceptor(),
 		metrics.NewServerMetricsTrailerPropagatorInterceptor(params.Logger),
 		params.TelemetryInterceptor.UnaryIntercept,

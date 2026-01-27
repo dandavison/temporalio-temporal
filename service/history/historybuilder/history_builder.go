@@ -1,27 +1,3 @@
-// The MIT License
-//
-// Copyright (c) 2024 Temporal Technologies Inc.  All rights reserved.
-//
-// Copyright (c) 2020 Uber Technologies, Inc.
-//
-// Permission is hereby granted, free of charge, to any person obtaining a copy
-// of this software and associated documentation files (the "Software"), to deal
-// in the Software without restriction, including without limitation the rights
-// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-// copies of the Software, and to permit persons to whom the Software is
-// furnished to do so, subject to the following conditions:
-//
-// The above copyright notice and this permission notice shall be included in
-// all copies or substantial portions of the Software.
-//
-// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
-// THE SOFTWARE.
-
 package historybuilder
 
 import (
@@ -29,6 +5,7 @@ import (
 
 	commandpb "go.temporal.io/api/command/v1"
 	commonpb "go.temporal.io/api/common/v1"
+	deploymentpb "go.temporal.io/api/deployment/v1"
 	enumspb "go.temporal.io/api/enums/v1"
 	failurepb "go.temporal.io/api/failure/v1"
 	historypb "go.temporal.io/api/history/v1"
@@ -36,11 +13,12 @@ import (
 	taskqueuepb "go.temporal.io/api/taskqueue/v1"
 	updatepb "go.temporal.io/api/update/v1"
 	workflowpb "go.temporal.io/api/workflow/v1"
-	"go.temporal.io/server/api/history/v1"
+	historyspb "go.temporal.io/server/api/history/v1"
 	"go.temporal.io/server/api/historyservice/v1"
 	"go.temporal.io/server/common/clock"
 	"go.temporal.io/server/common/metrics"
 	"go.temporal.io/server/common/namespace"
+	"go.temporal.io/server/common/worker_versioning"
 	"google.golang.org/protobuf/types/known/durationpb"
 )
 
@@ -69,6 +47,8 @@ type (
 		MemBufferBatch []*historypb.HistoryEvent
 		// scheduled to started event ID mapping for flushed buffered event
 		ScheduledIDToStartedID map[int64]int64
+		// request id to event ID mapping for flushed buffered event
+		RequestIDToEventID map[string]int64
 	}
 
 	TaskIDGenerator func(number int) ([]int64, error)
@@ -101,6 +81,7 @@ func New(
 			memLatestBatch:         nil,
 			memBufferBatch:         nil,
 			scheduledIDToStartedID: make(map[int64]int64),
+			requestIDToEventID:     make(map[string]int64),
 
 			metricsHandler: metricsHandler,
 		},
@@ -128,6 +109,7 @@ func NewImmutable(histories ...[]*historypb.HistoryEvent) *HistoryBuilder {
 			memLatestBatch:         nil,
 			memBufferBatch:         nil,
 			scheduledIDToStartedID: nil,
+			requestIDToEventID:     nil,
 
 			metricsHandler: nil,
 		},
@@ -135,7 +117,7 @@ func NewImmutable(histories ...[]*historypb.HistoryEvent) *HistoryBuilder {
 	}
 }
 
-func NewImmutableForUpdateNextEventID(lastVersionHistoryItem *history.VersionHistoryItem) *HistoryBuilder {
+func NewImmutableForUpdateNextEventID(lastVersionHistoryItem *historyspb.VersionHistoryItem) *HistoryBuilder {
 	return &HistoryBuilder{
 		EventStore: EventStore{
 			state:           HistoryBuilderStateImmutable,
@@ -153,6 +135,7 @@ func NewImmutableForUpdateNextEventID(lastVersionHistoryItem *history.VersionHis
 			memLatestBatch:         nil,
 			memBufferBatch:         nil,
 			scheduledIDToStartedID: nil,
+			requestIDToEventID:     nil,
 
 			metricsHandler: nil,
 		},
@@ -214,6 +197,7 @@ func (b *HistoryBuilder) AddWorkflowTaskStartedEvent(
 	historySizeBytes int64,
 	versioningStamp *commonpb.WorkerVersionStamp,
 	buildIdRedirectCounter int64,
+	suggestContinueAsNewReasons []enumspb.SuggestContinueAsNewReason,
 ) *historypb.HistoryEvent {
 	event := b.EventFactory.CreateWorkflowTaskStartedEvent(
 		scheduledEventID,
@@ -224,6 +208,7 @@ func (b *HistoryBuilder) AddWorkflowTaskStartedEvent(
 		historySizeBytes,
 		versioningStamp,
 		buildIdRedirectCounter,
+		suggestContinueAsNewReasons,
 	)
 	event, _ = b.EventStore.add(event)
 	return event
@@ -237,6 +222,9 @@ func (b *HistoryBuilder) AddWorkflowTaskCompletedEvent(
 	workerVersionStamp *commonpb.WorkerVersionStamp,
 	sdkMetadata *sdkpb.WorkflowTaskCompletedMetadata,
 	meteringMetadata *commonpb.MeteringMetadata,
+	deploymentName string,
+	deployment *deploymentpb.Deployment,
+	behavior enumspb.VersioningBehavior,
 ) *historypb.HistoryEvent {
 	event := b.EventFactory.CreateWorkflowTaskCompletedEvent(
 		scheduledEventID,
@@ -246,6 +234,9 @@ func (b *HistoryBuilder) AddWorkflowTaskCompletedEvent(
 		workerVersionStamp,
 		sdkMetadata,
 		meteringMetadata,
+		deploymentName,
+		deployment,
+		behavior,
 	)
 	event, _ = b.EventStore.add(event)
 	return event
@@ -287,12 +278,45 @@ func (b *HistoryBuilder) AddWorkflowTaskFailedEvent(
 	return event
 }
 
+func (b *HistoryBuilder) AddWorkflowExecutionPausedEvent(
+	identity string,
+	reason string,
+	requestID string,
+) *historypb.HistoryEvent {
+	event := b.CreateWorkflowExecutionPausedEvent(identity, reason, requestID)
+	// Mark the event as 'worker may ignore' so that older SDKs can safely ignore it.
+	event.WorkerMayIgnore = true
+	event, _ = b.add(event)
+	return event
+}
+
+func (b *HistoryBuilder) AddWorkflowExecutionUnpausedEvent(
+	identity string,
+	reason string,
+	requestID string,
+) *historypb.HistoryEvent {
+	event := b.CreateWorkflowExecutionUnpausedEvent(identity, reason, requestID)
+	// Mark the event as 'worker may ignore' so that older SDKs can safely ignore it.
+	event.WorkerMayIgnore = true
+	event, _ = b.add(event)
+	return event
+}
+
 func (b *HistoryBuilder) AddActivityTaskScheduledEvent(
 	workflowTaskCompletedEventID int64,
 	command *commandpb.ScheduleActivityTaskCommandAttributes,
+	ns namespace.Name,
 ) *historypb.HistoryEvent {
 	event := b.EventFactory.CreateActivityTaskScheduledEvent(workflowTaskCompletedEventID, command)
 	event, _ = b.EventStore.add(event)
+
+	if payloadSize := command.Input.Size(); payloadSize > 0 {
+		b.metricsHandler.Counter(metrics.ActivityPayloadSize.Name()).Record(
+			int64(payloadSize),
+			metrics.OperationTag(metrics.HistoryRecordActivityTaskStartedScope),
+			metrics.NamespaceTag(ns.String()))
+	}
+
 	return event
 }
 
@@ -315,9 +339,18 @@ func (b *HistoryBuilder) AddActivityTaskCompletedEvent(
 	startedEventID int64,
 	identity string,
 	result *commonpb.Payloads,
+	ns namespace.Name,
 ) *historypb.HistoryEvent {
 	event := b.EventFactory.CreateActivityTaskCompletedEvent(scheduledEventID, startedEventID, identity, result)
 	event, _ = b.EventStore.add(event)
+
+	if payloadSize := result.Size(); payloadSize > 0 {
+		b.metricsHandler.Counter(metrics.ActivityPayloadSize.Name()).Record(
+			int64(payloadSize),
+			metrics.OperationTag(metrics.HistoryRespondActivityTaskCompletedScope),
+			metrics.NamespaceTag(ns.String()))
+	}
+
 	return event
 }
 
@@ -327,6 +360,7 @@ func (b *HistoryBuilder) AddActivityTaskFailedEvent(
 	failure *failurepb.Failure,
 	retryState enumspb.RetryState,
 	identity string,
+	ns namespace.Name,
 ) *historypb.HistoryEvent {
 	event := b.EventFactory.CreateActivityTaskFailedEvent(
 		scheduledEventID,
@@ -337,6 +371,14 @@ func (b *HistoryBuilder) AddActivityTaskFailedEvent(
 	)
 
 	event, _ = b.EventStore.add(event)
+
+	if payloadSize := failure.Size(); payloadSize > 0 {
+		b.metricsHandler.Counter(metrics.ActivityPayloadSize.Name()).Record(
+			int64(payloadSize),
+			metrics.OperationTag(metrics.HistoryRespondActivityTaskFailedScope),
+			metrics.NamespaceTag(ns.String()))
+	}
+
 	return event
 }
 
@@ -406,6 +448,28 @@ func (b *HistoryBuilder) AddWorkflowExecutionTerminatedEvent(
 	return event
 }
 
+func (b *HistoryBuilder) AddWorkflowExecutionOptionsUpdatedEvent(
+	versioningOverride *workflowpb.VersioningOverride,
+	unsetVersioningOverride bool,
+	attachRequestID string,
+	attachCompletionCallbacks []*commonpb.Callback,
+	links []*commonpb.Link,
+	identity string,
+	priority *commonpb.Priority,
+) *historypb.HistoryEvent {
+	event := b.EventFactory.CreateWorkflowExecutionOptionsUpdatedEvent(
+		worker_versioning.ConvertOverrideToV32(versioningOverride),
+		unsetVersioningOverride,
+		attachRequestID,
+		attachCompletionCallbacks,
+		links,
+		identity,
+		priority,
+	)
+	event, _ = b.EventStore.add(event)
+	return event
+}
+
 func (b *HistoryBuilder) AddWorkflowExecutionUpdateAcceptedEvent(
 	protocolInstanceID string,
 	acceptedRequestMessageId string,
@@ -441,7 +505,6 @@ func (b *HistoryBuilder) AddContinuedAsNewEvent(
 	command *commandpb.ContinueAsNewWorkflowExecutionCommandAttributes,
 ) *historypb.HistoryEvent {
 	event := b.EventFactory.CreateContinuedAsNewEvent(workflowTaskCompletedEventID, newRunID, command)
-
 	event, _ = b.EventStore.add(event)
 	return event
 }
@@ -668,7 +731,6 @@ func (b *HistoryBuilder) AddWorkflowExecutionSignaledEvent(
 	input *commonpb.Payloads,
 	identity string,
 	header *commonpb.Header,
-	skipGenerateWorkflowTask bool,
 	externalWorkflowExecution *commonpb.WorkflowExecution,
 	links []*commonpb.Link,
 ) *historypb.HistoryEvent {
@@ -677,7 +739,6 @@ func (b *HistoryBuilder) AddWorkflowExecutionSignaledEvent(
 		input,
 		identity,
 		header,
-		skipGenerateWorkflowTask,
 		externalWorkflowExecution,
 		links,
 	)

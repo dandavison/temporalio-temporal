@@ -1,28 +1,4 @@
-// The MIT License
-//
-// Copyright (c) 2020 Temporal Technologies Inc.  All rights reserved.
-//
-// Copyright (c) 2020 Uber Technologies, Inc.
-//
-// Permission is hereby granted, free of charge, to any person obtaining a copy
-// of this software and associated documentation files (the "Software"), to deal
-// in the Software without restriction, including without limitation the rights
-// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-// copies of the Software, and to permit persons to whom the Software is
-// furnished to do so, subject to the following conditions:
-//
-// The above copyright notice and this permission notice shall be included in
-// all copies or substantial portions of the Software.
-//
-// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
-// THE SOFTWARE.
-
-//go:generate mockgen -copyright_file ../../../LICENSE -package $GOPACKAGE -source $GOFILE -destination dlq_handler_mock.go
+//go:generate mockgen -package $GOPACKAGE -source $GOFILE -destination dlq_handler_mock.go
 
 package replication
 
@@ -31,20 +7,16 @@ import (
 	"fmt"
 	"sync"
 
-	historypb "go.temporal.io/api/history/v1"
 	"go.temporal.io/server/api/adminservice/v1"
 	enumsspb "go.temporal.io/server/api/enums/v1"
-	historyspb "go.temporal.io/server/api/history/v1"
 	replicationspb "go.temporal.io/server/api/replication/v1"
 	"go.temporal.io/server/client"
-	"go.temporal.io/server/common/definition"
 	"go.temporal.io/server/common/log"
 	"go.temporal.io/server/common/log/tag"
-	"go.temporal.io/server/common/namespace"
 	"go.temporal.io/server/common/persistence"
-	"go.temporal.io/server/common/xdc"
-	deletemanager "go.temporal.io/server/service/history/deletemanager"
-	"go.temporal.io/server/service/history/shard"
+	"go.temporal.io/server/service/history/deletemanager"
+	historyi "go.temporal.io/server/service/history/interfaces"
+	"go.temporal.io/server/service/history/replication/eventhandler"
 	"go.temporal.io/server/service/history/tasks"
 	wcache "go.temporal.io/server/service/history/workflow/cache"
 )
@@ -76,17 +48,17 @@ type (
 	dlqHandlerImpl struct {
 		taskExecutorsLock    sync.Mutex
 		taskExecutors        map[string]TaskExecutor
-		shard                shard.Context
+		shard                historyi.ShardContext
 		deleteManager        deletemanager.DeleteManager
 		workflowCache        wcache.Cache
-		resender             xdc.NDCHistoryResender
+		remoteHistoryFetcher eventhandler.HistoryPaginatedFetcher
 		taskExecutorProvider TaskExecutorProvider
 		logger               log.Logger
 	}
 )
 
 func NewLazyDLQHandler(
-	shard shard.Context,
+	shard historyi.ShardContext,
 	deleteManager deletemanager.DeleteManager,
 	workflowCache wcache.Cache,
 	clientBean client.Bean,
@@ -103,7 +75,7 @@ func NewLazyDLQHandler(
 }
 
 func newDLQHandler(
-	shard shard.Context,
+	shard historyi.ShardContext,
 	deleteManager deletemanager.DeleteManager,
 	workflowCache wcache.Cache,
 	clientBean client.Bean,
@@ -114,46 +86,15 @@ func newDLQHandler(
 	if taskExecutors == nil {
 		panic("Failed to initialize replication DLQ handler due to nil task executors")
 	}
-
 	return &dlqHandlerImpl{
 		shard:         shard,
 		deleteManager: deleteManager,
 		workflowCache: workflowCache,
-		resender: xdc.NewNDCHistoryResender(
+		remoteHistoryFetcher: eventhandler.NewHistoryPaginatedFetcher(
 			shard.GetNamespaceRegistry(),
 			clientBean,
-			func(
-				ctx context.Context,
-				sourceClusterName string,
-				namespaceId namespace.ID,
-				workflowId string,
-				runId string,
-				events [][]*historypb.HistoryEvent,
-				versionHistory []*historyspb.VersionHistoryItem,
-			) error {
-				engine, err := shard.GetEngine(ctx)
-				if err != nil {
-					return err
-				}
-				return engine.ReplicateHistoryEvents(
-					ctx,
-					definition.WorkflowKey{
-						NamespaceID: namespaceId.String(),
-						WorkflowID:  workflowId,
-						RunID:       runId,
-					},
-					nil,
-					versionHistory,
-					events,
-					nil,
-					"",
-				)
-
-			},
 			shard.GetPayloadSerializer(),
-			shard.GetConfig().StandbyTaskReReplicationContextTimeout,
 			shard.GetLogger(),
-			nil,
 		),
 		taskExecutors:        taskExecutors,
 		taskExecutorProvider: taskExecutorProvider,
@@ -377,11 +318,11 @@ func (r *dlqHandlerImpl) getOrCreateTaskExecutor(clusterName string) (TaskExecut
 		return executor, nil
 	}
 	taskExecutor := r.taskExecutorProvider(TaskExecutorParams{
-		RemoteCluster:   clusterName,
-		Shard:           r.shard,
-		HistoryResender: r.resender,
-		DeleteManager:   r.deleteManager,
-		WorkflowCache:   r.workflowCache,
+		RemoteCluster:        clusterName,
+		Shard:                r.shard,
+		RemoteHistoryFetcher: r.remoteHistoryFetcher,
+		DeleteManager:        r.deleteManager,
+		WorkflowCache:        r.workflowCache,
 	})
 	r.taskExecutors[clusterName] = taskExecutor
 	return taskExecutor, nil

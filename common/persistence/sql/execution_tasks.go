@@ -1,27 +1,3 @@
-// The MIT License
-//
-// Copyright (c) 2020 Temporal Technologies Inc.  All rights reserved.
-//
-// Copyright (c) 2020 Uber Technologies, Inc.
-//
-// Permission is hereby granted, free of charge, to any person obtaining a copy
-// of this software and associated documentation files (the "Software"), to deal
-// in the Software without restriction, including without limitation the rights
-// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-// copies of the Software, and to permit persons to whom the Software is
-// furnished to do so, subject to the following conditions:
-//
-// The above copyright notice and this permission notice shall be included in
-// all copies or substantial portions of the Software.
-//
-// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
-// THE SOFTWARE.
-
 package sql
 
 import (
@@ -29,13 +5,11 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
-	"fmt"
 	"math"
 	"time"
 
 	"go.temporal.io/api/serviceerror"
 	p "go.temporal.io/server/common/persistence"
-	"go.temporal.io/server/common/persistence/serialization"
 	"go.temporal.io/server/common/persistence/sql/sqlplugin"
 	"go.temporal.io/server/service/history/tasks"
 )
@@ -67,7 +41,7 @@ func (m *sqlExecutionStore) GetHistoryTasks(
 	case tasks.CategoryTypeScheduled:
 		return m.getHistoryScheduledTasks(ctx, request)
 	default:
-		return nil, serviceerror.NewInternal(fmt.Sprintf("Unknown task category type: %v", request.TaskCategory))
+		return nil, serviceerror.NewInternalf("Unknown task category type: %v", request.TaskCategory)
 	}
 }
 
@@ -75,13 +49,17 @@ func (m *sqlExecutionStore) CompleteHistoryTask(
 	ctx context.Context,
 	request *p.CompleteHistoryTaskRequest,
 ) error {
+	// Ignore the request if it is best effort
+	if request.BestEffort {
+		return nil
+	}
 	switch request.TaskCategory.Type() {
 	case tasks.CategoryTypeImmediate:
 		return m.completeHistoryImmediateTask(ctx, request)
 	case tasks.CategoryTypeScheduled:
 		return m.completeHistoryScheduledTask(ctx, request)
 	default:
-		return serviceerror.NewInternal(fmt.Sprintf("Unknown task category type: %v", request.TaskCategory))
+		return serviceerror.NewInternalf("Unknown task category type: %v", request.TaskCategory)
 	}
 }
 
@@ -95,7 +73,7 @@ func (m *sqlExecutionStore) RangeCompleteHistoryTasks(
 	case tasks.CategoryTypeScheduled:
 		return m.rangeCompleteHistoryScheduledTasks(ctx, request)
 	default:
-		return serviceerror.NewInternal(fmt.Sprintf("Unknown task category type: %v", request.TaskCategory))
+		return serviceerror.NewInternalf("Unknown task category type: %v", request.TaskCategory)
 	}
 }
 
@@ -121,7 +99,7 @@ func (m *sqlExecutionStore) getHistoryImmediateTasks(
 		return nil, err
 	}
 
-	rows, err := m.Db.RangeSelectFromHistoryImmediateTasks(ctx, sqlplugin.HistoryImmediateTasksRangeFilter{
+	rows, err := m.DB.RangeSelectFromHistoryImmediateTasks(ctx, sqlplugin.HistoryImmediateTasksRangeFilter{
 		ShardID:            request.ShardID,
 		CategoryID:         int32(categoryID),
 		InclusiveMinTaskID: inclusiveMinTaskID,
@@ -130,8 +108,8 @@ func (m *sqlExecutionStore) getHistoryImmediateTasks(
 	})
 	if err != nil {
 		if err != sql.ErrNoRows {
-			return nil, serviceerror.NewUnavailable(
-				fmt.Sprintf("GetHistoryTasks operation failed. Select failed. CategoryID: %v. Error: %v", categoryID, err),
+			return nil, serviceerror.NewUnavailablef(
+				"GetHistoryTasks operation failed. Select failed. CategoryID: %v. Error: %v", categoryID, err,
 			)
 		}
 	}
@@ -175,13 +153,13 @@ func (m *sqlExecutionStore) completeHistoryImmediateTask(
 		return m.completeReplicationTask(ctx, request)
 	}
 
-	if _, err := m.Db.DeleteFromHistoryImmediateTasks(ctx, sqlplugin.HistoryImmediateTasksFilter{
+	if _, err := m.DB.DeleteFromHistoryImmediateTasks(ctx, sqlplugin.HistoryImmediateTasksFilter{
 		ShardID:    request.ShardID,
 		CategoryID: int32(categoryID),
 		TaskID:     request.TaskKey.TaskID,
 	}); err != nil {
-		return serviceerror.NewUnavailable(
-			fmt.Sprintf("CompleteHistoryTask operation failed. CategoryID: %v. Error: %v", categoryID, err),
+		return serviceerror.NewUnavailablef(
+			"CompleteHistoryTask operation failed. CategoryID: %v. Error: %v", categoryID, err,
 		)
 	}
 	return nil
@@ -204,14 +182,14 @@ func (m *sqlExecutionStore) rangeCompleteHistoryImmediateTasks(
 		return m.rangeCompleteReplicationTasks(ctx, request)
 	}
 
-	if _, err := m.Db.RangeDeleteFromHistoryImmediateTasks(ctx, sqlplugin.HistoryImmediateTasksRangeFilter{
+	if _, err := m.DB.RangeDeleteFromHistoryImmediateTasks(ctx, sqlplugin.HistoryImmediateTasksRangeFilter{
 		ShardID:            request.ShardID,
 		CategoryID:         int32(categoryID),
 		InclusiveMinTaskID: request.InclusiveMinTaskKey.TaskID,
 		ExclusiveMaxTaskID: request.ExclusiveMaxTaskKey.TaskID,
 	}); err != nil {
-		return serviceerror.NewUnavailable(
-			fmt.Sprintf("RangeCompleteTransferTask operation failed. CategoryID: %v. Error: %v", categoryID, err),
+		return serviceerror.NewUnavailablef(
+			"RangeCompleteTransferTask operation failed. CategoryID: %v. Error: %v", categoryID, err,
 		)
 	}
 	return nil
@@ -232,13 +210,13 @@ func (m *sqlExecutionStore) getHistoryScheduledTasks(
 	pageToken := &scheduledTaskPageToken{TaskID: math.MinInt64, Timestamp: request.InclusiveMinTaskKey.FireTime}
 	if len(request.NextPageToken) > 0 {
 		if err := pageToken.deserialize(request.NextPageToken); err != nil {
-			return nil, serviceerror.NewInternal(
-				fmt.Sprintf("categoryID: %v. error deserializing scheduledTaskPageToken: %v", categoryID, err),
+			return nil, serviceerror.NewInternalf(
+				"categoryID: %v. error deserializing scheduledTaskPageToken: %v", categoryID, err,
 			)
 		}
 	}
 
-	rows, err := m.Db.RangeSelectFromHistoryScheduledTasks(ctx, sqlplugin.HistoryScheduledTasksRangeFilter{
+	rows, err := m.DB.RangeSelectFromHistoryScheduledTasks(ctx, sqlplugin.HistoryScheduledTasksRangeFilter{
 		ShardID:                         request.ShardID,
 		CategoryID:                      int32(categoryID),
 		InclusiveMinVisibilityTimestamp: pageToken.Timestamp,
@@ -248,8 +226,8 @@ func (m *sqlExecutionStore) getHistoryScheduledTasks(
 	})
 
 	if err != nil && err != sql.ErrNoRows {
-		return nil, serviceerror.NewUnavailable(
-			fmt.Sprintf("GetHistoryTasks operation failed. Select failed. CategoryID: %v. Error: %v", categoryID, err),
+		return nil, serviceerror.NewUnavailablef(
+			"GetHistoryTasks operation failed. Select failed. CategoryID: %v. Error: %v", categoryID, err,
 		)
 	}
 
@@ -268,7 +246,7 @@ func (m *sqlExecutionStore) getHistoryScheduledTasks(
 		}
 		nextToken, err := pageToken.serialize()
 		if err != nil {
-			return nil, serviceerror.NewInternal(fmt.Sprintf("GetHistoryTasks: error serializing page token: %v", err))
+			return nil, serviceerror.NewInternalf("GetHistoryTasks: error serializing page token: %v", err)
 		}
 		resp.NextPageToken = nextToken
 	}
@@ -288,13 +266,13 @@ func (m *sqlExecutionStore) completeHistoryScheduledTask(
 		return m.completeTimerTask(ctx, request)
 	}
 
-	if _, err := m.Db.DeleteFromHistoryScheduledTasks(ctx, sqlplugin.HistoryScheduledTasksFilter{
+	if _, err := m.DB.DeleteFromHistoryScheduledTasks(ctx, sqlplugin.HistoryScheduledTasksFilter{
 		ShardID:             request.ShardID,
 		CategoryID:          int32(categoryID),
 		VisibilityTimestamp: request.TaskKey.FireTime,
 		TaskID:              request.TaskKey.TaskID,
 	}); err != nil {
-		return serviceerror.NewUnavailable(fmt.Sprintf("CompleteHistoryTask operation failed. CategoryID: %v. Error: %v", categoryID, err))
+		return serviceerror.NewUnavailablef("CompleteHistoryTask operation failed. CategoryID: %v. Error: %v", categoryID, err)
 	}
 	return nil
 }
@@ -313,13 +291,13 @@ func (m *sqlExecutionStore) rangeCompleteHistoryScheduledTasks(
 
 	start := request.InclusiveMinTaskKey.FireTime
 	end := request.ExclusiveMaxTaskKey.FireTime
-	if _, err := m.Db.RangeDeleteFromHistoryScheduledTasks(ctx, sqlplugin.HistoryScheduledTasksRangeFilter{
+	if _, err := m.DB.RangeDeleteFromHistoryScheduledTasks(ctx, sqlplugin.HistoryScheduledTasksRangeFilter{
 		ShardID:                         request.ShardID,
 		CategoryID:                      int32(categoryID),
 		InclusiveMinVisibilityTimestamp: start,
 		ExclusiveMaxVisibilityTimestamp: end,
 	}); err != nil {
-		return serviceerror.NewUnavailable(fmt.Sprintf("RangeCompleteHistoryTask operation failed. CategoryID: %v. Error: %v", categoryID, err))
+		return serviceerror.NewUnavailablef("RangeCompleteHistoryTask operation failed. CategoryID: %v. Error: %v", categoryID, err)
 	}
 	return nil
 }
@@ -333,7 +311,7 @@ func (m *sqlExecutionStore) getTransferTasks(
 		return nil, err
 	}
 
-	rows, err := m.Db.RangeSelectFromTransferTasks(ctx, sqlplugin.TransferTasksRangeFilter{
+	rows, err := m.DB.RangeSelectFromTransferTasks(ctx, sqlplugin.TransferTasksRangeFilter{
 		ShardID:            request.ShardID,
 		InclusiveMinTaskID: inclusiveMinTaskID,
 		ExclusiveMaxTaskID: exclusiveMaxTaskID,
@@ -341,7 +319,7 @@ func (m *sqlExecutionStore) getTransferTasks(
 	})
 	if err != nil {
 		if err != sql.ErrNoRows {
-			return nil, serviceerror.NewUnavailable(fmt.Sprintf("GetTransferTasks operation failed. Select failed. Error: %v", err))
+			return nil, serviceerror.NewUnavailablef("GetTransferTasks operation failed. Select failed. Error: %v", err)
 		}
 	}
 	resp := &p.InternalGetHistoryTasksResponse{
@@ -371,11 +349,11 @@ func (m *sqlExecutionStore) completeTransferTask(
 	ctx context.Context,
 	request *p.CompleteHistoryTaskRequest,
 ) error {
-	if _, err := m.Db.DeleteFromTransferTasks(ctx, sqlplugin.TransferTasksFilter{
+	if _, err := m.DB.DeleteFromTransferTasks(ctx, sqlplugin.TransferTasksFilter{
 		ShardID: request.ShardID,
 		TaskID:  request.TaskKey.TaskID,
 	}); err != nil {
-		return serviceerror.NewUnavailable(fmt.Sprintf("CompleteTransferTask operation failed. Error: %v", err))
+		return serviceerror.NewUnavailablef("CompleteTransferTask operation failed. Error: %v", err)
 	}
 	return nil
 }
@@ -384,12 +362,12 @@ func (m *sqlExecutionStore) rangeCompleteTransferTasks(
 	ctx context.Context,
 	request *p.RangeCompleteHistoryTasksRequest,
 ) error {
-	if _, err := m.Db.RangeDeleteFromTransferTasks(ctx, sqlplugin.TransferTasksRangeFilter{
+	if _, err := m.DB.RangeDeleteFromTransferTasks(ctx, sqlplugin.TransferTasksRangeFilter{
 		ShardID:            request.ShardID,
 		InclusiveMinTaskID: request.InclusiveMinTaskKey.TaskID,
 		ExclusiveMaxTaskID: request.ExclusiveMaxTaskKey.TaskID,
 	}); err != nil {
-		return serviceerror.NewUnavailable(fmt.Sprintf("RangeCompleteTransferTask operation failed. Error: %v", err))
+		return serviceerror.NewUnavailablef("RangeCompleteTransferTask operation failed. Error: %v", err)
 	}
 	return nil
 }
@@ -401,11 +379,11 @@ func (m *sqlExecutionStore) getTimerTasks(
 	pageToken := &scheduledTaskPageToken{TaskID: math.MinInt64, Timestamp: request.InclusiveMinTaskKey.FireTime}
 	if len(request.NextPageToken) > 0 {
 		if err := pageToken.deserialize(request.NextPageToken); err != nil {
-			return nil, serviceerror.NewInternal(fmt.Sprintf("error deserializing timerTaskPageToken: %v", err))
+			return nil, serviceerror.NewInternalf("error deserializing timerTaskPageToken: %v", err)
 		}
 	}
 
-	rows, err := m.Db.RangeSelectFromTimerTasks(ctx, sqlplugin.TimerTasksRangeFilter{
+	rows, err := m.DB.RangeSelectFromTimerTasks(ctx, sqlplugin.TimerTasksRangeFilter{
 		ShardID:                         request.ShardID,
 		InclusiveMinVisibilityTimestamp: pageToken.Timestamp,
 		InclusiveMinTaskID:              pageToken.TaskID,
@@ -414,7 +392,7 @@ func (m *sqlExecutionStore) getTimerTasks(
 	})
 
 	if err != nil && err != sql.ErrNoRows {
-		return nil, serviceerror.NewUnavailable(fmt.Sprintf("GetTimerTasks operation failed. Select failed. Error: %v", err))
+		return nil, serviceerror.NewUnavailablef("GetTimerTasks operation failed. Select failed. Error: %v", err)
 	}
 
 	resp := &p.InternalGetHistoryTasksResponse{Tasks: make([]p.InternalHistoryTask, 0, len(rows))}
@@ -432,7 +410,7 @@ func (m *sqlExecutionStore) getTimerTasks(
 		}
 		nextToken, err := pageToken.serialize()
 		if err != nil {
-			return nil, serviceerror.NewInternal(fmt.Sprintf("GetTimerTasks: error serializing page token: %v", err))
+			return nil, serviceerror.NewInternalf("GetTimerTasks: error serializing page token: %v", err)
 		}
 		resp.NextPageToken = nextToken
 	}
@@ -444,12 +422,12 @@ func (m *sqlExecutionStore) completeTimerTask(
 	ctx context.Context,
 	request *p.CompleteHistoryTaskRequest,
 ) error {
-	if _, err := m.Db.DeleteFromTimerTasks(ctx, sqlplugin.TimerTasksFilter{
+	if _, err := m.DB.DeleteFromTimerTasks(ctx, sqlplugin.TimerTasksFilter{
 		ShardID:             request.ShardID,
 		VisibilityTimestamp: request.TaskKey.FireTime,
 		TaskID:              request.TaskKey.TaskID,
 	}); err != nil {
-		return serviceerror.NewUnavailable(fmt.Sprintf("CompleteTimerTask operation failed. Error: %v", err))
+		return serviceerror.NewUnavailablef("CompleteTimerTask operation failed. Error: %v", err)
 	}
 	return nil
 }
@@ -460,12 +438,12 @@ func (m *sqlExecutionStore) rangeCompleteTimerTasks(
 ) error {
 	start := request.InclusiveMinTaskKey.FireTime
 	end := request.ExclusiveMaxTaskKey.FireTime
-	if _, err := m.Db.RangeDeleteFromTimerTasks(ctx, sqlplugin.TimerTasksRangeFilter{
+	if _, err := m.DB.RangeDeleteFromTimerTasks(ctx, sqlplugin.TimerTasksRangeFilter{
 		ShardID:                         request.ShardID,
 		InclusiveMinVisibilityTimestamp: start,
 		ExclusiveMaxVisibilityTimestamp: end,
 	}); err != nil {
-		return serviceerror.NewUnavailable(fmt.Sprintf("RangeCompleteTimerTask operation failed. Error: %v", err))
+		return serviceerror.NewUnavailablef("RangeCompleteTimerTask operation failed. Error: %v", err)
 	}
 	return nil
 }
@@ -479,7 +457,7 @@ func (m *sqlExecutionStore) getReplicationTasks(
 		return nil, err
 	}
 
-	rows, err := m.Db.RangeSelectFromReplicationTasks(ctx, sqlplugin.ReplicationTasksRangeFilter{
+	rows, err := m.DB.RangeSelectFromReplicationTasks(ctx, sqlplugin.ReplicationTasksRangeFilter{
 		ShardID:            request.ShardID,
 		InclusiveMinTaskID: inclusiveMinTaskID,
 		ExclusiveMaxTaskID: exclusiveMaxTaskID,
@@ -492,7 +470,7 @@ func (m *sqlExecutionStore) getReplicationTasks(
 	case sql.ErrNoRows:
 		return &p.InternalGetHistoryTasksResponse{}, nil
 	default:
-		return nil, serviceerror.NewUnavailable(fmt.Sprintf("GetReplicationTasks operation failed. Select failed: %v", err))
+		return nil, serviceerror.NewUnavailablef("GetReplicationTasks operation failed. Select failed: %v", err)
 	}
 }
 
@@ -583,11 +561,11 @@ func (m *sqlExecutionStore) completeReplicationTask(
 	ctx context.Context,
 	request *p.CompleteHistoryTaskRequest,
 ) error {
-	if _, err := m.Db.DeleteFromReplicationTasks(ctx, sqlplugin.ReplicationTasksFilter{
+	if _, err := m.DB.DeleteFromReplicationTasks(ctx, sqlplugin.ReplicationTasksFilter{
 		ShardID: request.ShardID,
 		TaskID:  request.TaskKey.TaskID,
 	}); err != nil {
-		return serviceerror.NewUnavailable(fmt.Sprintf("CompleteReplicationTask operation failed. Error: %v", err))
+		return serviceerror.NewUnavailablef("CompleteReplicationTask operation failed. Error: %v", err)
 	}
 	return nil
 }
@@ -596,12 +574,12 @@ func (m *sqlExecutionStore) rangeCompleteReplicationTasks(
 	ctx context.Context,
 	request *p.RangeCompleteHistoryTasksRequest,
 ) error {
-	if _, err := m.Db.RangeDeleteFromReplicationTasks(ctx, sqlplugin.ReplicationTasksRangeFilter{
+	if _, err := m.DB.RangeDeleteFromReplicationTasks(ctx, sqlplugin.ReplicationTasksRangeFilter{
 		ShardID:            request.ShardID,
 		InclusiveMinTaskID: request.InclusiveMinTaskKey.TaskID,
 		ExclusiveMaxTaskID: request.ExclusiveMaxTaskKey.TaskID,
 	}); err != nil {
-		return serviceerror.NewUnavailable(fmt.Sprintf("RangeCompleteReplicationTask operation failed. Error: %v", err))
+		return serviceerror.NewUnavailablef("RangeCompleteReplicationTask operation failed. Error: %v", err)
 	}
 	return nil
 }
@@ -611,13 +589,13 @@ func (m *sqlExecutionStore) PutReplicationTaskToDLQ(
 	request *p.PutReplicationTaskToDLQRequest,
 ) error {
 	replicationTask := request.TaskInfo
-	blob, err := serialization.ReplicationTaskInfoToBlob(replicationTask)
+	blob, err := m.serializer.ReplicationTaskInfoToBlob(replicationTask)
 
 	if err != nil {
 		return err
 	}
 
-	_, err = m.Db.InsertIntoReplicationDLQTasks(ctx, []sqlplugin.ReplicationDLQTasksRow{{
+	_, err = m.DB.InsertIntoReplicationDLQTasks(ctx, []sqlplugin.ReplicationDLQTasksRow{{
 		SourceClusterName: request.SourceClusterName,
 		ShardID:           request.ShardID,
 		TaskID:            replicationTask.GetTaskId(),
@@ -627,8 +605,8 @@ func (m *sqlExecutionStore) PutReplicationTaskToDLQ(
 
 	// Tasks are immutable. So it's fine if we already persisted it before.
 	// This can happen when tasks are retried (ack and cleanup can have lag on source side).
-	if err != nil && !m.Db.IsDupEntryError(err) {
-		return serviceerror.NewUnavailable(fmt.Sprintf("Failed to create replication tasks. Error: %v", err))
+	if err != nil && !m.DB.IsDupEntryError(err) {
+		return serviceerror.NewUnavailablef("Failed to create replication tasks. Error: %v", err)
 	}
 
 	return nil
@@ -643,7 +621,7 @@ func (m *sqlExecutionStore) GetReplicationTasksFromDLQ(
 		return nil, err
 	}
 
-	rows, err := m.Db.RangeSelectFromReplicationDLQTasks(ctx, sqlplugin.ReplicationDLQTasksRangeFilter{
+	rows, err := m.DB.RangeSelectFromReplicationDLQTasks(ctx, sqlplugin.ReplicationDLQTasksRangeFilter{
 		ShardID:            request.ShardID,
 		InclusiveMinTaskID: inclusiveMinTaskID,
 		ExclusiveMaxTaskID: exclusiveMaxTaskID,
@@ -657,7 +635,7 @@ func (m *sqlExecutionStore) GetReplicationTasksFromDLQ(
 	case sql.ErrNoRows:
 		return &p.InternalGetHistoryTasksResponse{}, nil
 	default:
-		return nil, serviceerror.NewUnavailable(fmt.Sprintf("GetReplicationTasks operation failed. Select failed: %v", err))
+		return nil, serviceerror.NewUnavailablef("GetReplicationTasks operation failed. Select failed: %v", err)
 	}
 }
 
@@ -665,7 +643,7 @@ func (m *sqlExecutionStore) DeleteReplicationTaskFromDLQ(
 	ctx context.Context,
 	request *p.DeleteReplicationTaskFromDLQRequest,
 ) error {
-	if _, err := m.Db.DeleteFromReplicationDLQTasks(ctx, sqlplugin.ReplicationDLQTasksFilter{
+	if _, err := m.DB.DeleteFromReplicationDLQTasks(ctx, sqlplugin.ReplicationDLQTasksFilter{
 		ShardID:           request.ShardID,
 		TaskID:            request.TaskKey.TaskID,
 		SourceClusterName: request.SourceClusterName,
@@ -679,7 +657,7 @@ func (m *sqlExecutionStore) RangeDeleteReplicationTaskFromDLQ(
 	ctx context.Context,
 	request *p.RangeDeleteReplicationTaskFromDLQRequest,
 ) error {
-	if _, err := m.Db.RangeDeleteFromReplicationDLQTasks(ctx, sqlplugin.ReplicationDLQTasksRangeFilter{
+	if _, err := m.DB.RangeDeleteFromReplicationDLQTasks(ctx, sqlplugin.ReplicationDLQTasksRangeFilter{
 		ShardID:            request.ShardID,
 		SourceClusterName:  request.SourceClusterName,
 		InclusiveMinTaskID: request.InclusiveMinTaskKey.TaskID,
@@ -694,7 +672,7 @@ func (m *sqlExecutionStore) IsReplicationDLQEmpty(
 	ctx context.Context,
 	request *p.GetReplicationTasksFromDLQRequest,
 ) (bool, error) {
-	res, err := m.Db.RangeSelectFromReplicationDLQTasks(ctx, sqlplugin.ReplicationDLQTasksRangeFilter{
+	res, err := m.DB.RangeSelectFromReplicationDLQTasks(ctx, sqlplugin.ReplicationDLQTasksRangeFilter{
 		ShardID:            request.ShardID,
 		SourceClusterName:  request.SourceClusterName,
 		InclusiveMinTaskID: request.InclusiveMinTaskKey.TaskID,
@@ -720,7 +698,7 @@ func (m *sqlExecutionStore) getVisibilityTasks(
 		return nil, err
 	}
 
-	rows, err := m.Db.RangeSelectFromVisibilityTasks(ctx, sqlplugin.VisibilityTasksRangeFilter{
+	rows, err := m.DB.RangeSelectFromVisibilityTasks(ctx, sqlplugin.VisibilityTasksRangeFilter{
 		ShardID:            request.ShardID,
 		InclusiveMinTaskID: inclusiveMinTaskID,
 		ExclusiveMaxTaskID: exclusiveMaxTaskID,
@@ -728,7 +706,7 @@ func (m *sqlExecutionStore) getVisibilityTasks(
 	})
 	if err != nil {
 		if err != sql.ErrNoRows {
-			return nil, serviceerror.NewUnavailable(fmt.Sprintf("GetVisibilityTasks operation failed. Select failed. Error: %v", err))
+			return nil, serviceerror.NewUnavailablef("GetVisibilityTasks operation failed. Select failed. Error: %v", err)
 		}
 	}
 	resp := &p.InternalGetHistoryTasksResponse{
@@ -758,11 +736,11 @@ func (m *sqlExecutionStore) completeVisibilityTask(
 	ctx context.Context,
 	request *p.CompleteHistoryTaskRequest,
 ) error {
-	if _, err := m.Db.DeleteFromVisibilityTasks(ctx, sqlplugin.VisibilityTasksFilter{
+	if _, err := m.DB.DeleteFromVisibilityTasks(ctx, sqlplugin.VisibilityTasksFilter{
 		ShardID: request.ShardID,
 		TaskID:  request.TaskKey.TaskID,
 	}); err != nil {
-		return serviceerror.NewUnavailable(fmt.Sprintf("CompleteVisibilityTask operation failed. Error: %v", err))
+		return serviceerror.NewUnavailablef("CompleteVisibilityTask operation failed. Error: %v", err)
 	}
 	return nil
 }
@@ -771,12 +749,12 @@ func (m *sqlExecutionStore) rangeCompleteVisibilityTasks(
 	ctx context.Context,
 	request *p.RangeCompleteHistoryTasksRequest,
 ) error {
-	if _, err := m.Db.RangeDeleteFromVisibilityTasks(ctx, sqlplugin.VisibilityTasksRangeFilter{
+	if _, err := m.DB.RangeDeleteFromVisibilityTasks(ctx, sqlplugin.VisibilityTasksRangeFilter{
 		ShardID:            request.ShardID,
 		InclusiveMinTaskID: request.InclusiveMinTaskKey.TaskID,
 		ExclusiveMaxTaskID: request.ExclusiveMaxTaskKey.TaskID,
 	}); err != nil {
-		return serviceerror.NewUnavailable(fmt.Sprintf("RangeCompleteVisibilityTask operation failed. Error: %v", err))
+		return serviceerror.NewUnavailablef("RangeCompleteVisibilityTask operation failed. Error: %v", err)
 	}
 	return nil
 }

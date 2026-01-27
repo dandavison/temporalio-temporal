@@ -1,27 +1,3 @@
-// The MIT License
-//
-// Copyright (c) 2020 Temporal Technologies Inc.  All rights reserved.
-//
-// Copyright (c) 2020 Uber Technologies, Inc.
-//
-// Permission is hereby granted, free of charge, to any person obtaining a copy
-// of this software and associated documentation files (the "Software"), to deal
-// in the Software without restriction, including without limitation the rights
-// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-// copies of the Software, and to permit persons to whom the Software is
-// furnished to do so, subject to the following conditions:
-//
-// The above copyright notice and this permission notice shall be included in
-// all copies or substantial portions of the Software.
-//
-// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
-// THE SOFTWARE.
-
 package tests
 
 import (
@@ -32,7 +8,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	commonpb "go.temporal.io/api/common/v1"
-	"go.temporal.io/api/enums/v1"
+	enumspb "go.temporal.io/api/enums/v1"
 	persistencespb "go.temporal.io/server/api/persistence/v1"
 	"go.temporal.io/server/client/history/historytest"
 	"go.temporal.io/server/common"
@@ -109,7 +85,8 @@ func (q faultyQueue) ListQueues(
 // RunHistoryTaskQueueManagerTestSuite runs all tests for the history task queue manager against a given queue provided by a
 // particular database. This test suite should be re-used to test all queue implementations.
 func RunHistoryTaskQueueManagerTestSuite(t *testing.T, queue persistence.QueueV2) {
-	historyTaskQueueManager := persistence.NewHistoryTaskQueueManager(queue, serialization.NewSerializer())
+	serializer := serialization.NewSerializer()
+	historyTaskQueueManager := persistence.NewHistoryTaskQueueManager(queue, serializer)
 	t.Run("ListQueues", func(t *testing.T) {
 		listqueuestest.TestInvoke(t, historyTaskQueueManager)
 	})
@@ -129,7 +106,7 @@ func RunHistoryTaskQueueManagerTestSuite(t *testing.T, queue persistence.QueueV2
 		t.Parallel()
 		testHistoryTaskQueueManagerErrDeserializeHistoryTask(t, queue, historyTaskQueueManager)
 	})
-	t.Run("DeleteTasks", func(t *testing.T) {
+	t.Run("BestEffortDeleteTasks", func(t *testing.T) {
 		t.Parallel()
 		testHistoryTaskQueueManagerDeleteTasks(t, historyTaskQueueManager)
 	})
@@ -153,10 +130,11 @@ func RunHistoryTaskQueueManagerTestSuite(t *testing.T, queue persistence.QueueV2
 
 func testHistoryTaskQueueManagerCreateQueueErr(t *testing.T, queue persistence.QueueV2) {
 	retErr := errors.New("test")
+	serializer := serialization.NewSerializer()
 	manager := persistence.NewHistoryTaskQueueManager(faultyQueue{
 		base:           queue,
 		createQueueErr: retErr,
-	}, serialization.NewSerializer())
+	}, serializer)
 	_, err := manager.CreateQueue(context.Background(), &persistence.CreateQueueRequest{
 		QueueKey: persistencetest.GetQueueKey(t),
 	})
@@ -214,10 +192,11 @@ func testHistoryTaskQueueManagerEnqueueTasksErr(t *testing.T, queue persistence.
 	ctx := context.Background()
 
 	retErr := errors.New("test")
+	serializer := serialization.NewSerializer()
 	manager := persistence.NewHistoryTaskQueueManager(faultyQueue{
 		base:       queue,
 		enqueueErr: retErr,
-	}, serialization.NewSerializer())
+	}, serializer)
 	queueKey := persistencetest.GetQueueKey(t)
 	_, err := manager.CreateQueue(ctx, &persistence.CreateQueueRequest{
 		QueueKey: queueKey,
@@ -307,7 +286,7 @@ func enqueueAndDeserializeBlob(
 		QueueType: queueType,
 		QueueName: queueName,
 		Blob: &commonpb.DataBlob{
-			EncodingType: enums.ENCODING_TYPE_PROTO3,
+			EncodingType: enumspb.ENCODING_TYPE_PROTO3,
 			Data:         historyTaskBytes,
 		},
 	})
@@ -324,10 +303,11 @@ func testHistoryTaskQueueManagerDeleteTasksErr(t *testing.T, queue persistence.Q
 	ctx := context.Background()
 
 	retErr := errors.New("test")
+	serializer := serialization.NewSerializer()
 	manager := persistence.NewHistoryTaskQueueManager(faultyQueue{
 		base:                   queue,
 		rangeDeleteMessagesErr: retErr,
-	}, serialization.NewSerializer())
+	}, serializer)
 	queueKey := persistencetest.GetQueueKey(t)
 	_, err := manager.CreateQueue(ctx, &persistence.CreateQueueRequest{
 		QueueKey: queueKey,

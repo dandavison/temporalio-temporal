@@ -2,10 +2,20 @@
 	"version": "0.2.0",
 	"configurations": [
 		{
+			"name": "Debug Running Server",
+			"type": "go",
+			"request": "attach",
+			"mode": "local",
+			"cwd": "${workspaceFolder}",
+		},
+		{
 			"name": "Debug single functional test method",
 			"type": "go",
 			"request": "launch",
 			"mode": "test",
+			"buildFlags": [
+				"-tags=test_dep"
+			],
 			"program": "${relativeFileDirname}",
 			"args": [
 				"-testify.m",

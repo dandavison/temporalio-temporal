@@ -1,27 +1,3 @@
-// The MIT License
-//
-// Copyright (c) 2020 Temporal Technologies Inc.  All rights reserved.
-//
-// Copyright (c) 2020 Uber Technologies, Inc.
-//
-// Permission is hereby granted, free of charge, to any person obtaining a copy
-// of this software and associated documentation files (the "Software"), to deal
-// in the Software without restriction, including without limitation the rights
-// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-// copies of the Software, and to permit persons to whom the Software is
-// furnished to do so, subject to the following conditions:
-//
-// The above copyright notice and this permission notice shall be included in
-// all copies or substantial portions of the Software.
-//
-// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
-// THE SOFTWARE.
-
 package persistence
 
 import (
@@ -101,31 +77,21 @@ func (s *temporalSerializerSuite) TestSerializer() {
 
 			// serialize event
 
-			nilEvent, err := serializer.SerializeEvent(nil, enumspb.ENCODING_TYPE_PROTO3)
+			nilEvent, err := serializer.SerializeEvent(nil)
 			s.Nil(err)
 			s.Nil(nilEvent)
 
-			_, err = serializer.SerializeEvent(event0, enumspb.ENCODING_TYPE_UNSPECIFIED)
-			s.NotNil(err)
-			_, ok := err.(*serialization.UnknownEncodingTypeError)
-			s.True(ok)
-
-			dProto, err := serializer.SerializeEvent(event0, enumspb.ENCODING_TYPE_PROTO3)
+			dProto, err := serializer.SerializeEvent(event0)
 			s.Nil(err)
 			s.NotNil(dProto)
 
 			// serialize batch events
 
-			nilEvents, err := serializer.SerializeEvents(nil, enumspb.ENCODING_TYPE_PROTO3)
+			nilEvents, err := serializer.SerializeEvents(nil)
 			s.Nil(err)
 			s.NotNil(nilEvents)
 
-			_, err = serializer.SerializeEvents(history0.Events, enumspb.ENCODING_TYPE_UNSPECIFIED)
-			s.NotNil(err)
-			_, ok = err.(*serialization.UnknownEncodingTypeError)
-			s.True(ok)
-
-			dsProto, err := serializer.SerializeEvents(history0.Events, enumspb.ENCODING_TYPE_PROTO3)
+			dsProto, err := serializer.SerializeEvents(history0.Events)
 			s.Nil(err)
 			s.NotNil(dsProto)
 

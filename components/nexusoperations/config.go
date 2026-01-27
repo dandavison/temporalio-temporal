@@ -1,32 +1,10 @@
-// The MIT License
-//
-// Copyright (c) 2024 Temporal Technologies Inc.  All rights reserved.
-//
-// Permission is hereby granted, free of charge, to any person obtaining a copy
-// of this software and associated documentation files (the "Software"), to deal
-// in the Software without restriction, including without limitation the rights
-// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-// copies of the Software, and to permit persons to whom the Software is
-// furnished to do so, subject to the following conditions:
-//
-// The above copyright notice and this permission notice shall be included in
-// all copies or substantial portions of the Software.
-//
-// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
-// THE SOFTWARE.
-
 package nexusoperations
 
 import (
-	"fmt"
 	"strings"
 	"time"
 
+	chasmnexus "go.temporal.io/server/chasm/lib/nexusoperation"
 	"go.temporal.io/server/common/backoff"
 	"go.temporal.io/server/common/dynamicconfig"
 	"go.temporal.io/server/common/headers"
@@ -39,6 +17,21 @@ var RequestTimeout = dynamicconfig.NewDestinationDurationSetting(
 	`RequestTimeout is the timeout for making a single nexus start or cancel request.`,
 )
 
+var MinRequestTimeout = dynamicconfig.NewNamespaceDurationSetting(
+	"component.nexusoperations.limit.request.timeout.min",
+	time.Millisecond*1500,
+	`MinRequestTimeout is the minimum time remaining for a request to complete for the server to make
+RPCs. If the remaining request timeout is less than this value, a non-retryable timeout error will be returned.`,
+)
+
+var MinDispatchTaskTimeout = dynamicconfig.NewNamespaceDurationSetting(
+	"component.nexusoperations.limit.dispatch.task.timeout.min",
+	time.Second,
+	`MinDispatchTaskTimeout is the minimum time remaining for a request to be dispatched to the handler worker.
+If the remaining request timeout is less than this value, a timeout error will be returned. Working in conjunction with
+MinRequestTimeout, both configs help ensure that the server has enough time to complete a Nexus request.`,
+)
+
 var MaxConcurrentOperations = dynamicconfig.NewNamespaceIntSetting(
 	"component.nexusoperations.limit.operation.concurrency",
 	// Temporary limit due to a persistence limitation, this will be increased when we change persistence to accept
@@ -46,14 +39,6 @@ var MaxConcurrentOperations = dynamicconfig.NewNamespaceIntSetting(
 	30,
 	`MaxConcurrentOperations limits the maximum allowed concurrent Nexus Operations for a given workflow execution.
 Once the limit is reached, ScheduleNexusOperation commands will be rejected.`,
-)
-
-var EndpointNotFoundAlwaysNonRetryable = dynamicconfig.NewNamespaceBoolSetting(
-	"component.nexusoperations.endpointNotFoundAlwaysNonRetryable",
-	false,
-	`When set to true, if an endpoint is not found when processing a ScheduleNexusOperation command, the command will be
-	accepted and the operation will fail on the first attempt. This defaults to false to prevent endpoint registry
-	propagation delay from failing operations.`,
 )
 
 var MaxServiceNameLength = dynamicconfig.NewNamespaceIntSetting(
@@ -72,20 +57,42 @@ ScheduleNexusOperation commands with an operation name that exceeds this limit w
 Uses Go's len() function to determine the length.`,
 )
 
+var MaxOperationTokenLength = dynamicconfig.NewNamespaceIntSetting(
+	"component.nexusoperations.limit.operation.token.length",
+	4096,
+	`Limits the maximum allowed length for a Nexus Operation token. Tokens returned via start responses or via async
+completions that exceed this limit will be rejected. Uses Go's len() function to determine the length.
+Leave this limit long enough to fit a workflow ID and namespace name plus padding at minimum since that's what the SDKs
+use as the token.`,
+)
+
 var MaxOperationHeaderSize = dynamicconfig.NewNamespaceIntSetting(
 	"component.nexusoperations.limit.header.size",
-	4096,
+	8192,
 	`The maximum allowed header size for a Nexus Operation.
 ScheduleNexusOperation commands with a "nexus_header" field that exceeds this limit will be rejected.
 Uses Go's len() function on header keys and values to determine the total size.`,
 )
 
-var DisallowedOperationHeaders = dynamicconfig.NewNamespaceTypedSettingWithConverter(
+var UseSystemCallbackURL = dynamicconfig.NewGlobalBoolSetting(
+	"component.nexusoperations.useSystemCallbackURL",
+	false,
+	`UseSystemCallbackURL is a global feature toggle that controls how the executor generates
+	callback URLs for worker targets in Nexus Operations.When set to true,
+	the executor will use the fixed system callback URL ("temporal://system") for all worker targets,
+	instead of generating URLs from the callback URL template.
+	This simplifies configuration and improves reliability for worker callbacks.
+	- false (default): The executor uses the callback URL template to generate callback URLs for worker targets.
+	- true: The executor uses the fixed system callback URL ("temporal://system") for worker targets.
+	Note: The default will switch to true in future releases.`,
+)
+
+var DisallowedOperationHeaders = dynamicconfig.NewGlobalTypedSettingWithConverter(
 	"component.nexusoperations.disallowedHeaders",
-	func(a any) ([]string, error) {
-		keys, ok := a.([]string)
-		if !ok {
-			return nil, fmt.Errorf("expected a string slice, got: %v", a)
+	func(in any) ([]string, error) {
+		keys, err := dynamicconfig.ConvertStructure[[]string](nil)(in)
+		if err != nil {
+			return nil, err
 		}
 		for i, k := range keys {
 			keys[i] = strings.ToLower(k)
@@ -133,34 +140,60 @@ var RetryPolicyMaximumInterval = dynamicconfig.NewGlobalDurationSetting(
 	`The maximum backoff interval between every nexus StartOperation or CancelOperation request for a given operation.`,
 )
 
+var MetricTagConfiguration = dynamicconfig.NewGlobalTypedSetting(
+	"component.nexusoperations.metrics.tags",
+	chasmnexus.NexusMetricTagConfig{},
+	`Controls which metric tags are included with Nexus operation metrics. This configuration supports:
+1. Service name tag - adds the Nexus service name as a metric dimension (IncludeServiceTag)
+2. Operation name tag - adds the Nexus operation name as a metric dimension (IncludeOperationTag)
+3. Header-based tags - maps values from request headers to metric tags (HeaderTagMappings)
+
+Note: default metric tags (like namespace, endpoint) are always included and not affected by this configuration.
+Adding high-cardinality tags (like unique operation names) can significantly increase metric storage
+requirements and query complexity. Consider the cardinality impact when enabling these tags.`,
+)
+
+var RecordCancelRequestCompletionEvents = dynamicconfig.NewGlobalBoolSetting(
+	"component.nexusoperations.recordCancelRequestCompletionEvents",
+	true,
+	`Boolean flag to control whether to record NexusOperationCancelRequestCompleted and
+NexusOperationCancelRequestFailed events. Default true.`,
+)
+
 type Config struct {
-	Enabled                            dynamicconfig.BoolPropertyFn
-	RequestTimeout                     dynamicconfig.DurationPropertyFnWithDestinationFilter
-	MaxConcurrentOperations            dynamicconfig.IntPropertyFnWithNamespaceFilter
-	MaxServiceNameLength               dynamicconfig.IntPropertyFnWithNamespaceFilter
-	MaxOperationNameLength             dynamicconfig.IntPropertyFnWithNamespaceFilter
-	MaxOperationHeaderSize             dynamicconfig.IntPropertyFnWithNamespaceFilter
-	DisallowedOperationHeaders         dynamicconfig.TypedPropertyFnWithNamespaceFilter[[]string]
-	MaxOperationScheduleToCloseTimeout dynamicconfig.DurationPropertyFnWithNamespaceFilter
-	PayloadSizeLimit                   dynamicconfig.IntPropertyFnWithNamespaceFilter
-	CallbackURLTemplate                dynamicconfig.StringPropertyFn
-	EndpointNotFoundAlwaysNonRetryable dynamicconfig.BoolPropertyFnWithNamespaceFilter
-	RetryPolicy                        func() backoff.RetryPolicy
+	Enabled                             dynamicconfig.BoolPropertyFn
+	RequestTimeout                      dynamicconfig.DurationPropertyFnWithDestinationFilter
+	MinRequestTimeout                   dynamicconfig.DurationPropertyFnWithNamespaceFilter
+	MaxConcurrentOperations             dynamicconfig.IntPropertyFnWithNamespaceFilter
+	MaxServiceNameLength                dynamicconfig.IntPropertyFnWithNamespaceFilter
+	MaxOperationNameLength              dynamicconfig.IntPropertyFnWithNamespaceFilter
+	MaxOperationTokenLength             dynamicconfig.IntPropertyFnWithNamespaceFilter
+	MaxOperationHeaderSize              dynamicconfig.IntPropertyFnWithNamespaceFilter
+	DisallowedOperationHeaders          dynamicconfig.TypedPropertyFn[[]string]
+	MaxOperationScheduleToCloseTimeout  dynamicconfig.DurationPropertyFnWithNamespaceFilter
+	PayloadSizeLimit                    dynamicconfig.IntPropertyFnWithNamespaceFilter
+	CallbackURLTemplate                 dynamicconfig.StringPropertyFn
+	UseSystemCallbackURL                dynamicconfig.BoolPropertyFn
+	RecordCancelRequestCompletionEvents dynamicconfig.BoolPropertyFn
+	RetryPolicy                         func() backoff.RetryPolicy
 }
 
 func ConfigProvider(dc *dynamicconfig.Collection) *Config {
 	return &Config{
-		Enabled:                            dynamicconfig.EnableNexus.Get(dc),
-		RequestTimeout:                     RequestTimeout.Get(dc),
-		MaxConcurrentOperations:            MaxConcurrentOperations.Get(dc),
-		MaxServiceNameLength:               MaxServiceNameLength.Get(dc),
-		MaxOperationNameLength:             MaxOperationNameLength.Get(dc),
-		MaxOperationHeaderSize:             MaxOperationHeaderSize.Get(dc),
-		DisallowedOperationHeaders:         DisallowedOperationHeaders.Get(dc),
-		MaxOperationScheduleToCloseTimeout: MaxOperationScheduleToCloseTimeout.Get(dc),
-		PayloadSizeLimit:                   dynamicconfig.BlobSizeLimitError.Get(dc),
-		CallbackURLTemplate:                CallbackURLTemplate.Get(dc),
-		EndpointNotFoundAlwaysNonRetryable: EndpointNotFoundAlwaysNonRetryable.Get(dc),
+		Enabled:                             dynamicconfig.EnableNexus.Get(dc),
+		RequestTimeout:                      RequestTimeout.Get(dc),
+		MinRequestTimeout:                   MinRequestTimeout.Get(dc),
+		MaxConcurrentOperations:             MaxConcurrentOperations.Get(dc),
+		MaxServiceNameLength:                MaxServiceNameLength.Get(dc),
+		MaxOperationNameLength:              MaxOperationNameLength.Get(dc),
+		MaxOperationTokenLength:             MaxOperationTokenLength.Get(dc),
+		MaxOperationHeaderSize:              MaxOperationHeaderSize.Get(dc),
+		DisallowedOperationHeaders:          DisallowedOperationHeaders.Get(dc),
+		MaxOperationScheduleToCloseTimeout:  MaxOperationScheduleToCloseTimeout.Get(dc),
+		PayloadSizeLimit:                    dynamicconfig.BlobSizeLimitError.Get(dc),
+		CallbackURLTemplate:                 CallbackURLTemplate.Get(dc),
+		UseSystemCallbackURL:                UseSystemCallbackURL.Get(dc),
+		RecordCancelRequestCompletionEvents: RecordCancelRequestCompletionEvents.Get(dc),
 		RetryPolicy: func() backoff.RetryPolicy {
 			return backoff.NewExponentialRetryPolicy(
 				RetryPolicyInitialInterval.Get(dc)(),

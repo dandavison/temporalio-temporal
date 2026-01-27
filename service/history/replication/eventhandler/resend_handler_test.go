@@ -1,34 +1,10 @@
-// The MIT License
-//
-// Copyright (c) 2020 Temporal Technologies Inc.  All rights reserved.
-//
-// Copyright (c) 2020 Uber Technologies, Inc.
-//
-// Permission is hereby granted, free of charge, to any person obtaining a copy
-// of this software and associated documentation files (the "Software"), to deal
-// in the Software without restriction, including without limitation the rights
-// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-// copies of the Software, and to permit persons to whom the Software is
-// furnished to do so, subject to the following conditions:
-//
-// The above copyright notice and this permission notice shall be included in
-// all copies or substantial portions of the Software.
-//
-// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
-// THE SOFTWARE.
-
 package eventhandler
 
 import (
 	"context"
 	"testing"
 
-	"github.com/pborman/uuid"
+	"github.com/google/uuid"
 	"github.com/stretchr/testify/require"
 	"github.com/stretchr/testify/suite"
 	commonpb "go.temporal.io/api/common/v1"
@@ -49,7 +25,7 @@ import (
 	"go.temporal.io/server/common/persistence/serialization"
 	"go.temporal.io/server/common/primitives/timestamp"
 	"go.temporal.io/server/service/history/configs"
-	"go.temporal.io/server/service/history/shard"
+	historyi "go.temporal.io/server/service/history/interfaces"
 	"go.temporal.io/server/service/history/tests"
 	"go.uber.org/mock/gomock"
 )
@@ -73,7 +49,7 @@ type (
 		logger         log.Logger
 		config         *configs.Config
 		resendHandler  ResendHandler
-		engine         *shard.MockEngine
+		engine         *historyi.MockEngine
 		historyFetcher *MockHistoryPaginatedFetcher
 		importer       *MockEventImporter
 	}
@@ -106,7 +82,7 @@ func (s *resendHandlerSuite) SetupTest() {
 	s.logger = log.NewTestLogger()
 	s.mockClusterMetadata.EXPECT().IsGlobalNamespaceEnabled().Return(true).AnyTimes()
 
-	s.namespaceID = namespace.ID(uuid.New())
+	s.namespaceID = namespace.ID(uuid.NewString())
 	s.namespace = "some random namespace name"
 	s.config = tests.NewDynamicConfig()
 	s.historyFetcher = NewMockHistoryPaginatedFetcher(s.controller)
@@ -124,7 +100,7 @@ func (s *resendHandlerSuite) SetupTest() {
 	)
 	s.mockNamespaceCache.EXPECT().GetNamespaceByID(s.namespaceID).Return(namespaceEntry, nil).AnyTimes()
 	s.mockNamespaceCache.EXPECT().GetNamespace(s.namespace).Return(namespaceEntry, nil).AnyTimes()
-	s.engine = shard.NewMockEngine(s.controller)
+	s.engine = historyi.NewMockEngine(s.controller)
 	s.serializer = serialization.NewSerializer()
 	s.importer = NewMockEventImporter(s.controller)
 	s.resendHandler = NewResendHandler(
@@ -132,7 +108,7 @@ func (s *resendHandlerSuite) SetupTest() {
 		s.mockClientBean,
 		s.serializer,
 		s.mockClusterMetadata,
-		func(ctx context.Context, namespaceId namespace.ID, workflowId string) (shard.Engine, error) {
+		func(ctx context.Context, namespaceId namespace.ID, workflowId string) (historyi.Engine, error) {
 			return s.engine, nil
 		},
 		s.historyFetcher,
@@ -182,7 +158,7 @@ func NewHistoryEventMatrixMatcher(expected [][]*historypb.HistoryEvent) gomock.M
 
 func (s *resendHandlerSuite) TestResendHistoryEvents_NoRemoteEvents() {
 	workflowID := "some random workflow ID"
-	runID := uuid.New()
+	runID := uuid.NewString()
 	endEventID := int64(12)
 	endEventVersion := int64(123)
 	s.config.ReplicationResendMaxBatchCount = dynamicconfig.GetIntPropertyFn(2)
@@ -230,7 +206,7 @@ func (s *resendHandlerSuite) TestResendHistoryEvents_NoRemoteEvents() {
 
 func (s *resendHandlerSuite) TestSendSingleWorkflowHistory_AllRemoteEvents() {
 	workflowID := "some random workflow ID"
-	runID := uuid.New()
+	runID := uuid.NewString()
 	endEventID := int64(13)
 	endEventVersion := int64(123)
 	s.config.ReplicationResendMaxBatchCount = dynamicconfig.GetIntPropertyFn(2)
@@ -356,7 +332,7 @@ func (s *resendHandlerSuite) TestSendSingleWorkflowHistory_AllRemoteEvents() {
 
 func (s *resendHandlerSuite) TestSendSingleWorkflowHistory_LocalAndRemoteEvents() {
 	workflowID := "some random workflow ID"
-	runID := uuid.New()
+	runID := uuid.NewString()
 	endEventID := int64(9)
 	endEventVersion := int64(124)
 	s.config.ReplicationResendMaxBatchCount = dynamicconfig.GetIntPropertyFn(2)
@@ -464,7 +440,7 @@ func (s *resendHandlerSuite) TestSendSingleWorkflowHistory_LocalAndRemoteEvents(
 
 func (s *resendHandlerSuite) TestSendSingleWorkflowHistory_MixedVersionHistory_RemoteEventsOnly() {
 	workflowID := "some random workflow ID"
-	runID := uuid.New()
+	runID := uuid.NewString()
 	endEventID := int64(9)
 	endEventVersion := int64(124)
 	s.config.ReplicationResendMaxBatchCount = dynamicconfig.GetIntPropertyFn(2)
@@ -532,7 +508,7 @@ func (s *resendHandlerSuite) TestSendSingleWorkflowHistory_MixedVersionHistory_R
 
 func (s *resendHandlerSuite) TestSendSingleWorkflowHistory_AllRemoteEvents_BatchTest() {
 	workflowID := "some random workflow ID"
-	runID := uuid.New()
+	runID := uuid.NewString()
 	endEventID := int64(13)
 	endEventVersion := int64(123)
 	s.config.ReplicationResendMaxBatchCount = dynamicconfig.GetIntPropertyFn(10)
@@ -655,7 +631,7 @@ func (s *resendHandlerSuite) TestSendSingleWorkflowHistory_AllRemoteEvents_Batch
 }
 
 func (s *resendHandlerSuite) serializeEvents(events []*historypb.HistoryEvent) *commonpb.DataBlob {
-	blob, err := s.serializer.SerializeEvents(events, enumspb.ENCODING_TYPE_PROTO3)
+	blob, err := s.serializer.SerializeEvents(events)
 	s.Nil(err)
 	return &commonpb.DataBlob{
 		EncodingType: enumspb.ENCODING_TYPE_PROTO3,

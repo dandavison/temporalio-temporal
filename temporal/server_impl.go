@@ -1,27 +1,3 @@
-// The MIT License
-//
-// Copyright (c) 2020 Temporal Technologies Inc.  All rights reserved.
-//
-// Copyright (c) 2020 Uber Technologies, Inc.
-//
-// Permission is hereby granted, free of charge, to any person obtaining a copy
-// of this software and associated documentation files (the "Software"), to deal
-// in the Software without restriction, including without limitation the rights
-// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-// copies of the Software, and to permit persons to whom the Software is
-// furnished to do so, subject to the following conditions:
-//
-// The above copyright notice and this permission notice shall be included in
-// all copies or substantial portions of the Software.
-//
-// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
-// THE SOFTWARE.
-
 package temporal
 
 import (
@@ -29,7 +5,9 @@ import (
 	"context"
 	"fmt"
 	"slices"
+	"time"
 
+	"go.opentelemetry.io/otel/trace"
 	"go.temporal.io/server/common/cluster"
 	"go.temporal.io/server/common/config"
 	"go.temporal.io/server/common/headers"
@@ -37,9 +15,11 @@ import (
 	"go.temporal.io/server/common/log/tag"
 	"go.temporal.io/server/common/metrics"
 	persistenceClient "go.temporal.io/server/common/persistence/client"
+	"go.temporal.io/server/common/persistence/serialization"
 	"go.temporal.io/server/common/primitives"
 	"go.temporal.io/server/common/resolver"
 	"go.temporal.io/server/common/resource"
+	"go.temporal.io/server/common/telemetry"
 	"go.uber.org/multierr"
 )
 
@@ -56,6 +36,8 @@ type (
 		clusterMetadata            *cluster.Config
 		persistenceFactoryProvider persistenceClient.FactoryProviderFn
 		metricsHandler             metrics.Handler
+		tracerProvider             trace.TracerProvider
+		serializer                 serialization.Serializer
 	}
 )
 
@@ -81,6 +63,7 @@ func NewServerFxImpl(
 	clusterMetadata *cluster.Config,
 	persistenceFactoryProvider persistenceClient.FactoryProviderFn,
 	metricsHandler metrics.Handler,
+	serializer serialization.Serializer,
 ) *ServerImpl {
 	s := &ServerImpl{
 		so:                         opts,
@@ -97,6 +80,8 @@ func NewServerFxImpl(
 			s.servicesMetadata = append(s.servicesMetadata, svcMeta)
 		}
 	}
+	// Store serializer for use in Start()
+	s.serializer = serializer
 	return s
 }
 
@@ -113,6 +98,7 @@ func (s *ServerImpl) Start(ctx context.Context) error {
 		s.logger,
 		s.so.customDataStoreFactory,
 		s.metricsHandler,
+		s.serializer,
 	); err != nil {
 		return fmt.Errorf("unable to initialize system namespace: %w", err)
 	}
@@ -168,6 +154,7 @@ func initSystemNamespaces(
 	logger log.Logger,
 	customDataStoreFactory persistenceClient.AbstractDataStoreFactory,
 	metricsHandler metrics.Handler,
+	serializer serialization.Serializer,
 ) error {
 	clusterName := persistenceClient.ClusterName(currentClusterName)
 	metricsHandler = metricsHandler.WithTags(metrics.ServiceNameTag(primitives.ServerService))
@@ -178,6 +165,8 @@ func initSystemNamespaces(
 		customDataStoreFactory,
 		logger,
 		metricsHandler,
+		telemetry.NoopTracerProvider,
+		serializer,
 	)
 	factory := persistenceFactoryProvider(persistenceClient.NewFactoryParams{
 		DataStoreFactory:           dataStoreFactory,
@@ -187,6 +176,7 @@ func initSystemNamespaces(
 		ClusterName:                persistenceClient.ClusterName(currentClusterName),
 		MetricsHandler:             metricsHandler,
 		Logger:                     logger,
+		Serializer:                 serializer,
 	})
 	defer factory.Close()
 
@@ -195,7 +185,12 @@ func initSystemNamespaces(
 		return fmt.Errorf("unable to initialize metadata manager: %w", err)
 	}
 	defer metadataManager.Close()
-	ctx = headers.SetCallerInfo(ctx, headers.SystemBackgroundCallerInfo)
+	ctx, cancel := context.WithTimeout(
+		headers.SetCallerInfo(ctx, headers.SystemBackgroundHighCallerInfo),
+		30*time.Second,
+	)
+	defer cancel()
+
 	if err = metadataManager.InitializeSystemNamespaces(ctx, currentClusterName); err != nil {
 		return fmt.Errorf("unable to register system namespace: %w", err)
 	}

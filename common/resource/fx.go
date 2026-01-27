@@ -1,27 +1,3 @@
-// The MIT License
-//
-// Copyright (c) 2020 Temporal Technologies Inc.  All rights reserved.
-//
-// Copyright (c) 2020 Uber Technologies, Inc.
-//
-// Permission is hereby granted, free of charge, to any person obtaining a copy
-// of this software and associated documentation files (the "Software"), to deal
-// in the Software without restriction, including without limitation the rights
-// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-// copies of the Software, and to permit persons to whom the Software is
-// furnished to do so, subject to the following conditions:
-//
-// The above copyright notice and this permission notice shall be included in
-// all copies or substantial portions of the Software.
-//
-// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
-// THE SOFTWARE.
-
 package resource
 
 import (
@@ -32,9 +8,11 @@ import (
 	"time"
 
 	"go.temporal.io/api/workflowservice/v1"
+	"go.temporal.io/server/api/adminservice/v1"
 	"go.temporal.io/server/api/historyservice/v1"
 	"go.temporal.io/server/api/matchingservice/v1"
 	"go.temporal.io/server/client"
+	"go.temporal.io/server/client/admin"
 	"go.temporal.io/server/client/frontend"
 	"go.temporal.io/server/client/history"
 	"go.temporal.io/server/client/matching"
@@ -52,9 +30,12 @@ import (
 	"go.temporal.io/server/common/metrics"
 	"go.temporal.io/server/common/namespace"
 	"go.temporal.io/server/common/namespace/nsregistry"
+	commonnexus "go.temporal.io/server/common/nexus"
 	"go.temporal.io/server/common/persistence"
 	persistenceClient "go.temporal.io/server/common/persistence/client"
 	"go.temporal.io/server/common/persistence/serialization"
+	"go.temporal.io/server/common/persistence/visibility"
+	"go.temporal.io/server/common/persistence/visibility/manager"
 	"go.temporal.io/server/common/pingable"
 	"go.temporal.io/server/common/primitives"
 	"go.temporal.io/server/common/quotas"
@@ -63,7 +44,7 @@ import (
 	"go.temporal.io/server/common/sdk"
 	"go.temporal.io/server/common/searchattribute"
 	"go.temporal.io/server/common/telemetry"
-	"go.temporal.io/server/common/utf8validator"
+	"go.temporal.io/server/common/testing/testhooks"
 	"go.uber.org/fx"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/health"
@@ -96,6 +77,8 @@ type (
 // See LifetimeHooksModule for detail
 var Module = fx.Options(
 	persistenceClient.Module,
+	dynamicconfig.Module,
+	serialization.Module,
 	fx.Provide(HostNameProvider),
 	fx.Provide(TimeSourceProvider),
 	cluster.MetadataLifetimeHooksModule,
@@ -108,12 +91,10 @@ var Module = fx.Options(
 		func(p namespace.Registry) pingable.Pingable { return p },
 		fx.ResultTags(`group:"deadlockDetectorRoots"`),
 	)),
-	fx.Provide(serialization.NewSerializer),
-	fx.Provide(HistoryBootstrapContainerProvider),
-	fx.Provide(VisibilityBootstrapContainerProvider),
 	fx.Provide(ClientFactoryProvider),
 	fx.Provide(ClientBeanProvider),
 	fx.Provide(FrontendClientProvider),
+	fx.Provide(AdminClientProvider),
 	fx.Provide(GrpcListenerProvider),
 	fx.Provide(RuntimeMetricsReporterProvider),
 	metrics.RuntimeMetricsReporterLifetimeHooksModule,
@@ -123,17 +104,18 @@ var Module = fx.Options(
 	fx.Provide(MatchingClientProvider),
 	membership.GRPCResolverModule,
 	fx.Provide(FrontendHTTPClientCacheProvider),
-	fx.Invoke(RegisterBootstrapContainer),
 	fx.Provide(PersistenceConfigProvider),
 	fx.Provide(health.NewServer),
+	fx.Provide(namespace.NewDefaultReplicationResolverFactory),
 	deadlock.Module,
 	config.Module,
-	utf8validator.Module,
-	fx.Invoke(func(*utf8validator.Validator) {}), // force this to be constructed even if not referenced elsewhere
+	testhooks.Module,
+	fx.Provide(commonnexus.NewLoggedHTTPClientTraceProvider),
 )
 
 var DefaultOptions = fx.Options(
 	fx.Provide(RPCFactoryProvider),
+	fx.Provide(PerServiceDialOptionsProvider),
 	fx.Provide(ArchivalMetadataProvider),
 	fx.Provide(ArchiverProviderProvider),
 	fx.Provide(ThrottledLoggerProvider),
@@ -178,11 +160,12 @@ func SearchAttributeMapperProviderProvider(
 		saMapper,
 		namespaceRegistry,
 		searchAttributeProvider,
-		persistenceConfig.IsSQLVisibilityStore(),
+		persistenceConfig.IsSQLVisibilityStore() || persistenceConfig.IsCustomVisibilityStore(),
 	)
 }
 
 func SearchAttributeProviderProvider(
+	logger log.SnTaggedLogger,
 	timeSource clock.TimeSource,
 	cmMgr persistence.ClusterMetadataManager,
 	dynamicCollection *dynamicconfig.Collection,
@@ -190,10 +173,12 @@ func SearchAttributeProviderProvider(
 	return searchattribute.NewManager(
 		timeSource,
 		cmMgr,
+		logger,
 		dynamicconfig.ForceSearchAttributesCacheRefreshOnRead.Get(dynamicCollection))
 }
 
 func SearchAttributeManagerProvider(
+	logger log.SnTaggedLogger,
 	timeSource clock.TimeSource,
 	cmMgr persistence.ClusterMetadataManager,
 	dynamicCollection *dynamicconfig.Collection,
@@ -201,7 +186,32 @@ func SearchAttributeManagerProvider(
 	return searchattribute.NewManager(
 		timeSource,
 		cmMgr,
+		logger,
 		dynamicconfig.ForceSearchAttributesCacheRefreshOnRead.Get(dynamicCollection))
+}
+
+// SearchAttributeValidatorProvider creates a new search attribute validator with the given dependencies. It configures
+// the validator with dynamic config values for key limits, value size limits, total size limits, visibility allowlist,
+// and system search attribute error suppression.
+func SearchAttributeValidatorProvider(
+	saProvider searchattribute.Provider,
+	saMapperProvider searchattribute.MapperProvider,
+	visibilityMgr manager.VisibilityManager,
+	dynamicCollection *dynamicconfig.Collection,
+) *searchattribute.Validator {
+	return searchattribute.NewValidator(
+		saProvider,
+		saMapperProvider,
+		dynamicconfig.SearchAttributesNumberOfKeysLimit.Get(dynamicCollection),
+		dynamicconfig.SearchAttributesSizeOfValueLimit.Get(dynamicCollection),
+		dynamicconfig.SearchAttributesTotalSizeLimit.Get(dynamicCollection),
+		visibilityMgr,
+		visibility.AllowListForValidation(
+			visibilityMgr.GetStoreNames(),
+			dynamicconfig.VisibilityAllowList.Get(dynamicCollection),
+		),
+		dynamicconfig.SuppressErrorSetSystemSearchAttribute.Get(dynamicCollection),
+	)
 }
 
 func NamespaceRegistryProvider(
@@ -210,6 +220,7 @@ func NamespaceRegistryProvider(
 	clusterMetadata cluster.Metadata,
 	metadataManager persistence.MetadataManager,
 	dynamicCollection *dynamicconfig.Collection,
+	replicationResolverFactory namespace.ReplicationResolverFactory,
 ) namespace.Registry {
 	return nsregistry.NewRegistry(
 		metadataManager,
@@ -218,6 +229,7 @@ func NamespaceRegistryProvider(
 		dynamicconfig.ForceSearchAttributesCacheRefreshOnRead.Get(dynamicCollection),
 		metricsHandler,
 		logger,
+		replicationResolverFactory,
 	)
 }
 
@@ -227,6 +239,7 @@ func ClientFactoryProvider(
 	membershipMonitor membership.Monitor,
 	metricsHandler metrics.Handler,
 	dynamicCollection *dynamicconfig.Collection,
+	testHooks testhooks.TestHooks,
 	persistenceConfig *config.Persistence,
 	logger log.SnTaggedLogger,
 	throttledLogger log.ThrottledLogger,
@@ -236,6 +249,7 @@ func ClientFactoryProvider(
 		membershipMonitor,
 		metricsHandler,
 		dynamicCollection,
+		testHooks,
 		persistenceConfig.NumHistoryShards,
 		logger,
 		throttledLogger,
@@ -261,6 +275,18 @@ func FrontendClientProvider(clientBean client.Bean) workflowservice.WorkflowServ
 	)
 }
 
+func AdminClientProvider(clientBean client.Bean, clusterMetadata cluster.Metadata) (adminservice.AdminServiceClient, error) {
+	adminRawClient, err := clientBean.GetRemoteAdminClient(clusterMetadata.GetCurrentClusterName())
+	if err != nil {
+		return nil, err
+	}
+	return admin.NewRetryableClient(
+		adminRawClient,
+		common.CreateFrontendClientRetryPolicy(),
+		common.IsServiceClientTransientError,
+	), nil
+}
+
 func RuntimeMetricsReporterProvider(
 	params RuntimeMetricsReporterParams,
 ) *metrics.RuntimeMetricsReporter {
@@ -269,45 +295,6 @@ func RuntimeMetricsReporterProvider(
 		time.Minute,
 		params.Logger,
 		string(params.InstanceID),
-	)
-}
-
-func VisibilityBootstrapContainerProvider(
-	logger log.SnTaggedLogger,
-	metricsHandler metrics.Handler,
-	clusterMetadata cluster.Metadata,
-) *archiver.VisibilityBootstrapContainer {
-	return &archiver.VisibilityBootstrapContainer{
-		Logger:          logger,
-		MetricsHandler:  metricsHandler,
-		ClusterMetadata: clusterMetadata,
-	}
-}
-
-func HistoryBootstrapContainerProvider(
-	logger log.SnTaggedLogger,
-	metricsHandler metrics.Handler,
-	clusterMetadata cluster.Metadata,
-	executionManager persistence.ExecutionManager,
-) *archiver.HistoryBootstrapContainer {
-	return &archiver.HistoryBootstrapContainer{
-		ExecutionManager: executionManager,
-		Logger:           logger,
-		MetricsHandler:   metricsHandler,
-		ClusterMetadata:  clusterMetadata,
-	}
-}
-
-func RegisterBootstrapContainer(
-	archiverProvider provider.ArchiverProvider,
-	serviceName primitives.ServiceName,
-	visibilityArchiverBootstrapContainer *archiver.VisibilityBootstrapContainer,
-	historyArchiverBootstrapContainer *archiver.HistoryBootstrapContainer,
-) error {
-	return archiverProvider.RegisterBootstrapContainer(
-		string(serviceName),
-		historyArchiverBootstrapContainer,
-		visibilityArchiverBootstrapContainer,
 	)
 }
 
@@ -334,6 +321,7 @@ func MatchingClientProvider(matchingRawClient MatchingRawClient) MatchingClient 
 	return matching.NewRetryableClient(
 		matchingRawClient,
 		common.CreateMatchingClientRetryPolicy(),
+		common.CreateMatchingClientLongPollRetryPolicy(),
 		common.IsServiceClientTransientError,
 	)
 }
@@ -354,8 +342,19 @@ func ArchivalMetadataProvider(dc *dynamicconfig.Collection, cfg *config.Config) 
 	)
 }
 
-func ArchiverProviderProvider(cfg *config.Config) provider.ArchiverProvider {
-	return provider.NewArchiverProvider(cfg.Archival.History.Provider, cfg.Archival.Visibility.Provider)
+func ArchiverProviderProvider(
+	cfg *config.Config,
+	persistenceExecutionManager persistence.ExecutionManager,
+	logger log.SnTaggedLogger,
+	metricsHandler metrics.Handler,
+) provider.ArchiverProvider {
+	return provider.NewArchiverProvider(
+		cfg.Archival.History.Provider,
+		cfg.Archival.Visibility.Provider,
+		persistenceExecutionManager,
+		logger,
+		metricsHandler,
+	)
 }
 
 func SdkClientFactoryProvider(
@@ -383,34 +382,51 @@ func DCRedirectionPolicyProvider(cfg *config.Config) config.DCRedirectionPolicy 
 	return cfg.DCRedirectionPolicy
 }
 
+func PerServiceDialOptionsProvider() map[primitives.ServiceName][]grpc.DialOption {
+	return map[primitives.ServiceName][]grpc.DialOption{}
+}
+
 func RPCFactoryProvider(
 	cfg *config.Config,
 	svcName primitives.ServiceName,
 	logger log.Logger,
+	metricsHandler metrics.Handler,
 	tlsConfigProvider encryption.TLSConfigProvider,
 	resolver *membership.GRPCResolver,
-	traceInterceptor telemetry.ClientTraceInterceptor,
+	tracingStatsHandler telemetry.ClientStatsHandler,
+	perServiceDialOptions map[primitives.ServiceName][]grpc.DialOption,
 	monitor membership.Monitor,
+	dc *dynamicconfig.Collection,
 ) (common.RPCFactory, error) {
-	svcCfg := cfg.Services[string(svcName)]
 	frontendURL, frontendHTTPURL, frontendHTTPPort, frontendTLSConfig, err := getFrontendConnectionDetails(cfg, tlsConfigProvider, resolver)
 	if err != nil {
 		return nil, err
 	}
-	return rpc.NewFactory(
-		&svcCfg.RPC,
+
+	var options []grpc.DialOption
+	if tracingStatsHandler != nil {
+		options = append(options, grpc.WithStatsHandler(tracingStatsHandler))
+	}
+	enableServerKeepalive := dynamicconfig.EnableInternodeServerKeepAlive.Get(dc)()
+	enableClientKeepalive := dynamicconfig.EnableInternodeClientKeepAlive.Get(dc)()
+	factory := rpc.NewFactory(
+		cfg,
 		svcName,
 		logger,
+		metricsHandler,
 		tlsConfigProvider,
 		frontendURL,
 		frontendHTTPURL,
 		frontendHTTPPort,
 		frontendTLSConfig,
-		[]grpc.UnaryClientInterceptor{
-			grpc.UnaryClientInterceptor(traceInterceptor),
-		},
+		options,
+		perServiceDialOptions,
 		monitor,
-	), nil
+	)
+	factory.EnableInternodeServerKeepalive = enableServerKeepalive
+	factory.EnableInternodeClientKeepalive = enableClientKeepalive
+	logger.Debug(fmt.Sprintf("RPC factory created. enableServerKeepalive: %v, enableClientKeepalive: %v", enableServerKeepalive, enableClientKeepalive))
+	return factory, nil
 }
 
 func FrontendHTTPClientCacheProvider(

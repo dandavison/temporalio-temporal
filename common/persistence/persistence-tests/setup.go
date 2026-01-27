@@ -1,38 +1,20 @@
-// The MIT License
-//
-// Copyright (c) 2020 Temporal Technologies Inc.  All rights reserved.
-//
-// Copyright (c) 2020 Uber Technologies, Inc.
-//
-// Permission is hereby granted, free of charge, to any person obtaining a copy
-// of this software and associated documentation files (the "Software"), to deal
-// in the Software without restriction, including without limitation the rights
-// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-// copies of the Software, and to permit persons to whom the Software is
-// furnished to do so, subject to the following conditions:
-//
-// The above copyright notice and this permission notice shall be included in
-// all copies or substantial portions of the Software.
-//
-// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
-// THE SOFTWARE.
-
 package persistencetests
 
 import (
+	"fmt"
+	"os"
+	"path/filepath"
+
 	"go.temporal.io/server/common/config"
 	"go.temporal.io/server/common/persistence/sql/sqlplugin/mysql"
 	"go.temporal.io/server/common/persistence/sql/sqlplugin/postgresql"
 	"go.temporal.io/server/common/persistence/sql/sqlplugin/sqlite"
-	"go.temporal.io/server/environment"
+	"go.temporal.io/server/temporal/environment"
 )
 
 const (
+	testCassandraSchemaDir = "schema/cassandra/"
+
 	testMySQLUser      = "temporal"
 	testMySQLPassword  = "temporal"
 	testMySQLSchemaDir = "schema/mysql/v8"
@@ -48,10 +30,45 @@ const (
 	testSQLiteSchemaDir = "schema/sqlite/v3" // specify if mode is not "memory"
 )
 
+// GetTestClusterOption returns test options for the given store type and driver.
+func GetTestClusterOption(storeType, driver string) *TestBaseOptions {
+	switch storeType {
+	case config.StoreTypeSQL:
+		switch driver {
+		case mysql.PluginName:
+			return GetMySQLTestClusterOption()
+		case postgresql.PluginName:
+			return GetPostgreSQLTestClusterOption()
+		case postgresql.PluginNamePGX:
+			return GetPostgreSQLPGXTestClusterOption()
+		case sqlite.PluginName:
+			return GetSQLiteMemoryTestClusterOption()
+		default:
+			panic(fmt.Sprintf("unknown sql driver: %v", driver))
+		}
+	case config.StoreTypeNoSQL:
+		return GetCassandraTestClusterOption()
+	default:
+		panic(fmt.Sprintf("unknown store type: %v", storeType))
+	}
+}
+
+// GetCassandraTestClusterOption returns test options
+func GetCassandraTestClusterOption() *TestBaseOptions {
+	return &TestBaseOptions{
+		DBName:    "test_" + GenerateRandomDBName(3),
+		DBHost:    environment.GetCassandraAddress(),
+		DBPort:    environment.GetCassandraPort(),
+		SchemaDir: testCassandraSchemaDir,
+		StoreType: config.StoreTypeNoSQL,
+	}
+}
+
 // GetMySQLTestClusterOption return test options
 func GetMySQLTestClusterOption() *TestBaseOptions {
 	return &TestBaseOptions{
 		SQLDBPluginName: mysql.PluginName,
+		DBName:          "test_" + GenerateRandomDBName(3),
 		DBUsername:      testMySQLUser,
 		DBPassword:      testMySQLPassword,
 		DBHost:          environment.GetMySQLAddress(),
@@ -65,6 +82,7 @@ func GetMySQLTestClusterOption() *TestBaseOptions {
 func GetPostgreSQLTestClusterOption() *TestBaseOptions {
 	return &TestBaseOptions{
 		SQLDBPluginName: postgresql.PluginName,
+		DBName:          "test_" + GenerateRandomDBName(3),
 		DBUsername:      testPostgreSQLUser,
 		DBPassword:      testPostgreSQLPassword,
 		DBHost:          environment.GetPostgreSQLAddress(),
@@ -78,6 +96,7 @@ func GetPostgreSQLTestClusterOption() *TestBaseOptions {
 func GetPostgreSQLPGXTestClusterOption() *TestBaseOptions {
 	return &TestBaseOptions{
 		SQLDBPluginName: postgresql.PluginNamePGX,
+		DBName:          "test_" + GenerateRandomDBName(3),
 		DBUsername:      testPostgreSQLUser,
 		DBPassword:      testPostgreSQLPassword,
 		DBHost:          environment.GetPostgreSQLAddress(),
@@ -87,24 +106,31 @@ func GetPostgreSQLPGXTestClusterOption() *TestBaseOptions {
 	}
 }
 
-// GetSQLiteTestClusterOption return test options
+// GetSQLiteFileTestClusterOption return test options
 func GetSQLiteFileTestClusterOption() *TestBaseOptions {
 	return &TestBaseOptions{
-		SQLDBPluginName:   sqlite.PluginName,
-		DBUsername:        testSQLiteUser,
-		DBPassword:        testSQLitePassword,
-		DBHost:            environment.GetLocalhostIP(),
-		DBPort:            0,
-		SchemaDir:         testSQLiteSchemaDir,
-		StoreType:         config.StoreTypeSQL,
-		ConnectAttributes: map[string]string{"cache": testSQLiteCache},
+		SQLDBPluginName: sqlite.PluginName,
+		DBName:          filepath.Join(os.TempDir(), "test_"+GenerateRandomDBName(3)), // put files in temp to avoid cluttering the project
+		DBUsername:      testSQLiteUser,
+		DBPassword:      testSQLitePassword,
+		DBHost:          environment.GetLocalhostIP(),
+		DBPort:          0,
+		SchemaDir:       testSQLiteSchemaDir,
+		StoreType:       config.StoreTypeSQL,
+		ConnectAttributes: map[string]string{
+			"cache":        "shared",
+			"busy_timeout": "30000",
+			"journal_mode": "wal",
+			"synchronous":  "normal",
+		},
 	}
 }
 
-// GetSQLiteTestClusterOption return test options
+// GetSQLiteMemoryTestClusterOption return test options
 func GetSQLiteMemoryTestClusterOption() *TestBaseOptions {
 	return &TestBaseOptions{
 		SQLDBPluginName:   sqlite.PluginName,
+		DBName:            "test_" + GenerateRandomDBName(3),
 		DBUsername:        testSQLiteUser,
 		DBPassword:        testSQLitePassword,
 		DBHost:            environment.GetLocalhostIP(),

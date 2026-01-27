@@ -1,25 +1,3 @@
-// The MIT License
-//
-// Copyright (c) 2024 Temporal Technologies Inc.  All rights reserved.
-//
-// Permission is hereby granted, free of charge, to any person obtaining a copy
-// of this software and associated documentation files (the "Software"), to deal
-// in the Software without restriction, including without limitation the rights
-// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-// copies of the Software, and to permit persons to whom the Software is
-// furnished to do so, subject to the following conditions:
-//
-// The above copyright notice and this permission notice shall be included in
-// all copies or substantial portions of the Software.
-//
-// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
-// THE SOFTWARE.
-
 package tests
 
 import (
@@ -31,7 +9,7 @@ import (
 	"github.com/stretchr/testify/suite"
 	commonpb "go.temporal.io/api/common/v1"
 	enumspb "go.temporal.io/api/enums/v1"
-	"go.temporal.io/api/taskqueue/v1"
+	taskqueuepb "go.temporal.io/api/taskqueue/v1"
 	"go.temporal.io/api/workflowservice/v1"
 	"go.temporal.io/sdk/client"
 	"go.temporal.io/server/common/testing/protorequire"
@@ -39,7 +17,7 @@ import (
 )
 
 type LinksSuite struct {
-	testcore.ClientFunctionalSuite
+	testcore.FunctionalTestBase
 }
 
 func TestLinksTestSuite(t *testing.T) {
@@ -72,7 +50,7 @@ func (s *LinksSuite) TestTerminateWorkflow_LinksAttachedToEvent() {
 
 	// TODO(bergundy): Use SdkClient if and when it exposes links on TerminateWorkflow.
 	_, err = s.FrontendClient().TerminateWorkflowExecution(ctx, &workflowservice.TerminateWorkflowExecutionRequest{
-		Namespace: s.Namespace(),
+		Namespace: s.Namespace().String(),
 		WorkflowExecution: &commonpb.WorkflowExecution{
 			WorkflowId: run.GetID(),
 		},
@@ -101,7 +79,7 @@ func (s *LinksSuite) TestRequestCancelWorkflow_LinksAttachedToEvent() {
 
 	// TODO(bergundy): Use SdkClient if and when it exposes links on CancelWorkflow.
 	_, err = s.FrontendClient().RequestCancelWorkflowExecution(ctx, &workflowservice.RequestCancelWorkflowExecutionRequest{
-		Namespace: s.Namespace(),
+		Namespace: s.Namespace().String(),
 		WorkflowExecution: &commonpb.WorkflowExecution{
 			WorkflowId: run.GetID(),
 		},
@@ -138,7 +116,7 @@ func (s *LinksSuite) TestSignalWorkflowExecution_LinksAttachedToEvent() {
 
 	// TODO(bergundy): Use SdkClient if and when it exposes links on SignalWorkflow.
 	_, err = s.FrontendClient().SignalWorkflowExecution(ctx, &workflowservice.SignalWorkflowExecutionRequest{
-		Namespace: s.Namespace(),
+		Namespace: s.Namespace().String(),
 		WorkflowExecution: &commonpb.WorkflowExecution{
 			WorkflowId: run.GetID(),
 		},
@@ -171,14 +149,14 @@ func (s *LinksSuite) TestSignalWithStartWorkflowExecution_LinksAttachedToRelevan
 
 	// TODO(bergundy): Use SdkClient if and when it exposes links on SignalWithStartWorkflow.
 	request := &workflowservice.SignalWithStartWorkflowExecutionRequest{
-		Namespace:  s.Namespace(),
+		Namespace:  s.Namespace().String(),
 		WorkflowId: workflowID,
 		WorkflowType: &commonpb.WorkflowType{
 			Name: "dont-care",
 		},
 		SignalName: "dont-care",
 		Identity:   "test",
-		TaskQueue: &taskqueue.TaskQueue{
+		TaskQueue: &taskqueuepb.TaskQueue{
 			Name: "dont-care",
 		},
 		RequestId: uuid.NewString(),

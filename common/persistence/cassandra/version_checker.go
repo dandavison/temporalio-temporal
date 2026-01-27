@@ -1,27 +1,3 @@
-// The MIT License
-//
-// Copyright (c) 2020 Temporal Technologies Inc.  All rights reserved.
-//
-// Copyright (c) 2020 Uber Technologies, Inc.
-//
-// Permission is hereby granted, free of charge, to any person obtaining a copy
-// of this software and associated documentation files (the "Software"), to deal
-// in the Software without restriction, including without limitation the rights
-// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-// copies of the Software, and to permit persons to whom the Software is
-// furnished to do so, subject to the following conditions:
-//
-// The above copyright notice and this permission notice shall be included in
-// all copies or substantial portions of the Software.
-//
-// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
-// THE SOFTWARE.
-
 package cassandra
 
 import (
@@ -43,21 +19,19 @@ import (
 func VerifyCompatibleVersion(
 	cfg config.Persistence,
 	r resolver.ServiceResolver,
+	logger log.Logger,
 ) error {
-
-	if err := checkMainKeyspace(cfg, r); err != nil {
-		return err
-	}
-	return nil
+	return checkMainKeyspace(cfg, r, logger)
 }
 
 func checkMainKeyspace(
 	cfg config.Persistence,
 	r resolver.ServiceResolver,
+	logger log.Logger,
 ) error {
 	ds, ok := cfg.DataStores[cfg.DefaultStore]
 	if ok && ds.Cassandra != nil {
-		return CheckCompatibleVersion(*ds.Cassandra, r, cassandraschema.Version)
+		return CheckCompatibleVersion(*ds.Cassandra, r, cassandraschema.Version, logger)
 	}
 	return nil
 }
@@ -67,13 +41,14 @@ func CheckCompatibleVersion(
 	cfg config.Cassandra,
 	r resolver.ServiceResolver,
 	expectedVersion string,
+	logger log.Logger,
 ) error {
 
 	session, err := commongocql.NewSession(
 		func() (*gocql.ClusterConfig, error) {
 			return commongocql.NewCassandraCluster(cfg, r)
 		},
-		log.NewNoopLogger(),
+		logger,
 		metrics.NoopMetricsHandler,
 	)
 	if err != nil {

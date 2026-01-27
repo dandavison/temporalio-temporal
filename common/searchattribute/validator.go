@@ -1,27 +1,3 @@
-// The MIT License
-//
-// Copyright (c) 2020 Temporal Technologies Inc.  All rights reserved.
-//
-// Copyright (c) 2020 Uber Technologies, Inc.
-//
-// Permission is hereby granted, free of charge, to any person obtaining a copy
-// of this software and associated documentation files (the "Software"), to deal
-// in the Software without restriction, including without limitation the rights
-// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-// copies of the Software, and to permit persons to whom the Software is
-// furnished to do so, subject to the following conditions:
-//
-// The above copyright notice and this permission notice shall be included in
-// all copies or substantial portions of the Software.
-//
-// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
-// THE SOFTWARE.
-
 package searchattribute
 
 import (
@@ -34,6 +10,7 @@ import (
 	"go.temporal.io/server/common/namespace"
 	"go.temporal.io/server/common/payload"
 	"go.temporal.io/server/common/persistence/visibility/manager"
+	"go.temporal.io/server/common/searchattribute/sadefs"
 )
 
 type (
@@ -87,12 +64,10 @@ func (v *Validator) Validate(searchAttributes *commonpb.SearchAttributes, namesp
 
 	lengthOfFields := len(searchAttributes.GetIndexedFields())
 	if lengthOfFields > v.searchAttributesNumberOfKeysLimit(namespace) {
-		return serviceerror.NewInvalidArgument(
-			fmt.Sprintf(
-				"number of search attributes %d exceeds limit %d",
-				lengthOfFields,
-				v.searchAttributesNumberOfKeysLimit(namespace),
-			),
+		return serviceerror.NewInvalidArgumentf(
+			"number of search attributes %d exceeds limit %d",
+			lengthOfFields,
+			v.searchAttributesNumberOfKeysLimit(namespace),
 		)
 	}
 
@@ -101,8 +76,8 @@ func (v *Validator) Validate(searchAttributes *commonpb.SearchAttributes, namesp
 		false,
 	)
 	if err != nil {
-		return serviceerror.NewInvalidArgument(
-			fmt.Sprintf("unable to get search attributes from cluster metadata: %v", err),
+		return serviceerror.NewUnavailablef(
+			"unable to get search attributes from cluster metadata: %v", err,
 		)
 	}
 
@@ -114,8 +89,8 @@ func (v *Validator) Validate(searchAttributes *commonpb.SearchAttributes, namesp
 				// if suppressing the error, then just ignore the search attribute
 				continue
 			}
-			return serviceerror.NewInvalidArgument(
-				fmt.Sprintf("%s attribute can't be set in SearchAttributes", saFieldName),
+			return serviceerror.NewInvalidArgumentf(
+				"%s attribute can't be set in SearchAttributes", saFieldName,
 			)
 		}
 
@@ -135,6 +110,16 @@ func (v *Validator) Validate(searchAttributes *commonpb.SearchAttributes, namesp
 			)
 		}
 
+		// Don't allow those SA's that are in predefined but not in predefinedWhiteList to be set by a user
+		predefined := sadefs.Predefined()
+		if _, ok := predefined[saFieldName]; ok {
+			predefinedWhiteList := sadefs.PredefinedWhiteList()
+			if _, ok = predefinedWhiteList[saFieldName]; !ok {
+				return serviceerror.NewInvalidArgumentf(
+					"%s attribute can't be set in SearchAttributes", saFieldName,
+				)
+			}
+		}
 		saValue, err := DecodeValue(saPayload, saType, v.allowList(namespace))
 		if err != nil {
 			var invalidValue interface{}
@@ -181,12 +166,10 @@ func (v *Validator) ValidateSize(searchAttributes *commonpb.SearchAttributes, na
 	}
 
 	if searchAttributes.Size() > v.searchAttributesTotalSizeLimit(namespace) {
-		return serviceerror.NewInvalidArgument(
-			fmt.Sprintf(
-				"total size of search attributes %d exceeds size limit %d",
-				searchAttributes.Size(),
-				v.searchAttributesTotalSizeLimit(namespace),
-			),
+		return serviceerror.NewInvalidArgumentf(
+			"total size of search attributes %d exceeds size limit %d",
+			searchAttributes.Size(),
+			v.searchAttributesTotalSizeLimit(namespace),
 		)
 	}
 
@@ -201,11 +184,11 @@ func (v *Validator) validationError(msg string, saFieldName string, namespace st
 	if err != nil {
 		return err
 	}
-	return serviceerror.NewInvalidArgument(fmt.Sprintf(msg, saAlias))
+	return serviceerror.NewInvalidArgumentf(msg, saAlias)
 }
 
 func (v *Validator) getAlias(saFieldName string, namespaceName string) (string, error) {
-	if IsMappable(saFieldName) {
+	if sadefs.IsMappable(saFieldName) {
 		mapper, err := v.searchAttributesMapperProvider.GetMapper(namespace.Name(namespaceName))
 		if err != nil {
 			return "", err

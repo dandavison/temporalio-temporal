@@ -1,30 +1,7 @@
-// The MIT License
-//
-// Copyright (c) 2020 Temporal Technologies Inc.  All rights reserved.
-//
-// Copyright (c) 2020 Uber Technologies, Inc.
-//
-// Permission is hereby granted, free of charge, to any person obtaining a copy
-// of this software and associated documentation files (the "Software"), to deal
-// in the Software without restriction, including without limitation the rights
-// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-// copies of the Software, and to permit persons to whom the Software is
-// furnished to do so, subject to the following conditions:
-//
-// The above copyright notice and this permission notice shall be included in
-// all copies or substantial portions of the Software.
-//
-// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
-// THE SOFTWARE.
-
 package temporal
 
 import (
+	"errors"
 	"fmt"
 	"net/http"
 	"slices"
@@ -58,6 +35,7 @@ type (
 		configDir      string
 		env            string
 		zone           string
+		configFilePath string
 		hostsByService map[primitives.ServiceName]static.Hosts
 
 		startupSynchronizationMode synchronizationModeParams
@@ -115,12 +93,28 @@ func (so *serverOptions) loadAndValidate() error {
 }
 
 func (so *serverOptions) loadConfig() error {
-	so.config = &config.Config{}
-	err := config.Load(so.env, so.configDir, so.zone, so.config)
-	if err != nil {
-		return fmt.Errorf("config file corrupted: %w", err)
+	if so.configFilePath != "" {
+		if so.env != "" || so.configDir != "" || so.zone != "" {
+			return errors.New("env, config, zone can not be set if configFilePath is set")
+		}
+		cfg, err := config.Load(
+			config.WithConfigFile(so.configFilePath),
+		)
+		if err != nil {
+			return fmt.Errorf("could not load config file: %w", err)
+		}
+		so.config = cfg
+		return nil
 	}
-
+	cfg, err := config.Load(
+		config.WithEnv(so.env),
+		config.WithConfigDir(so.configDir),
+		config.WithZone(so.zone),
+	)
+	if err != nil {
+		return fmt.Errorf("could not load config file: %w", err)
+	}
+	so.config = cfg
 	return nil
 }
 

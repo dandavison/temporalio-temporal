@@ -1,27 +1,3 @@
-// The MIT License
-//
-// Copyright (c) 2020 Temporal Technologies Inc.  All rights reserved.
-//
-// Copyright (c) 2020 Uber Technologies, Inc.
-//
-// Permission is hereby granted, free of charge, to any person obtaining a copy
-// of this software and associated documentation files (the "Software"), to deal
-// in the Software without restriction, including without limitation the rights
-// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-// copies of the Software, and to permit persons to whom the Software is
-// furnished to do so, subject to the following conditions:
-//
-// The above copyright notice and this permission notice shall be included in
-// all copies or substantial portions of the Software.
-//
-// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
-// THE SOFTWARE.
-
 package tasks
 
 import (
@@ -29,11 +5,11 @@ import (
 	"slices"
 	"testing"
 
-	"github.com/pborman/uuid"
+	"github.com/google/uuid"
 	"github.com/stretchr/testify/require"
 	"github.com/stretchr/testify/suite"
 	enumsspb "go.temporal.io/server/api/enums/v1"
-	"go.temporal.io/server/api/persistence/v1"
+	persistencespb "go.temporal.io/server/api/persistence/v1"
 	"go.temporal.io/server/common/definition"
 	"go.temporal.io/server/common/predicates"
 	"go.uber.org/mock/gomock"
@@ -60,7 +36,7 @@ func (s *predicatesSuite) SetupTest() {
 }
 
 func (s *predicatesSuite) TestNamespacePredicate_Test() {
-	namespaceIDs := []string{uuid.New(), uuid.New()}
+	namespaceIDs := []string{uuid.NewString(), uuid.NewString()}
 
 	p := NewNamespacePredicate(namespaceIDs)
 	for _, id := range namespaceIDs {
@@ -70,12 +46,12 @@ func (s *predicatesSuite) TestNamespacePredicate_Test() {
 	}
 
 	mockTask := NewMockTask(s.controller)
-	mockTask.EXPECT().GetNamespaceID().Return(uuid.New()).Times(1)
+	mockTask.EXPECT().GetNamespaceID().Return(uuid.NewString()).Times(1)
 	s.False(p.Test(mockTask))
 }
 
 func (s *predicatesSuite) TestNamespacePredicate_Equals() {
-	namespaceIDs := []string{uuid.New(), uuid.New()}
+	namespaceIDs := []string{uuid.NewString(), uuid.NewString()}
 
 	p := NewNamespacePredicate(namespaceIDs)
 
@@ -89,13 +65,13 @@ func (s *predicatesSuite) TestNamespacePredicate_Equals() {
 	)
 	s.True(p.Equals(NewNamespacePredicate(namespaceIDs)))
 
-	s.False(p.Equals(NewNamespacePredicate([]string{uuid.New(), uuid.New()})))
+	s.False(p.Equals(NewNamespacePredicate([]string{uuid.NewString(), uuid.NewString()})))
 	s.False(p.Equals(NewTypePredicate([]enumsspb.TaskType{enumsspb.TASK_TYPE_ACTIVITY_RETRY_TIMER})))
 	s.False(p.Equals(predicates.Universal[Task]()))
 }
 
 func (s *predicatesSuite) TestNamespacePredicate_Size() {
-	namespaceIDs := []string{uuid.New(), uuid.New()}
+	namespaceIDs := []string{uuid.NewString(), uuid.NewString()}
 
 	p := NewNamespacePredicate(namespaceIDs)
 
@@ -155,7 +131,7 @@ func (s *predicatesSuite) TestTypePredicate_Equals() {
 		enumsspb.TASK_TYPE_DELETE_HISTORY_EVENT,
 		enumsspb.TASK_TYPE_ACTIVITY_TIMEOUT,
 	})))
-	s.False(p.Equals(NewNamespacePredicate([]string{uuid.New(), uuid.New()})))
+	s.False(p.Equals(NewNamespacePredicate([]string{uuid.NewString(), uuid.NewString()})))
 	s.False(p.Equals(predicates.Universal[Task]()))
 }
 
@@ -171,7 +147,7 @@ func (s *predicatesSuite) TestTypePredicate_Size() {
 }
 
 func (s *predicatesSuite) TestDestinationPredicate_Test() {
-	destinations := []string{uuid.New(), uuid.New()}
+	destinations := []string{uuid.NewString(), uuid.NewString()}
 
 	p := NewDestinationPredicate(destinations)
 	for _, dest := range destinations {
@@ -179,12 +155,12 @@ func (s *predicatesSuite) TestDestinationPredicate_Test() {
 		s.True(p.Test(mockTask))
 	}
 
-	mockTask := &StateMachineOutboundTask{Destination: uuid.New()}
+	mockTask := &StateMachineOutboundTask{Destination: uuid.NewString()}
 	s.False(p.Test(mockTask))
 }
 
 func (s *predicatesSuite) TestDestinationPredicate_Equals() {
-	destinations := []string{uuid.New(), uuid.New()}
+	destinations := []string{uuid.NewString(), uuid.NewString()}
 
 	p := NewDestinationPredicate(destinations)
 
@@ -198,13 +174,13 @@ func (s *predicatesSuite) TestDestinationPredicate_Equals() {
 	)
 	s.True(p.Equals(NewDestinationPredicate(destinations)))
 
-	s.False(p.Equals(NewDestinationPredicate([]string{uuid.New(), uuid.New()})))
+	s.False(p.Equals(NewDestinationPredicate([]string{uuid.NewString(), uuid.NewString()})))
 	s.False(p.Equals(NewTypePredicate([]enumsspb.TaskType{enumsspb.TASK_TYPE_ACTIVITY_RETRY_TIMER})))
 	s.False(p.Equals(predicates.Universal[Task]()))
 }
 
 func (s *predicatesSuite) TestDestinationPredicate_Size() {
-	destinations := []string{uuid.New(), uuid.New()}
+	destinations := []string{uuid.NewString(), uuid.NewString()}
 
 	p := NewDestinationPredicate(destinations)
 
@@ -217,11 +193,11 @@ func (s *predicatesSuite) TestOutboundTaskGroupPredicate_Test() {
 
 	p := NewOutboundTaskGroupPredicate(groups)
 	for _, t := range groups {
-		mockTask := &StateMachineOutboundTask{StateMachineTask: StateMachineTask{Info: &persistence.StateMachineTaskInfo{Type: t}}}
+		mockTask := &StateMachineOutboundTask{StateMachineTask: StateMachineTask{Info: &persistencespb.StateMachineTaskInfo{Type: t}}}
 		s.True(p.Test(mockTask))
 	}
 
-	mockTask := &StateMachineOutboundTask{StateMachineTask: StateMachineTask{Info: &persistence.StateMachineTaskInfo{Type: "3"}}}
+	mockTask := &StateMachineOutboundTask{StateMachineTask: StateMachineTask{Info: &persistencespb.StateMachineTaskInfo{Type: "3"}}}
 	s.False(p.Test(mockTask))
 }
 
@@ -246,7 +222,7 @@ func (s *predicatesSuite) TestOutboundTaskGroupPredicate_Equals() {
 }
 
 func (s *predicatesSuite) TestOutboundTaskGroupPredicate_Size() {
-	groups := []string{uuid.New(), uuid.New()}
+	groups := []string{uuid.NewString(), uuid.NewString()}
 
 	p := NewOutboundTaskGroupPredicate(groups)
 
@@ -264,7 +240,7 @@ func (s *predicatesSuite) TestOutboundTaskPredicate_Test() {
 	for _, g := range groups {
 		mockTask := &StateMachineOutboundTask{
 			StateMachineTask: StateMachineTask{
-				Info:        &persistence.StateMachineTaskInfo{Type: g.TaskGroup},
+				Info:        &persistencespb.StateMachineTaskInfo{Type: g.TaskGroup},
 				WorkflowKey: definition.NewWorkflowKey(g.NamespaceID, "", ""),
 			},
 			Destination: g.Destination,
@@ -275,7 +251,7 @@ func (s *predicatesSuite) TestOutboundTaskPredicate_Test() {
 	// Verify any field mismatch fails Test().
 	mockTask := &StateMachineOutboundTask{
 		StateMachineTask: StateMachineTask{
-			Info:        &persistence.StateMachineTaskInfo{Type: "g1"},
+			Info:        &persistencespb.StateMachineTaskInfo{Type: "g1"},
 			WorkflowKey: definition.NewWorkflowKey("n1", "", ""),
 		},
 		Destination: "d3",
@@ -283,7 +259,7 @@ func (s *predicatesSuite) TestOutboundTaskPredicate_Test() {
 	s.False(p.Test(mockTask))
 	mockTask = &StateMachineOutboundTask{
 		StateMachineTask: StateMachineTask{
-			Info:        &persistence.StateMachineTaskInfo{Type: "g3"},
+			Info:        &persistencespb.StateMachineTaskInfo{Type: "g3"},
 			WorkflowKey: definition.NewWorkflowKey("n1", "", ""),
 		},
 		Destination: "d1",
@@ -291,7 +267,7 @@ func (s *predicatesSuite) TestOutboundTaskPredicate_Test() {
 	s.False(p.Test(mockTask))
 	mockTask = &StateMachineOutboundTask{
 		StateMachineTask: StateMachineTask{
-			Info:        &persistence.StateMachineTaskInfo{Type: "g1"},
+			Info:        &persistencespb.StateMachineTaskInfo{Type: "g1"},
 			WorkflowKey: definition.NewWorkflowKey("n3", "", ""),
 		},
 		Destination: "d1",
@@ -388,12 +364,32 @@ func (s *predicatesSuite) TestAndPredicates() {
 			predicateB: NewTypePredicate([]enumsspb.TaskType{
 				enumsspb.TASK_TYPE_ACTIVITY_TIMEOUT,
 			}),
-			expectedResult: predicates.And[Task](
+			expectedResult: predicates.And(
 				NewNamespacePredicate([]string{"namespace1"}),
 				NewTypePredicate([]enumsspb.TaskType{
 					enumsspb.TASK_TYPE_ACTIVITY_TIMEOUT,
 				}),
 			),
+		},
+		{
+			predicateA:     NewNamespacePredicate([]string{"namespace1", "namespace2"}),
+			predicateB:     predicates.Not(NewNamespacePredicate([]string{"namespace2", "namespace3"})),
+			expectedResult: NewNamespacePredicate([]string{"namespace1"}),
+		},
+		{
+			predicateA:     predicates.Not(NewNamespacePredicate([]string{"namespace2", "namespace3"})),
+			predicateB:     NewNamespacePredicate([]string{"namespace1", "namespace2"}),
+			expectedResult: NewNamespacePredicate([]string{"namespace1"}),
+		},
+		{
+			predicateA:     predicates.Not(NewNamespacePredicate([]string{"namespace1", "namespace2"})),
+			predicateB:     predicates.Not(NewNamespacePredicate([]string{"namespace2", "namespace3"})),
+			expectedResult: predicates.Not(NewNamespacePredicate([]string{"namespace1", "namespace2", "namespace3"})),
+		},
+		{
+			predicateA:     NewNamespacePredicate([]string{"namespace1", "namespace2"}),
+			predicateB:     predicates.Not(NewNamespacePredicate([]string{"namespace1", "namespace2", "namespace3"})),
+			expectedResult: predicates.Empty[Task](),
 		},
 	}
 
@@ -455,12 +451,27 @@ func (s *predicatesSuite) TestOrPredicates() {
 			predicateB: NewTypePredicate([]enumsspb.TaskType{
 				enumsspb.TASK_TYPE_ACTIVITY_TIMEOUT,
 			}),
-			expectedResult: predicates.Or[Task](
+			expectedResult: predicates.Or(
 				NewNamespacePredicate([]string{"namespace1"}),
 				NewTypePredicate([]enumsspb.TaskType{
 					enumsspb.TASK_TYPE_ACTIVITY_TIMEOUT,
 				}),
 			),
+		},
+		{
+			predicateA:     NewNamespacePredicate([]string{"namespace1", "namespace2"}),
+			predicateB:     predicates.Not(NewNamespacePredicate([]string{"namespace2", "namespace3"})),
+			expectedResult: predicates.Not(NewNamespacePredicate([]string{"namespace3"})),
+		},
+		{
+			predicateA:     predicates.Not(NewNamespacePredicate([]string{"namespace2", "namespace3"})),
+			predicateB:     NewNamespacePredicate([]string{"namespace1", "namespace2"}),
+			expectedResult: predicates.Not(NewNamespacePredicate([]string{"namespace3"})),
+		},
+		{
+			predicateA:     predicates.Not(NewNamespacePredicate([]string{"namespace1", "namespace2"})),
+			predicateB:     predicates.Not(NewNamespacePredicate([]string{"namespace2", "namespace3"})),
+			expectedResult: predicates.Not(NewNamespacePredicate([]string{"namespace2"})),
 		},
 	}
 

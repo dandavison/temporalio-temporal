@@ -1,27 +1,3 @@
-// The MIT License
-//
-// Copyright (c) 2020 Temporal Technologies Inc.  All rights reserved.
-//
-// Copyright (c) 2020 Uber Technologies, Inc.
-//
-// Permission is hereby granted, free of charge, to any person obtaining a copy
-// of this software and associated documentation files (the "Software"), to deal
-// in the Software without restriction, including without limitation the rights
-// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-// copies of the Software, and to permit persons to whom the Software is
-// furnished to do so, subject to the following conditions:
-//
-// The above copyright notice and this permission notice shall be included in
-// all copies or substantial portions of the Software.
-//
-// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
-// THE SOFTWARE.
-
 package tests
 
 import (
@@ -32,7 +8,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/pborman/uuid"
+	"github.com/google/uuid"
 	"github.com/stretchr/testify/suite"
 	commandpb "go.temporal.io/api/command/v1"
 	commonpb "go.temporal.io/api/common/v1"
@@ -51,7 +27,7 @@ import (
 )
 
 type WorkflowFailuresTestSuite struct {
-	testcore.FunctionalSuite
+	testcore.FunctionalTestBase
 }
 
 func TestWorkflowFailuresTestSuite(t *testing.T) {
@@ -68,8 +44,8 @@ func (s *WorkflowFailuresTestSuite) TestWorkflowTimeout() {
 	identity := "worker1"
 
 	request := &workflowservice.StartWorkflowExecutionRequest{
-		RequestId:           uuid.New(),
-		Namespace:           s.Namespace(),
+		RequestId:           uuid.NewString(),
+		Namespace:           s.Namespace().String(),
 		WorkflowId:          id,
 		WorkflowType:        &commonpb.WorkflowType{Name: wt},
 		TaskQueue:           &taskqueuepb.TaskQueue{Name: tl, Kind: enumspb.TASK_QUEUE_KIND_NORMAL},
@@ -89,7 +65,7 @@ func (s *WorkflowFailuresTestSuite) TestWorkflowTimeout() {
 	var historyEvents []*historypb.HistoryEvent
 GetHistoryLoop:
 	for i := 0; i < 10; i++ {
-		historyEvents = s.GetHistory(s.Namespace(), &commonpb.WorkflowExecution{
+		historyEvents = s.GetHistory(s.Namespace().String(), &commonpb.WorkflowExecution{
 			WorkflowId: id,
 			RunId:      we.RunId,
 		})
@@ -117,7 +93,7 @@ GetHistoryLoop:
 ListClosedLoop:
 	for i := 0; i < 10; i++ {
 		resp, err3 := s.FrontendClient().ListClosedWorkflowExecutions(testcore.NewContext(), &workflowservice.ListClosedWorkflowExecutionsRequest{
-			Namespace:       s.Namespace(),
+			Namespace:       s.Namespace().String(),
 			MaximumPageSize: 100,
 			StartTimeFilter: startFilter,
 			Filters: &workflowservice.ListClosedWorkflowExecutionsRequest_ExecutionFilter{ExecutionFilter: &filterpb.WorkflowExecutionFilter{
@@ -145,8 +121,8 @@ func (s *WorkflowFailuresTestSuite) TestWorkflowTaskFailed() {
 
 	// Start workflow execution
 	request := &workflowservice.StartWorkflowExecutionRequest{
-		RequestId:           uuid.New(),
-		Namespace:           s.Namespace(),
+		RequestId:           uuid.NewString(),
+		Namespace:           s.Namespace().String(),
 		WorkflowId:          id,
 		WorkflowType:        &commonpb.WorkflowType{Name: wt},
 		TaskQueue:           &taskqueuepb.TaskQueue{Name: tl, Kind: enumspb.TASK_QUEUE_KIND_NORMAL},
@@ -188,9 +164,9 @@ func (s *WorkflowFailuresTestSuite) TestWorkflowTaskFailed() {
 
 		// Send signals during workflow task
 		if sendSignal {
-			s.NoError(s.SendSignal(s.Namespace(), workflowExecution, "signalC", nil, identity))
-			s.NoError(s.SendSignal(s.Namespace(), workflowExecution, "signalD", nil, identity))
-			s.NoError(s.SendSignal(s.Namespace(), workflowExecution, "signalE", nil, identity))
+			s.NoError(s.SendSignal(s.Namespace().String(), workflowExecution, "signalC", nil, identity))
+			s.NoError(s.SendSignal(s.Namespace().String(), workflowExecution, "signalD", nil, identity))
+			s.NoError(s.SendSignal(s.Namespace().String(), workflowExecution, "signalE", nil, identity))
 			sendSignal = false
 		}
 
@@ -241,7 +217,7 @@ func (s *WorkflowFailuresTestSuite) TestWorkflowTaskFailed() {
 
 	poller := &testcore.TaskPoller{
 		Client:              s.FrontendClient(),
-		Namespace:           s.Namespace(),
+		Namespace:           s.Namespace().String(),
 		TaskQueue:           &taskqueuepb.TaskQueue{Name: tl, Kind: enumspb.TASK_QUEUE_KIND_NORMAL},
 		Identity:            identity,
 		WorkflowTaskHandler: wtHandler,
@@ -266,7 +242,7 @@ func (s *WorkflowFailuresTestSuite) TestWorkflowTaskFailed() {
 		s.NoError(err)
 	}
 
-	err = s.SendSignal(s.Namespace(), workflowExecution, "signalA", nil, identity)
+	err = s.SendSignal(s.Namespace().String(), workflowExecution, "signalA", nil, identity)
 	s.NoError(err, "failed to send signal to execution")
 
 	// process signal
@@ -276,7 +252,7 @@ func (s *WorkflowFailuresTestSuite) TestWorkflowTaskFailed() {
 	s.Equal(1, signalCount)
 
 	// send another signal to trigger workflow task
-	err = s.SendSignal(s.Namespace(), workflowExecution, "signalB", nil, identity)
+	err = s.SendSignal(s.Namespace().String(), workflowExecution, "signalB", nil, identity)
 	s.NoError(err, "failed to send signal to execution")
 
 	// fail workflow task 2 more times
@@ -306,7 +282,7 @@ func (s *WorkflowFailuresTestSuite) TestWorkflowTaskFailed() {
 	s.True(workflowComplete)
 	s.Equal(16, signalCount)
 
-	events := s.GetHistory(s.Namespace(), workflowExecution)
+	events := s.GetHistory(s.Namespace().String(), workflowExecution)
 	s.EqualHistoryEvents(`
   1 WorkflowExecutionStarted
   2 WorkflowTaskScheduled
@@ -350,8 +326,8 @@ func (s *WorkflowFailuresTestSuite) TestRespondWorkflowTaskCompleted_ReturnsErro
 	identity := "worker1"
 
 	request := &workflowservice.StartWorkflowExecutionRequest{
-		RequestId:          uuid.New(),
-		Namespace:          s.Namespace(),
+		RequestId:          uuid.NewString(),
+		Namespace:          s.Namespace().String(),
 		WorkflowId:         id,
 		WorkflowType:       &commonpb.WorkflowType{Name: wt},
 		TaskQueue:          &taskqueuepb.TaskQueue{Name: tq, Kind: enumspb.TASK_QUEUE_KIND_NORMAL},
@@ -380,7 +356,7 @@ func (s *WorkflowFailuresTestSuite) TestRespondWorkflowTaskCompleted_ReturnsErro
 
 	poller := &testcore.TaskPoller{
 		Client:              s.FrontendClient(),
-		Namespace:           s.Namespace(),
+		Namespace:           s.Namespace().String(),
 		TaskQueue:           &taskqueuepb.TaskQueue{Name: tq, Kind: enumspb.TASK_QUEUE_KIND_NORMAL},
 		Identity:            identity,
 		WorkflowTaskHandler: wtHandler,
@@ -394,7 +370,7 @@ func (s *WorkflowFailuresTestSuite) TestRespondWorkflowTaskCompleted_ReturnsErro
 	s.IsType(&serviceerror.InvalidArgument{}, err)
 	s.Equal("BadRecordMarkerAttributes: MarkerName is not set on RecordMarkerCommand.", err.Error())
 
-	historyEvents := s.GetHistory(s.Namespace(), &commonpb.WorkflowExecution{
+	historyEvents := s.GetHistory(s.Namespace().String(), &commonpb.WorkflowExecution{
 		WorkflowId: id,
 		RunId:      we0.GetRunId(),
 	})

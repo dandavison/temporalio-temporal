@@ -1,90 +1,116 @@
-// The MIT License
-//
-// Copyright (c) 2020 Temporal Technologies Inc.  All rights reserved.
-//
-// Copyright (c) 2020 Uber Technologies, Inc.
-//
-// Permission is hereby granted, free of charge, to any person obtaining a copy
-// of this software and associated documentation files (the "Software"), to deal
-// in the Software without restriction, including without limitation the rights
-// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-// copies of the Software, and to permit persons to whom the Software is
-// furnished to do so, subject to the following conditions:
-//
-// The above copyright notice and this permission notice shall be included in
-// all copies or substantial portions of the Software.
-//
-// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
-// THE SOFTWARE.
-
 package testcore
 
 import (
 	"bytes"
+	"cmp"
 	"context"
 	"encoding/binary"
 	"fmt"
 	"maps"
 	"os"
+	"regexp"
 	"strconv"
 	"time"
 
 	"github.com/dgryski/go-farm"
-	"github.com/pborman/uuid"
+	"github.com/google/uuid"
 	"github.com/stretchr/testify/require"
 	"github.com/stretchr/testify/suite"
+	sdktrace "go.opentelemetry.io/otel/sdk/trace"
 	commonpb "go.temporal.io/api/common/v1"
 	enumspb "go.temporal.io/api/enums/v1"
 	historypb "go.temporal.io/api/history/v1"
 	namespacepb "go.temporal.io/api/namespace/v1"
 	"go.temporal.io/api/operatorservice/v1"
 	"go.temporal.io/api/workflowservice/v1"
+	sdkclient "go.temporal.io/sdk/client"
+	sdkworker "go.temporal.io/sdk/worker"
 	"go.temporal.io/server/api/adminservice/v1"
 	persistencespb "go.temporal.io/server/api/persistence/v1"
 	"go.temporal.io/server/common"
+	"go.temporal.io/server/common/config"
 	"go.temporal.io/server/common/dynamicconfig"
 	"go.temporal.io/server/common/log"
 	"go.temporal.io/server/common/log/tag"
+	"go.temporal.io/server/common/namespace"
 	"go.temporal.io/server/common/payloads"
 	"go.temporal.io/server/common/persistence"
+	persistencetests "go.temporal.io/server/common/persistence/persistence-tests"
 	"go.temporal.io/server/common/primitives"
 	"go.temporal.io/server/common/primitives/timestamp"
 	"go.temporal.io/server/common/rpc"
-	"go.temporal.io/server/environment"
+	"go.temporal.io/server/common/telemetry"
+	"go.temporal.io/server/common/testing/historyrequire"
+	"go.temporal.io/server/common/testing/protorequire"
+	"go.temporal.io/server/common/testing/taskpoller"
+	"go.temporal.io/server/common/testing/testhooks"
+	"go.temporal.io/server/common/testing/testlogger"
+	"go.temporal.io/server/common/testing/testtelemetry"
+	"go.temporal.io/server/common/testing/updateutils"
+	"go.temporal.io/server/components/nexusoperations"
 	"go.uber.org/fx"
-	"google.golang.org/protobuf/types/known/durationpb"
-	"gopkg.in/yaml.v3"
+	"google.golang.org/grpc"
+	"google.golang.org/grpc/metadata"
 )
 
 type (
-	// FunctionalTestBase is a testcore struct for functional tests
 	FunctionalTestBase struct {
 		suite.Suite
 
-		testClusterFactory     TestClusterFactory
-		testCluster            *TestCluster
-		testClusterConfig      *TestClusterConfig
-		client                 workflowservice.WorkflowServiceClient
-		adminClient            adminservice.AdminServiceClient
-		operatorClient         operatorservice.OperatorServiceClient
-		httpAPIAddress         string
-		Logger                 log.Logger
-		namespace              string
-		foreignNamespace       string
-		archivalNamespace      string
-		dynamicConfigOverrides map[dynamicconfig.Key]interface{}
+		// `suite.Suite` embeds `*assert.Assertions` which, by default, makes all asserts (like `s.NoError(err)`)
+		// only log the error, continue test execution, and only then fail the test.
+		// This is not desired behavior in most cases. The idiomatic way to change this behavior
+		// is to replace `*assert.Assertions` with `*require.Assertions` by embedding it in every test suite
+		// (or base struct of every test suite).
+		*require.Assertions
+
+		protorequire.ProtoAssertions
+		historyrequire.HistoryRequire
+		updateutils.UpdateUtils
+
+		Logger       log.Logger
+		otelExporter *testtelemetry.MemoryExporter
+
+		testCluster *TestCluster
+		// TODO (alex): this doesn't have to be a separate field. All usages can be replaced with values from testCluster itself.
+		testClusterConfig *TestClusterConfig
+
+		namespace         namespace.Name
+		namespaceID       namespace.ID
+		externalNamespace namespace.Name
+
+		// Fields used by SDK based tests.
+		sdkClient sdkclient.Client
+		worker    sdkworker.Worker
+		taskQueue string
+
+		// TODO (alex): replace with v2
+		taskPoller *taskpoller.TaskPoller
+
+		// isShared indicates whether this cluster is shared between multiple tests.
+		// Certain operations (e.g. InjectHook, CloseShard) are not safe on shared clusters
+		// and will panic if called.
+		isShared bool
 	}
-	// TestClusterParams contains the variables which are used to configure test suites via the Option type.
+	// TestClusterParams contains the variables which are used to configure test cluster via the TestClusterOption type.
 	TestClusterParams struct {
-		ServiceOptions map[primitives.ServiceName][]fx.Option
+		ServiceOptions         map[primitives.ServiceName][]fx.Option
+		DynamicConfigOverrides map[dynamicconfig.Key]any
+		ArchivalEnabled        bool
+		EnableMTLS             bool
+		FaultInjectionConfig   *config.FaultInjection
+		NumHistoryShards       int32
+		SharedCluster          bool
 	}
-	Option func(params *TestClusterParams)
+	TestClusterOption func(params *TestClusterParams)
 )
+
+func init() {
+	// By default, the SDK worker will calculate a checksum of the binary and use that as an identifier.
+	// But given the size of the test binary, that has a significant performance impact (100 ms or more).
+	// By specifying a checksum here, we can avoid that overhead.
+	sdkworker.SetBinaryChecksum("oss-server-test")
+}
 
 // WithFxOptionsForService returns an Option which, when passed as an argument to setupSuite, will append the given list
 // of fx options to the end of the arguments to the fx.New call for the given service. For example, if you want to
@@ -97,9 +123,49 @@ type (
 // This is similar to the pattern of plumbing dependencies through the TestClusterConfig, but it's much more convenient,
 // scalable and flexible. The reason we need to do this on a per-service basis is that there are separate fx apps for
 // each one.
-func WithFxOptionsForService(serviceName primitives.ServiceName, options ...fx.Option) Option {
+func WithFxOptionsForService(serviceName primitives.ServiceName, options ...fx.Option) TestClusterOption {
 	return func(params *TestClusterParams) {
 		params.ServiceOptions[serviceName] = append(params.ServiceOptions[serviceName], options...)
+	}
+}
+
+func WithDynamicConfigOverrides(overrides map[dynamicconfig.Key]any) TestClusterOption {
+	return func(params *TestClusterParams) {
+		if params.DynamicConfigOverrides == nil {
+			params.DynamicConfigOverrides = overrides
+		} else {
+			maps.Copy(params.DynamicConfigOverrides, overrides)
+		}
+	}
+}
+
+func WithArchivalEnabled() TestClusterOption {
+	return func(params *TestClusterParams) {
+		params.ArchivalEnabled = true
+	}
+}
+
+func WithMTLS() TestClusterOption {
+	return func(params *TestClusterParams) {
+		params.EnableMTLS = true
+	}
+}
+
+func WithFaultInjectionConfig(cfg *config.FaultInjection) TestClusterOption {
+	return func(params *TestClusterParams) {
+		params.FaultInjectionConfig = cfg
+	}
+}
+
+func WithNumHistoryShards(n int32) TestClusterOption {
+	return func(params *TestClusterParams) {
+		params.NumHistoryShards = n
+	}
+}
+
+func WithSharedCluster() TestClusterOption {
+	return func(params *TestClusterParams) {
+		params.SharedCluster = true
 	}
 }
 
@@ -111,99 +177,171 @@ func (s *FunctionalTestBase) GetTestClusterConfig() *TestClusterConfig {
 	return s.testClusterConfig
 }
 
-func (s *FunctionalTestBase) FrontendClient() FrontendClient {
-	return s.client
+func (s *FunctionalTestBase) FrontendClient() workflowservice.WorkflowServiceClient {
+	return s.testCluster.FrontendClient()
 }
 
-func (s *FunctionalTestBase) AdminClient() AdminClient {
-	return s.adminClient
+func (s *FunctionalTestBase) AdminClient() adminservice.AdminServiceClient {
+	return s.testCluster.AdminClient()
 }
 
 func (s *FunctionalTestBase) OperatorClient() operatorservice.OperatorServiceClient {
-	return s.operatorClient
+	return s.testCluster.OperatorClient()
 }
 
 func (s *FunctionalTestBase) HttpAPIAddress() string {
-	return s.httpAPIAddress
+	return s.testCluster.Host().FrontendHTTPAddress()
 }
 
-func (s *FunctionalTestBase) Namespace() string {
+func (s *FunctionalTestBase) Namespace() namespace.Name {
 	return s.namespace
 }
 
-func (s *FunctionalTestBase) ArchivalNamespace() string {
-	return s.archivalNamespace
+func (s *FunctionalTestBase) NamespaceID() namespace.ID {
+	return s.namespaceID
 }
 
-func (s *FunctionalTestBase) ForeignNamespace() string {
-	return s.foreignNamespace
+func (s *FunctionalTestBase) ExternalNamespace() namespace.Name {
+	return s.externalNamespace
 }
 
 func (s *FunctionalTestBase) FrontendGRPCAddress() string {
 	return s.GetTestCluster().Host().FrontendGRPCAddress()
 }
 
-func (s *FunctionalTestBase) SetDynamicConfigOverrides(dynamicConfig map[dynamicconfig.Key]interface{}) {
-	s.dynamicConfigOverrides = dynamicConfig
+func (s *FunctionalTestBase) WorkerGRPCAddress() string {
+	return s.GetTestCluster().WorkerGRPCAddress()
 }
 
-func (s *FunctionalTestBase) SetupSuite(defaultClusterConfigFile string, options ...Option) {
-	s.testClusterFactory = NewTestClusterFactory()
+func (s *FunctionalTestBase) Worker() sdkworker.Worker {
+	return s.worker
+}
 
-	params := ApplyTestClusterParams(options)
+func (s *FunctionalTestBase) SdkClient() sdkclient.Client {
+	return s.sdkClient
+}
 
-	s.setupLogger()
+func (s *FunctionalTestBase) TaskQueue() string {
+	return s.taskQueue
+}
 
-	clusterConfig, err := GetTestClusterConfig(defaultClusterConfigFile)
-	s.Require().NoError(err)
-	s.Empty(clusterConfig.DeprecatedFrontendAddress, "Functional tests against external frontends are not supported")
-	s.Empty(clusterConfig.DeprecatedClusterNo, "ClusterNo should not be present in cluster config files")
+func (s *FunctionalTestBase) TaskPoller() *taskpoller.TaskPoller {
+	return s.taskPoller
+}
 
-	if clusterConfig.DynamicConfigOverrides == nil {
-		clusterConfig.DynamicConfigOverrides = make(map[dynamicconfig.Key]interface{})
+func (s *FunctionalTestBase) SetupSuite() {
+	s.SetupSuiteWithCluster()
+}
+
+func (s *FunctionalTestBase) TearDownSuite() {
+	// NOTE: We can't make s.Logger a testlogger.TestLogger because of AcquireShardSuiteBase.
+	if tl, ok := s.Logger.(*testlogger.TestLogger); ok {
+		// Before we tear down the cluster, we disable the test logger.
+		// This prevents cluster teardown errors from failing the test; and log spam.
+		tl.Close()
 	}
-	maps.Copy(clusterConfig.DynamicConfigOverrides, map[dynamicconfig.Key]any{
-		dynamicconfig.HistoryScannerEnabled.Key():    false,
-		dynamicconfig.TaskQueueScannerEnabled.Key():  false,
-		dynamicconfig.ExecutionsScannerEnabled.Key(): false,
-		dynamicconfig.BuildIdScavengerEnabled.Key():  false,
-		dynamicconfig.EnableNexus.Key():              true,
-		// Better to read through in tests than add artificial sleeps (which is what we previously had).
-		dynamicconfig.ForceSearchAttributesCacheRefreshOnRead.Key(): true,
-	})
-	maps.Copy(clusterConfig.DynamicConfigOverrides, s.dynamicConfigOverrides)
-	clusterConfig.ServiceFxOptions = params.ServiceOptions
-	clusterConfig.EnableMetricsCapture = true
-	s.testClusterConfig = clusterConfig
 
-	cluster, err := s.testClusterFactory.NewCluster(s.T(), clusterConfig, s.Logger)
-	s.Require().NoError(err)
-	s.testCluster = cluster
-	s.client = s.testCluster.FrontendClient()
-	s.adminClient = s.testCluster.AdminClient()
-	s.operatorClient = s.testCluster.OperatorClient()
-	s.httpAPIAddress = cluster.Host().FrontendHTTPAddress()
+	s.TearDownCluster()
+}
 
-	s.namespace = RandomizeStr("functional-test-namespace")
-	s.Require().NoError(s.registerNamespaceWithDefaults(s.namespace))
+func (s *FunctionalTestBase) SetupSuiteWithCluster(options ...TestClusterOption) {
+	// Acquire a slot from the dedicated test cluster pool.
+	testClusterPool.dedicated.acquireSlot(s.T())
+	s.setupCluster(options...)
+}
 
-	s.foreignNamespace = RandomizeStr("functional-foreign-test-namespace")
-	s.Require().NoError(s.registerNamespaceWithDefaults(s.foreignNamespace))
+func (s *FunctionalTestBase) setupCluster(options ...TestClusterOption) {
+	params := ApplyTestClusterOptions(options)
 
-	if clusterConfig.EnableArchival {
-		s.archivalNamespace = RandomizeStr("functional-archival-enabled-namespace")
-		s.Require().NoError(s.registerArchivalNamespace(s.archivalNamespace))
+	// NOTE: A suite might set its own logger. Example: AcquireShardSuiteBase.
+	if s.Logger == nil {
+		tl := testlogger.NewTestLogger(s.T(), testlogger.FailOnExpectedErrorOnly)
+		// Instead of panic'ing immediately, TearDownTest will check if the test logger failed
+		// after each test completed. This is better since otherwise is would fail inside
+		// the server and not the test, creating a lot of noise and possibly stuck tests.
+		testlogger.DontFailOnError(tl)
+		// Fail test when an assertion fails (see `softassert` package).
+		tl.Expect(testlogger.Error, ".*", tag.FailedAssertion)
+		s.Logger = tl
 	}
+
+	s.testClusterConfig = &TestClusterConfig{
+		FaultInjection: params.FaultInjectionConfig,
+		HistoryConfig: HistoryConfig{
+			NumHistoryShards: cmp.Or(params.NumHistoryShards, 4),
+		},
+		DynamicConfigOverrides: params.DynamicConfigOverrides,
+		ServiceFxOptions:       params.ServiceOptions,
+		EnableMetricsCapture:   true,
+		EnableArchival:         params.ArchivalEnabled,
+		EnableMTLS:             params.EnableMTLS,
+	}
+
+	// Apply configuration for shared clusters.
+	if params.SharedCluster {
+		// Use file-based SQLite for shared clusters to support parallel test access.
+		s.testClusterConfig.Persistence = *persistencetests.GetSQLiteFileTestClusterOption()
+		s.isShared = true
+	}
+
+	// Initialize the OTEL collector if OTEL is enabled.
+	// Must be done before the test cluster is created, so that the collector can be used by the test cluster.
+	if otelOutputDir := os.Getenv("TEMPORAL_TEST_OTEL_OUTPUT"); otelOutputDir != "" {
+		// Create an OTEL exporter.
+		s.otelExporter = testtelemetry.NewFileExporter(otelOutputDir)
+
+		// Direct the OTEL exporter to the collector.
+		s.testClusterConfig.SpanExporters = map[telemetry.SpanExporterType]sdktrace.SpanExporter{
+			telemetry.OtelTracesOtlpExporterType: s.otelExporter,
+		}
+	}
+
+	var err error
+	testClusterFactory := NewTestClusterFactory()
+	s.testCluster, err = testClusterFactory.NewCluster(s.T(), s.testClusterConfig, s.Logger)
+	s.Require().NoError(err)
+
+	// Setup test cluster namespaces.
+	s.namespace = namespace.Name(RandomizeStr("namespace"))
+	s.namespaceID, err = s.RegisterNamespace(s.Namespace(), 1, enumspb.ARCHIVAL_STATE_DISABLED, "", "")
+	s.Require().NoError(err)
+
+	s.externalNamespace = namespace.Name(RandomizeStr("external-namespace"))
+	_, err = s.RegisterNamespace(s.ExternalNamespace(), 1, enumspb.ARCHIVAL_STATE_DISABLED, "", "")
+	s.Require().NoError(err)
 }
 
 // All test suites that inherit FunctionalTestBase and overwrite SetupTest must
 // call this testcore FunctionalTestBase.SetupTest function to distribute the tests
 // into partitions. Otherwise, the test suite will be executed multiple times
 // in each partition.
-// Furthermore, all test suites in the "tests/" directory that don't inherit
-// from FunctionalTestBase must implement SetupTest that calls checkTestShard.
 func (s *FunctionalTestBase) SetupTest() {
 	s.checkTestShard()
+	s.initAssertions()
+	s.setupSdk()
+	s.taskPoller = taskpoller.New(s.T(), s.FrontendClient(), s.Namespace().String())
+
+	// Annotate gRPC requests with the test name for OTEL tracing.
+	s.testCluster.host.grpcClientInterceptor.Set(func(ctx context.Context) context.Context {
+		return metadata.AppendToOutgoingContext(ctx, "temporal-test-name", s.T().Name())
+	})
+}
+
+func (s *FunctionalTestBase) SetupSubTest() {
+	s.initAssertions()
+}
+
+func (s *FunctionalTestBase) initAssertions() {
+	// `s.Assertions` (as well as other test helpers which depends on `s.T()`) must be initialized on
+	// both test and subtest levels (but not suite level, where `s.T()` is `nil`).
+	//
+	// If these helpers are not reinitialized on subtest level, any failed `assert` in
+	// subtest will fail the entire test (not subtest) immediately without running other subtests.
+
+	s.Assertions = require.New(s.T())
+	s.ProtoAssertions = protorequire.New(s.T())
+	s.HistoryRequire = historyrequire.New(s.T())
+	s.UpdateUtils = updateutils.New(s.T())
 }
 
 // checkTestShard supports test sharding based on environment variables.
@@ -235,11 +373,7 @@ func (s *FunctionalTestBase) checkTestShard() {
 	s.T().Logf("Running %s in test shard %d/%d", s.T().Name(), index+1, total)
 }
 
-func (s *FunctionalTestBase) registerNamespaceWithDefaults(name string) error {
-	return s.registerNamespace(name, 24*time.Hour, enumspb.ARCHIVAL_STATE_DISABLED, "", enumspb.ARCHIVAL_STATE_DISABLED, "")
-}
-
-func ApplyTestClusterParams(options []Option) TestClusterParams {
+func ApplyTestClusterOptions(options []TestClusterOption) TestClusterParams {
 	params := TestClusterParams{
 		ServiceOptions: make(map[primitives.ServiceName][]fx.Option),
 	}
@@ -249,124 +383,157 @@ func ApplyTestClusterParams(options []Option) TestClusterParams {
 	return params
 }
 
-// setupLogger sets the Logger for the test suite.
-// If the Logger is already set, this method does nothing.
-// If the Logger is not set, this method creates a new log.TestLogger which logs to stdout and stderr.
-func (s *FunctionalTestBase) setupLogger() {
-	if s.Logger == nil {
-		s.Logger = log.NewTestLogger()
+func (s *FunctionalTestBase) setupSdk() {
+	// Set URL template after httpAPAddress is set, see commonnexus.RouteCompletionCallback
+	s.OverrideDynamicConfig(
+		nexusoperations.CallbackURLTemplate,
+		"http://"+s.HttpAPIAddress()+"/namespaces/{{.NamespaceName}}/nexus/callback")
+
+	clientOptions := sdkclient.Options{
+		HostPort:  s.FrontendGRPCAddress(),
+		Namespace: s.Namespace().String(),
+		Logger:    log.NewSdkLogger(s.Logger),
 	}
+
+	if provider := s.testCluster.host.tlsConfigProvider; provider != nil {
+		clientOptions.ConnectionOptions.TLS = provider.FrontendClientConfig
+	}
+
+	if interceptor := s.testCluster.host.grpcClientInterceptor; interceptor != nil {
+		clientOptions.ConnectionOptions.DialOptions = []grpc.DialOption{
+			grpc.WithUnaryInterceptor(interceptor.Unary()),
+			grpc.WithStreamInterceptor(interceptor.Stream()),
+		}
+	}
+
+	var err error
+	s.sdkClient, err = sdkclient.Dial(clientOptions)
+	s.NoError(err)
+	// TODO(alex): move initialization to suite level?
+	s.taskQueue = RandomizeStr("tq")
+
+	workerOptions := sdkworker.Options{}
+	s.worker = sdkworker.New(s.sdkClient, s.taskQueue, workerOptions)
+	err = s.worker.Start()
+	s.NoError(err)
 }
 
-// GetTestClusterConfig return test cluster config
-func GetTestClusterConfig(configFile string) (*TestClusterConfig, error) {
-	environment.SetupEnv()
-
-	configLocation := configFile
-	if TestFlags.TestClusterConfigFile != "" {
-		configLocation = TestFlags.TestClusterConfigFile
+func (s *FunctionalTestBase) exportOTELTraces() {
+	if s.otelExporter == nil {
+		return
 	}
-	if _, err := os.Stat(configLocation); err != nil {
-		if os.IsNotExist(err) {
-			configLocation = "../" + configLocation
+	if s.T().Failed() {
+		var validFilenameChars = regexp.MustCompile(`[^a-zA-Z0-9._-]+`)
+		fileName := s.T().Name()
+		fileName = validFilenameChars.ReplaceAllString(fileName, "-") // remove invalid characters
+		fileName = fmt.Sprintf("traces.%s_%d.json", fileName, time.Now().Unix())
+		if filePath, err := s.otelExporter.Write(fileName); err != nil {
+			s.T().Logf("unable to write OTEL traces: %v", err)
+		} else {
+			s.T().Logf("wrote OTEL traces to %s", filePath)
 		}
 	}
-
-	// This is just reading a config, so it's less of a security concern
-	// #nosec
-	confContent, err := os.ReadFile(configLocation)
-	if err != nil {
-		return nil, fmt.Errorf("failed to read test cluster config file %s: %w", configLocation, err)
-	}
-	confContent = []byte(os.ExpandEnv(string(confContent)))
-	var options TestClusterConfig
-	if err := yaml.Unmarshal(confContent, &options); err != nil {
-		return nil, fmt.Errorf("failed to decode test cluster config %s: %w", configLocation, err)
-	}
-
-	// If -FaultInjectionConfigFile is passed to the test runner,
-	// then fault injection config will be added to the test cluster config.
-	if TestFlags.FaultInjectionConfigFile != "" {
-		fiConfigContent, err := os.ReadFile(TestFlags.FaultInjectionConfigFile)
-		if err != nil {
-			return nil, fmt.Errorf("failed to read test cluster fault injection config file %s: %v", TestFlags.FaultInjectionConfigFile, err)
-		}
-
-		var fiOptions TestClusterConfig
-		if err := yaml.Unmarshal(fiConfigContent, &fiOptions); err != nil {
-			return nil, fmt.Errorf("failed to decode test cluster fault injection config %s: %w", TestFlags.FaultInjectionConfigFile, err)
-		}
-		options.FaultInjection = fiOptions.FaultInjection
-	}
-
-	return &options, nil
+	_ = s.otelExporter.Shutdown(NewContext())
 }
 
-func (s *FunctionalTestBase) TearDownSuite() {
-	s.Require().NoError(s.markNamespaceAsDeleted(s.namespace))
-	s.Require().NoError(s.markNamespaceAsDeleted(s.foreignNamespace))
-	if s.archivalNamespace != "" {
-		s.Require().NoError(s.markNamespaceAsDeleted(s.archivalNamespace))
-	}
+func (s *FunctionalTestBase) TearDownCluster() {
+	s.Require().NoError(s.MarkNamespaceAsDeleted(s.Namespace()))
+	s.Require().NoError(s.MarkNamespaceAsDeleted(s.ExternalNamespace()))
 
 	if s.testCluster != nil {
-		s.NoError(s.testCluster.TearDownCluster())
-		s.testCluster = nil
+		s.Require().NoError(s.testCluster.TearDownCluster())
 	}
-
-	s.client = nil
-	s.adminClient = nil
 }
 
-func (s *FunctionalTestBase) registerNamespace(
-	namespace string,
-	retention time.Duration,
-	historyArchivalState enumspb.ArchivalState,
+// **IMPORTANT**: When overridding this, make sure to invoke `s.FunctionalTestBase.TearDownTest()`.
+func (s *FunctionalTestBase) TearDownTest() {
+	s.exportOTELTraces()
+	s.tearDownSdk()
+	s.testCluster.host.grpcClientInterceptor.Set(nil)
+}
+
+// **IMPORTANT**: When overridding this, make sure to invoke `s.FunctionalTestBase.TearDownSubTest()`.
+func (s *FunctionalTestBase) TearDownSubTest() {
+	s.exportOTELTraces()
+}
+
+func (s *FunctionalTestBase) tearDownSdk() {
+	if s.worker != nil {
+		s.worker.Stop()
+	}
+	if s.sdkClient != nil {
+		s.sdkClient.Close()
+	}
+}
+
+// Register namespace using persistence API because:
+//  1. The Retention period is set to 0 for archival tests, and this can't be done through FE,
+//  2. Update search attributes would require an extra API call,
+//  3. One more extra API call would be necessary to get namespace.ID.
+func (s *FunctionalTestBase) RegisterNamespace(
+	nsName namespace.Name,
+	retentionDays int32,
+	archivalState enumspb.ArchivalState,
 	historyArchivalURI string,
-	visibilityArchivalState enumspb.ArchivalState,
 	visibilityArchivalURI string,
-) error {
-	ctx, cancel := rpc.NewContextWithTimeoutAndVersionHeaders(10000 * time.Second)
-	defer cancel()
-	_, err := s.client.RegisterNamespace(ctx, &workflowservice.RegisterNamespaceRequest{
-		Namespace:                        namespace,
-		Description:                      namespace,
-		WorkflowExecutionRetentionPeriod: durationpb.New(retention),
-		HistoryArchivalState:             historyArchivalState,
-		HistoryArchivalUri:               historyArchivalURI,
-		VisibilityArchivalState:          visibilityArchivalState,
-		VisibilityArchivalUri:            visibilityArchivalURI,
-	})
+) (namespace.ID, error) {
+	currentClusterName := s.testCluster.testBase.ClusterMetadata.GetCurrentClusterName()
+	nsID := namespace.ID(uuid.NewString())
+	namespaceRequest := &persistence.CreateNamespaceRequest{
+		Namespace: &persistencespb.NamespaceDetail{
+			Info: &persistencespb.NamespaceInfo{
+				Id:          nsID.String(),
+				Name:        nsName.String(),
+				State:       enumspb.NAMESPACE_STATE_REGISTERED,
+				Description: "namespace for functional tests",
+			},
+			Config: &persistencespb.NamespaceConfig{
+				Retention:               timestamp.DurationFromDays(retentionDays),
+				HistoryArchivalState:    archivalState,
+				HistoryArchivalUri:      historyArchivalURI,
+				VisibilityArchivalState: archivalState,
+				VisibilityArchivalUri:   visibilityArchivalURI,
+				BadBinaries:             &namespacepb.BadBinaries{Binaries: map[string]*namespacepb.BadBinaryInfo{}},
+				CustomSearchAttributeAliases: map[string]string{
+					"Bool01":     "CustomBoolField",
+					"Datetime01": "CustomDatetimeField",
+					"Double01":   "CustomDoubleField",
+					"Int01":      "CustomIntField",
+					"Keyword01":  "CustomKeywordField",
+					"Text01":     "CustomTextField",
+				},
+			},
+			ReplicationConfig: &persistencespb.NamespaceReplicationConfig{
+				ActiveClusterName: currentClusterName,
+				Clusters: []string{
+					currentClusterName,
+				},
+			},
+
+			FailoverVersion: common.EmptyVersion,
+		},
+		IsGlobalNamespace: false,
+	}
+	_, err := s.testCluster.testBase.MetadataManager.CreateNamespace(context.Background(), namespaceRequest)
 
 	if err != nil {
-		return err
+		return namespace.EmptyID, err
 	}
 
-	// Set up default alias for custom search attributes.
-	_, err = s.client.UpdateNamespace(ctx, &workflowservice.UpdateNamespaceRequest{
-		Namespace: namespace,
-		Config: &namespacepb.NamespaceConfig{
-			CustomSearchAttributeAliases: map[string]string{
-				"Bool01":     "CustomBoolField",
-				"Datetime01": "CustomDatetimeField",
-				"Double01":   "CustomDoubleField",
-				"Int01":      "CustomIntField",
-				"Keyword01":  "CustomKeywordField",
-				"Text01":     "CustomTextField",
-			},
-		},
-	})
-
-	return err
+	s.Logger.Info("Register namespace succeeded",
+		tag.WorkflowNamespace(nsName.String()),
+		tag.WorkflowNamespaceID(nsID.String()),
+	)
+	return nsID, nil
 }
 
-func (s *FunctionalTestBase) markNamespaceAsDeleted(
-	namespace string,
+func (s *FunctionalTestBase) MarkNamespaceAsDeleted(
+	nsName namespace.Name,
 ) error {
 	ctx, cancel := rpc.NewContextWithTimeoutAndVersionHeaders(10000 * time.Second)
 	defer cancel()
-	_, err := s.client.UpdateNamespace(ctx, &workflowservice.UpdateNamespaceRequest{
-		Namespace: namespace,
+	_, err := s.FrontendClient().UpdateNamespace(ctx, &workflowservice.UpdateNamespaceRequest{
+		Namespace: nsName.String(),
 		UpdateInfo: &namespacepb.UpdateNamespaceInfo{
 			State: enumspb.NAMESPACE_STATE_DELETED,
 		},
@@ -377,7 +544,7 @@ func (s *FunctionalTestBase) markNamespaceAsDeleted(
 
 func (s *FunctionalTestBase) GetHistoryFunc(namespace string, execution *commonpb.WorkflowExecution) func() []*historypb.HistoryEvent {
 	return func() []*historypb.HistoryEvent {
-		historyResponse, err := s.client.GetWorkflowExecutionHistory(NewContext(), &workflowservice.GetWorkflowExecutionHistoryRequest{
+		historyResponse, err := s.FrontendClient().GetWorkflowExecutionHistory(NewContext(), &workflowservice.GetWorkflowExecutionHistoryRequest{
 			Namespace:       namespace,
 			Execution:       execution,
 			MaximumPageSize: 5, // Use small page size to force pagination code path
@@ -386,7 +553,7 @@ func (s *FunctionalTestBase) GetHistoryFunc(namespace string, execution *commonp
 
 		events := historyResponse.History.Events
 		for historyResponse.NextPageToken != nil {
-			historyResponse, err = s.client.GetWorkflowExecutionHistory(NewContext(), &workflowservice.GetWorkflowExecutionHistoryRequest{
+			historyResponse, err = s.FrontendClient().GetWorkflowExecutionHistory(NewContext(), &workflowservice.GetWorkflowExecutionHistoryRequest{
 				Namespace:     namespace,
 				Execution:     execution,
 				NextPageToken: historyResponse.NextPageToken,
@@ -431,51 +598,28 @@ func (s *FunctionalTestBase) DurationNear(value, target, tolerance time.Duration
 	s.Less(value, target+tolerance)
 }
 
-// To register archival namespace we can't use frontend API as the retention period is set to 0 for testing,
-// and request will be rejected by frontend. Here we make a call directly to persistence to register
-// the namespace.
-func (s *FunctionalTestBase) registerArchivalNamespace(archivalNamespace string) error {
-	currentClusterName := s.testCluster.testBase.ClusterMetadata.GetCurrentClusterName()
-	namespaceRequest := &persistence.CreateNamespaceRequest{
-		Namespace: &persistencespb.NamespaceDetail{
-			Info: &persistencespb.NamespaceInfo{
-				Id:    uuid.New(),
-				Name:  archivalNamespace,
-				State: enumspb.NAMESPACE_STATE_REGISTERED,
-			},
-			Config: &persistencespb.NamespaceConfig{
-				Retention:               timestamp.DurationFromDays(0),
-				HistoryArchivalState:    enumspb.ARCHIVAL_STATE_ENABLED,
-				HistoryArchivalUri:      s.testCluster.archiverBase.historyURI,
-				VisibilityArchivalState: enumspb.ARCHIVAL_STATE_ENABLED,
-				VisibilityArchivalUri:   s.testCluster.archiverBase.visibilityURI,
-				BadBinaries:             &namespacepb.BadBinaries{Binaries: map[string]*namespacepb.BadBinaryInfo{}},
-			},
-			ReplicationConfig: &persistencespb.NamespaceReplicationConfig{
-				ActiveClusterName: currentClusterName,
-				Clusters: []string{
-					currentClusterName,
-				},
-			},
-
-			FailoverVersion: common.EmptyVersion,
-		},
-		IsGlobalNamespace: false,
-	}
-	response, err := s.testCluster.testBase.MetadataManager.CreateNamespace(context.Background(), namespaceRequest)
-
-	s.Logger.Info("Register namespace succeeded",
-		tag.WorkflowNamespace(archivalNamespace),
-		tag.WorkflowNamespaceID(response.ID),
-	)
-	return err
-}
-
-// Overrides one dynamic config setting for the duration of this test (or sub-test). The change
-// will automatically be reverted at the end of the test (using t.Cleanup). The cleanup
-// function is also returned if you want to revert the change before the end of the test.
 func (s *FunctionalTestBase) OverrideDynamicConfig(setting dynamicconfig.GenericSetting, value any) (cleanup func()) {
 	return s.testCluster.host.overrideDynamicConfig(s.T(), setting.Key(), value)
+}
+
+func (s *FunctionalTestBase) InjectHook(key testhooks.Key, value any) (cleanup func()) {
+	if s.isShared {
+		s.T().Fatalf("InjectHook cannot be called on a shared cluster; use testcore.WithDedicatedCluster()")
+	}
+	return s.testCluster.host.injectHook(s.T(), key, value)
+}
+
+// CloseShard closes the shard that contains the given workflow.
+// This is a cluster-global operation and cannot be called on shared clusters.
+func (s *FunctionalTestBase) CloseShard(namespaceID string, workflowID string) {
+	if s.isShared {
+		s.T().Fatalf("CloseShard cannot be called on a shared cluster; use testcore.WithDedicatedCluster()")
+	}
+	shardID := common.WorkflowIDToHistoryShard(namespaceID, workflowID, s.testClusterConfig.HistoryConfig.NumHistoryShards)
+	_, err := s.AdminClient().CloseShard(NewContext(), &adminservice.CloseShardRequest{
+		ShardId: shardID,
+	})
+	s.Require().NoError(err)
 }
 
 func (s *FunctionalTestBase) GetNamespaceID(namespace string) string {
@@ -508,22 +652,27 @@ func (s *FunctionalTestBase) RunTestWithMatchingBehavior(subtest func()) {
 
 				s.Run(
 					name, func() {
-						if forceTaskForward {
-							s.OverrideDynamicConfig(dynamicconfig.MatchingNumTaskqueueWritePartitions, 13)
-							s.OverrideDynamicConfig(dynamicconfig.TestMatchingLBForceWritePartition, 11)
-						} else {
-							s.OverrideDynamicConfig(dynamicconfig.MatchingNumTaskqueueWritePartitions, 1)
-						}
-						if forcePollForward {
+						if forceTaskForward || forcePollForward {
 							s.OverrideDynamicConfig(dynamicconfig.MatchingNumTaskqueueReadPartitions, 13)
-							s.OverrideDynamicConfig(dynamicconfig.TestMatchingLBForceReadPartition, 5)
+							s.OverrideDynamicConfig(dynamicconfig.MatchingNumTaskqueueWritePartitions, 13)
 						} else {
 							s.OverrideDynamicConfig(dynamicconfig.MatchingNumTaskqueueReadPartitions, 1)
+							s.OverrideDynamicConfig(dynamicconfig.MatchingNumTaskqueueWritePartitions, 1)
+						}
+						if forceTaskForward {
+							s.InjectHook(testhooks.MatchingLBForceWritePartition, 11)
+						} else {
+							s.InjectHook(testhooks.MatchingLBForceWritePartition, 0)
+						}
+						if forcePollForward {
+							s.InjectHook(testhooks.MatchingLBForceReadPartition, 5)
+						} else {
+							s.InjectHook(testhooks.MatchingLBForceReadPartition, 0)
 						}
 						if forceAsync {
-							s.OverrideDynamicConfig(dynamicconfig.TestMatchingDisableSyncMatch, true)
+							s.InjectHook(testhooks.MatchingDisableSyncMatch, true)
 						} else {
-							s.OverrideDynamicConfig(dynamicconfig.TestMatchingDisableSyncMatch, false)
+							s.InjectHook(testhooks.MatchingDisableSyncMatch, false)
 						}
 
 						subtest()
@@ -532,4 +681,27 @@ func (s *FunctionalTestBase) RunTestWithMatchingBehavior(subtest func()) {
 			}
 		}
 	}
+}
+
+func (s *FunctionalTestBase) WaitForChannel(ctx context.Context, ch chan struct{}) {
+	s.T().Helper()
+	select {
+	case <-ch:
+	case <-ctx.Done():
+		s.FailNow("context timeout while waiting for channel")
+	}
+}
+
+// TODO (alex): change to nsName namespace.Name
+func (s *FunctionalTestBase) SendSignal(nsName string, execution *commonpb.WorkflowExecution, signalName string,
+	input *commonpb.Payloads, identity string) error {
+	_, err := s.FrontendClient().SignalWorkflowExecution(NewContext(), &workflowservice.SignalWorkflowExecutionRequest{
+		Namespace:         nsName,
+		WorkflowExecution: execution,
+		SignalName:        signalName,
+		Input:             input,
+		Identity:          identity,
+	})
+
+	return err
 }

@@ -1,54 +1,21 @@
-// The MIT License
-//
-// Copyright (c) 2020 Temporal Technologies Inc.  All rights reserved.
-//
-// Copyright (c) 2020 Uber Technologies, Inc.
-//
-// Permission is hereby granted, free of charge, to any person obtaining a copy
-// of this software and associated documentation files (the "Software"), to deal
-// in the Software without restriction, including without limitation the rights
-// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-// copies of the Software, and to permit persons to whom the Software is
-// furnished to do so, subject to the following conditions:
-//
-// The above copyright notice and this permission notice shall be included in
-// all copies or substantial portions of the Software.
-//
-// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
-// THE SOFTWARE.
-
 package query
 
-type (
-	FieldNameInterceptor interface {
-		Name(name string, usage FieldNameUsage) (string, error)
-	}
-	FieldValuesInterceptor interface {
-		Values(name string, fieldName string, values ...interface{}) ([]interface{}, error)
-	}
-
-	NopFieldNameInterceptor struct{}
-
-	NopFieldValuesInterceptor struct{}
-
-	FieldNameUsage int
-)
-
-const (
-	FieldNameFilter FieldNameUsage = iota
-	FieldNameSorter
-	FieldNameGroupBy
-)
-
-func (n *NopFieldNameInterceptor) Name(name string, _ FieldNameUsage) (string, error) {
-	return name, nil
+// SearchAttributeInterceptor is used in the query converter to intercept the search attributes
+// used in the filters of the query.
+// Eg: if the query is `ExecutionStatus = 'Running' AND CustomKeywordField = 'foo'`, the interceptor
+// will be called for the `ExecutionStatus` and `CustomKeywordField` search attributes.
+// The interceptor can be useful if you need to capture the search attributes used in the query, or
+// if you need to modify the field name that is used to query the data store.
+type SearchAttributeInterceptor interface {
+	Intercept(col *SAColumn) error
 }
 
-func (n *NopFieldValuesInterceptor) Values(_ string, _ string, values ...interface{}) ([]interface{}, error) {
-	return values, nil
+// NopSearchAttributeInterceptor is a dummy interceptor and the default interceptor used in the
+// query converter.
+type NopSearchAttributeInterceptor struct{}
+
+var nopSearchAttributeInterceptor SearchAttributeInterceptor = &NopSearchAttributeInterceptor{}
+
+func (i *NopSearchAttributeInterceptor) Intercept(col *SAColumn) error {
+	return nil
 }

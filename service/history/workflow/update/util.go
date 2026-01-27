@@ -1,41 +1,16 @@
-// The MIT License
-//
-// Copyright (c) 2020 Temporal Technologies Inc.  All rights reserved.
-//
-// Copyright (c) 2020 Uber Technologies, Inc.
-//
-// Permission is hereby granted, free of charge, to any person obtaining a copy
-// of this software and associated documentation files (the "Software"), to deal
-// in the Software without restriction, including without limitation the rights
-// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-// copies of the Software, and to permit persons to whom the Software is
-// furnished to do so, subject to the following conditions:
-//
-// The above copyright notice and this permission notice shall be included in
-// all copies or substantial portions of the Software.
-//
-// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
-// THE SOFTWARE.
-
 package update
 
 import (
 	"fmt"
 
 	"go.opentelemetry.io/otel/trace"
-	"go.temporal.io/api/serviceerror"
 	"go.temporal.io/server/common/log"
 	"go.temporal.io/server/common/log/tag"
 	"go.temporal.io/server/common/metrics"
+	"go.temporal.io/server/common/softassert"
+	"go.temporal.io/server/common/telemetry"
 	"google.golang.org/protobuf/proto"
 )
-
-const libraryName = "go.temporal.io/service/history/workflow/update"
 
 type (
 	instrumentation struct {
@@ -49,17 +24,9 @@ var (
 	noopInstrumentation = instrumentation{
 		log:     log.NewNoopLogger(),
 		metrics: metrics.NoopMetricsHandler,
-		tracer:  trace.NewNoopTracerProvider().Tracer(libraryName),
+		tracer:  telemetry.NoopTracer,
 	}
 )
-
-func invalidArgf(tmpl string, args ...any) error {
-	return serviceerror.NewInvalidArgument(fmt.Sprintf(tmpl, args...))
-}
-
-func internalErrorf(tmpl string, args ...any) error {
-	return serviceerror.NewInternal(fmt.Sprintf(tmpl, args...))
-}
 
 func (i *instrumentation) countRequestMsg() {
 	i.oneOf(metrics.MessageTypeRequestWorkflowExecutionUpdateCounter.Name())
@@ -81,12 +48,26 @@ func (i *instrumentation) countRateLimited() {
 	i.oneOf(metrics.WorkflowExecutionUpdateRequestRateLimited.Name())
 }
 
+func (i *instrumentation) countRegistrySizeLimited(updateCount, registrySize, payloadSize int) {
+	i.oneOf(metrics.WorkflowExecutionUpdateRegistrySizeLimited.Name())
+	// TODO: remove log once limit is enforced everywhere
+	i.log.Warn("update registry size limit reached",
+		tag.NewInt("registry-size", registrySize),
+		tag.NewInt("payload-size", payloadSize),
+		tag.NewInt("update-count", updateCount))
+}
+
 func (i *instrumentation) countTooMany() {
 	i.oneOf(metrics.WorkflowExecutionUpdateTooMany.Name())
 }
 
-func (i *instrumentation) countAborted() {
-	i.oneOf(metrics.WorkflowExecutionUpdateAborted.Name())
+func (i *instrumentation) countAborted(updateID string, reason AbortReason) {
+	i.metrics.Counter(metrics.WorkflowExecutionUpdateAborted.Name()).
+		Record(1, metrics.ReasonTag(metrics.ReasonString(reason.String())))
+	i.log.Debug("update aborted",
+		tag.NewStringTag("reason", reason.String()),
+		tag.NewStringTag("update-id", updateID),
+	)
 }
 
 func (i *instrumentation) countSent() {
@@ -99,10 +80,14 @@ func (i *instrumentation) countSentAgain() {
 
 func (i *instrumentation) invalidStateTransition(updateID string, msg proto.Message, state state) {
 	i.oneOf(metrics.InvalidStateTransitionWorkflowExecutionUpdateCounter.Name())
-	i.log.Error("invalid state transition attempted",
+	softassert.Fail(
+		i.log,
+		"invalid state transition attempted",
+		tag.ComponentWorkflowUpdate,
 		tag.NewStringTag("update-id", updateID),
 		tag.NewStringTag("message", fmt.Sprintf("%T", msg)),
-		tag.NewStringTag("state", state.String()))
+		tag.NewStringerTag("state", state),
+	)
 }
 
 func (i *instrumentation) updateRegistrySize(size int) {
@@ -114,9 +99,11 @@ func (i *instrumentation) oneOf(counterName string) {
 }
 
 func (i *instrumentation) stateChange(updateID string, from, to state) {
-	i.log.Debug("update state change",
+	i.log.Debug(
+		"update state change",
+		tag.ComponentWorkflowUpdate,
 		tag.NewStringTag("update-id", updateID),
-		tag.NewStringTag("from-state", from.String()),
-		tag.NewStringTag("to-state", to.String()),
+		tag.NewStringerTag("from-state", from),
+		tag.NewStringerTag("to-state", to),
 	)
 }

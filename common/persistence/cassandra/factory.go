@@ -1,27 +1,3 @@
-// The MIT License
-//
-// Copyright (c) 2020 Temporal Technologies Inc.  All rights reserved.
-//
-// Copyright (c) 2020 Uber Technologies, Inc.
-//
-// Permission is hereby granted, free of charge, to any person obtaining a copy
-// of this software and associated documentation files (the "Software"), to deal
-// in the Software without restriction, including without limitation the rights
-// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-// copies of the Software, and to permit persons to whom the Software is
-// furnished to do so, subject to the following conditions:
-//
-// The above copyright notice and this permission notice shall be included in
-// all copies or substantial portions of the Software.
-//
-// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
-// THE SOFTWARE.
-
 package cassandra
 
 import (
@@ -34,6 +10,7 @@ import (
 	"go.temporal.io/server/common/metrics"
 	p "go.temporal.io/server/common/persistence"
 	commongocql "go.temporal.io/server/common/persistence/nosql/nosqlplugin/cassandra/gocql"
+	"go.temporal.io/server/common/persistence/serialization"
 	"go.temporal.io/server/common/resolver"
 )
 
@@ -45,6 +22,7 @@ type (
 		clusterName string
 		logger      log.Logger
 		session     commongocql.Session
+		serializer  serialization.Serializer
 	}
 )
 
@@ -56,6 +34,7 @@ func NewFactory(
 	clusterName string,
 	logger log.Logger,
 	metricsHandler metrics.Handler,
+	serializer serialization.Serializer,
 ) *Factory {
 	session, err := commongocql.NewSession(
 		func() (*gocql.ClusterConfig, error) {
@@ -67,7 +46,13 @@ func NewFactory(
 	if err != nil {
 		logger.Fatal("unable to initialize cassandra session", tag.Error(err))
 	}
-	return NewFactoryFromSession(cfg, clusterName, logger, session)
+	return NewFactoryFromSession(
+		cfg,
+		clusterName,
+		logger,
+		session,
+		serializer,
+	)
 }
 
 // NewFactoryFromSession returns an instance of a factory object from the given session.
@@ -76,18 +61,25 @@ func NewFactoryFromSession(
 	clusterName string,
 	logger log.Logger,
 	session commongocql.Session,
+	serializer serialization.Serializer,
 ) *Factory {
 	return &Factory{
 		cfg:         cfg,
 		clusterName: clusterName,
 		logger:      logger,
 		session:     session,
+		serializer:  serializer,
 	}
 }
 
 // NewTaskStore returns a new task store
 func (f *Factory) NewTaskStore() (p.TaskStore, error) {
-	return NewMatchingTaskStore(f.session, f.logger), nil
+	return NewMatchingTaskStore(f.session, f.logger, false), nil
+}
+
+// NewTaskStore returns a new task store
+func (f *Factory) NewFairTaskStore() (p.TaskStore, error) {
+	return NewMatchingTaskStore(f.session, f.logger, true), nil
 }
 
 // NewShardStore returns a new shard store
@@ -107,7 +99,7 @@ func (f *Factory) NewClusterMetadataStore() (p.ClusterMetadataStore, error) {
 
 // NewExecutionStore returns a new ExecutionStore.
 func (f *Factory) NewExecutionStore() (p.ExecutionStore, error) {
-	return NewExecutionStore(f.session), nil
+	return NewExecutionStore(f.session, f.serializer, f.logger), nil
 }
 
 // NewQueue returns a new queue backed by cassandra

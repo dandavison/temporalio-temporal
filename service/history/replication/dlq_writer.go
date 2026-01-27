@@ -1,27 +1,3 @@
-// The MIT License
-//
-// Copyright (c) 2020 Temporal Technologies Inc.  All rights reserved.
-//
-// Copyright (c) 2020 Uber Technologies, Inc.
-//
-// Permission is hereby granted, free of charge, to any person obtaining a copy
-// of this software and associated documentation files (the "Software"), to deal
-// in the Software without restriction, including without limitation the rights
-// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-// copies of the Software, and to permit persons to whom the Software is
-// furnished to do so, subject to the following conditions:
-//
-// The above copyright notice and this permission notice shall be included in
-// all copies or substantial portions of the Software.
-//
-// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
-// THE SOFTWARE.
-
 package replication
 
 import (
@@ -31,7 +7,6 @@ import (
 	"go.temporal.io/server/common/persistence"
 	"go.temporal.io/server/service/history/configs"
 	"go.temporal.io/server/service/history/queues"
-	"go.temporal.io/server/service/history/tasks"
 	"go.uber.org/fx"
 )
 
@@ -63,16 +38,11 @@ type (
 	executionManagerDLQWriter struct {
 		executionManager ExecutionManager
 	}
-	// TaskParser is a trimmed version of [go.temporal.io/server/common/persistence/serialization.Serializer]
-	// that only provides the methods we need.
-	TaskParser interface {
-		ParseReplicationTask(replicationTask *persistencespb.ReplicationTaskInfo) (tasks.Task, error)
-	}
 	// DLQWriterAdapter is a [DLQWriter] that uses the QueueV2 [queues.DLQWriter] object.
 	DLQWriterAdapter struct {
-		dlqWriter          *queues.DLQWriter
-		taskParser         TaskParser
-		currentClusterName string
+		dlqWriter                 *queues.DLQWriter
+		replicationTaskSerializer TaskSerializer
+		currentClusterName        string
 	}
 	dlqWriterToggleParams struct {
 		fx.In
@@ -95,13 +65,13 @@ func NewExecutionManagerDLQWriter(executionManager ExecutionManager) *executionM
 // NewDLQWriterAdapter creates a new DLQWriter from a QueueV2 [queues.DLQWriter].
 func NewDLQWriterAdapter(
 	dlqWriter *queues.DLQWriter,
-	taskParser TaskParser,
+	replicationTaskSerializer TaskSerializer,
 	currentClusterName string,
 ) *DLQWriterAdapter {
 	return &DLQWriterAdapter{
-		dlqWriter:          dlqWriter,
-		taskParser:         taskParser,
-		currentClusterName: currentClusterName,
+		dlqWriter:                 dlqWriter,
+		replicationTaskSerializer: replicationTaskSerializer,
+		currentClusterName:        currentClusterName,
 	}
 }
 
@@ -144,11 +114,11 @@ func (d *DLQWriterAdapter) WriteTaskToDLQ(
 	ctx context.Context,
 	request DLQWriteRequest,
 ) error {
-	task, err := d.taskParser.ParseReplicationTask(request.ReplicationTaskInfo)
+	task, err := d.replicationTaskSerializer.DeserializeReplicationTask(request.ReplicationTaskInfo)
 	if err != nil {
 		return err
 	}
-	return d.dlqWriter.WriteTaskToDLQ(ctx, request.SourceCluster, d.currentClusterName, int(request.SourceShardID), task)
+	return d.dlqWriter.WriteTaskToDLQ(ctx, request.SourceCluster, d.currentClusterName, int(request.SourceShardID), task, false)
 }
 
 // This is a helper function to make it easier to change the DLQWriteRequest format in the future.

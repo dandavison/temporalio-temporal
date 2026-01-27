@@ -1,27 +1,3 @@
-// The MIT License
-//
-// Copyright (c) 2020 Temporal Technologies Inc.  All rights reserved.
-//
-// Copyright (c) 2020 Uber Technologies, Inc.
-//
-// Permission is hereby granted, free of charge, to any person obtaining a copy
-// of this software and associated documentation files (the "Software"), to deal
-// in the Software without restriction, including without limitation the rights
-// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-// copies of the Software, and to permit persons to whom the Software is
-// furnished to do so, subject to the following conditions:
-//
-// The above copyright notice and this permission notice shall be included in
-// all copies or substantial portions of the Software.
-//
-// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
-// THE SOFTWARE.
-
 // util contains small standalone utility functions. This should have no
 // dependencies on other server packages.
 package util
@@ -102,6 +78,28 @@ func InverseMap[M ~map[K]V, K, V comparable](m M) map[V]K {
 	return invm
 }
 
+// GetOrSetNew looks up k in m and returns the result. If it's not present, it uses `new` to
+// allocate an new value type and sets that in the map, then returns it.
+func GetOrSetNew[M ~map[K]*V, K comparable, V any](m M, k K) *V {
+	if v, ok := m[k]; ok {
+		return v
+	}
+	v := new(V)
+	m[k] = v
+	return v
+}
+
+// GetOrSetMap looks up k in m, a two-level map, and returns the result. If it's not present,
+// it uses `make` to allocate new second-level map and sets that in the first map, then returns it.
+func GetOrSetMap[M ~map[K]M2, M2 ~map[K2]V, K, K2 comparable, V any](m M, k K) M2 {
+	if m2, ok := m[k]; ok {
+		return m2
+	}
+	m2 := make(M2)
+	m[k] = m2
+	return m2
+}
+
 // MapConcurrent concurrently maps a function over input and fails fast on error.
 func MapConcurrent[IN any, OUT any](input []IN, mapper func(IN) (OUT, error)) ([]OUT, error) {
 	errorsCh := make(chan error, len(input))
@@ -175,11 +173,14 @@ func Ptr[T any](v T) *T {
 }
 
 // InterruptibleSleep is like time.Sleep but can be interrupted by a context.
-func InterruptibleSleep(ctx context.Context, timeout time.Duration) {
+// Returns context error if interrupted, otherwise nil.
+func InterruptibleSleep(ctx context.Context, timeout time.Duration) error {
 	timer := time.NewTimer(timeout)
 	defer timer.Stop()
 	select {
 	case <-timer.C:
+		return nil
 	case <-ctx.Done():
+		return ctx.Err()
 	}
 }

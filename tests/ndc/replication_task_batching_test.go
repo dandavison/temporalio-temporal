@@ -1,41 +1,15 @@
-// The MIT License
-//
-// Copyright (c) 2020 Temporal Technologies Inc.  All rights reserved.
-//
-// Copyright (c) 2020 Uber Technologies, Inc.
-//
-// Permission is hereby granted, free of charge, to any person obtaining a copy
-// of this software and associated documentation files (the "Software"), to deal
-// in the Software without restriction, including without limitation the rights
-// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-// copies of the Software, and to permit persons to whom the Software is
-// furnished to do so, subject to the following conditions:
-//
-// The above copyright notice and this permission notice shall be included in
-// all copies or substantial portions of the Software.
-//
-// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
-// THE SOFTWARE.
-
 package ndc
 
 import (
 	"context"
-	"os"
 	"sync/atomic"
 	"testing"
 	"time"
 
-	"github.com/pborman/uuid"
+	"github.com/google/uuid"
 	"github.com/stretchr/testify/require"
 	"github.com/stretchr/testify/suite"
 	commonpb "go.temporal.io/api/common/v1"
-	enumspb "go.temporal.io/api/enums/v1"
 	historypb "go.temporal.io/api/history/v1"
 	replicationpb "go.temporal.io/api/replication/v1"
 	"go.temporal.io/api/workflowservice/v1"
@@ -54,12 +28,10 @@ import (
 	"go.temporal.io/server/common/persistence/serialization"
 	test "go.temporal.io/server/common/testing"
 	"go.temporal.io/server/common/testing/protorequire"
-	"go.temporal.io/server/environment"
 	"go.temporal.io/server/service/history/replication/eventhandler"
 	"go.temporal.io/server/tests/testcore"
 	"go.uber.org/mock/gomock"
 	"google.golang.org/protobuf/types/known/durationpb"
-	"gopkg.in/yaml.v3"
 )
 
 type (
@@ -96,27 +68,12 @@ func (s *NDCReplicationTaskBatchingTestSuite) SetupSuite() {
 	s.testClusterFactory = testcore.NewTestClusterFactory()
 	s.passiveClusterName = "cluster-b"
 
-	fileName := "../testdata/ndc_clusters.yaml"
-	if testcore.TestFlags.TestClusterConfigFile != "" {
-		fileName = testcore.TestFlags.TestClusterConfigFile
-	}
-	environment.SetupEnv()
-	s.standByTaskID = 0
-
-	confContent, err := os.ReadFile(fileName)
-	s.Require().NoError(err)
-	confContent = []byte(os.ExpandEnv(string(confContent)))
-
-	var clusterConfigs []*testcore.TestClusterConfig
-	s.Require().NoError(yaml.Unmarshal(confContent, &clusterConfigs))
-
+	clusterConfigs := clustersConfig("cluster-a", "cluster-b")
 	passiveClusterConfig := clusterConfigs[1]
 	passiveClusterConfig.WorkerConfig = testcore.WorkerConfig{DisableWorker: true}
 	passiveClusterConfig.DynamicConfigOverrides = map[dynamicconfig.Key]any{
-		dynamicconfig.EnableReplicationStream.Key():             true,
-		dynamicconfig.EnableEagerNamespaceRefresher.Key():       true,
-		dynamicconfig.EnableReplicationTaskBatching.Key():       true,
-		dynamicconfig.EnableReplicateLocalGeneratedEvents.Key(): true,
+		dynamicconfig.EnableReplicationStream.Key():       true,
+		dynamicconfig.EnableReplicationTaskBatching.Key(): true,
 	}
 	s.controller = gomock.NewController(s.T())
 	mockActiveStreamClient := adminservicemock.NewMockAdminService_StreamWorkflowReplicationMessagesClient(s.controller)
@@ -137,7 +94,6 @@ func (s *NDCReplicationTaskBatchingTestSuite) SetupSuite() {
 	passiveClusterConfig.MockAdminClient = s.mockAdminClient
 
 	passiveClusterConfig.ClusterMetadata.MasterClusterName = s.passiveClusterName
-	delete(passiveClusterConfig.ClusterMetadata.ClusterInformation, "cluster-c") // ndc_clusters.yaml has 3 clusters, but we only need 2 for this test
 	cluster, err := s.testClusterFactory.NewCluster(s.T(), passiveClusterConfig, log.With(s.logger, tag.ClusterName(clusterName[0])))
 	s.Require().NoError(err)
 	s.passtiveCluster = cluster
@@ -163,8 +119,8 @@ func (s *NDCReplicationTaskBatchingTestSuite) TestHistoryReplicationTaskAndThenR
 	versions := []int64{1, 1, 21, 31, 301, 401, 601, 501, 801, 1001, 901, 701, 1101}
 	executions := make(map[workflow.Execution][]*historypb.History)
 	for _, version := range versions {
-		workflowID := "replication-message-test" + uuid.New()
-		runID := uuid.New()
+		workflowID := "replication-message-test" + uuid.NewString()
+		runID := uuid.NewString()
 		var historyBatch []*historypb.History
 		s.generator = test.InitializeHistoryEventGenerator(s.namespace, s.namespaceID, version)
 		for s.generator.HasNextVertex() {
@@ -213,11 +169,10 @@ func (s *NDCReplicationTaskBatchingTestSuite) assertHistoryEvents(
 		Return(s.passtiveCluster.AdminClient(), nil).
 		AnyTimes()
 
-	serializer := serialization.NewSerializer()
 	passiveClusterFetcher := eventhandler.NewHistoryPaginatedFetcher(
 		nil,
 		mockClientBean,
-		serializer,
+		s.serializer,
 		s.logger,
 	)
 
@@ -231,7 +186,7 @@ func (s *NDCReplicationTaskBatchingTestSuite) assertHistoryEvents(
 		s.NoError(err)
 		inputEvents := historyBatch[index].Events
 		index++
-		inputBatch, _ := s.serializer.SerializeEvents(inputEvents, enumspb.ENCODING_TYPE_PROTO3)
+		inputBatch, _ := s.serializer.SerializeEvents(inputEvents)
 		s.Equal(inputBatch, passiveBatch.RawEventBatch)
 	}
 }
@@ -291,10 +246,10 @@ func (s *NDCReplicationTaskBatchingTestSuite) createHistoryEventReplicationTaskF
 	newRunEvents []*historypb.HistoryEvent,
 	versionHistoryItems []*historyspb.VersionHistoryItem,
 ) *replicationspb.ReplicationTask {
-	eventBlob, err := s.serializer.SerializeEvents(events, enumspb.ENCODING_TYPE_PROTO3)
+	eventBlob, err := s.serializer.SerializeEvents(events)
 	var newRunEventBlob *commonpb.DataBlob
 	if newRunEvents != nil {
-		newRunEventBlob, err = s.serializer.SerializeEvents(newRunEvents, enumspb.ENCODING_TYPE_PROTO3)
+		newRunEventBlob, err = s.serializer.SerializeEvents(newRunEvents)
 		s.NoError(err)
 	}
 	s.NoError(err)
