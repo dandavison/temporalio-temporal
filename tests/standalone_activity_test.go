@@ -7,9 +7,11 @@ import (
 	"time"
 
 	"github.com/google/go-cmp/cmp"
+	"github.com/google/uuid"
 	"github.com/stretchr/testify/require"
 	"github.com/stretchr/testify/suite"
 	activitypb "go.temporal.io/api/activity/v1"
+	commandpb "go.temporal.io/api/command/v1"
 	commonpb "go.temporal.io/api/common/v1"
 	enumspb "go.temporal.io/api/enums/v1"
 	errordetailspb "go.temporal.io/api/errordetails/v1"
@@ -1268,6 +1270,106 @@ func (s *standaloneActivityTestSuite) TestCancellation() {
 			runTest(t, false)
 		})
 		t.Run("PreventedIfCancelRequested", func(t *testing.T) {
+			runTest(t, true)
+		})
+	})
+
+	t.Run("WorkflowRetry", func(t *testing.T) {
+		runTest := func(t *testing.T, requestCancellation bool) {
+			ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
+			defer cancel()
+
+			workflowID := testcore.RandomizeStr(t.Name())
+			taskQueue := testcore.RandomizeStr(t.Name())
+
+			retryableFailure := &failurepb.Failure{
+				Message: "retryable failure",
+				FailureInfo: &failurepb.Failure_ApplicationFailureInfo{
+					ApplicationFailureInfo: &failurepb.ApplicationFailureInfo{NonRetryable: false},
+				},
+			}
+
+			startResp, err := s.FrontendClient().StartWorkflowExecution(ctx, &workflowservice.StartWorkflowExecutionRequest{
+				Namespace:           s.Namespace().String(),
+				WorkflowId:          workflowID,
+				WorkflowType:        &commonpb.WorkflowType{Name: "test-workflow"},
+				TaskQueue:           &taskqueuepb.TaskQueue{Name: taskQueue},
+				WorkflowRunTimeout:  durationpb.New(1 * time.Minute),
+				WorkflowTaskTimeout: durationpb.New(10 * time.Second),
+				RequestId:           uuid.NewString(),
+				RetryPolicy: &commonpb.RetryPolicy{
+					InitialInterval: durationpb.New(1 * time.Millisecond),
+					MaximumAttempts: 2,
+				},
+			})
+			require.NoError(t, err)
+			runID := startResp.RunId
+
+			pollResp, err := s.FrontendClient().PollWorkflowTaskQueue(ctx, &workflowservice.PollWorkflowTaskQueueRequest{
+				Namespace: s.Namespace().String(),
+				TaskQueue: &taskqueuepb.TaskQueue{Name: taskQueue, Kind: enumspb.TASK_QUEUE_KIND_NORMAL},
+				Identity:  "test-worker",
+			})
+			require.NoError(t, err)
+			require.EqualValues(t, 1, pollResp.Attempt)
+
+			if requestCancellation {
+				_, err = s.FrontendClient().RespondWorkflowTaskCompleted(ctx, &workflowservice.RespondWorkflowTaskCompletedRequest{
+					Namespace: s.Namespace().String(),
+					TaskToken: pollResp.TaskToken,
+					Commands:  []*commandpb.Command{},
+					Identity:  "test-worker",
+				})
+				require.NoError(t, err)
+
+				_, err = s.FrontendClient().RequestCancelWorkflowExecution(ctx, &workflowservice.RequestCancelWorkflowExecutionRequest{
+					Namespace: s.Namespace().String(),
+					WorkflowExecution: &commonpb.WorkflowExecution{
+						WorkflowId: workflowID,
+						RunId:      runID,
+					},
+					Identity:  "test",
+					RequestId: uuid.NewString(),
+				})
+				require.NoError(t, err)
+
+				pollResp, err = s.FrontendClient().PollWorkflowTaskQueue(ctx, &workflowservice.PollWorkflowTaskQueueRequest{
+					Namespace: s.Namespace().String(),
+					TaskQueue: &taskqueuepb.TaskQueue{Name: taskQueue, Kind: enumspb.TASK_QUEUE_KIND_NORMAL},
+					Identity:  "test-worker",
+				})
+				require.NoError(t, err)
+			}
+
+			_, err = s.FrontendClient().RespondWorkflowTaskCompleted(ctx, &workflowservice.RespondWorkflowTaskCompletedRequest{
+				Namespace: s.Namespace().String(),
+				TaskToken: pollResp.TaskToken,
+				Commands: []*commandpb.Command{{
+					CommandType: enumspb.COMMAND_TYPE_FAIL_WORKFLOW_EXECUTION,
+					Attributes: &commandpb.Command_FailWorkflowExecutionCommandAttributes{
+						FailWorkflowExecutionCommandAttributes: &commandpb.FailWorkflowExecutionCommandAttributes{
+							Failure: retryableFailure,
+						},
+					},
+				}},
+				Identity: "test-worker",
+			})
+			require.NoError(t, err)
+
+			descResp, err := s.FrontendClient().DescribeWorkflowExecution(ctx, &workflowservice.DescribeWorkflowExecutionRequest{
+				Namespace: s.Namespace().String(),
+				Execution: &commonpb.WorkflowExecution{
+					WorkflowId: workflowID,
+				},
+			})
+			require.NoError(t, err)
+			require.Equal(t, enumspb.WORKFLOW_EXECUTION_STATUS_RUNNING, descResp.GetWorkflowExecutionInfo().GetStatus())
+			require.NotEqual(t, runID, descResp.GetWorkflowExecutionInfo().GetExecution().GetRunId())
+		}
+		t.Run("AllowedIfNotCancelRequested", func(t *testing.T) {
+			runTest(t, false)
+		})
+		t.Run("AllowedEvenIfCancelRequested", func(t *testing.T) {
 			runTest(t, true)
 		})
 	})
