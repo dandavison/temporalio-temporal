@@ -2504,7 +2504,9 @@ func (s *standaloneActivityTestSuite) TestListActivityExecutions() {
 			require.NoError(t, err)
 		}
 
-		// Await first page. Use pageSize > FrontendVisibilityMaxPageSize
+		// Await first page. Use pageSize > FrontendVisibilityMaxPageSize.
+		// Wait until exactly 1 result AND a next page token exists, confirming both:
+		// (a) page size cap is working, and (b) both activities are indexed.
 		var resp *workflowservice.ListActivityExecutionsResponse
 		s.Eventually(
 			func() bool {
@@ -2514,12 +2516,11 @@ func (s *standaloneActivityTestSuite) TestListActivityExecutions() {
 					PageSize:  2,
 					Query:     fmt.Sprintf("ActivityType = '%s'", testActivityType),
 				})
-				return err == nil && len(resp.GetExecutions()) >= 1
+				return err == nil && len(resp.GetExecutions()) == 1 && resp.GetNextPageToken() != nil
 			},
 			testcore.WaitForESToSettle,
 			100*time.Millisecond,
 		)
-		require.Len(t, resp.GetExecutions(), 1)
 
 		// Get next page. Use pageSize > FrontendVisibilityMaxPageSize
 		resp, err := s.FrontendClient().ListActivityExecutions(ctx, &workflowservice.ListActivityExecutionsRequest{
