@@ -217,8 +217,8 @@ func (s *standaloneActivityTestSuite) TestIDConflictPolicy() {
 		taskQueue := testcore.RandomizeStr(t.Name())
 		firstStartResp := s.startAndValidateActivity(ctx, t, activityID, taskQueue)
 
-		startWithUseExisting := func(requestID string) *workflowservice.StartActivityExecutionResponse {
-			resp, err := s.FrontendClient().StartActivityExecution(ctx, &workflowservice.StartActivityExecutionRequest{
+		startWithUseExisting := func(requestID string) (*workflowservice.StartActivityExecutionResponse, error) {
+			return s.FrontendClient().StartActivityExecution(ctx, &workflowservice.StartActivityExecutionRequest{
 				Namespace:    s.Namespace().String(),
 				ActivityId:   activityID,
 				ActivityType: s.tv.ActivityType(),
@@ -231,17 +231,19 @@ func (s *standaloneActivityTestSuite) TestIDConflictPolicy() {
 				IdConflictPolicy:    enumspb.ACTIVITY_ID_CONFLICT_POLICY_USE_EXISTING,
 				RequestId:           requestID,
 			})
-			require.NoError(t, err)
-			require.Equal(t, firstStartResp.RunId, resp.RunId)
-			require.False(t, resp.GetStarted())
-			return resp
 		}
 
 		t.Run("SecondStartRequestReturnsExistingRun", func(t *testing.T) {
-			startWithUseExisting("different-request-id")
+			resp, err := startWithUseExisting("different-request-id")
+			require.NoError(t, err)
+			require.Equal(t, firstStartResp.RunId, resp.RunId)
+			require.False(t, resp.GetStarted())
 		})
 		t.Run("SameRequestIdReturnsExistingRun", func(t *testing.T) {
-			startWithUseExisting(s.tv.RequestID())
+			resp, err := startWithUseExisting(s.tv.RequestID())
+			require.NoError(t, err)
+			require.Equal(t, firstStartResp.RunId, resp.RunId)
+			require.False(t, resp.GetStarted())
 		})
 
 	})
