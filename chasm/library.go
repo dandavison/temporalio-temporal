@@ -43,4 +43,15 @@ func FullyQualifiedName(libName, name string) string {
 	return libName + "." + name
 }
 
+// ComponentOrTaskName extracts the component or task name from a fully qualified name.
+// For an FQN "libName.name", it returns "name". If there's no ".", returns the input as-is.
+func ComponentOrTaskName(fqn string) string {
+	for i := range fqn {
+		if fqn[i] == '.' {
+			return fqn[i+1:]
+		}
+	}
+	return fqn
+}
+
 func (UnimplementedLibrary) mustEmbedUnimplementedLibrary() {}

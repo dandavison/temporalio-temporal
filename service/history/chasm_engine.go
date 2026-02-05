@@ -59,8 +59,9 @@ var defaultTransitionOptions = chasm.TransitionOptions{
 	Speculative:    false,
 }
 
-// wrapNotFoundError wraps NotFound errors with a user-friendly message based on the archetype.
-func (e *ChasmEngine) wrapNotFoundError(err error, ref chasm.ComponentRef) error {
+// createNotFoundError creates a user-friendly NotFound error based on the archetype.
+// Returns the original error if it's not a NotFound or if archetype lookup fails.
+func (e *ChasmEngine) createNotFoundError(err error, ref chasm.ComponentRef) error {
 	var notFound *serviceerror.NotFound
 	if !errors.As(err, &notFound) {
 		return err
@@ -69,8 +70,12 @@ func (e *ChasmEngine) wrapNotFoundError(err error, ref chasm.ComponentRef) error
 	if archetypeErr != nil {
 		return err
 	}
-	label := e.registry.ExecutionLabelByID(archetypeID)
-	return serviceerror.NewNotFound(label + " not found")
+	fqn, ok := e.registry.ComponentFqnByID(archetypeID)
+	if !ok {
+		return err
+	}
+	name := chasm.ComponentOrTaskName(fqn)
+	return serviceerror.NewNotFound(name + " not found")
 }
 
 var ChasmEngineModule = fx.Options(
@@ -209,7 +214,7 @@ func (e *ChasmEngine) UpdateComponent(
 	opts ...chasm.TransitionOption,
 ) (updatedRef []byte, retError error) {
 	defer func() {
-		retError = e.wrapNotFoundError(retError, ref)
+		retError = e.createNotFoundError(retError, ref)
 	}()
 
 	shardContext, executionLease, err := e.getExecutionLease(ctx, ref)
@@ -267,7 +272,7 @@ func (e *ChasmEngine) ReadComponent(
 	opts ...chasm.TransitionOption,
 ) (retError error) {
 	defer func() {
-		retError = e.wrapNotFoundError(retError, ref)
+		retError = e.createNotFoundError(retError, ref)
 	}()
 
 	_, executionLease, err := e.getExecutionLease(ctx, ref)
@@ -318,7 +323,7 @@ func (e *ChasmEngine) PollComponent(
 	opts ...chasm.TransitionOption,
 ) (retRef []byte, retError error) {
 	defer func() {
-		retError = e.wrapNotFoundError(retError, requestRef)
+		retError = e.createNotFoundError(retError, requestRef)
 	}()
 
 	var ch <-chan struct{}

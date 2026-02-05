@@ -38,7 +38,6 @@ func (l *componentOnlyLibrary) Components() []*chasm.RegistrableComponent {
 				chasm.SearchAttributeTaskQueue,
 			),
 			chasm.WithBusinessIDAlias("ActivityId"),
-			chasm.WithExecutionLabel("activity execution"),
 		),
 	}
 }

@@ -1556,7 +1556,7 @@ func (s *standaloneActivityTestSuite) TestRequestCancel() {
 
 		var notFoundErr *serviceerror.NotFound
 		require.ErrorAs(t, err, &notFoundErr)
-		require.Equal(t, "activity execution not found", notFoundErr.Message)
+		require.Equal(t, "activity not found", notFoundErr.Message)
 	})
 }
 
@@ -1714,7 +1714,7 @@ func (s *standaloneActivityTestSuite) TestTerminate() {
 
 		var notFoundErr *serviceerror.NotFound
 		require.ErrorAs(t, err, &notFoundErr)
-		require.Equal(t, "activity execution not found", notFoundErr.Message)
+		require.Equal(t, "activity not found", notFoundErr.Message)
 	})
 }
 
@@ -2529,7 +2529,7 @@ func (s *standaloneActivityTestSuite) TestPollActivityExecution_NotFound() {
 				RunId:      existingRunID,
 			},
 			expectedErr:    notFoundErr,
-			expectedErrMsg: "activity execution not found",
+			expectedErrMsg: "activity not found",
 		},
 		{
 			name: "NonExistentRunID",
@@ -2539,7 +2539,7 @@ func (s *standaloneActivityTestSuite) TestPollActivityExecution_NotFound() {
 				RunId:      "11111111-2222-3333-4444-555555555555",
 			},
 			expectedErr:    notFoundErr,
-			expectedErrMsg: "activity execution not found",
+			expectedErrMsg: "activity not found",
 		},
 	}
 
@@ -3099,7 +3099,7 @@ func (s *standaloneActivityTestSuite) TestDescribeActivityExecution_NotFound() {
 				RunId:      existingRunID,
 			},
 			expectedErr:    notFoundErr,
-			expectedErrMsg: "activity execution not found",
+			expectedErrMsg: "activity not found",
 		},
 		{
 			name: "NonExistentRunID",
@@ -3109,7 +3109,7 @@ func (s *standaloneActivityTestSuite) TestDescribeActivityExecution_NotFound() {
 				RunId:      "11111111-2222-3333-4444-555555555555",
 			},
 			expectedErr:    notFoundErr,
-			expectedErrMsg: "activity execution not found",
+			expectedErrMsg: "activity not found",
 		},
 	}
 
@@ -3139,7 +3139,7 @@ func (s *standaloneActivityTestSuite) TestDescribeActivityExecution_NotFound() {
 		})
 		var notFoundErr *serviceerror.NotFound
 		require.ErrorAs(t, err, &notFoundErr)
-		require.Equal(t, "activity execution not found", notFoundErr.Message)
+		require.Equal(t, "activity not found", notFoundErr.Message)
 	})
 }
 
