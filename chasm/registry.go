@@ -101,6 +101,16 @@ func (r *Registry) ComponentByID(id uint32) (*RegistrableComponent, bool) {
 	return r.component(fqn)
 }
 
+// ExecutionLabelByID returns the user-friendly execution label for a given archetype ID.
+// Returns defaultExecutionLabel if the archetype is not found or has no custom label.
+func (r *Registry) ExecutionLabelByID(id uint32) string {
+	rc, ok := r.ComponentByID(id)
+	if !ok {
+		return defaultExecutionLabel
+	}
+	return rc.ExecutionLabel()
+}
+
 // ComponentIDFor converts registered component instance to component type ID.
 // This method should only be used by CHASM framework internal code,
 // NOT CHASM library developers.

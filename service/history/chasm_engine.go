@@ -59,6 +59,20 @@ var defaultTransitionOptions = chasm.TransitionOptions{
 	Speculative:    false,
 }
 
+// wrapNotFoundError wraps NotFound errors with a user-friendly message based on the archetype.
+func (e *ChasmEngine) wrapNotFoundError(err error, ref chasm.ComponentRef) error {
+	var notFound *serviceerror.NotFound
+	if !errors.As(err, &notFound) {
+		return err
+	}
+	archetypeID, archetypeErr := ref.ArchetypeID(e.registry)
+	if archetypeErr != nil {
+		return err
+	}
+	label := e.registry.ExecutionLabelByID(archetypeID)
+	return serviceerror.NewNotFound(label + " not found")
+}
+
 var ChasmEngineModule = fx.Options(
 	fx.Provide(NewChasmNotifier),
 	fx.Provide(newChasmEngine),
@@ -194,6 +208,9 @@ func (e *ChasmEngine) UpdateComponent(
 	updateFn func(chasm.MutableContext, chasm.Component) error,
 	opts ...chasm.TransitionOption,
 ) (updatedRef []byte, retError error) {
+	defer func() {
+		retError = e.wrapNotFoundError(retError, ref)
+	}()
 
 	shardContext, executionLease, err := e.getExecutionLease(ctx, ref)
 	if err != nil {
@@ -249,6 +266,10 @@ func (e *ChasmEngine) ReadComponent(
 	readFn func(chasm.Context, chasm.Component) error,
 	opts ...chasm.TransitionOption,
 ) (retError error) {
+	defer func() {
+		retError = e.wrapNotFoundError(retError, ref)
+	}()
+
 	_, executionLease, err := e.getExecutionLease(ctx, ref)
 	if err != nil {
 		return err
@@ -296,6 +317,9 @@ func (e *ChasmEngine) PollComponent(
 	monotonicPredicate func(chasm.Context, chasm.Component) (bool, error),
 	opts ...chasm.TransitionOption,
 ) (retRef []byte, retError error) {
+	defer func() {
+		retError = e.wrapNotFoundError(retError, requestRef)
+	}()
 
 	var ch <-chan struct{}
 	var unsubscribe func()

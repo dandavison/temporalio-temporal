@@ -9,6 +9,8 @@ import (
 	"go.temporal.io/server/common/searchattribute/sadefs"
 )
 
+const defaultExecutionLabel = "execution"
+
 type (
 	RegistrableComponent struct {
 		componentType string
@@ -21,6 +23,10 @@ type (
 		ephemeral     bool
 		singleCluster bool
 		detached      bool
+
+		// executionLabel is a user-friendly label for error messages. If not set, defaults to
+		// defaultExecutionLabel.
+		executionLabel string
 
 		searchAttributesMapper *VisibilitySearchAttributesMapper
 	}
@@ -66,9 +72,26 @@ func WithDetached() RegistrableComponentOption {
 	}
 }
 
+// WithExecutionLabel sets a user-friendly label for this archetype's executions. This label is used
+// in error messages (e.g. "activity execution not found"). Defaults to "execution".
+func WithExecutionLabel(label string) RegistrableComponentOption {
+	return func(rc *RegistrableComponent) {
+		rc.executionLabel = label
+	}
+}
+
 // IsDetached returns true if the component type is registered as detached.
 func (rc *RegistrableComponent) IsDetached() bool {
 	return rc.detached
+}
+
+// ExecutionLabel returns the user-friendly label for this archetype's executions. This label is
+// used in error messages (e.g. "activity execution not found"). Defaults to "execution".
+func (rc *RegistrableComponent) ExecutionLabel() string {
+	if rc.executionLabel == "" {
+		return defaultExecutionLabel
+	}
+	return rc.executionLabel
 }
 
 // WithBusinessIDAlias allows specifying the business ID alias of the component.
