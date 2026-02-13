@@ -100,276 +100,270 @@ func (s *standaloneActivityTestSuite) SetupTest() {
 }
 
 func (s *standaloneActivityTestSuite) TestStartActivityExecution() {
-	s.Run("IDReusePolicy", s.testIDReusePolicy)
-	s.Run("IDConflictPolicy", s.testIDConflictPolicy)
-	s.testStartValidations()
-}
+	s.Run("IDReusePolicy", func() {
+		t := s.T()
+		ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
+		defer cancel()
 
-func (s *standaloneActivityTestSuite) testIDReusePolicy() {
-	t := s.T()
-	ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
-	defer cancel()
+		t.Run("RejectDuplicate", func(t *testing.T) {
+			activityID := testcore.RandomizeStr(t.Name())
+			taskQueue := testcore.RandomizeStr(t.Name())
 
-	t.Run("RejectDuplicate", func(t *testing.T) {
-		activityID := testcore.RandomizeStr(t.Name())
-		taskQueue := testcore.RandomizeStr(t.Name())
+			startResp := s.startAndValidateActivity(ctx, t, activityID, taskQueue)
+			runID := startResp.RunId
+			pollTaskResp := s.pollActivityTaskAndValidate(ctx, t, activityID, taskQueue, runID)
 
-		startResp := s.startAndValidateActivity(ctx, t, activityID, taskQueue)
-		runID := startResp.RunId
-		pollTaskResp := s.pollActivityTaskAndValidate(ctx, t, activityID, taskQueue, runID)
-
-		_, err := s.FrontendClient().RespondActivityTaskCompleted(ctx, &workflowservice.RespondActivityTaskCompletedRequest{
-			Namespace: s.Namespace().String(),
-			TaskToken: pollTaskResp.TaskToken,
-			Result:    defaultResult,
-			Identity:  "new-worker",
-		})
-		require.NoError(t, err)
-
-		s.validateCompletion(ctx, t, activityID, runID, "new-worker")
-
-		_, err = s.FrontendClient().StartActivityExecution(ctx, &workflowservice.StartActivityExecutionRequest{
-			Namespace:    s.Namespace().String(),
-			ActivityId:   activityID,
-			ActivityType: s.tv.ActivityType(),
-			Identity:     s.tv.WorkerIdentity(),
-			Input:        defaultInput,
-			TaskQueue: &taskqueuepb.TaskQueue{
-				Name: taskQueue,
-			},
-			StartToCloseTimeout: durationpb.New(1 * time.Minute),
-			IdReusePolicy:       enumspb.ACTIVITY_ID_REUSE_POLICY_REJECT_DUPLICATE,
-		})
-		require.Error(t, err)
-	})
-
-	t.Run("AllowDuplicateFailedOnly", func(t *testing.T) {
-		activityID := testcore.RandomizeStr(t.Name())
-		taskQueue := testcore.RandomizeStr(t.Name())
-
-		startResp := s.startAndValidateActivity(ctx, t, activityID, taskQueue)
-		runID := startResp.RunId
-
-		pollTaskResp := s.pollActivityTaskAndValidate(ctx, t, activityID, taskQueue, runID)
-
-		_, err := s.FrontendClient().RespondActivityTaskFailed(ctx, &workflowservice.RespondActivityTaskFailedRequest{
-			Namespace: s.Namespace().String(),
-			TaskToken: pollTaskResp.TaskToken,
-			Failure:   defaultFailure,
-			Identity:  "new-worker",
-		})
-		require.NoError(t, err)
-
-		s.validateFailure(ctx, t, activityID, runID, nil, "new-worker")
-
-		_, err = s.FrontendClient().StartActivityExecution(ctx, &workflowservice.StartActivityExecutionRequest{
-			Namespace:    s.Namespace().String(),
-			ActivityId:   activityID,
-			ActivityType: s.tv.ActivityType(),
-			Identity:     s.tv.WorkerIdentity(),
-			Input:        defaultInput,
-			TaskQueue: &taskqueuepb.TaskQueue{
-				Name: taskQueue,
-			},
-			StartToCloseTimeout: durationpb.New(1 * time.Minute),
-			IdReusePolicy:       enumspb.ACTIVITY_ID_REUSE_POLICY_ALLOW_DUPLICATE_FAILED_ONLY,
-		})
-		require.NoError(t, err)
-	})
-}
-
-func (s *standaloneActivityTestSuite) testIDConflictPolicy() {
-	t := s.T()
-	ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
-	defer cancel()
-
-	t.Run("Fail", func(t *testing.T) {
-		activityID := testcore.RandomizeStr(t.Name())
-		taskQueue := testcore.RandomizeStr(t.Name())
-		firstStartResp := s.startAndValidateActivity(ctx, t, activityID, taskQueue)
-
-		startWithFail := func(requestID string) (*workflowservice.StartActivityExecutionResponse, error) {
-			return s.FrontendClient().StartActivityExecution(ctx, &workflowservice.StartActivityExecutionRequest{
-				Namespace:    s.Namespace().String(),
-				ActivityId:   activityID,
-				ActivityType: s.tv.ActivityType(),
-				Identity:     s.tv.WorkerIdentity(),
-				Input:        defaultInput,
-				TaskQueue: &taskqueuepb.TaskQueue{
-					Name: taskQueue,
-				},
-				StartToCloseTimeout: durationpb.New(1 * time.Minute),
-				RequestId:           requestID,
-			})
-		}
-
-		t.Run("SecondStartFails", func(t *testing.T) {
-			_, err := startWithFail("different-request-id")
-			var alreadyStartedErr *serviceerror.ActivityExecutionAlreadyStarted
-			require.ErrorAs(t, err, &alreadyStartedErr)
-			require.Equal(t, s.tv.RequestID(), alreadyStartedErr.StartRequestId)
-			require.Equal(t, firstStartResp.GetRunId(), alreadyStartedErr.RunId)
-		})
-
-		t.Run("SecondStartWithSameRequestIdReturnsExistingRun", func(t *testing.T) {
-			resp, err := startWithFail(s.tv.RequestID())
-			require.NoError(t, err)
-			require.Equal(t, firstStartResp.RunId, resp.RunId)
-			require.False(t, resp.GetStarted())
-		})
-	})
-
-	t.Run("UseExisting", func(t *testing.T) {
-		activityID := testcore.RandomizeStr(t.Name())
-		taskQueue := testcore.RandomizeStr(t.Name())
-		firstStartResp := s.startAndValidateActivity(ctx, t, activityID, taskQueue)
-
-		startWithUseExisting := func(requestID string) (*workflowservice.StartActivityExecutionResponse, error) {
-			return s.FrontendClient().StartActivityExecution(ctx, &workflowservice.StartActivityExecutionRequest{
-				Namespace:    s.Namespace().String(),
-				ActivityId:   activityID,
-				ActivityType: s.tv.ActivityType(),
-				Identity:     s.tv.WorkerIdentity(),
-				Input:        defaultInput,
-				TaskQueue: &taskqueuepb.TaskQueue{
-					Name: taskQueue,
-				},
-				StartToCloseTimeout: durationpb.New(1 * time.Minute),
-				IdConflictPolicy:    enumspb.ACTIVITY_ID_CONFLICT_POLICY_USE_EXISTING,
-				RequestId:           requestID,
-			})
-		}
-
-		t.Run("SecondStartReturnsExistingRun", func(t *testing.T) {
-			resp, err := startWithUseExisting("different-request-id")
-			require.NoError(t, err)
-			require.Equal(t, firstStartResp.RunId, resp.RunId)
-			require.False(t, resp.GetStarted())
-		})
-		t.Run("SecondStartWithSameRequestIdReturnsExistingRun", func(t *testing.T) {
-			resp, err := startWithUseExisting(s.tv.RequestID())
-			require.NoError(t, err)
-			require.Equal(t, firstStartResp.RunId, resp.RunId)
-			require.False(t, resp.GetStarted())
-		})
-
-		t.Run("DoesNotApplyToCompletedActivity", func(t *testing.T) {
-			pollTaskResp := s.pollActivityTaskAndValidate(ctx, t, activityID, taskQueue, firstStartResp.RunId)
 			_, err := s.FrontendClient().RespondActivityTaskCompleted(ctx, &workflowservice.RespondActivityTaskCompletedRequest{
 				Namespace: s.Namespace().String(),
 				TaskToken: pollTaskResp.TaskToken,
 				Result:    defaultResult,
-				Identity:  defaultIdentity,
+				Identity:  "new-worker",
 			})
 			require.NoError(t, err)
 
-			// USE_EXISTING only applies to running activities; completed activities
-			// are governed by reuse policy (default ALLOW_DUPLICATE creates new)
-			resp, err := startWithUseExisting("different-request-id")
+			s.validateCompletion(ctx, t, activityID, runID, "new-worker")
+
+			_, err = s.FrontendClient().StartActivityExecution(ctx, &workflowservice.StartActivityExecutionRequest{
+				Namespace:    s.Namespace().String(),
+				ActivityId:   activityID,
+				ActivityType: s.tv.ActivityType(),
+				Identity:     s.tv.WorkerIdentity(),
+				Input:        defaultInput,
+				TaskQueue: &taskqueuepb.TaskQueue{
+					Name: taskQueue,
+				},
+				StartToCloseTimeout: durationpb.New(1 * time.Minute),
+				IdReusePolicy:       enumspb.ACTIVITY_ID_REUSE_POLICY_REJECT_DUPLICATE,
+			})
+			require.Error(t, err)
+		})
+
+		t.Run("AllowDuplicateFailedOnly", func(t *testing.T) {
+			activityID := testcore.RandomizeStr(t.Name())
+			taskQueue := testcore.RandomizeStr(t.Name())
+
+			startResp := s.startAndValidateActivity(ctx, t, activityID, taskQueue)
+			runID := startResp.RunId
+
+			pollTaskResp := s.pollActivityTaskAndValidate(ctx, t, activityID, taskQueue, runID)
+
+			_, err := s.FrontendClient().RespondActivityTaskFailed(ctx, &workflowservice.RespondActivityTaskFailedRequest{
+				Namespace: s.Namespace().String(),
+				TaskToken: pollTaskResp.TaskToken,
+				Failure:   defaultFailure,
+				Identity:  "new-worker",
+			})
 			require.NoError(t, err)
-			require.NotEqual(t, firstStartResp.RunId, resp.RunId)
-			require.True(t, resp.GetStarted())
+
+			s.validateFailure(ctx, t, activityID, runID, nil, "new-worker")
+
+			_, err = s.FrontendClient().StartActivityExecution(ctx, &workflowservice.StartActivityExecutionRequest{
+				Namespace:    s.Namespace().String(),
+				ActivityId:   activityID,
+				ActivityType: s.tv.ActivityType(),
+				Identity:     s.tv.WorkerIdentity(),
+				Input:        defaultInput,
+				TaskQueue: &taskqueuepb.TaskQueue{
+					Name: taskQueue,
+				},
+				StartToCloseTimeout: durationpb.New(1 * time.Minute),
+				IdReusePolicy:       enumspb.ACTIVITY_ID_REUSE_POLICY_ALLOW_DUPLICATE_FAILED_ONLY,
+			})
+			require.NoError(t, err)
 		})
 	})
-}
+	s.Run("IDConflictPolicy", func() {
+		t := s.T()
+		ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
+		defer cancel()
 
-func (s *standaloneActivityTestSuite) testStartValidations() {
-	t := s.T()
-	ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
-	defer cancel()
+		t.Run("Fail", func(t *testing.T) {
+			activityID := testcore.RandomizeStr(t.Name())
+			taskQueue := testcore.RandomizeStr(t.Name())
+			firstStartResp := s.startAndValidateActivity(ctx, t, activityID, taskQueue)
 
-	t.Run("RequestValidations", func(t *testing.T) {
-		t.Run("RequestIDTooLong", func(t *testing.T) {
-			_, err := s.FrontendClient().StartActivityExecution(ctx, &workflowservice.StartActivityExecutionRequest{
-				Namespace:    s.Namespace().String(),
-				ActivityId:   s.tv.ActivityID(),
-				ActivityType: s.tv.ActivityType(),
-				Identity:     s.tv.WorkerIdentity(),
-				Input:        defaultInput,
-				TaskQueue: &taskqueuepb.TaskQueue{
-					Name: s.tv.TaskQueue().GetName(),
-				},
-				StartToCloseTimeout: durationpb.New(defaultStartToCloseTimeout),
-				RequestId:           string(make([]byte, defaultMaxIDLengthLimit+1)),
-			})
-
-			var invalidArgErr *serviceerror.InvalidArgument
-			require.ErrorAs(t, err, &invalidArgErr)
-			require.Equal(t, fmt.Sprintf("request ID exceeds length limit. Length=%d Limit=%d",
-				defaultMaxIDLengthLimit+1, defaultMaxIDLengthLimit), invalidArgErr.Message)
-		})
-
-		t.Run("IdentityTooLong", func(t *testing.T) {
-			_, err := s.FrontendClient().StartActivityExecution(ctx, &workflowservice.StartActivityExecutionRequest{
-				Namespace:    s.Namespace().String(),
-				ActivityId:   s.tv.ActivityID(),
-				ActivityType: s.tv.ActivityType(),
-				Identity:     string(make([]byte, defaultMaxIDLengthLimit+1)),
-				Input:        defaultInput,
-				TaskQueue: &taskqueuepb.TaskQueue{
-					Name: s.tv.TaskQueue().GetName(),
-				},
-				StartToCloseTimeout: durationpb.New(defaultStartToCloseTimeout),
-				RequestId:           s.tv.RequestID(),
-			})
-
-			var invalidArgErr *serviceerror.InvalidArgument
-			require.ErrorAs(t, err, &invalidArgErr)
-			require.Equal(t, fmt.Sprintf("identity exceeds length limit. Length=%d Limit=%d",
-				defaultMaxIDLengthLimit+1, defaultMaxIDLengthLimit), invalidArgErr.Message)
-		})
-
-		t.Run("InputTooLarge", func(t *testing.T) {
-			blobSizeLimitError := 1000
-			cleanup := s.OverrideDynamicConfig(
-				dynamicconfig.BlobSizeLimitError,
-				blobSizeLimitError,
-			)
-			defer cleanup()
-
-			input := payloads.EncodeString(string(make([]byte, blobSizeLimitError+1)))
-
-			_, err := s.FrontendClient().StartActivityExecution(ctx, &workflowservice.StartActivityExecutionRequest{
-				Namespace:    s.Namespace().String(),
-				ActivityId:   s.tv.ActivityID(),
-				ActivityType: s.tv.ActivityType(),
-				Identity:     s.tv.WorkerIdentity(),
-				Input:        input,
-				TaskQueue: &taskqueuepb.TaskQueue{
-					Name: s.tv.TaskQueue().GetName(),
-				},
-				StartToCloseTimeout: durationpb.New(defaultStartToCloseTimeout),
-				RequestId:           s.tv.RequestID(),
-			})
-
-			var invalidArgErr *serviceerror.InvalidArgument
-			require.ErrorAs(t, err, &invalidArgErr)
-			require.Contains(t, invalidArgErr.Message, "input exceeds length limit")
-		})
-
-		t.Run("SearchAttributesInvalid", func(t *testing.T) {
-			invalidSearchAttributes := &commonpb.SearchAttributes{
-				IndexedFields: map[string]*commonpb.Payload{
-					"InvalidSearchAttributeKey": payload.EncodeString("value"),
-				},
+			startWithFail := func(requestID string) (*workflowservice.StartActivityExecutionResponse, error) {
+				return s.FrontendClient().StartActivityExecution(ctx, &workflowservice.StartActivityExecutionRequest{
+					Namespace:    s.Namespace().String(),
+					ActivityId:   activityID,
+					ActivityType: s.tv.ActivityType(),
+					Identity:     s.tv.WorkerIdentity(),
+					Input:        defaultInput,
+					TaskQueue: &taskqueuepb.TaskQueue{
+						Name: taskQueue,
+					},
+					StartToCloseTimeout: durationpb.New(1 * time.Minute),
+					RequestId:           requestID,
+				})
 			}
 
-			_, err := s.FrontendClient().StartActivityExecution(ctx, &workflowservice.StartActivityExecutionRequest{
-				Namespace:    s.Namespace().String(),
-				ActivityId:   s.tv.ActivityID(),
-				ActivityType: s.tv.ActivityType(),
-				Identity:     s.tv.WorkerIdentity(),
-				Input:        defaultInput,
-				TaskQueue: &taskqueuepb.TaskQueue{
-					Name: s.tv.TaskQueue().GetName(),
-				},
-				StartToCloseTimeout: durationpb.New(defaultStartToCloseTimeout),
-				RequestId:           s.tv.RequestID(),
-				SearchAttributes:    invalidSearchAttributes,
+			t.Run("SecondStartFails", func(t *testing.T) {
+				_, err := startWithFail("different-request-id")
+				var alreadyStartedErr *serviceerror.ActivityExecutionAlreadyStarted
+				require.ErrorAs(t, err, &alreadyStartedErr)
+				require.Equal(t, s.tv.RequestID(), alreadyStartedErr.StartRequestId)
+				require.Equal(t, firstStartResp.GetRunId(), alreadyStartedErr.RunId)
 			})
 
-			var invalidArgErr *serviceerror.InvalidArgument
-			require.ErrorAs(t, err, &invalidArgErr)
+			t.Run("SecondStartWithSameRequestIdReturnsExistingRun", func(t *testing.T) {
+				resp, err := startWithFail(s.tv.RequestID())
+				require.NoError(t, err)
+				require.Equal(t, firstStartResp.RunId, resp.RunId)
+				require.False(t, resp.GetStarted())
+			})
+		})
+
+		t.Run("UseExisting", func(t *testing.T) {
+			activityID := testcore.RandomizeStr(t.Name())
+			taskQueue := testcore.RandomizeStr(t.Name())
+			firstStartResp := s.startAndValidateActivity(ctx, t, activityID, taskQueue)
+
+			startWithUseExisting := func(requestID string) (*workflowservice.StartActivityExecutionResponse, error) {
+				return s.FrontendClient().StartActivityExecution(ctx, &workflowservice.StartActivityExecutionRequest{
+					Namespace:    s.Namespace().String(),
+					ActivityId:   activityID,
+					ActivityType: s.tv.ActivityType(),
+					Identity:     s.tv.WorkerIdentity(),
+					Input:        defaultInput,
+					TaskQueue: &taskqueuepb.TaskQueue{
+						Name: taskQueue,
+					},
+					StartToCloseTimeout: durationpb.New(1 * time.Minute),
+					IdConflictPolicy:    enumspb.ACTIVITY_ID_CONFLICT_POLICY_USE_EXISTING,
+					RequestId:           requestID,
+				})
+			}
+
+			t.Run("SecondStartReturnsExistingRun", func(t *testing.T) {
+				resp, err := startWithUseExisting("different-request-id")
+				require.NoError(t, err)
+				require.Equal(t, firstStartResp.RunId, resp.RunId)
+				require.False(t, resp.GetStarted())
+			})
+			t.Run("SecondStartWithSameRequestIdReturnsExistingRun", func(t *testing.T) {
+				resp, err := startWithUseExisting(s.tv.RequestID())
+				require.NoError(t, err)
+				require.Equal(t, firstStartResp.RunId, resp.RunId)
+				require.False(t, resp.GetStarted())
+			})
+
+			t.Run("DoesNotApplyToCompletedActivity", func(t *testing.T) {
+				pollTaskResp := s.pollActivityTaskAndValidate(ctx, t, activityID, taskQueue, firstStartResp.RunId)
+				_, err := s.FrontendClient().RespondActivityTaskCompleted(ctx, &workflowservice.RespondActivityTaskCompletedRequest{
+					Namespace: s.Namespace().String(),
+					TaskToken: pollTaskResp.TaskToken,
+					Result:    defaultResult,
+					Identity:  defaultIdentity,
+				})
+				require.NoError(t, err)
+
+				// USE_EXISTING only applies to running activities; completed activities
+				// are governed by reuse policy (default ALLOW_DUPLICATE creates new)
+				resp, err := startWithUseExisting("different-request-id")
+				require.NoError(t, err)
+				require.NotEqual(t, firstStartResp.RunId, resp.RunId)
+				require.True(t, resp.GetStarted())
+			})
+		})
+	})
+	s.Run("Validations", func() {
+		t := s.T()
+		ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
+		defer cancel()
+
+		t.Run("RequestValidations", func(t *testing.T) {
+			t.Run("RequestIDTooLong", func(t *testing.T) {
+				_, err := s.FrontendClient().StartActivityExecution(ctx, &workflowservice.StartActivityExecutionRequest{
+					Namespace:    s.Namespace().String(),
+					ActivityId:   s.tv.ActivityID(),
+					ActivityType: s.tv.ActivityType(),
+					Identity:     s.tv.WorkerIdentity(),
+					Input:        defaultInput,
+					TaskQueue: &taskqueuepb.TaskQueue{
+						Name: s.tv.TaskQueue().GetName(),
+					},
+					StartToCloseTimeout: durationpb.New(defaultStartToCloseTimeout),
+					RequestId:           string(make([]byte, defaultMaxIDLengthLimit+1)),
+				})
+
+				var invalidArgErr *serviceerror.InvalidArgument
+				require.ErrorAs(t, err, &invalidArgErr)
+				require.Equal(t, fmt.Sprintf("request ID exceeds length limit. Length=%d Limit=%d",
+					defaultMaxIDLengthLimit+1, defaultMaxIDLengthLimit), invalidArgErr.Message)
+			})
+
+			t.Run("IdentityTooLong", func(t *testing.T) {
+				_, err := s.FrontendClient().StartActivityExecution(ctx, &workflowservice.StartActivityExecutionRequest{
+					Namespace:    s.Namespace().String(),
+					ActivityId:   s.tv.ActivityID(),
+					ActivityType: s.tv.ActivityType(),
+					Identity:     string(make([]byte, defaultMaxIDLengthLimit+1)),
+					Input:        defaultInput,
+					TaskQueue: &taskqueuepb.TaskQueue{
+						Name: s.tv.TaskQueue().GetName(),
+					},
+					StartToCloseTimeout: durationpb.New(defaultStartToCloseTimeout),
+					RequestId:           s.tv.RequestID(),
+				})
+
+				var invalidArgErr *serviceerror.InvalidArgument
+				require.ErrorAs(t, err, &invalidArgErr)
+				require.Equal(t, fmt.Sprintf("identity exceeds length limit. Length=%d Limit=%d",
+					defaultMaxIDLengthLimit+1, defaultMaxIDLengthLimit), invalidArgErr.Message)
+			})
+
+			t.Run("InputTooLarge", func(t *testing.T) {
+				blobSizeLimitError := 1000
+				cleanup := s.OverrideDynamicConfig(
+					dynamicconfig.BlobSizeLimitError,
+					blobSizeLimitError,
+				)
+				defer cleanup()
+
+				input := payloads.EncodeString(string(make([]byte, blobSizeLimitError+1)))
+
+				_, err := s.FrontendClient().StartActivityExecution(ctx, &workflowservice.StartActivityExecutionRequest{
+					Namespace:    s.Namespace().String(),
+					ActivityId:   s.tv.ActivityID(),
+					ActivityType: s.tv.ActivityType(),
+					Identity:     s.tv.WorkerIdentity(),
+					Input:        input,
+					TaskQueue: &taskqueuepb.TaskQueue{
+						Name: s.tv.TaskQueue().GetName(),
+					},
+					StartToCloseTimeout: durationpb.New(defaultStartToCloseTimeout),
+					RequestId:           s.tv.RequestID(),
+				})
+
+				var invalidArgErr *serviceerror.InvalidArgument
+				require.ErrorAs(t, err, &invalidArgErr)
+				require.Contains(t, invalidArgErr.Message, "input exceeds length limit")
+			})
+
+			t.Run("SearchAttributesInvalid", func(t *testing.T) {
+				invalidSearchAttributes := &commonpb.SearchAttributes{
+					IndexedFields: map[string]*commonpb.Payload{
+						"InvalidSearchAttributeKey": payload.EncodeString("value"),
+					},
+				}
+
+				_, err := s.FrontendClient().StartActivityExecution(ctx, &workflowservice.StartActivityExecutionRequest{
+					Namespace:    s.Namespace().String(),
+					ActivityId:   s.tv.ActivityID(),
+					ActivityType: s.tv.ActivityType(),
+					Identity:     s.tv.WorkerIdentity(),
+					Input:        defaultInput,
+					TaskQueue: &taskqueuepb.TaskQueue{
+						Name: s.tv.TaskQueue().GetName(),
+					},
+					StartToCloseTimeout: durationpb.New(defaultStartToCloseTimeout),
+					RequestId:           s.tv.RequestID(),
+					SearchAttributes:    invalidSearchAttributes,
+				})
+
+				var invalidArgErr *serviceerror.InvalidArgument
+				require.ErrorAs(t, err, &invalidArgErr)
+			})
 		})
 	})
 }
@@ -2286,338 +2280,61 @@ func (s *standaloneActivityTestSuite) TestScheduleToStartTimeout() {
 }
 
 func (s *standaloneActivityTestSuite) TestDescribeActivityExecution() {
-	s.Run("NoWait", s.testDescribeActivityExecution_NoWait)
-	s.Run("WaitAnyStateChange", s.testDescribeActivityExecution_WaitAnyStateChange)
-	s.Run("Completed", s.testDescribeActivityExecution_Completed)
-	s.Run("DeadlineExceeded", s.testDescribeActivityExecution_DeadlineExceeded)
-	s.Run("NotFound", s.testDescribeActivityExecution_NotFound)
-	s.Run("InvalidArgument", s.testDescribeActivityExecution_InvalidArgument)
-}
+	s.Run("NoWait", func() {
+		t := s.T()
+		ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
+		defer cancel()
+		activityID := s.tv.ActivityID()
+		taskQueue := s.tv.TaskQueue()
 
-func (s *standaloneActivityTestSuite) testDescribeActivityExecution_NoWait() {
-	t := s.T()
-	ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
-	defer cancel()
-	activityID := s.tv.ActivityID()
-	taskQueue := s.tv.TaskQueue()
-
-	startReq := &workflowservice.StartActivityExecutionRequest{
-		Namespace:              s.Namespace().String(),
-		ActivityId:             activityID,
-		ActivityType:           s.tv.ActivityType(),
-		Header:                 defaultHeader,
-		HeartbeatTimeout:       durationpb.New(45 * time.Second),
-		Identity:               s.tv.WorkerIdentity(),
-		Input:                  defaultInput,
-		ScheduleToStartTimeout: durationpb.New(30 * time.Second),
-		ScheduleToCloseTimeout: durationpb.New(3 * time.Minute),
-		StartToCloseTimeout:    durationpb.New(1 * time.Minute),
-		RequestId:              s.tv.RequestID(),
-		RetryPolicy: &commonpb.RetryPolicy{
-			InitialInterval:    durationpb.New(2 * time.Second),
-			BackoffCoefficient: 1.5,
-			MaximumAttempts:    3,
-			MaximumInterval:    durationpb.New(111 * time.Second),
-		},
-		Priority: &commonpb.Priority{
-			FairnessKey: "test-key",
-		},
-		SearchAttributes: defaultSearchAttributes,
-		TaskQueue: &taskqueuepb.TaskQueue{
-			Name: taskQueue.GetName(),
-		},
-		UserMetadata: defaultUserMetadata,
-	}
-
-	startResp, err := s.FrontendClient().StartActivityExecution(ctx, startReq)
-	require.NoError(t, err)
-
-	t.Run("MinimalResponse", func(t *testing.T) {
-		describeResp, err := s.FrontendClient().DescribeActivityExecution(ctx, &workflowservice.DescribeActivityExecutionRequest{
-			Namespace:  s.Namespace().String(),
-			ActivityId: activityID,
-			// Omit RunID to verify that latest run will be used
-			IncludeInput:   false,
-			IncludeOutcome: false,
-		})
-		require.NoError(t, err)
-		require.NotNil(t, describeResp.LongPollToken)
-		require.Equal(t, startResp.RunId, describeResp.RunId)
-		require.Nil(t, describeResp.Input)
-		require.Nil(t, describeResp.GetOutcome().GetResult())
-		require.Nil(t, describeResp.GetOutcome().GetFailure())
-	})
-
-	t.Run("FullResponse", func(t *testing.T) {
-		describeResp, err := s.FrontendClient().DescribeActivityExecution(ctx, &workflowservice.DescribeActivityExecutionRequest{
-			Namespace:      s.Namespace().String(),
-			ActivityId:     activityID,
-			RunId:          startResp.RunId,
-			IncludeInput:   true,
-			IncludeOutcome: true,
-		})
-		require.NoError(t, err)
-
-		respInfo := describeResp.GetInfo()
-		require.NotNil(t, describeResp.LongPollToken)
-		require.NotNil(t, respInfo)
-
-		expectedExpirationTime := timestamppb.New(respInfo.GetScheduleTime().AsTime().Add(
-			startReq.GetScheduleToCloseTimeout().AsDuration()))
-
-		expected := &activitypb.ActivityExecutionInfo{
+		startReq := &workflowservice.StartActivityExecutionRequest{
+			Namespace:              s.Namespace().String(),
 			ActivityId:             activityID,
 			ActivityType:           s.tv.ActivityType(),
-			Attempt:                1,
-			ExpirationTime:         expectedExpirationTime,
 			Header:                 defaultHeader,
-			HeartbeatTimeout:       startReq.GetHeartbeatTimeout(),
-			RetryPolicy:            startReq.GetRetryPolicy(),
-			RunId:                  startResp.RunId,
-			RunState:               enumspb.PENDING_ACTIVITY_STATE_SCHEDULED,
-			Priority:               startReq.GetPriority(),
-			ScheduleToCloseTimeout: startReq.GetScheduleToCloseTimeout(),
-			ScheduleToStartTimeout: startReq.GetScheduleToStartTimeout(),
-			StartToCloseTimeout:    startReq.GetStartToCloseTimeout(),
-			Status:                 enumspb.ACTIVITY_EXECUTION_STATUS_RUNNING,
-			SearchAttributes:       defaultSearchAttributes,
-			TaskQueue:              taskQueue.Name,
-			UserMetadata:           defaultUserMetadata,
+			HeartbeatTimeout:       durationpb.New(45 * time.Second),
+			Identity:               s.tv.WorkerIdentity(),
+			Input:                  defaultInput,
+			ScheduleToStartTimeout: durationpb.New(30 * time.Second),
+			ScheduleToCloseTimeout: durationpb.New(3 * time.Minute),
+			StartToCloseTimeout:    durationpb.New(1 * time.Minute),
+			RequestId:              s.tv.RequestID(),
+			RetryPolicy: &commonpb.RetryPolicy{
+				InitialInterval:    durationpb.New(2 * time.Second),
+				BackoffCoefficient: 1.5,
+				MaximumAttempts:    3,
+				MaximumInterval:    durationpb.New(111 * time.Second),
+			},
+			Priority: &commonpb.Priority{
+				FairnessKey: "test-key",
+			},
+			SearchAttributes: defaultSearchAttributes,
+			TaskQueue: &taskqueuepb.TaskQueue{
+				Name: taskQueue.GetName(),
+			},
+			UserMetadata: defaultUserMetadata,
 		}
 
-		diff := cmp.Diff(expected, respInfo,
-			protocmp.Transform(),
-			// Ignore non-deterministic fields. Validated separately.
-			protocmp.IgnoreFields(&activitypb.ActivityExecutionInfo{},
-				"execution_duration",
-				"schedule_time",
-				"state_transition_count",
-			),
-		)
-		require.Empty(t, diff)
-		require.Equal(t, respInfo.GetExecutionDuration().AsDuration(), time.Duration(0)) // Never completed, so expect 0
-		require.Nil(t, describeResp.GetInfo().GetCloseTime())
-		require.Positive(t, respInfo.GetScheduleTime().AsTime().Unix())
-		require.Positive(t, respInfo.GetStateTransitionCount())
+		startResp, err := s.FrontendClient().StartActivityExecution(ctx, startReq)
+		require.NoError(t, err)
 
-		protorequire.ProtoEqual(t, defaultInput, describeResp.Input)
-
-		// Activity is scheduled but not completed, so no outcome yet
-		require.Nil(t, describeResp.GetOutcome().GetResult())
-		require.Nil(t, describeResp.GetOutcome().GetFailure())
-	})
-}
-
-func (s *standaloneActivityTestSuite) testDescribeActivityExecution_WaitAnyStateChange() {
-	// Long poll for any state change. PollActivityTaskQueue is used to cause a state change.
-	t := s.T()
-	ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
-	defer cancel()
-	activityID := s.tv.ActivityID()
-	taskQueue := s.tv.TaskQueue()
-
-	startResp, err := s.startActivity(ctx, activityID, taskQueue.Name)
-	require.NoError(t, err)
-
-	// First poll lacks token and therefore responds immediately, returning a token
-	firstDescribeResp, err := s.FrontendClient().DescribeActivityExecution(ctx, &workflowservice.DescribeActivityExecutionRequest{
-		Namespace:  s.Namespace().String(),
-		ActivityId: activityID,
-		// RunId:        startResp.RunId, // RunID is now required by validation [?]
-		IncludeInput: true,
-	})
-	require.NoError(t, err)
-	require.NotNil(t, firstDescribeResp.LongPollToken)
-	require.NotNil(t, firstDescribeResp.Info)
-	require.Equal(t, firstDescribeResp.RunId, startResp.RunId)
-
-	expected := &activitypb.ActivityExecutionInfo{
-		ActivityId:             activityID,
-		ActivityType:           s.tv.ActivityType(),
-		Attempt:                1,
-		HeartbeatTimeout:       durationpb.New(0),
-		RetryPolicy:            defaultRetryPolicy,
-		RunId:                  startResp.RunId,
-		RunState:               enumspb.PENDING_ACTIVITY_STATE_SCHEDULED,
-		SearchAttributes:       &commonpb.SearchAttributes{},
-		ScheduleToCloseTimeout: durationpb.New(0),
-		ScheduleToStartTimeout: durationpb.New(0),
-		StartToCloseTimeout:    durationpb.New(defaultStartToCloseTimeout),
-		Status:                 enumspb.ACTIVITY_EXECUTION_STATUS_RUNNING,
-		TaskQueue:              taskQueue.Name,
-	}
-	diff := cmp.Diff(expected, firstDescribeResp.GetInfo(),
-		protocmp.Transform(),
-		// Ignore non-deterministic fields. Validated separately.
-		protocmp.IgnoreFields(&activitypb.ActivityExecutionInfo{},
-			"execution_duration",
-			"schedule_time",
-			"state_transition_count",
-		),
-	)
-	require.Empty(t, diff)
-
-	taskQueuePollErr := make(chan error, 1)
-	activityPollDone := make(chan struct{})
-	var describeResp *workflowservice.DescribeActivityExecutionResponse
-	var describeErr error
-
-	go func() {
-		defer close(activityPollDone)
-		// Second poll uses token and therefore waits for a state transition
-		describeResp, describeErr = s.FrontendClient().DescribeActivityExecution(ctx, &workflowservice.DescribeActivityExecutionRequest{
-			Namespace:     s.Namespace().String(),
-			ActivityId:    activityID,
-			RunId:         startResp.RunId,
-			IncludeInput:  true,
-			LongPollToken: firstDescribeResp.LongPollToken,
-		})
-	}()
-
-	// TODO(dan): race here: subscription might not be established yet
-
-	// Worker picks up activity task, triggering transition (via RecordActivityTaskStarted)
-	go func() {
-		_, err := s.pollActivityTaskQueue(ctx, taskQueue.Name)
-		taskQueuePollErr <- err
-	}()
-
-	select {
-	case <-activityPollDone:
-		require.NoError(t, describeErr)
-		require.NotNil(t, describeResp)
-		require.NotNil(t, describeResp.Info)
-
-		expected := &activitypb.ActivityExecutionInfo{
-			ActivityId:             activityID,
-			ActivityType:           s.tv.ActivityType(),
-			Attempt:                1,
-			HeartbeatTimeout:       durationpb.New(0),
-			LastWorkerIdentity:     defaultIdentity,
-			RetryPolicy:            defaultRetryPolicy,
-			RunId:                  startResp.RunId,
-			RunState:               enumspb.PENDING_ACTIVITY_STATE_STARTED,
-			ScheduleToCloseTimeout: durationpb.New(0),
-			ScheduleToStartTimeout: durationpb.New(0),
-			SearchAttributes:       &commonpb.SearchAttributes{},
-			StartToCloseTimeout:    durationpb.New(defaultStartToCloseTimeout),
-			Status:                 enumspb.ACTIVITY_EXECUTION_STATUS_RUNNING,
-			TaskQueue:              taskQueue.Name,
-		}
-		diff := cmp.Diff(expected, describeResp.GetInfo(),
-			protocmp.Transform(),
-			// Ignore non-deterministic fields. Validated separately.
-			protocmp.IgnoreFields(&activitypb.ActivityExecutionInfo{},
-				"execution_duration",
-				"last_started_time",
-				"schedule_time",
-				"state_transition_count",
-			),
-		)
-		require.Empty(t, diff)
-
-		protorequire.ProtoEqual(t, defaultInput, describeResp.Input)
-
-	case <-ctx.Done():
-		t.Fatal("DescribeActivityExecution timed out")
-	}
-
-	err = <-taskQueuePollErr
-	require.NoError(t, err)
-}
-
-func (s *standaloneActivityTestSuite) testDescribeActivityExecution_Completed() {
-	testCases := []struct {
-		name             string
-		expectedStatus   enumspb.ActivityExecutionStatus
-		taskCompletionFn func(ctx context.Context, taskToken []byte, activityID, runID string) error
-		outcomeValidator func(*testing.T, *workflowservice.DescribeActivityExecutionResponse)
-	}{
-		{
-			name:           "successful completion",
-			expectedStatus: enumspb.ACTIVITY_EXECUTION_STATUS_COMPLETED,
-			taskCompletionFn: func(ctx context.Context, taskToken []byte, _, _ string) error {
-				_, err := s.FrontendClient().RespondActivityTaskCompleted(ctx, &workflowservice.RespondActivityTaskCompletedRequest{
-					Namespace: s.Namespace().String(),
-					TaskToken: taskToken,
-					Result:    defaultResult,
-					Identity:  defaultIdentity,
-				})
-				return err
-			},
-			outcomeValidator: func(t *testing.T, response *workflowservice.DescribeActivityExecutionResponse) {
-				protorequire.ProtoEqual(t, defaultResult, response.GetOutcome().GetResult())
-				require.Nil(t, response.GetOutcome().GetFailure())
-			},
-		},
-		{
-			name:           "failure completion",
-			expectedStatus: enumspb.ACTIVITY_EXECUTION_STATUS_FAILED,
-			taskCompletionFn: func(ctx context.Context, taskToken []byte, _, _ string) error {
-				_, err := s.FrontendClient().RespondActivityTaskFailed(ctx, &workflowservice.RespondActivityTaskFailedRequest{
-					Namespace: s.Namespace().String(),
-					TaskToken: taskToken,
-					Failure:   defaultFailure,
-					Identity:  defaultIdentity,
-				})
-				return err
-			},
-			outcomeValidator: func(t *testing.T, response *workflowservice.DescribeActivityExecutionResponse) {
-				protorequire.ProtoEqual(t, defaultFailure, response.GetOutcome().GetFailure())
-				require.Nil(t, response.GetOutcome().GetResult())
-			},
-		},
-		{
-			name:           "termination",
-			expectedStatus: enumspb.ACTIVITY_EXECUTION_STATUS_TERMINATED,
-			taskCompletionFn: func(ctx context.Context, _ []byte, activityID, runID string) error {
-				_, err := s.FrontendClient().TerminateActivityExecution(ctx, &workflowservice.TerminateActivityExecutionRequest{
-					Namespace:  s.Namespace().String(),
-					ActivityId: activityID,
-					RunId:      runID,
-					Reason:     "test termination",
-				})
-				return err
-			},
-			outcomeValidator: func(t *testing.T, response *workflowservice.DescribeActivityExecutionResponse) {
-				require.NotNil(t, response.GetOutcome().GetFailure())
-				require.NotNil(t, response.GetOutcome().GetFailure().GetTerminatedFailureInfo())
-				require.Nil(t, response.GetOutcome().GetResult())
-			},
-		},
-	}
-
-	for _, tc := range testCases {
-		s.Run(tc.name, func() {
-			t := s.T()
-			ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
-			t.Cleanup(cancel)
-			activityID := s.tv.Any().String()
-			taskQueue := s.tv.TaskQueue()
-
-			startResp, err := s.FrontendClient().StartActivityExecution(ctx, &workflowservice.StartActivityExecutionRequest{
-				Namespace:           s.Namespace().String(),
-				ActivityId:          activityID,
-				ActivityType:        s.tv.ActivityType(),
-				Header:              defaultHeader,
-				HeartbeatTimeout:    durationpb.New(45 * time.Second),
-				Identity:            s.tv.WorkerIdentity(),
-				Input:               defaultInput,
-				StartToCloseTimeout: durationpb.New(defaultStartToCloseTimeout),
-				RequestId:           s.tv.RequestID(),
-				RetryPolicy:         defaultRetryPolicy,
-				Priority:            &commonpb.Priority{FairnessKey: "test-key"},
-				SearchAttributes:    defaultSearchAttributes,
-				TaskQueue:           taskQueue,
-				UserMetadata:        defaultUserMetadata,
+		t.Run("MinimalResponse", func(t *testing.T) {
+			describeResp, err := s.FrontendClient().DescribeActivityExecution(ctx, &workflowservice.DescribeActivityExecutionRequest{
+				Namespace:  s.Namespace().String(),
+				ActivityId: activityID,
+				// Omit RunID to verify that latest run will be used
+				IncludeInput:   false,
+				IncludeOutcome: false,
 			})
 			require.NoError(t, err)
+			require.NotNil(t, describeResp.LongPollToken)
+			require.Equal(t, startResp.RunId, describeResp.RunId)
+			require.Nil(t, describeResp.Input)
+			require.Nil(t, describeResp.GetOutcome().GetResult())
+			require.Nil(t, describeResp.GetOutcome().GetFailure())
+		})
 
-			pollTaskResp, err := s.pollActivityTaskQueue(ctx, taskQueue.Name)
-			require.NoError(t, err)
-			err = tc.taskCompletionFn(ctx, pollTaskResp.TaskToken, activityID, startResp.RunId)
-			require.NoError(t, err)
-
+		t.Run("FullResponse", func(t *testing.T) {
 			describeResp, err := s.FrontendClient().DescribeActivityExecution(ctx, &workflowservice.DescribeActivityExecutionRequest{
 				Namespace:      s.Namespace().String(),
 				ActivityId:     activityID,
@@ -2626,373 +2343,638 @@ func (s *standaloneActivityTestSuite) testDescribeActivityExecution_Completed() 
 				IncludeOutcome: true,
 			})
 			require.NoError(t, err)
-			require.NotNil(t, describeResp)
-			require.Equal(t, startResp.RunId, describeResp.GetRunId())
-			protorequire.ProtoEqual(t, defaultInput, describeResp.GetInput())
-			// info fields
-			info := describeResp.GetInfo()
-			require.NotNil(t, info)
-			require.Equal(t, activityID, info.GetActivityId())
-			require.Equal(t, startResp.RunId, info.GetRunId())
-			protorequire.ProtoEqual(t, s.tv.ActivityType(), info.GetActivityType())
-			require.Equal(t, tc.expectedStatus, info.GetStatus())
-			require.Equal(t, taskQueue.Name, info.GetTaskQueue())
-			require.Equal(t, int32(1), info.GetAttempt())
-			protorequire.ProtoEqual(t, defaultRetryPolicy, info.GetRetryPolicy())
-			protorequire.ProtoEqual(t, defaultHeader, info.GetHeader())
-			protorequire.ProtoEqual(t, &commonpb.Priority{FairnessKey: "test-key"}, info.GetPriority())
-			protorequire.ProtoEqual(t, defaultSearchAttributes, info.GetSearchAttributes())
-			protorequire.ProtoEqual(t, defaultUserMetadata, info.GetUserMetadata())
-			require.Equal(t, 45*time.Second, info.GetHeartbeatTimeout().AsDuration())
-			require.Equal(t, defaultStartToCloseTimeout, info.GetStartToCloseTimeout().AsDuration())
-			require.Equal(t, defaultIdentity, info.GetLastWorkerIdentity())
-			// time fields
-			require.NotNil(t, info.GetScheduleTime())
-			require.Positive(t, info.GetScheduleTime().AsTime().Unix())
-			require.NotNil(t, info.GetLastStartedTime())
-			require.Positive(t, info.GetLastStartedTime().AsTime().Unix())
-			require.NotNil(t, info.GetCloseTime())
-			require.Positive(t, info.GetCloseTime().AsTime().Unix())
-			require.GreaterOrEqual(t, info.GetCloseTime().AsTime().UnixNano(), info.GetLastStartedTime().AsTime().UnixNano())
-			require.Positive(t, info.GetStateTransitionCount())
 
-			tc.outcomeValidator(t, describeResp)
-		})
-	}
-}
+			respInfo := describeResp.GetInfo()
+			require.NotNil(t, describeResp.LongPollToken)
+			require.NotNil(t, respInfo)
 
-func (s *standaloneActivityTestSuite) testDescribeActivityExecution_DeadlineExceeded() {
-	t := s.T()
-	ctx := testcore.NewContext()
+			expectedExpirationTime := timestamppb.New(respInfo.GetScheduleTime().AsTime().Add(
+				startReq.GetScheduleToCloseTimeout().AsDuration()))
 
-	// Start an activity and get initial long-poll state token
-	activityID := s.tv.ActivityID()
-	taskQueue := s.tv.TaskQueue()
-	startResp, err := s.startActivity(ctx, activityID, taskQueue.Name)
-	require.NoError(t, err)
-	describeResp, err := s.FrontendClient().DescribeActivityExecution(ctx, &workflowservice.DescribeActivityExecutionRequest{
-		Namespace:  s.Namespace().String(),
-		ActivityId: activityID,
-		RunId:      startResp.RunId,
-	})
-	require.NoError(t, err)
-
-	// The DescribeActivityExecution calls below use a long-poll token and will necessarily time out,
-	// because the activity undergoes no further state transitions.
-
-	// The timeout imposed by the server is essentially
-	// Min(CallerTimeout - LongPollBuffer, LongPollTimeout)
-
-	// Case 1: Caller sets a deadline which has room for the buffer. History returns empty success
-	// result with at least buffer remaining before the caller deadline.
-	t.Run("CallerDeadlineNotExceeded", func(t *testing.T) {
-		// CallerTimeout - LongPollBuffer is far in the future
-		cleanup1 := s.OverrideDynamicConfig(activity.LongPollBuffer, 1*time.Second)
-		defer cleanup1()
-		ctx, cancel := context.WithTimeout(ctx, 9999*time.Millisecond)
-		defer cancel()
-
-		// DescribeActivityExecution will return when this long poll timeout expires.
-		cleanup2 := s.OverrideDynamicConfig(activity.LongPollTimeout, 10*time.Millisecond)
-		defer cleanup2()
-
-		describeResp, err = s.FrontendClient().DescribeActivityExecution(ctx, &workflowservice.DescribeActivityExecutionRequest{
-			Namespace:     s.Namespace().String(),
-			ActivityId:    activityID,
-			RunId:         startResp.RunId,
-			LongPollToken: describeResp.LongPollToken,
-		})
-		// The server uses an empty non-error response to indicate to the caller that it should resubmit
-		// its long-poll.
-		require.NoError(t, err)
-		require.Empty(t, describeResp.GetInfo())
-	})
-
-	// Case 2: caller does not set a deadline. In practice this is equivalent to them setting a 30s
-	// deadline since that is what Histry receives. In this case History times out the wait at
-	// LongPollTimeout and the caller gets an empty response.
-	t.Run("NoCallerDeadline", func(t *testing.T) {
-		// The caller sets no deadline. However, the ctx received by the history service handler
-		// will have a 30s deadline that was applied by one of the upstream server layers, so we
-		// still must use a buffer < 30s.
-		ctx := context.Background()
-		cleanup1 := s.OverrideDynamicConfig(activity.LongPollBuffer, 29*time.Second)
-		defer cleanup1()
-		// DescribeActivityExecution will return when this long poll timeout expires.
-		cleanup2 := s.OverrideDynamicConfig(activity.LongPollTimeout, 10*time.Millisecond)
-		defer cleanup2()
-
-		_, err = s.FrontendClient().DescribeActivityExecution(ctx, &workflowservice.DescribeActivityExecutionRequest{
-			Namespace:     s.Namespace().String(),
-			ActivityId:    activityID,
-			RunId:         startResp.RunId,
-			LongPollToken: describeResp.LongPollToken,
-		})
-		require.NoError(t, err)
-		require.Empty(t, describeResp.GetInfo())
-	})
-
-	// Case 3: caller sets a deadline that is < the buffer. In this case DescribeActivityExecution
-	// will return an empty result immediately, and there is a race between caller receiving that
-	// and caller's client timing out the request. Therefore we do not test this.
-}
-
-func (s *standaloneActivityTestSuite) testDescribeActivityExecution_NotFound() {
-	t := s.T()
-	ctx := testcore.NewContext()
-
-	existingActivityID := s.tv.ActivityID()
-	tq := s.tv.TaskQueue()
-	startResp, err := s.startActivity(ctx, existingActivityID, tq.Name)
-	require.NoError(t, err)
-	existingRunID := startResp.RunId
-	require.NotEmpty(t, existingRunID)
-	existingNamespace := s.Namespace().String()
-
-	var notFoundErr *serviceerror.NotFound
-	var namespaceNotFoundErr *serviceerror.NamespaceNotFound
-
-	testCases := []struct {
-		name           string
-		request        *workflowservice.DescribeActivityExecutionRequest
-		expectedErr    error
-		expectedErrMsg string
-	}{
-		{
-			name: "NonExistentNamespace",
-			request: &workflowservice.DescribeActivityExecutionRequest{
-				Namespace:  "non-existent-namespace",
-				ActivityId: existingActivityID,
-				RunId:      existingRunID,
-			},
-			expectedErr:    namespaceNotFoundErr,
-			expectedErrMsg: "Namespace non-existent-namespace is not found.",
-		},
-		{
-			name: "NonExistentActivityID",
-			request: &workflowservice.DescribeActivityExecutionRequest{
-				Namespace:  existingNamespace,
-				ActivityId: "non-existent-activity",
-				RunId:      existingRunID,
-			},
-			expectedErr:    notFoundErr,
-			expectedErrMsg: "activity not found for ID: non-existent-activity",
-		},
-		{
-			name: "NonExistentRunID",
-			request: &workflowservice.DescribeActivityExecutionRequest{
-				Namespace:  existingNamespace,
-				ActivityId: existingActivityID,
-				RunId:      "11111111-2222-3333-4444-555555555555",
-			},
-			expectedErr:    notFoundErr,
-			expectedErrMsg: fmt.Sprintf("activity not found for ID: %s", existingActivityID),
-		},
-	}
-
-	for _, tc := range testCases {
-		t.Run(tc.name, func(t *testing.T) {
-			_, err := s.FrontendClient().DescribeActivityExecution(ctx, tc.request)
-			require.ErrorAs(t, err, &tc.expectedErr) //nolint:testifylint
-			require.Equal(t, tc.expectedErrMsg, tc.expectedErr.Error())
-		})
-	}
-
-	t.Run("LongPollNonExistentActivity", func(t *testing.T) {
-		// Poll to get a token
-		validPollResp, err := s.FrontendClient().DescribeActivityExecution(ctx, &workflowservice.DescribeActivityExecutionRequest{
-			Namespace:  existingNamespace,
-			ActivityId: existingActivityID,
-			RunId:      existingRunID,
-		})
-		require.NoError(t, err)
-
-		// Use the token with a non-existent activity
-		_, err = s.FrontendClient().DescribeActivityExecution(ctx, &workflowservice.DescribeActivityExecutionRequest{
-			Namespace:     existingNamespace,
-			ActivityId:    "non-existent-activity",
-			RunId:         existingRunID,
-			LongPollToken: validPollResp.LongPollToken,
-		})
-		var notFoundErr *serviceerror.NotFound
-		require.ErrorAs(t, err, &notFoundErr)
-		require.Equal(t, "activity not found for ID: non-existent-activity", notFoundErr.Message)
-	})
-}
-
-func (s *standaloneActivityTestSuite) testDescribeActivityExecution_InvalidArgument() {
-
-	t := s.T()
-	ctx := testcore.NewContext()
-
-	existingActivityID := s.tv.ActivityID()
-	tq := s.tv.TaskQueue()
-	startResp, err := s.startActivity(ctx, existingActivityID, tq.Name)
-	require.NoError(t, err)
-	existingRunID := startResp.RunId
-	require.NotEmpty(t, existingRunID)
-	existingNamespace := s.Namespace().String()
-
-	validActivityID := "activity-id"
-	validRunID := "11111111-2222-3333-4444-555555555555"
-
-	testCases := []struct {
-		name        string
-		request     *workflowservice.DescribeActivityExecutionRequest
-		expectedErr string
-	}{
-		{
-			name: "EmptyNamespace",
-			request: &workflowservice.DescribeActivityExecutionRequest{
-				Namespace:  "",
-				ActivityId: validActivityID,
-				RunId:      validRunID,
-			},
-			expectedErr: "Namespace is empty",
-		},
-		{
-			name: "EmptyActivityID",
-			request: &workflowservice.DescribeActivityExecutionRequest{
-				Namespace:  existingNamespace,
-				ActivityId: "",
-				RunId:      validRunID,
-			},
-			expectedErr: "activity ID is required",
-		},
-		{
-			name: "ActivityIDTooLong",
-			request: &workflowservice.DescribeActivityExecutionRequest{
-				Namespace:  existingNamespace,
-				ActivityId: string(make([]byte, 2000)),
-				RunId:      validRunID,
-			},
-			expectedErr: "activity ID exceeds length limit",
-		},
-		{
-			name: "InvalidRunID",
-			request: &workflowservice.DescribeActivityExecutionRequest{
-				Namespace:  existingNamespace,
-				ActivityId: validActivityID,
-				RunId:      "invalid-uuid",
-			},
-			expectedErr: "invalid run id",
-		},
-		{
-			name: "RunIdNotRequiredWhenWaitPolicyAbsent",
-			request: &workflowservice.DescribeActivityExecutionRequest{
-				Namespace:  existingNamespace,
-				ActivityId: existingActivityID,
-				RunId:      "",
-			},
-			expectedErr: "",
-		},
-		{
-			name: "RunIdNotRequiredWhenLongPollTokenAbsent",
-			request: &workflowservice.DescribeActivityExecutionRequest{
-				Namespace:  existingNamespace,
-				ActivityId: existingActivityID,
-				RunId:      "",
-			},
-			expectedErr: "",
-		},
-		{
-			name: "RunIdRequiredWhenLongPollTokenPresent",
-			request: &workflowservice.DescribeActivityExecutionRequest{
-				Namespace:     existingNamespace,
-				ActivityId:    validActivityID,
-				RunId:         "",
-				LongPollToken: []byte("doesn't-matter"),
-			},
-			expectedErr: "run id is required",
-		},
-		{
-			name: "MalformedLongPollToken",
-			request: &workflowservice.DescribeActivityExecutionRequest{
-				Namespace:     existingNamespace,
-				ActivityId:    existingActivityID,
-				RunId:         existingRunID,
-				LongPollToken: []byte("invalid-token"),
-			},
-			expectedErr: "invalid long poll token",
-		},
-	}
-
-	for _, tc := range testCases {
-		t.Run(tc.name, func(t *testing.T) {
-			_, err := s.FrontendClient().DescribeActivityExecution(ctx, tc.request)
-			if tc.expectedErr == "" {
-				require.NoError(t, err)
-				return
+			expected := &activitypb.ActivityExecutionInfo{
+				ActivityId:             activityID,
+				ActivityType:           s.tv.ActivityType(),
+				Attempt:                1,
+				ExpirationTime:         expectedExpirationTime,
+				Header:                 defaultHeader,
+				HeartbeatTimeout:       startReq.GetHeartbeatTimeout(),
+				RetryPolicy:            startReq.GetRetryPolicy(),
+				RunId:                  startResp.RunId,
+				RunState:               enumspb.PENDING_ACTIVITY_STATE_SCHEDULED,
+				Priority:               startReq.GetPriority(),
+				ScheduleToCloseTimeout: startReq.GetScheduleToCloseTimeout(),
+				ScheduleToStartTimeout: startReq.GetScheduleToStartTimeout(),
+				StartToCloseTimeout:    startReq.GetStartToCloseTimeout(),
+				Status:                 enumspb.ACTIVITY_EXECUTION_STATUS_RUNNING,
+				SearchAttributes:       defaultSearchAttributes,
+				TaskQueue:              taskQueue.Name,
+				UserMetadata:           defaultUserMetadata,
 			}
+
+			diff := cmp.Diff(expected, respInfo,
+				protocmp.Transform(),
+				// Ignore non-deterministic fields. Validated separately.
+				protocmp.IgnoreFields(&activitypb.ActivityExecutionInfo{},
+					"execution_duration",
+					"schedule_time",
+					"state_transition_count",
+				),
+			)
+			require.Empty(t, diff)
+			require.Equal(t, respInfo.GetExecutionDuration().AsDuration(), time.Duration(0)) // Never completed, so expect 0
+			require.Nil(t, describeResp.GetInfo().GetCloseTime())
+			require.Positive(t, respInfo.GetScheduleTime().AsTime().Unix())
+			require.Positive(t, respInfo.GetStateTransitionCount())
+
+			protorequire.ProtoEqual(t, defaultInput, describeResp.Input)
+
+			// Activity is scheduled but not completed, so no outcome yet
+			require.Nil(t, describeResp.GetOutcome().GetResult())
+			require.Nil(t, describeResp.GetOutcome().GetFailure())
+		})
+	})
+	s.Run("WaitAnyStateChange", func() {
+		// Long poll for any state change. PollActivityTaskQueue is used to cause a state change.
+		t := s.T()
+		ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
+		defer cancel()
+		activityID := s.tv.ActivityID()
+		taskQueue := s.tv.TaskQueue()
+
+		startResp, err := s.startActivity(ctx, activityID, taskQueue.Name)
+		require.NoError(t, err)
+
+		// First poll lacks token and therefore responds immediately, returning a token
+		firstDescribeResp, err := s.FrontendClient().DescribeActivityExecution(ctx, &workflowservice.DescribeActivityExecutionRequest{
+			Namespace:  s.Namespace().String(),
+			ActivityId: activityID,
+			// RunId:        startResp.RunId, // RunID is now required by validation [?]
+			IncludeInput: true,
+		})
+		require.NoError(t, err)
+		require.NotNil(t, firstDescribeResp.LongPollToken)
+		require.NotNil(t, firstDescribeResp.Info)
+		require.Equal(t, firstDescribeResp.RunId, startResp.RunId)
+
+		expected := &activitypb.ActivityExecutionInfo{
+			ActivityId:             activityID,
+			ActivityType:           s.tv.ActivityType(),
+			Attempt:                1,
+			HeartbeatTimeout:       durationpb.New(0),
+			RetryPolicy:            defaultRetryPolicy,
+			RunId:                  startResp.RunId,
+			RunState:               enumspb.PENDING_ACTIVITY_STATE_SCHEDULED,
+			SearchAttributes:       &commonpb.SearchAttributes{},
+			ScheduleToCloseTimeout: durationpb.New(0),
+			ScheduleToStartTimeout: durationpb.New(0),
+			StartToCloseTimeout:    durationpb.New(defaultStartToCloseTimeout),
+			Status:                 enumspb.ACTIVITY_EXECUTION_STATUS_RUNNING,
+			TaskQueue:              taskQueue.Name,
+		}
+		diff := cmp.Diff(expected, firstDescribeResp.GetInfo(),
+			protocmp.Transform(),
+			// Ignore non-deterministic fields. Validated separately.
+			protocmp.IgnoreFields(&activitypb.ActivityExecutionInfo{},
+				"execution_duration",
+				"schedule_time",
+				"state_transition_count",
+			),
+		)
+		require.Empty(t, diff)
+
+		taskQueuePollErr := make(chan error, 1)
+		activityPollDone := make(chan struct{})
+		var describeResp *workflowservice.DescribeActivityExecutionResponse
+		var describeErr error
+
+		go func() {
+			defer close(activityPollDone)
+			// Second poll uses token and therefore waits for a state transition
+			describeResp, describeErr = s.FrontendClient().DescribeActivityExecution(ctx, &workflowservice.DescribeActivityExecutionRequest{
+				Namespace:     s.Namespace().String(),
+				ActivityId:    activityID,
+				RunId:         startResp.RunId,
+				IncludeInput:  true,
+				LongPollToken: firstDescribeResp.LongPollToken,
+			})
+		}()
+
+		// TODO(dan): race here: subscription might not be established yet
+
+		// Worker picks up activity task, triggering transition (via RecordActivityTaskStarted)
+		go func() {
+			_, err := s.pollActivityTaskQueue(ctx, taskQueue.Name)
+			taskQueuePollErr <- err
+		}()
+
+		select {
+		case <-activityPollDone:
+			require.NoError(t, describeErr)
+			require.NotNil(t, describeResp)
+			require.NotNil(t, describeResp.Info)
+
+			expected := &activitypb.ActivityExecutionInfo{
+				ActivityId:             activityID,
+				ActivityType:           s.tv.ActivityType(),
+				Attempt:                1,
+				HeartbeatTimeout:       durationpb.New(0),
+				LastWorkerIdentity:     defaultIdentity,
+				RetryPolicy:            defaultRetryPolicy,
+				RunId:                  startResp.RunId,
+				RunState:               enumspb.PENDING_ACTIVITY_STATE_STARTED,
+				ScheduleToCloseTimeout: durationpb.New(0),
+				ScheduleToStartTimeout: durationpb.New(0),
+				SearchAttributes:       &commonpb.SearchAttributes{},
+				StartToCloseTimeout:    durationpb.New(defaultStartToCloseTimeout),
+				Status:                 enumspb.ACTIVITY_EXECUTION_STATUS_RUNNING,
+				TaskQueue:              taskQueue.Name,
+			}
+			diff := cmp.Diff(expected, describeResp.GetInfo(),
+				protocmp.Transform(),
+				// Ignore non-deterministic fields. Validated separately.
+				protocmp.IgnoreFields(&activitypb.ActivityExecutionInfo{},
+					"execution_duration",
+					"last_started_time",
+					"schedule_time",
+					"state_transition_count",
+				),
+			)
+			require.Empty(t, diff)
+
+			protorequire.ProtoEqual(t, defaultInput, describeResp.Input)
+
+		case <-ctx.Done():
+			t.Fatal("DescribeActivityExecution timed out")
+		}
+
+		err = <-taskQueuePollErr
+		require.NoError(t, err)
+	})
+	s.Run("Completed", func() {
+		testCases := []struct {
+			name             string
+			expectedStatus   enumspb.ActivityExecutionStatus
+			taskCompletionFn func(ctx context.Context, taskToken []byte, activityID, runID string) error
+			outcomeValidator func(*testing.T, *workflowservice.DescribeActivityExecutionResponse)
+		}{
+			{
+				name:           "successful completion",
+				expectedStatus: enumspb.ACTIVITY_EXECUTION_STATUS_COMPLETED,
+				taskCompletionFn: func(ctx context.Context, taskToken []byte, _, _ string) error {
+					_, err := s.FrontendClient().RespondActivityTaskCompleted(ctx, &workflowservice.RespondActivityTaskCompletedRequest{
+						Namespace: s.Namespace().String(),
+						TaskToken: taskToken,
+						Result:    defaultResult,
+						Identity:  defaultIdentity,
+					})
+					return err
+				},
+				outcomeValidator: func(t *testing.T, response *workflowservice.DescribeActivityExecutionResponse) {
+					protorequire.ProtoEqual(t, defaultResult, response.GetOutcome().GetResult())
+					require.Nil(t, response.GetOutcome().GetFailure())
+				},
+			},
+			{
+				name:           "failure completion",
+				expectedStatus: enumspb.ACTIVITY_EXECUTION_STATUS_FAILED,
+				taskCompletionFn: func(ctx context.Context, taskToken []byte, _, _ string) error {
+					_, err := s.FrontendClient().RespondActivityTaskFailed(ctx, &workflowservice.RespondActivityTaskFailedRequest{
+						Namespace: s.Namespace().String(),
+						TaskToken: taskToken,
+						Failure:   defaultFailure,
+						Identity:  defaultIdentity,
+					})
+					return err
+				},
+				outcomeValidator: func(t *testing.T, response *workflowservice.DescribeActivityExecutionResponse) {
+					protorequire.ProtoEqual(t, defaultFailure, response.GetOutcome().GetFailure())
+					require.Nil(t, response.GetOutcome().GetResult())
+				},
+			},
+			{
+				name:           "termination",
+				expectedStatus: enumspb.ACTIVITY_EXECUTION_STATUS_TERMINATED,
+				taskCompletionFn: func(ctx context.Context, _ []byte, activityID, runID string) error {
+					_, err := s.FrontendClient().TerminateActivityExecution(ctx, &workflowservice.TerminateActivityExecutionRequest{
+						Namespace:  s.Namespace().String(),
+						ActivityId: activityID,
+						RunId:      runID,
+						Reason:     "test termination",
+					})
+					return err
+				},
+				outcomeValidator: func(t *testing.T, response *workflowservice.DescribeActivityExecutionResponse) {
+					require.NotNil(t, response.GetOutcome().GetFailure())
+					require.NotNil(t, response.GetOutcome().GetFailure().GetTerminatedFailureInfo())
+					require.Nil(t, response.GetOutcome().GetResult())
+				},
+			},
+		}
+
+		for _, tc := range testCases {
+			s.Run(tc.name, func() {
+				t := s.T()
+				ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
+				t.Cleanup(cancel)
+				activityID := s.tv.Any().String()
+				taskQueue := s.tv.TaskQueue()
+
+				startResp, err := s.FrontendClient().StartActivityExecution(ctx, &workflowservice.StartActivityExecutionRequest{
+					Namespace:           s.Namespace().String(),
+					ActivityId:          activityID,
+					ActivityType:        s.tv.ActivityType(),
+					Header:              defaultHeader,
+					HeartbeatTimeout:    durationpb.New(45 * time.Second),
+					Identity:            s.tv.WorkerIdentity(),
+					Input:               defaultInput,
+					StartToCloseTimeout: durationpb.New(defaultStartToCloseTimeout),
+					RequestId:           s.tv.RequestID(),
+					RetryPolicy:         defaultRetryPolicy,
+					Priority:            &commonpb.Priority{FairnessKey: "test-key"},
+					SearchAttributes:    defaultSearchAttributes,
+					TaskQueue:           taskQueue,
+					UserMetadata:        defaultUserMetadata,
+				})
+				require.NoError(t, err)
+
+				pollTaskResp, err := s.pollActivityTaskQueue(ctx, taskQueue.Name)
+				require.NoError(t, err)
+				err = tc.taskCompletionFn(ctx, pollTaskResp.TaskToken, activityID, startResp.RunId)
+				require.NoError(t, err)
+
+				describeResp, err := s.FrontendClient().DescribeActivityExecution(ctx, &workflowservice.DescribeActivityExecutionRequest{
+					Namespace:      s.Namespace().String(),
+					ActivityId:     activityID,
+					RunId:          startResp.RunId,
+					IncludeInput:   true,
+					IncludeOutcome: true,
+				})
+				require.NoError(t, err)
+				require.NotNil(t, describeResp)
+				require.Equal(t, startResp.RunId, describeResp.GetRunId())
+				protorequire.ProtoEqual(t, defaultInput, describeResp.GetInput())
+				// info fields
+				info := describeResp.GetInfo()
+				require.NotNil(t, info)
+				require.Equal(t, activityID, info.GetActivityId())
+				require.Equal(t, startResp.RunId, info.GetRunId())
+				protorequire.ProtoEqual(t, s.tv.ActivityType(), info.GetActivityType())
+				require.Equal(t, tc.expectedStatus, info.GetStatus())
+				require.Equal(t, taskQueue.Name, info.GetTaskQueue())
+				require.Equal(t, int32(1), info.GetAttempt())
+				protorequire.ProtoEqual(t, defaultRetryPolicy, info.GetRetryPolicy())
+				protorequire.ProtoEqual(t, defaultHeader, info.GetHeader())
+				protorequire.ProtoEqual(t, &commonpb.Priority{FairnessKey: "test-key"}, info.GetPriority())
+				protorequire.ProtoEqual(t, defaultSearchAttributes, info.GetSearchAttributes())
+				protorequire.ProtoEqual(t, defaultUserMetadata, info.GetUserMetadata())
+				require.Equal(t, 45*time.Second, info.GetHeartbeatTimeout().AsDuration())
+				require.Equal(t, defaultStartToCloseTimeout, info.GetStartToCloseTimeout().AsDuration())
+				require.Equal(t, defaultIdentity, info.GetLastWorkerIdentity())
+				// time fields
+				require.NotNil(t, info.GetScheduleTime())
+				require.Positive(t, info.GetScheduleTime().AsTime().Unix())
+				require.NotNil(t, info.GetLastStartedTime())
+				require.Positive(t, info.GetLastStartedTime().AsTime().Unix())
+				require.NotNil(t, info.GetCloseTime())
+				require.Positive(t, info.GetCloseTime().AsTime().Unix())
+				require.GreaterOrEqual(t, info.GetCloseTime().AsTime().UnixNano(), info.GetLastStartedTime().AsTime().UnixNano())
+				require.Positive(t, info.GetStateTransitionCount())
+
+				tc.outcomeValidator(t, describeResp)
+			})
+		}
+	})
+	s.Run("DeadlineExceeded", func() {
+		t := s.T()
+		ctx := testcore.NewContext()
+
+		// Start an activity and get initial long-poll state token
+		activityID := s.tv.ActivityID()
+		taskQueue := s.tv.TaskQueue()
+		startResp, err := s.startActivity(ctx, activityID, taskQueue.Name)
+		require.NoError(t, err)
+		describeResp, err := s.FrontendClient().DescribeActivityExecution(ctx, &workflowservice.DescribeActivityExecutionRequest{
+			Namespace:  s.Namespace().String(),
+			ActivityId: activityID,
+			RunId:      startResp.RunId,
+		})
+		require.NoError(t, err)
+
+		// The DescribeActivityExecution calls below use a long-poll token and will necessarily time out,
+		// because the activity undergoes no further state transitions.
+
+		// The timeout imposed by the server is essentially
+		// Min(CallerTimeout - LongPollBuffer, LongPollTimeout)
+
+		// Case 1: Caller sets a deadline which has room for the buffer. History returns empty success
+		// result with at least buffer remaining before the caller deadline.
+		t.Run("CallerDeadlineNotExceeded", func(t *testing.T) {
+			// CallerTimeout - LongPollBuffer is far in the future
+			cleanup1 := s.OverrideDynamicConfig(activity.LongPollBuffer, 1*time.Second)
+			defer cleanup1()
+			ctx, cancel := context.WithTimeout(ctx, 9999*time.Millisecond)
+			defer cancel()
+
+			// DescribeActivityExecution will return when this long poll timeout expires.
+			cleanup2 := s.OverrideDynamicConfig(activity.LongPollTimeout, 10*time.Millisecond)
+			defer cleanup2()
+
+			describeResp, err = s.FrontendClient().DescribeActivityExecution(ctx, &workflowservice.DescribeActivityExecutionRequest{
+				Namespace:     s.Namespace().String(),
+				ActivityId:    activityID,
+				RunId:         startResp.RunId,
+				LongPollToken: describeResp.LongPollToken,
+			})
+			// The server uses an empty non-error response to indicate to the caller that it should resubmit
+			// its long-poll.
+			require.NoError(t, err)
+			require.Empty(t, describeResp.GetInfo())
+		})
+
+		// Case 2: caller does not set a deadline. In practice this is equivalent to them setting a 30s
+		// deadline since that is what Histry receives. In this case History times out the wait at
+		// LongPollTimeout and the caller gets an empty response.
+		t.Run("NoCallerDeadline", func(t *testing.T) {
+			// The caller sets no deadline. However, the ctx received by the history service handler
+			// will have a 30s deadline that was applied by one of the upstream server layers, so we
+			// still must use a buffer < 30s.
+			ctx := context.Background()
+			cleanup1 := s.OverrideDynamicConfig(activity.LongPollBuffer, 29*time.Second)
+			defer cleanup1()
+			// DescribeActivityExecution will return when this long poll timeout expires.
+			cleanup2 := s.OverrideDynamicConfig(activity.LongPollTimeout, 10*time.Millisecond)
+			defer cleanup2()
+
+			_, err = s.FrontendClient().DescribeActivityExecution(ctx, &workflowservice.DescribeActivityExecutionRequest{
+				Namespace:     s.Namespace().String(),
+				ActivityId:    activityID,
+				RunId:         startResp.RunId,
+				LongPollToken: describeResp.LongPollToken,
+			})
+			require.NoError(t, err)
+			require.Empty(t, describeResp.GetInfo())
+		})
+
+		// Case 3: caller sets a deadline that is < the buffer. In this case DescribeActivityExecution
+		// will return an empty result immediately, and there is a race between caller receiving that
+		// and caller's client timing out the request. Therefore we do not test this.
+	})
+	s.Run("NotFound", func() {
+		t := s.T()
+		ctx := testcore.NewContext()
+
+		existingActivityID := s.tv.ActivityID()
+		tq := s.tv.TaskQueue()
+		startResp, err := s.startActivity(ctx, existingActivityID, tq.Name)
+		require.NoError(t, err)
+		existingRunID := startResp.RunId
+		require.NotEmpty(t, existingRunID)
+		existingNamespace := s.Namespace().String()
+
+		var notFoundErr *serviceerror.NotFound
+		var namespaceNotFoundErr *serviceerror.NamespaceNotFound
+
+		testCases := []struct {
+			name           string
+			request        *workflowservice.DescribeActivityExecutionRequest
+			expectedErr    error
+			expectedErrMsg string
+		}{
+			{
+				name: "NonExistentNamespace",
+				request: &workflowservice.DescribeActivityExecutionRequest{
+					Namespace:  "non-existent-namespace",
+					ActivityId: existingActivityID,
+					RunId:      existingRunID,
+				},
+				expectedErr:    namespaceNotFoundErr,
+				expectedErrMsg: "Namespace non-existent-namespace is not found.",
+			},
+			{
+				name: "NonExistentActivityID",
+				request: &workflowservice.DescribeActivityExecutionRequest{
+					Namespace:  existingNamespace,
+					ActivityId: "non-existent-activity",
+					RunId:      existingRunID,
+				},
+				expectedErr:    notFoundErr,
+				expectedErrMsg: "activity not found for ID: non-existent-activity",
+			},
+			{
+				name: "NonExistentRunID",
+				request: &workflowservice.DescribeActivityExecutionRequest{
+					Namespace:  existingNamespace,
+					ActivityId: existingActivityID,
+					RunId:      "11111111-2222-3333-4444-555555555555",
+				},
+				expectedErr:    notFoundErr,
+				expectedErrMsg: fmt.Sprintf("activity not found for ID: %s", existingActivityID),
+			},
+		}
+
+		for _, tc := range testCases {
+			t.Run(tc.name, func(t *testing.T) {
+				_, err := s.FrontendClient().DescribeActivityExecution(ctx, tc.request)
+				require.ErrorAs(t, err, &tc.expectedErr) //nolint:testifylint
+				require.Equal(t, tc.expectedErrMsg, tc.expectedErr.Error())
+			})
+		}
+
+		t.Run("LongPollNonExistentActivity", func(t *testing.T) {
+			// Poll to get a token
+			validPollResp, err := s.FrontendClient().DescribeActivityExecution(ctx, &workflowservice.DescribeActivityExecutionRequest{
+				Namespace:  existingNamespace,
+				ActivityId: existingActivityID,
+				RunId:      existingRunID,
+			})
+			require.NoError(t, err)
+
+			// Use the token with a non-existent activity
+			_, err = s.FrontendClient().DescribeActivityExecution(ctx, &workflowservice.DescribeActivityExecutionRequest{
+				Namespace:     existingNamespace,
+				ActivityId:    "non-existent-activity",
+				RunId:         existingRunID,
+				LongPollToken: validPollResp.LongPollToken,
+			})
+			var notFoundErr *serviceerror.NotFound
+			require.ErrorAs(t, err, &notFoundErr)
+			require.Equal(t, "activity not found for ID: non-existent-activity", notFoundErr.Message)
+		})
+	})
+	s.Run("InvalidArgument", func() {
+
+		t := s.T()
+		ctx := testcore.NewContext()
+
+		existingActivityID := s.tv.ActivityID()
+		tq := s.tv.TaskQueue()
+		startResp, err := s.startActivity(ctx, existingActivityID, tq.Name)
+		require.NoError(t, err)
+		existingRunID := startResp.RunId
+		require.NotEmpty(t, existingRunID)
+		existingNamespace := s.Namespace().String()
+
+		validActivityID := "activity-id"
+		validRunID := "11111111-2222-3333-4444-555555555555"
+
+		testCases := []struct {
+			name        string
+			request     *workflowservice.DescribeActivityExecutionRequest
+			expectedErr string
+		}{
+			{
+				name: "EmptyNamespace",
+				request: &workflowservice.DescribeActivityExecutionRequest{
+					Namespace:  "",
+					ActivityId: validActivityID,
+					RunId:      validRunID,
+				},
+				expectedErr: "Namespace is empty",
+			},
+			{
+				name: "EmptyActivityID",
+				request: &workflowservice.DescribeActivityExecutionRequest{
+					Namespace:  existingNamespace,
+					ActivityId: "",
+					RunId:      validRunID,
+				},
+				expectedErr: "activity ID is required",
+			},
+			{
+				name: "ActivityIDTooLong",
+				request: &workflowservice.DescribeActivityExecutionRequest{
+					Namespace:  existingNamespace,
+					ActivityId: string(make([]byte, 2000)),
+					RunId:      validRunID,
+				},
+				expectedErr: "activity ID exceeds length limit",
+			},
+			{
+				name: "InvalidRunID",
+				request: &workflowservice.DescribeActivityExecutionRequest{
+					Namespace:  existingNamespace,
+					ActivityId: validActivityID,
+					RunId:      "invalid-uuid",
+				},
+				expectedErr: "invalid run id",
+			},
+			{
+				name: "RunIdNotRequiredWhenWaitPolicyAbsent",
+				request: &workflowservice.DescribeActivityExecutionRequest{
+					Namespace:  existingNamespace,
+					ActivityId: existingActivityID,
+					RunId:      "",
+				},
+				expectedErr: "",
+			},
+			{
+				name: "RunIdNotRequiredWhenLongPollTokenAbsent",
+				request: &workflowservice.DescribeActivityExecutionRequest{
+					Namespace:  existingNamespace,
+					ActivityId: existingActivityID,
+					RunId:      "",
+				},
+				expectedErr: "",
+			},
+			{
+				name: "RunIdRequiredWhenLongPollTokenPresent",
+				request: &workflowservice.DescribeActivityExecutionRequest{
+					Namespace:     existingNamespace,
+					ActivityId:    validActivityID,
+					RunId:         "",
+					LongPollToken: []byte("doesn't-matter"),
+				},
+				expectedErr: "run id is required",
+			},
+			{
+				name: "MalformedLongPollToken",
+				request: &workflowservice.DescribeActivityExecutionRequest{
+					Namespace:     existingNamespace,
+					ActivityId:    existingActivityID,
+					RunId:         existingRunID,
+					LongPollToken: []byte("invalid-token"),
+				},
+				expectedErr: "invalid long poll token",
+			},
+		}
+
+		for _, tc := range testCases {
+			t.Run(tc.name, func(t *testing.T) {
+				_, err := s.FrontendClient().DescribeActivityExecution(ctx, tc.request)
+				if tc.expectedErr == "" {
+					require.NoError(t, err)
+					return
+				}
+				var invalidArgErr *serviceerror.InvalidArgument
+				require.ErrorAs(t, err, &invalidArgErr)
+				require.Contains(t, invalidArgErr.Message, tc.expectedErr)
+			})
+		}
+
+		t.Run("LongPollTokenFromWrongExecution", func(t *testing.T) {
+			validPollResp, err := s.FrontendClient().DescribeActivityExecution(ctx, &workflowservice.DescribeActivityExecutionRequest{
+				Namespace:  existingNamespace,
+				ActivityId: existingActivityID,
+				RunId:      existingRunID,
+			})
+			require.NoError(t, err)
+			require.NotEmpty(t, validPollResp.LongPollToken)
+
+			activityID2 := s.tv.Any().String()
+			startResp2, err := s.startActivity(ctx, activityID2, tq.Name)
+			require.NoError(t, err)
+			require.NotEmpty(t, startResp2.GetRunId())
+
+			_, err = s.FrontendClient().DescribeActivityExecution(ctx, &workflowservice.DescribeActivityExecutionRequest{
+				Namespace:     existingNamespace,
+				ActivityId:    activityID2,
+				RunId:         startResp2.GetRunId(),
+				LongPollToken: validPollResp.LongPollToken,
+			})
 			var invalidArgErr *serviceerror.InvalidArgument
 			require.ErrorAs(t, err, &invalidArgErr)
-			require.Contains(t, invalidArgErr.Message, tc.expectedErr)
+			require.Equal(t, "long poll token does not match execution", invalidArgErr.Message)
 		})
-	}
 
-	t.Run("LongPollTokenFromWrongExecution", func(t *testing.T) {
-		validPollResp, err := s.FrontendClient().DescribeActivityExecution(ctx, &workflowservice.DescribeActivityExecutionRequest{
-			Namespace:  existingNamespace,
-			ActivityId: existingActivityID,
-			RunId:      existingRunID,
+		t.Run("LongPollTokenFromDifferentNamespace", func(t *testing.T) {
+			// Get a valid poll token from activity in main namespace
+			validPollResp, err := s.FrontendClient().DescribeActivityExecution(ctx, &workflowservice.DescribeActivityExecutionRequest{
+				Namespace:  existingNamespace,
+				ActivityId: existingActivityID,
+				RunId:      existingRunID,
+			})
+			require.NoError(t, err)
+			require.NotEmpty(t, validPollResp.LongPollToken)
+
+			// Start an activity in a different namespace
+			externalNamespace := s.ExternalNamespace().String()
+			externalActivityID := s.tv.Any().String()
+			externalStartResp, err := s.FrontendClient().StartActivityExecution(ctx, &workflowservice.StartActivityExecutionRequest{
+				Namespace:    externalNamespace,
+				ActivityId:   externalActivityID,
+				ActivityType: s.tv.ActivityType(),
+				Identity:     s.tv.WorkerIdentity(),
+				Input:        defaultInput,
+				TaskQueue: &taskqueuepb.TaskQueue{
+					Name: tq.Name,
+				},
+				StartToCloseTimeout: durationpb.New(defaultStartToCloseTimeout),
+				RequestId:           s.tv.Any().String(),
+			})
+			require.NoError(t, err)
+			require.NotEmpty(t, externalStartResp.GetRunId())
+
+			// Try to use main namespace's poll token with external namespace's activity
+			_, err = s.FrontendClient().DescribeActivityExecution(ctx, &workflowservice.DescribeActivityExecutionRequest{
+				Namespace:     externalNamespace,
+				ActivityId:    externalActivityID,
+				RunId:         externalStartResp.GetRunId(),
+				LongPollToken: validPollResp.LongPollToken,
+			})
+			var invalidArgErr *serviceerror.InvalidArgument
+			require.ErrorAs(t, err, &invalidArgErr)
+			require.Equal(t, "long poll token does not match execution", invalidArgErr.Message)
 		})
-		require.NoError(t, err)
-		require.NotEmpty(t, validPollResp.LongPollToken)
-
-		activityID2 := s.tv.Any().String()
-		startResp2, err := s.startActivity(ctx, activityID2, tq.Name)
-		require.NoError(t, err)
-		require.NotEmpty(t, startResp2.GetRunId())
-
-		_, err = s.FrontendClient().DescribeActivityExecution(ctx, &workflowservice.DescribeActivityExecutionRequest{
-			Namespace:     existingNamespace,
-			ActivityId:    activityID2,
-			RunId:         startResp2.GetRunId(),
-			LongPollToken: validPollResp.LongPollToken,
-		})
-		var invalidArgErr *serviceerror.InvalidArgument
-		require.ErrorAs(t, err, &invalidArgErr)
-		require.Equal(t, "long poll token does not match execution", invalidArgErr.Message)
-	})
-
-	t.Run("LongPollTokenFromDifferentNamespace", func(t *testing.T) {
-		// Get a valid poll token from activity in main namespace
-		validPollResp, err := s.FrontendClient().DescribeActivityExecution(ctx, &workflowservice.DescribeActivityExecutionRequest{
-			Namespace:  existingNamespace,
-			ActivityId: existingActivityID,
-			RunId:      existingRunID,
-		})
-		require.NoError(t, err)
-		require.NotEmpty(t, validPollResp.LongPollToken)
-
-		// Start an activity in a different namespace
-		externalNamespace := s.ExternalNamespace().String()
-		externalActivityID := s.tv.Any().String()
-		externalStartResp, err := s.FrontendClient().StartActivityExecution(ctx, &workflowservice.StartActivityExecutionRequest{
-			Namespace:    externalNamespace,
-			ActivityId:   externalActivityID,
-			ActivityType: s.tv.ActivityType(),
-			Identity:     s.tv.WorkerIdentity(),
-			Input:        defaultInput,
-			TaskQueue: &taskqueuepb.TaskQueue{
-				Name: tq.Name,
-			},
-			StartToCloseTimeout: durationpb.New(defaultStartToCloseTimeout),
-			RequestId:           s.tv.Any().String(),
-		})
-		require.NoError(t, err)
-		require.NotEmpty(t, externalStartResp.GetRunId())
-
-		// Try to use main namespace's poll token with external namespace's activity
-		_, err = s.FrontendClient().DescribeActivityExecution(ctx, &workflowservice.DescribeActivityExecutionRequest{
-			Namespace:     externalNamespace,
-			ActivityId:    externalActivityID,
-			RunId:         externalStartResp.GetRunId(),
-			LongPollToken: validPollResp.LongPollToken,
-		})
-		var invalidArgErr *serviceerror.InvalidArgument
-		require.ErrorAs(t, err, &invalidArgErr)
-		require.Equal(t, "long poll token does not match execution", invalidArgErr.Message)
 	})
 }
 
@@ -3096,163 +3078,157 @@ func (s *standaloneActivityTestSuite) TestPollActivityExecution() {
 		})
 	}
 
-	s.Run("EmptyRunID", s.testPollActivityExecution_EmptyRunID)
-	s.Run("NotFound", s.testPollActivityExecution_NotFound)
-	s.Run("InvalidArgument", s.testPollActivityExecution_InvalidArgument)
-}
+	s.Run("EmptyRunID", func() {
+		t := s.T()
+		ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
+		t.Cleanup(cancel)
 
-func (s *standaloneActivityTestSuite) testPollActivityExecution_EmptyRunID() {
-	t := s.T()
-	ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
-	t.Cleanup(cancel)
+		activityID := s.tv.Any().String()
+		taskQueue := s.tv.TaskQueue().String()
 
-	activityID := s.tv.Any().String()
-	taskQueue := s.tv.TaskQueue().String()
+		startResp, err := s.startActivity(ctx, activityID, taskQueue)
+		require.NoError(t, err)
 
-	startResp, err := s.startActivity(ctx, activityID, taskQueue)
-	require.NoError(t, err)
+		pollTaskResp, err := s.pollActivityTaskQueue(ctx, taskQueue)
+		require.NoError(t, err)
 
-	pollTaskResp, err := s.pollActivityTaskQueue(ctx, taskQueue)
-	require.NoError(t, err)
-
-	_, err = s.FrontendClient().RespondActivityTaskCompleted(ctx, &workflowservice.RespondActivityTaskCompletedRequest{
-		Namespace: s.Namespace().String(),
-		TaskToken: pollTaskResp.TaskToken,
-		Result:    defaultResult,
-	})
-	require.NoError(t, err)
-
-	pollActivityResp, err := s.FrontendClient().PollActivityExecution(ctx, &workflowservice.PollActivityExecutionRequest{
-		Namespace:  s.Namespace().String(),
-		ActivityId: activityID,
-		RunId:      "", // resolves to current run ID
-	})
-	require.NoError(t, err)
-	require.NotNil(t, pollActivityResp)
-	require.Equal(t, startResp.RunId, pollActivityResp.GetRunId())
-	protorequire.ProtoEqual(t, defaultResult, pollActivityResp.GetOutcome().GetResult())
-}
-
-func (s *standaloneActivityTestSuite) testPollActivityExecution_NotFound() {
-	t := s.T()
-	ctx := testcore.NewContext()
-
-	existingActivityID := s.tv.ActivityID()
-	tq := s.tv.TaskQueue()
-	startResp, err := s.startActivity(ctx, existingActivityID, tq.Name)
-	require.NoError(t, err)
-	existingRunID := startResp.RunId
-	require.NotEmpty(t, existingRunID)
-	existingNamespace := s.Namespace().String()
-
-	var notFoundErr *serviceerror.NotFound
-	var namespaceNotFoundErr *serviceerror.NamespaceNotFound
-
-	testCases := []struct {
-		name           string
-		request        *workflowservice.PollActivityExecutionRequest
-		expectedErr    error
-		expectedErrMsg string
-	}{
-		{
-			name: "NonExistentNamespace",
-			request: &workflowservice.PollActivityExecutionRequest{
-				Namespace:  "non-existent-namespace",
-				ActivityId: existingActivityID,
-				RunId:      existingRunID,
-			},
-			expectedErr:    namespaceNotFoundErr,
-			expectedErrMsg: "Namespace non-existent-namespace is not found.",
-		},
-		{
-			name: "NonExistentActivityID",
-			request: &workflowservice.PollActivityExecutionRequest{
-				Namespace:  existingNamespace,
-				ActivityId: "non-existent-activity",
-				RunId:      existingRunID,
-			},
-			expectedErr:    notFoundErr,
-			expectedErrMsg: "activity not found for ID: non-existent-activity",
-		},
-		{
-			name: "NonExistentRunID",
-			request: &workflowservice.PollActivityExecutionRequest{
-				Namespace:  existingNamespace,
-				ActivityId: existingActivityID,
-				RunId:      "11111111-2222-3333-4444-555555555555",
-			},
-			expectedErr:    notFoundErr,
-			expectedErrMsg: fmt.Sprintf("activity not found for ID: %s", existingActivityID),
-		},
-	}
-
-	for _, tc := range testCases {
-		t.Run(tc.name, func(t *testing.T) {
-			_, err := s.FrontendClient().PollActivityExecution(ctx, tc.request)
-			require.ErrorAs(t, err, &tc.expectedErr) //nolint:testifylint
-			require.Equal(t, tc.expectedErrMsg, tc.expectedErr.Error())
+		_, err = s.FrontendClient().RespondActivityTaskCompleted(ctx, &workflowservice.RespondActivityTaskCompletedRequest{
+			Namespace: s.Namespace().String(),
+			TaskToken: pollTaskResp.TaskToken,
+			Result:    defaultResult,
 		})
-	}
-}
+		require.NoError(t, err)
 
-func (s *standaloneActivityTestSuite) testPollActivityExecution_InvalidArgument() {
-	t := s.T()
-	ctx := testcore.NewContext()
-
-	existingNamespace := s.Namespace().String()
-	validRunID := "11111111-2222-3333-4444-555555555555"
-
-	testCases := []struct {
-		name        string
-		request     *workflowservice.PollActivityExecutionRequest
-		expectedErr string
-	}{
-		{
-			name: "EmptyNamespace",
-			request: &workflowservice.PollActivityExecutionRequest{
-				Namespace:  "",
-				ActivityId: "activity-id",
-				RunId:      validRunID,
-			},
-			expectedErr: "Namespace is empty",
-		},
-		{
-			name: "EmptyActivityID",
-			request: &workflowservice.PollActivityExecutionRequest{
-				Namespace:  existingNamespace,
-				ActivityId: "",
-				RunId:      validRunID,
-			},
-			expectedErr: "activity ID is required",
-		},
-		{
-			name: "ActivityIDTooLong",
-			request: &workflowservice.PollActivityExecutionRequest{
-				Namespace:  existingNamespace,
-				ActivityId: string(make([]byte, 2000)),
-				RunId:      validRunID,
-			},
-			expectedErr: "activity ID exceeds length limit",
-		},
-		{
-			name: "InvalidRunID",
-			request: &workflowservice.PollActivityExecutionRequest{
-				Namespace:  existingNamespace,
-				ActivityId: "activity-id",
-				RunId:      "invalid-uuid",
-			},
-			expectedErr: "invalid run id",
-		},
-	}
-
-	for _, tc := range testCases {
-		t.Run(tc.name, func(t *testing.T) {
-			_, err := s.FrontendClient().PollActivityExecution(ctx, tc.request)
-			var invalidArgErr *serviceerror.InvalidArgument
-			require.ErrorAs(t, err, &invalidArgErr)
-			require.Contains(t, invalidArgErr.Message, tc.expectedErr)
+		pollActivityResp, err := s.FrontendClient().PollActivityExecution(ctx, &workflowservice.PollActivityExecutionRequest{
+			Namespace:  s.Namespace().String(),
+			ActivityId: activityID,
+			RunId:      "", // resolves to current run ID
 		})
-	}
+		require.NoError(t, err)
+		require.NotNil(t, pollActivityResp)
+		require.Equal(t, startResp.RunId, pollActivityResp.GetRunId())
+		protorequire.ProtoEqual(t, defaultResult, pollActivityResp.GetOutcome().GetResult())
+	})
+	s.Run("NotFound", func() {
+		t := s.T()
+		ctx := testcore.NewContext()
+
+		existingActivityID := s.tv.ActivityID()
+		tq := s.tv.TaskQueue()
+		startResp, err := s.startActivity(ctx, existingActivityID, tq.Name)
+		require.NoError(t, err)
+		existingRunID := startResp.RunId
+		require.NotEmpty(t, existingRunID)
+		existingNamespace := s.Namespace().String()
+
+		var notFoundErr *serviceerror.NotFound
+		var namespaceNotFoundErr *serviceerror.NamespaceNotFound
+
+		testCases := []struct {
+			name           string
+			request        *workflowservice.PollActivityExecutionRequest
+			expectedErr    error
+			expectedErrMsg string
+		}{
+			{
+				name: "NonExistentNamespace",
+				request: &workflowservice.PollActivityExecutionRequest{
+					Namespace:  "non-existent-namespace",
+					ActivityId: existingActivityID,
+					RunId:      existingRunID,
+				},
+				expectedErr:    namespaceNotFoundErr,
+				expectedErrMsg: "Namespace non-existent-namespace is not found.",
+			},
+			{
+				name: "NonExistentActivityID",
+				request: &workflowservice.PollActivityExecutionRequest{
+					Namespace:  existingNamespace,
+					ActivityId: "non-existent-activity",
+					RunId:      existingRunID,
+				},
+				expectedErr:    notFoundErr,
+				expectedErrMsg: "activity not found for ID: non-existent-activity",
+			},
+			{
+				name: "NonExistentRunID",
+				request: &workflowservice.PollActivityExecutionRequest{
+					Namespace:  existingNamespace,
+					ActivityId: existingActivityID,
+					RunId:      "11111111-2222-3333-4444-555555555555",
+				},
+				expectedErr:    notFoundErr,
+				expectedErrMsg: fmt.Sprintf("activity not found for ID: %s", existingActivityID),
+			},
+		}
+
+		for _, tc := range testCases {
+			t.Run(tc.name, func(t *testing.T) {
+				_, err := s.FrontendClient().PollActivityExecution(ctx, tc.request)
+				require.ErrorAs(t, err, &tc.expectedErr) //nolint:testifylint
+				require.Equal(t, tc.expectedErrMsg, tc.expectedErr.Error())
+			})
+		}
+	})
+	s.Run("InvalidArgument", func() {
+		t := s.T()
+		ctx := testcore.NewContext()
+
+		existingNamespace := s.Namespace().String()
+		validRunID := "11111111-2222-3333-4444-555555555555"
+
+		testCases := []struct {
+			name        string
+			request     *workflowservice.PollActivityExecutionRequest
+			expectedErr string
+		}{
+			{
+				name: "EmptyNamespace",
+				request: &workflowservice.PollActivityExecutionRequest{
+					Namespace:  "",
+					ActivityId: "activity-id",
+					RunId:      validRunID,
+				},
+				expectedErr: "Namespace is empty",
+			},
+			{
+				name: "EmptyActivityID",
+				request: &workflowservice.PollActivityExecutionRequest{
+					Namespace:  existingNamespace,
+					ActivityId: "",
+					RunId:      validRunID,
+				},
+				expectedErr: "activity ID is required",
+			},
+			{
+				name: "ActivityIDTooLong",
+				request: &workflowservice.PollActivityExecutionRequest{
+					Namespace:  existingNamespace,
+					ActivityId: string(make([]byte, 2000)),
+					RunId:      validRunID,
+				},
+				expectedErr: "activity ID exceeds length limit",
+			},
+			{
+				name: "InvalidRunID",
+				request: &workflowservice.PollActivityExecutionRequest{
+					Namespace:  existingNamespace,
+					ActivityId: "activity-id",
+					RunId:      "invalid-uuid",
+				},
+				expectedErr: "invalid run id",
+			},
+		}
+
+		for _, tc := range testCases {
+			t.Run(tc.name, func(t *testing.T) {
+				_, err := s.FrontendClient().PollActivityExecution(ctx, tc.request)
+				var invalidArgErr *serviceerror.InvalidArgument
+				require.ErrorAs(t, err, &invalidArgErr)
+				require.Contains(t, invalidArgErr.Message, tc.expectedErr)
+			})
+		}
+	})
 }
 
 // TODO(dan): add tests that DescribeActivityExecution can wait for deletion, termination, cancellation etc
