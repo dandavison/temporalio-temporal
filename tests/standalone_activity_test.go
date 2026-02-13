@@ -697,6 +697,44 @@ func (s *standaloneActivityTestSuite) TestComplete() {
 		require.ErrorAs(t, err, &invalidArgErr)
 		require.Equal(t, "token does not match namespace", invalidArgErr.Message)
 	})
+
+	t.Run("OversizedResult", func(t *testing.T) {
+		blobSizeLimitError := 1000
+		cleanup := s.OverrideDynamicConfig(dynamicconfig.BlobSizeLimitError, blobSizeLimitError)
+		defer cleanup()
+		cleanupWarn := s.OverrideDynamicConfig(dynamicconfig.BlobSizeLimitWarn, blobSizeLimitError)
+		defer cleanupWarn()
+
+		activityID := testcore.RandomizeStr(t.Name())
+		taskQueue := testcore.RandomizeStr(t.Name())
+		startResp, err := s.startActivity(ctx, activityID, taskQueue)
+		require.NoError(t, err)
+
+		pollResp, err := s.pollActivityTaskQueue(ctx, taskQueue)
+		require.NoError(t, err)
+
+		oversizedResult := &commonpb.Payloads{
+			Payloads: []*commonpb.Payload{{Data: make([]byte, blobSizeLimitError+1)}},
+		}
+		// Frontend should convert oversized result to a failure.
+		_, err = s.FrontendClient().RespondActivityTaskCompleted(ctx, &workflowservice.RespondActivityTaskCompletedRequest{
+			Namespace: s.Namespace().String(),
+			TaskToken: pollResp.TaskToken,
+			Result:    oversizedResult,
+			Identity:  "worker",
+		})
+		require.NoError(t, err)
+
+		descResp, err := s.FrontendClient().DescribeActivityExecution(ctx, &workflowservice.DescribeActivityExecutionRequest{
+			Namespace:      s.Namespace().String(),
+			ActivityId:     activityID,
+			RunId:          startResp.RunId,
+			IncludeOutcome: true,
+		})
+		require.NoError(t, err)
+		require.Equal(t, enumspb.ACTIVITY_EXECUTION_STATUS_FAILED, descResp.GetInfo().GetStatus())
+		require.Contains(t, descResp.GetOutcome().GetFailure().GetMessage(), "Complete result exceeds size limit")
+	})
 }
 
 func (s *standaloneActivityTestSuite) TestFail() {
@@ -994,6 +1032,115 @@ func (s *standaloneActivityTestSuite) TestFail() {
 		var invalidArgErr *serviceerror.InvalidArgument
 		require.ErrorAs(t, err, &invalidArgErr)
 		require.Equal(t, "token does not match namespace", invalidArgErr.Message)
+	})
+
+	t.Run("OversizedFailure", func(t *testing.T) {
+		blobSizeLimitError := 1000
+		cleanup := s.OverrideDynamicConfig(dynamicconfig.BlobSizeLimitError, blobSizeLimitError)
+		defer cleanup()
+		cleanupWarn := s.OverrideDynamicConfig(dynamicconfig.BlobSizeLimitWarn, blobSizeLimitError)
+		defer cleanupWarn()
+
+		activityID := testcore.RandomizeStr(t.Name())
+		taskQueue := testcore.RandomizeStr(t.Name())
+		startResp, err := s.startActivity(ctx, activityID, taskQueue)
+		require.NoError(t, err)
+
+		pollResp, err := s.pollActivityTaskQueue(ctx, taskQueue)
+		require.NoError(t, err)
+
+		oversizedFailure := &failurepb.Failure{
+			Message: string(make([]byte, blobSizeLimitError+1)),
+			FailureInfo: &failurepb.Failure_ApplicationFailureInfo{
+				ApplicationFailureInfo: &failurepb.ApplicationFailureInfo{NonRetryable: true},
+			},
+		}
+		// Frontend should truncate the failure and wrap it in a server failure.
+		resp, err := s.FrontendClient().RespondActivityTaskFailed(ctx, &workflowservice.RespondActivityTaskFailedRequest{
+			Namespace: s.Namespace().String(),
+			TaskToken: pollResp.TaskToken,
+			Failure:   oversizedFailure,
+		})
+		require.NoError(t, err)
+		require.NotEmpty(t, resp.Failures, "expected server failure in response")
+		require.Contains(t, resp.Failures[0].GetMessage(), "Failure exceeds size limit")
+
+		descResp, err := s.FrontendClient().DescribeActivityExecution(ctx, &workflowservice.DescribeActivityExecutionRequest{
+			Namespace:      s.Namespace().String(),
+			ActivityId:     activityID,
+			RunId:          startResp.RunId,
+			IncludeOutcome: true,
+		})
+		require.NoError(t, err)
+		require.Equal(t, enumspb.ACTIVITY_EXECUTION_STATUS_FAILED, descResp.GetInfo().GetStatus())
+		require.Contains(t, descResp.GetOutcome().GetFailure().GetMessage(), "Failure exceeds size limit")
+	})
+
+	t.Run("OversizedLastHeartbeatDetails", func(t *testing.T) {
+		blobSizeLimitError := 1000
+		cleanup := s.OverrideDynamicConfig(dynamicconfig.BlobSizeLimitError, blobSizeLimitError)
+		defer cleanup()
+		cleanupWarn := s.OverrideDynamicConfig(dynamicconfig.BlobSizeLimitWarn, blobSizeLimitError)
+		defer cleanupWarn()
+
+		activityID := testcore.RandomizeStr(t.Name())
+		taskQueue := testcore.RandomizeStr(t.Name())
+		startResp, err := s.startActivity(ctx, activityID, taskQueue)
+		require.NoError(t, err)
+
+		pollResp, err := s.pollActivityTaskQueue(ctx, taskQueue)
+		require.NoError(t, err)
+
+		oversizedDetails := &commonpb.Payloads{
+			Payloads: []*commonpb.Payload{{Data: make([]byte, blobSizeLimitError+1)}},
+		}
+		// Frontend should strip oversized heartbeat details and report a server failure.
+		resp, err := s.FrontendClient().RespondActivityTaskFailed(ctx, &workflowservice.RespondActivityTaskFailedRequest{
+			Namespace:            s.Namespace().String(),
+			TaskToken:            pollResp.TaskToken,
+			Failure:              defaultFailure,
+			LastHeartbeatDetails: oversizedDetails,
+		})
+		require.NoError(t, err)
+		require.NotEmpty(t, resp.Failures, "expected server failure in response")
+		require.Contains(t, resp.Failures[0].GetMessage(), "Heartbeat details exceed size limit")
+
+		descResp, err := s.FrontendClient().DescribeActivityExecution(ctx, &workflowservice.DescribeActivityExecutionRequest{
+			Namespace:      s.Namespace().String(),
+			ActivityId:     activityID,
+			RunId:          startResp.RunId,
+			IncludeOutcome: true,
+		})
+		require.NoError(t, err)
+		require.Equal(t, enumspb.ACTIVITY_EXECUTION_STATUS_FAILED, descResp.GetInfo().GetStatus())
+	})
+
+	t.Run("ByIDMissingApplicationFailureInfo", func(t *testing.T) {
+		// RespondActivityTaskFailed (token-based) rejects failures without ApplicationFailureInfo.
+		// RespondActivityTaskFailedById should enforce the same validation.
+		activityID := testcore.RandomizeStr(t.Name())
+		taskQueue := testcore.RandomizeStr(t.Name())
+		_, err := s.startActivity(ctx, activityID, taskQueue)
+		require.NoError(t, err)
+
+		_, err = s.pollActivityTaskQueue(ctx, taskQueue)
+		require.NoError(t, err)
+
+		failureWithoutAppInfo := &failurepb.Failure{
+			Message: "some failure",
+			FailureInfo: &failurepb.Failure_ServerFailureInfo{
+				ServerFailureInfo: &failurepb.ServerFailureInfo{},
+			},
+		}
+		_, err = s.FrontendClient().RespondActivityTaskFailedById(ctx, &workflowservice.RespondActivityTaskFailedByIdRequest{
+			Namespace:  s.Namespace().String(),
+			ActivityId: activityID,
+			Failure:    failureWithoutAppInfo,
+			Identity:   "worker",
+		})
+		require.Error(t, err)
+		var invalidArgErr *serviceerror.InvalidArgument
+		require.ErrorAs(t, err, &invalidArgErr)
 	})
 }
 
@@ -1742,6 +1889,79 @@ func (s *standaloneActivityTestSuite) TestRequestCancel() {
 		require.Equal(t, "token does not match namespace", invalidArgErr.Message)
 	})
 
+	t.Run("OversizedCancelDetails", func(t *testing.T) {
+		blobSizeLimitError := 1000
+		cleanup := s.OverrideDynamicConfig(dynamicconfig.BlobSizeLimitError, blobSizeLimitError)
+		defer cleanup()
+		cleanupWarn := s.OverrideDynamicConfig(dynamicconfig.BlobSizeLimitWarn, blobSizeLimitError)
+		defer cleanupWarn()
+
+		activityID := testcore.RandomizeStr(t.Name())
+		taskQueue := testcore.RandomizeStr(t.Name())
+		startResp, err := s.startActivity(ctx, activityID, taskQueue)
+		require.NoError(t, err)
+
+		pollResp, err := s.pollActivityTaskQueue(ctx, taskQueue)
+		require.NoError(t, err)
+
+		// Request cancellation so that RespondActivityTaskCanceled is valid.
+		_, err = s.FrontendClient().RequestCancelActivityExecution(ctx, &workflowservice.RequestCancelActivityExecutionRequest{
+			Namespace:  s.Namespace().String(),
+			ActivityId: activityID,
+			Reason:     "cancel",
+			Identity:   "worker",
+		})
+		require.NoError(t, err)
+
+		oversizedDetails := &commonpb.Payloads{
+			Payloads: []*commonpb.Payload{{Data: make([]byte, blobSizeLimitError+1)}},
+		}
+		// Frontend converts oversized cancel details into a RespondActivityTaskFailed (no error to caller).
+		_, err = s.FrontendClient().RespondActivityTaskCanceled(ctx, &workflowservice.RespondActivityTaskCanceledRequest{
+			Namespace: s.Namespace().String(),
+			TaskToken: pollResp.TaskToken,
+			Details:   oversizedDetails,
+		})
+		require.NoError(t, err)
+
+		descResp, err := s.FrontendClient().DescribeActivityExecution(ctx, &workflowservice.DescribeActivityExecutionRequest{
+			Namespace:      s.Namespace().String(),
+			ActivityId:     activityID,
+			RunId:          startResp.RunId,
+			IncludeOutcome: true,
+		})
+		require.NoError(t, err)
+		require.Equal(t, enumspb.ACTIVITY_EXECUTION_STATUS_FAILED, descResp.GetInfo().GetStatus())
+		require.Contains(t, descResp.GetOutcome().GetFailure().GetMessage(), "Cancel details exceed size limit")
+	})
+
+	t.Run("AlreadyCompletedCannotCancel", func(t *testing.T) {
+		activityID := testcore.RandomizeStr(t.Name())
+		taskQueue := testcore.RandomizeStr(t.Name())
+
+		startResp := s.startAndValidateActivity(ctx, t, activityID, taskQueue)
+		runID := startResp.RunId
+
+		pollTaskResp := s.pollActivityTaskAndValidate(ctx, t, activityID, taskQueue, runID)
+
+		_, err := s.FrontendClient().RespondActivityTaskCompleted(ctx, &workflowservice.RespondActivityTaskCompletedRequest{
+			Namespace: s.Namespace().String(),
+			TaskToken: pollTaskResp.TaskToken,
+			Result:    defaultResult,
+			Identity:  "worker",
+		})
+		require.NoError(t, err)
+
+		_, err = s.FrontendClient().RequestCancelActivityExecution(ctx, &workflowservice.RequestCancelActivityExecutionRequest{
+			Namespace:  s.Namespace().String(),
+			ActivityId: activityID,
+			RunId:      runID,
+			Reason:     "too late",
+			Identity:   "canceller",
+		})
+		require.Error(t, err)
+	})
+
 	t.Run("NonExistent", func(t *testing.T) {
 		activityID := testcore.RandomizeStr(t.Name())
 
@@ -2055,6 +2275,169 @@ func (s *standaloneActivityTestSuite) TestRetryWithoutScheduleToCloseTimeout() {
 	})
 	require.NoError(t, err)
 	require.EqualValues(t, 2, pollResp2.Attempt)
+}
+
+func (s *standaloneActivityTestSuite) TestMaximumAttemptsExhausted() {
+	t := s.T()
+	ctx, cancel := context.WithTimeout(t.Context(), 30*time.Second)
+	defer cancel()
+
+	activityID := testcore.RandomizeStr(t.Name())
+	taskQueue := testcore.RandomizeStr(t.Name())
+
+	startResp, err := s.FrontendClient().StartActivityExecution(ctx, &workflowservice.StartActivityExecutionRequest{
+		Namespace:           s.Namespace().String(),
+		ActivityId:          activityID,
+		ActivityType:        &commonpb.ActivityType{Name: "test-activity-type"},
+		TaskQueue:           &taskqueuepb.TaskQueue{Name: taskQueue},
+		StartToCloseTimeout: durationpb.New(1 * time.Minute),
+		RetryPolicy: &commonpb.RetryPolicy{
+			InitialInterval: durationpb.New(1 * time.Millisecond),
+			MaximumAttempts: 2,
+		},
+	})
+	require.NoError(t, err)
+
+	retryableFailure := &failurepb.Failure{
+		Message: "retryable failure",
+		FailureInfo: &failurepb.Failure_ApplicationFailureInfo{
+			ApplicationFailureInfo: &failurepb.ApplicationFailureInfo{NonRetryable: false},
+		},
+	}
+
+	// Attempt 1: fail retryably
+	pollResp, err := s.pollActivityTaskQueue(ctx, taskQueue)
+	require.NoError(t, err)
+	require.EqualValues(t, 1, pollResp.Attempt)
+	_, err = s.FrontendClient().RespondActivityTaskFailed(ctx, &workflowservice.RespondActivityTaskFailedRequest{
+		Namespace: s.Namespace().String(),
+		TaskToken: pollResp.TaskToken,
+		Failure:   retryableFailure,
+	})
+	require.NoError(t, err)
+
+	// Attempt 2: fail retryably again -- should exhaust MaximumAttempts.
+	pollResp, err = s.pollActivityTaskQueue(ctx, taskQueue)
+	require.NoError(t, err)
+	require.EqualValues(t, 2, pollResp.Attempt)
+	_, err = s.FrontendClient().RespondActivityTaskFailed(ctx, &workflowservice.RespondActivityTaskFailedRequest{
+		Namespace: s.Namespace().String(),
+		TaskToken: pollResp.TaskToken,
+		Failure:   retryableFailure,
+	})
+	require.NoError(t, err)
+
+	// Activity should now be in FAILED state.
+	pollActivityResp, err := s.FrontendClient().PollActivityExecution(ctx, &workflowservice.PollActivityExecutionRequest{
+		Namespace:  s.Namespace().String(),
+		ActivityId: activityID,
+		RunId:      startResp.RunId,
+	})
+	require.NoError(t, err)
+	require.NotNil(t, pollActivityResp.GetOutcome().GetFailure())
+	require.Equal(t, "retryable failure", pollActivityResp.GetOutcome().GetFailure().GetMessage())
+}
+
+func (s *standaloneActivityTestSuite) TestNonRetryableFailure() {
+	t := s.T()
+	ctx, cancel := context.WithTimeout(t.Context(), 30*time.Second)
+	defer cancel()
+
+	activityID := testcore.RandomizeStr(t.Name())
+	taskQueue := testcore.RandomizeStr(t.Name())
+
+	startResp, err := s.FrontendClient().StartActivityExecution(ctx, &workflowservice.StartActivityExecutionRequest{
+		Namespace:           s.Namespace().String(),
+		ActivityId:          activityID,
+		ActivityType:        &commonpb.ActivityType{Name: "test-activity-type"},
+		TaskQueue:           &taskqueuepb.TaskQueue{Name: taskQueue},
+		StartToCloseTimeout: durationpb.New(1 * time.Minute),
+		RetryPolicy: &commonpb.RetryPolicy{
+			InitialInterval: durationpb.New(1 * time.Millisecond),
+			MaximumAttempts: 5,
+		},
+	})
+	require.NoError(t, err)
+
+	t.Run("NonRetryableFlag", func(t *testing.T) {
+		pollResp, err := s.pollActivityTaskQueue(ctx, taskQueue)
+		require.NoError(t, err)
+
+		nonRetryableFailure := &failurepb.Failure{
+			Message: "non-retryable failure",
+			FailureInfo: &failurepb.Failure_ApplicationFailureInfo{
+				ApplicationFailureInfo: &failurepb.ApplicationFailureInfo{
+					NonRetryable: true,
+				},
+			},
+		}
+		_, err = s.FrontendClient().RespondActivityTaskFailed(ctx, &workflowservice.RespondActivityTaskFailedRequest{
+			Namespace: s.Namespace().String(),
+			TaskToken: pollResp.TaskToken,
+			Failure:   nonRetryableFailure,
+		})
+		require.NoError(t, err)
+
+		// Activity should transition directly to FAILED without retrying.
+		pollActivityResp, err := s.FrontendClient().PollActivityExecution(ctx, &workflowservice.PollActivityExecutionRequest{
+			Namespace:  s.Namespace().String(),
+			ActivityId: activityID,
+			RunId:      startResp.RunId,
+		})
+		require.NoError(t, err)
+		require.Equal(t, "non-retryable failure", pollActivityResp.GetOutcome().GetFailure().GetMessage())
+	})
+}
+
+func (s *standaloneActivityTestSuite) TestNonRetryableErrorTypes() {
+	t := s.T()
+	ctx, cancel := context.WithTimeout(t.Context(), 30*time.Second)
+	defer cancel()
+
+	activityID := testcore.RandomizeStr(t.Name())
+	taskQueue := testcore.RandomizeStr(t.Name())
+
+	startResp, err := s.FrontendClient().StartActivityExecution(ctx, &workflowservice.StartActivityExecutionRequest{
+		Namespace:           s.Namespace().String(),
+		ActivityId:          activityID,
+		ActivityType:        &commonpb.ActivityType{Name: "test-activity-type"},
+		TaskQueue:           &taskqueuepb.TaskQueue{Name: taskQueue},
+		StartToCloseTimeout: durationpb.New(1 * time.Minute),
+		RetryPolicy: &commonpb.RetryPolicy{
+			InitialInterval:        durationpb.New(1 * time.Millisecond),
+			MaximumAttempts:        5,
+			NonRetryableErrorTypes: []string{"FatalError"},
+		},
+	})
+	require.NoError(t, err)
+
+	pollResp, err := s.pollActivityTaskQueue(ctx, taskQueue)
+	require.NoError(t, err)
+
+	matchingFailure := &failurepb.Failure{
+		Message: "fatal error occurred",
+		FailureInfo: &failurepb.Failure_ApplicationFailureInfo{
+			ApplicationFailureInfo: &failurepb.ApplicationFailureInfo{
+				Type:         "FatalError",
+				NonRetryable: false,
+			},
+		},
+	}
+	_, err = s.FrontendClient().RespondActivityTaskFailed(ctx, &workflowservice.RespondActivityTaskFailedRequest{
+		Namespace: s.Namespace().String(),
+		TaskToken: pollResp.TaskToken,
+		Failure:   matchingFailure,
+	})
+	require.NoError(t, err)
+
+	// Activity should transition directly to FAILED because the error type matches NonRetryableErrorTypes.
+	pollActivityResp, err := s.FrontendClient().PollActivityExecution(ctx, &workflowservice.PollActivityExecutionRequest{
+		Namespace:  s.Namespace().String(),
+		ActivityId: activityID,
+		RunId:      startResp.RunId,
+	})
+	require.NoError(t, err)
+	require.Equal(t, "fatal error occurred", pollActivityResp.GetOutcome().GetFailure().GetMessage())
 }
 
 func (s *standaloneActivityTestSuite) Test_ScheduleToCloseTimeout_WithRetry() {
@@ -4172,6 +4555,255 @@ func (s *standaloneActivityTestSuite) TestHeartbeat() {
 		require.Equal(t, enumspb.ACTIVITY_EXECUTION_STATUS_COMPLETED, pollResp.GetInfo().GetStatus(),
 			"expected status=Completed but is %s", pollResp.GetInfo().GetStatus())
 		protorequire.ProtoEqual(t, defaultResult, pollResp.GetOutcome().GetResult())
+	})
+
+	t.Run("OversizedDetails", func(t *testing.T) {
+		blobSizeLimitError := 1000
+		cleanup := s.OverrideDynamicConfig(dynamicconfig.BlobSizeLimitError, blobSizeLimitError)
+		defer cleanup()
+		cleanupWarn := s.OverrideDynamicConfig(dynamicconfig.BlobSizeLimitWarn, blobSizeLimitError)
+		defer cleanupWarn()
+
+		activityID := testcore.RandomizeStr(t.Name())
+		taskQueue := testcore.RandomizeStr(t.Name())
+		startResp, err := s.FrontendClient().StartActivityExecution(ctx, &workflowservice.StartActivityExecutionRequest{
+			Namespace:           s.Namespace().String(),
+			ActivityId:          activityID,
+			ActivityType:        &commonpb.ActivityType{Name: "test-activity-type"},
+			TaskQueue:           &taskqueuepb.TaskQueue{Name: taskQueue},
+			StartToCloseTimeout: durationpb.New(1 * time.Minute),
+			HeartbeatTimeout:    durationpb.New(10 * time.Second),
+		})
+		require.NoError(t, err)
+
+		pollResp, err := s.FrontendClient().PollActivityTaskQueue(ctx, &workflowservice.PollActivityTaskQueueRequest{
+			Namespace: s.Namespace().String(),
+			TaskQueue: &taskqueuepb.TaskQueue{Name: taskQueue, Kind: enumspb.TASK_QUEUE_KIND_NORMAL},
+		})
+		require.NoError(t, err)
+
+		oversizedDetails := &commonpb.Payloads{
+			Payloads: []*commonpb.Payload{{Data: make([]byte, blobSizeLimitError+1)}},
+		}
+		// Frontend converts oversized heartbeat details into a RespondActivityTaskFailed.
+		heartbeatResp, err := s.FrontendClient().RecordActivityTaskHeartbeat(ctx, &workflowservice.RecordActivityTaskHeartbeatRequest{
+			Namespace: s.Namespace().String(),
+			TaskToken: pollResp.TaskToken,
+			Details:   oversizedDetails,
+		})
+		require.NoError(t, err)
+		require.True(t, heartbeatResp.GetCancelRequested(), "CancelRequested should be true after oversized heartbeat")
+
+		descResp, err := s.FrontendClient().DescribeActivityExecution(ctx, &workflowservice.DescribeActivityExecutionRequest{
+			Namespace:      s.Namespace().String(),
+			ActivityId:     activityID,
+			RunId:          startResp.RunId,
+			IncludeOutcome: true,
+		})
+		require.NoError(t, err)
+		require.Equal(t, enumspb.ACTIVITY_EXECUTION_STATUS_FAILED, descResp.GetInfo().GetStatus())
+		require.Contains(t, descResp.GetOutcome().GetFailure().GetMessage(), "Heartbeat details exceed size limit")
+	})
+}
+
+func (s *standaloneActivityTestSuite) TestFeatureDisabledOnRespondRPCs() {
+	t := s.T()
+	ctx, cancel := context.WithTimeout(t.Context(), 30*time.Second)
+	defer cancel()
+
+	// Start an activity and get a token while the feature is enabled.
+	activityID := testcore.RandomizeStr(t.Name())
+	taskQueue := testcore.RandomizeStr(t.Name())
+	_, err := s.startActivity(ctx, activityID, taskQueue)
+	require.NoError(t, err)
+
+	pollResp, err := s.pollActivityTaskQueue(ctx, taskQueue)
+	require.NoError(t, err)
+
+	// Disable the feature.
+	cleanup := s.OverrideDynamicConfig(activity.Enabled, false)
+	defer cleanup()
+
+	t.Run("RespondActivityTaskCompleted", func(t *testing.T) {
+		_, err := s.FrontendClient().RespondActivityTaskCompleted(ctx, &workflowservice.RespondActivityTaskCompletedRequest{
+			Namespace: s.Namespace().String(),
+			TaskToken: pollResp.TaskToken,
+			Result:    defaultResult,
+		})
+		require.Error(t, err)
+		statusErr := serviceerror.ToStatus(err)
+		require.Equal(t, codes.Unimplemented, statusErr.Code())
+		require.Contains(t, statusErr.Message(), "Standalone activity is disabled")
+	})
+
+	t.Run("RespondActivityTaskFailed", func(t *testing.T) {
+		_, err := s.FrontendClient().RespondActivityTaskFailed(ctx, &workflowservice.RespondActivityTaskFailedRequest{
+			Namespace: s.Namespace().String(),
+			TaskToken: pollResp.TaskToken,
+			Failure:   defaultFailure,
+		})
+		require.Error(t, err)
+		statusErr := serviceerror.ToStatus(err)
+		require.Equal(t, codes.Unimplemented, statusErr.Code())
+		require.Contains(t, statusErr.Message(), "Standalone activity is disabled")
+	})
+
+	t.Run("RespondActivityTaskCanceled", func(t *testing.T) {
+		_, err := s.FrontendClient().RespondActivityTaskCanceled(ctx, &workflowservice.RespondActivityTaskCanceledRequest{
+			Namespace: s.Namespace().String(),
+			TaskToken: pollResp.TaskToken,
+		})
+		require.Error(t, err)
+		statusErr := serviceerror.ToStatus(err)
+		require.Equal(t, codes.Unimplemented, statusErr.Code())
+		require.Contains(t, statusErr.Message(), "Standalone activity is disabled")
+	})
+
+	t.Run("RecordActivityTaskHeartbeat", func(t *testing.T) {
+		_, err := s.FrontendClient().RecordActivityTaskHeartbeat(ctx, &workflowservice.RecordActivityTaskHeartbeatRequest{
+			Namespace: s.Namespace().String(),
+			TaskToken: pollResp.TaskToken,
+		})
+		require.Error(t, err)
+		statusErr := serviceerror.ToStatus(err)
+		require.Equal(t, codes.Unimplemented, statusErr.Code())
+		require.Contains(t, statusErr.Message(), "Standalone activity is disabled")
+	})
+}
+
+func (s *standaloneActivityTestSuite) TestScheduleToCloseTimeoutWithoutRetry() {
+	t := s.T()
+	ctx, cancel := context.WithTimeout(t.Context(), 30*time.Second)
+	defer cancel()
+
+	activityID := testcore.RandomizeStr(t.Name())
+	taskQueue := testcore.RandomizeStr(t.Name())
+
+	startResp, err := s.FrontendClient().StartActivityExecution(ctx, &workflowservice.StartActivityExecutionRequest{
+		Namespace:              s.Namespace().String(),
+		ActivityId:             activityID,
+		ActivityType:           &commonpb.ActivityType{Name: "test-activity-type"},
+		TaskQueue:              &taskqueuepb.TaskQueue{Name: taskQueue},
+		ScheduleToCloseTimeout: durationpb.New(2 * time.Second),
+		StartToCloseTimeout:    durationpb.New(1 * time.Minute),
+		RetryPolicy: &commonpb.RetryPolicy{
+			MaximumAttempts: 1,
+		},
+	})
+	require.NoError(t, err)
+
+	// Poll to start the activity, then let the schedule-to-close timeout fire.
+	_, err = s.pollActivityTaskQueue(ctx, taskQueue)
+	require.NoError(t, err)
+
+	pollActivityResp, err := s.FrontendClient().PollActivityExecution(ctx, &workflowservice.PollActivityExecutionRequest{
+		Namespace:  s.Namespace().String(),
+		ActivityId: activityID,
+		RunId:      startResp.RunId,
+	})
+	require.NoError(t, err)
+	require.Equal(t, enumspb.TIMEOUT_TYPE_SCHEDULE_TO_CLOSE,
+		pollActivityResp.GetOutcome().GetFailure().GetTimeoutFailureInfo().GetTimeoutType())
+}
+
+func (s *standaloneActivityTestSuite) TestForceCompleteRetryingActivity() {
+	t := s.T()
+	ctx, cancel := context.WithTimeout(t.Context(), 30*time.Second)
+	defer cancel()
+
+	activityID := testcore.RandomizeStr(t.Name())
+	taskQueue := testcore.RandomizeStr(t.Name())
+
+	startResp, err := s.FrontendClient().StartActivityExecution(ctx, &workflowservice.StartActivityExecutionRequest{
+		Namespace:           s.Namespace().String(),
+		ActivityId:          activityID,
+		ActivityType:        &commonpb.ActivityType{Name: "test-activity-type"},
+		TaskQueue:           &taskqueuepb.TaskQueue{Name: taskQueue},
+		StartToCloseTimeout: durationpb.New(1 * time.Minute),
+		RetryPolicy: &commonpb.RetryPolicy{
+			InitialInterval: durationpb.New(2 * time.Minute),
+			MaximumAttempts: 5,
+		},
+	})
+	require.NoError(t, err)
+
+	// Poll and fail retryably. Activity enters retry backoff (SCHEDULED state).
+	pollResp, err := s.pollActivityTaskQueue(ctx, taskQueue)
+	require.NoError(t, err)
+	_, err = s.FrontendClient().RespondActivityTaskFailed(ctx, &workflowservice.RespondActivityTaskFailedRequest{
+		Namespace: s.Namespace().String(),
+		TaskToken: pollResp.TaskToken,
+		Failure: &failurepb.Failure{
+			Message: "retryable",
+			FailureInfo: &failurepb.Failure_ApplicationFailureInfo{
+				ApplicationFailureInfo: &failurepb.ApplicationFailureInfo{NonRetryable: false},
+			},
+		},
+	})
+	require.NoError(t, err)
+
+	// Try to force-complete via ById while activity is in SCHEDULED (retry) state.
+	// TransitionCompleted only allows STARTED or CANCEL_REQUESTED, so this should fail.
+	_, err = s.FrontendClient().RespondActivityTaskCompletedById(ctx, &workflowservice.RespondActivityTaskCompletedByIdRequest{
+		Namespace:  s.Namespace().String(),
+		ActivityId: activityID,
+		RunId:      startResp.RunId,
+		Result:     defaultResult,
+		Identity:   "force-completer",
+	})
+	require.Error(t, err)
+}
+
+func (s *standaloneActivityTestSuite) TestRespondByIdNotFound() {
+	t := s.T()
+	ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
+	defer cancel()
+
+	nonExistentID := testcore.RandomizeStr(t.Name())
+
+	t.Run("CompletedById", func(t *testing.T) {
+		_, err := s.FrontendClient().RespondActivityTaskCompletedById(ctx, &workflowservice.RespondActivityTaskCompletedByIdRequest{
+			Namespace:  s.Namespace().String(),
+			ActivityId: nonExistentID,
+			Result:     defaultResult,
+			Identity:   "worker",
+		})
+		require.Error(t, err)
+		var notFoundErr *serviceerror.NotFound
+		require.ErrorAs(t, err, &notFoundErr)
+	})
+
+	t.Run("FailedById", func(t *testing.T) {
+		_, err := s.FrontendClient().RespondActivityTaskFailedById(ctx, &workflowservice.RespondActivityTaskFailedByIdRequest{
+			Namespace:  s.Namespace().String(),
+			ActivityId: nonExistentID,
+			Failure:    defaultFailure,
+			Identity:   "worker",
+		})
+		require.Error(t, err)
+		var notFoundErr *serviceerror.NotFound
+		require.ErrorAs(t, err, &notFoundErr)
+	})
+
+	t.Run("CanceledById", func(t *testing.T) {
+		_, err := s.FrontendClient().RespondActivityTaskCanceledById(ctx, &workflowservice.RespondActivityTaskCanceledByIdRequest{
+			Namespace:  s.Namespace().String(),
+			ActivityId: nonExistentID,
+			Identity:   "worker",
+		})
+		require.Error(t, err)
+		var notFoundErr *serviceerror.NotFound
+		require.ErrorAs(t, err, &notFoundErr)
+	})
+
+	t.Run("HeartbeatById", func(t *testing.T) {
+		_, err := s.FrontendClient().RecordActivityTaskHeartbeatById(ctx, &workflowservice.RecordActivityTaskHeartbeatByIdRequest{
+			Namespace:  s.Namespace().String(),
+			ActivityId: nonExistentID,
+		})
+		require.Error(t, err)
+		var notFoundErr *serviceerror.NotFound
+		require.ErrorAs(t, err, &notFoundErr)
 	})
 }
 
