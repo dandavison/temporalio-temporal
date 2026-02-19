@@ -7,7 +7,10 @@ import (
 	"github.com/stretchr/testify/require"
 	commonpb "go.temporal.io/api/common/v1"
 	taskqueuepb "go.temporal.io/api/taskqueue/v1"
+	"go.temporal.io/api/workflowservice/v1"
 	"go.temporal.io/server/api/historyservice/v1"
+	persistencespb "go.temporal.io/server/api/persistence/v1"
+	tokenspb "go.temporal.io/server/api/token/v1"
 	"go.temporal.io/server/chasm"
 	"go.temporal.io/server/chasm/lib/activity/gen/activitypb/v1"
 	serviceerrors "go.temporal.io/server/common/serviceerror"
@@ -151,6 +154,85 @@ func TestHandleStarted(t *testing.T) {
 			response, err := activity.HandleStarted(ctx, request)
 
 			tc.checkOutcome(t, response, err)
+		})
+	}
+}
+
+func makeTaskToken(t *testing.T, namespaceID string, attempt int32) *tokenspb.Task {
+	t.Helper()
+	ref := &persistencespb.ChasmComponentRef{
+		NamespaceId: namespaceID,
+		BusinessId:  "test-activity-id",
+	}
+	refBytes, err := ref.Marshal()
+	require.NoError(t, err)
+	return &tokenspb.Task{
+		Attempt:      attempt,
+		ComponentRef: refBytes,
+	}
+}
+
+func TestRecordHeartbeat(t *testing.T) {
+	const testNamespaceID = "test-namespace-id"
+	testTime := time.Date(2000, 1, 1, 0, 0, 0, 0, time.UTC)
+
+	testCases := []struct {
+		name             string
+		heartbeatTimeout time.Duration
+		expectTask       bool
+	}{
+		{
+			name:             "with heartbeat timeout",
+			heartbeatTimeout: 30 * time.Second,
+			expectTask:       true,
+		},
+		{
+			name:             "without heartbeat timeout",
+			heartbeatTimeout: 0,
+			expectTask:       false,
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx := &chasm.MockMutableContext{
+				MockContext: chasm.MockContext{
+					HandleNow: func(chasm.Component) time.Time { return testTime },
+				},
+			}
+
+			activity := &Activity{
+				ActivityState: &activitypb.ActivityState{
+					Status:           activitypb.ACTIVITY_EXECUTION_STATUS_STARTED,
+					HeartbeatTimeout: durationpb.New(tc.heartbeatTimeout),
+				},
+				LastAttempt: chasm.NewDataField(ctx, &activitypb.ActivityAttemptState{
+					Count: 1,
+					Stamp: 1,
+				}),
+			}
+
+			token := makeTaskToken(t, testNamespaceID, 1)
+			input := WithToken[*historyservice.RecordActivityTaskHeartbeatRequest]{
+				Token: token,
+				Request: &historyservice.RecordActivityTaskHeartbeatRequest{
+					NamespaceId:      testNamespaceID,
+					HeartbeatRequest: &workflowservice.RecordActivityTaskHeartbeatRequest{},
+				},
+			}
+
+			resp, err := activity.RecordHeartbeat(ctx, input)
+			require.NoError(t, err)
+			require.NotNil(t, resp)
+
+			if tc.expectTask {
+				require.Len(t, ctx.Tasks, 1)
+				_, ok := ctx.Tasks[0].Payload.(*activitypb.HeartbeatTimeoutTask)
+				require.True(t, ok)
+				require.Equal(t, testTime.Add(tc.heartbeatTimeout), ctx.Tasks[0].Attributes.ScheduledTime)
+			} else {
+				require.Empty(t, ctx.Tasks)
+			}
 		})
 	}
 }
