@@ -854,6 +854,46 @@ func (s *AdvancedVisibilitySuite) testListWorkflowHelper(
 	s.Nil(nextPageToken)
 }
 
+// TestListWorkflow_DatetimeCustomSearchAttribute starts a workflow with a
+// Datetime custom search attribute set to a whole-second value and queries for
+// it using equality. This reproduces a SQLite-specific bug where the query
+// returns 0 results instead of 1.
+//
+// Root cause: SQLite has no native datetime type; the generated column uses
+// STRFTIME which always produces 3 fractional-second digits (e.g.
+// "2024-06-01 00:00:00.000+00:00"), but the Go query converter formats
+// whole-second times without a fractional part ("2024-06-01 00:00:00+00:00").
+// SQLite compares textually, so the two representations don't match.
+func (s *AdvancedVisibilitySuite) TestListWorkflow_DatetimeCustomSearchAttribute() {
+	id := "es-functional-list-workflow-datetime-csa-test"
+	wt := "es-functional-list-workflow-datetime-csa-test-type"
+	tl := "es-functional-list-workflow-datetime-csa-test-taskqueue"
+	request := s.createStartWorkflowExecutionRequest(id, wt, tl)
+
+	// Use a whole-second time to trigger the format mismatch on SQLite.
+	// Non-zero fractional seconds would mask the bug because Go's .999999
+	// format preserves non-zero digits.
+	datetimeVal := time.Date(2024, 6, 1, 0, 0, 0, 0, time.UTC)
+	encodedVal, err := payload.Encode(datetimeVal)
+	s.NoError(err)
+	request.SearchAttributes = &commonpb.SearchAttributes{
+		IndexedFields: map[string]*commonpb.Payload{
+			"CustomDatetimeField": encodedVal,
+		},
+	}
+
+	we, err := s.FrontendClient().StartWorkflowExecution(testcore.NewContext(), request)
+	s.NoError(err)
+
+	// Query using the same datetime value. On Elasticsearch this works; on
+	// SQLite this fails due to the format mismatch described above.
+	query := fmt.Sprintf(
+		`WorkflowId = "%s" and CustomDatetimeField = "%s"`,
+		id, datetimeVal.Format(time.RFC3339),
+	)
+	s.testHelperForReadOnce(we.GetRunId(), query)
+}
+
 func (s *AdvancedVisibilitySuite) testHelperForReadOnce(expectedRunID string, query string) *workflowpb.WorkflowExecutionInfo {
 	var openExecution *workflowpb.WorkflowExecutionInfo
 	listRequest := &workflowservice.ListWorkflowExecutionsRequest{
