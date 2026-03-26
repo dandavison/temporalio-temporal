@@ -1,0 +1,27 @@
+start_execution: StartExecution {
+  shape: oval
+}
+
+is_running: Is it running? {
+  shape: diamond
+}
+
+start_execution -> is_running
+
+yes_running: Request ID\nseen already? {
+  shape: diamond
+}
+
+return_previous_request: {
+  shape: oval
+}
+
+no_not_running: {
+  shape: diamond
+}
+
+is_running -> yes_running: Yes
+is_running -> no_not_running: No
+
+yes_running -> return_previous_request: Yes
+yes_running -> xxx: No
