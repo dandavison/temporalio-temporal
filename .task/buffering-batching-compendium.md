@@ -7,9 +7,6 @@
 # Table of Contents
 
 1. [Notion Documents](#1-notion-documents)
-   1. [Jessica's One-Pager: Buffering + Batching](#11-jessicas-one-pager-buffering--batching)
-   2. [Proposal: Buffering — Accept Work Now, Execute Later](#12-proposal-buffering--accept-work-now-execute-later)
-   3. [Proposal: Batch Semantics — Manage a Group of Workflows as a Unit](#13-proposal-batch-semantics--manage-a-group-of-workflows-as-a-unit)
    4. [Meeting: March 11, 2025](#14-meeting-march-11-2025)
    5. [Customer Conversations: Burst Starts](#15-customer-conversations-burst-starts)
    6. [Internal Customer Conversation Guide: Burst Starts](#16-internal-customer-conversation-guide-burst-starts)
@@ -33,119 +30,6 @@
 
 ---
 
-## 1.1 Jessica's One-Pager: Buffering + Batching
-
-**Source:** [Notion](https://www.notion.so/temporalio/Buffering-Batching-Handling-Work-Temporal-Can-t-Immediately-Process-31e8fc567738808c91e4d06bf989c581)
-**Driver:** Jessica Laughlin | **Status:** 1-pager Draft | **Created:** 2026-03-09
-
-> **Note:** "Batch" is overloaded with Temporal's existing Batch Operations (terminate/cancel/signal on existing workflows). This 1-pager uses "batch" in the industry-standard sense: submitting a large group of Workflows for execution at once. Final naming TBD.
-
-### Problem
-
-Temporal has no way to accept work it can't immediately process. Whether a user starts or signals a large burst of Workflows, hits an unexpected traffic spike, or loses connectivity during an outage, the result is the same: Workflows aren't created, Signals aren't delivered, and the burden of recovery is pushed to the application.
-
-Today, this surfaces in three ways:
-
-1. **Intentional bursts get rejected.** Nightly batch runs, backfills, or fan-outs from an upstream job hit `RESOURCE_EXHAUSTED` limits. 137 accounts (representing 86% of all platform actions; 61% excluding OpenAI) hit this via `StartWorkflow` in the last 30 days.
-2. **Traffic spikes have no graceful degradation.** When inbound volume unexpectedly exceeds APS limits, the server rejects requests immediately. The SDK retries with a backoff, but if the spike outlasts the retry window, Workflows will not be created.
-3. **Unavailability means lost work.** When Temporal is unreachable, Workflows cannot be created. During a network outage, Block lost ~11,480 Workflow starts that had to be manually recovered.
-
-Without a way to accept work it can't immediately process, Temporal pushes customers toward the same workaround: put a queue between their systems and Temporal. Stripe, OpenAI, and Coupang use Kafka. Netflix uses SQS. Meta built a MySQL workaround. 25+ named customers across all four customer segments are affected.
-
-**Our biggest customers are building infrastructure to work around our infrastructure.** Temporal should encourage customer growth, not resist it.
-
-#### Impact Classification and Strategic Alignment
-
-**Core Loop**: The accounts hitting this ceiling are the center of our target: high-value, high-volume use cases. This removes the workaround tax for those customers and makes the platform resilient to the conditions they already face.
-
-**Revenue tailwind** ($1M+ from existing accounts, plus unlocks data orchestration market):
-The 137 throttled accounts generate 86% of all platform actions. Two dynamics:
-1. **Eliminating expansion friction.** Accounts at their APS ceiling face an engineering tax to add bursty workloads. Stripe routes every bursty workload through Kafka. OpenAI built custom queueing. That tax slows adoption of new use cases and pushes some workloads to other platforms entirely.
-2. **New workload capture.** Prospects evaluating for high-volume use cases (Lululemon designing a Kafka replacement, Finch Legal wanting 5-10x their current 500 TPS) hit burst limits during evaluation.
-
-Conservative estimate: 2% additional actions growth across accounts responsible for ~$60M in actions ARR = $1.2M/year.
-
-**Market expansion prerequisite.** This is also the foundation of the planned Batch primitive. Without burst absorption and batch semantics, Temporal cannot serve data orchestration workloads (scheduled ETL, bulk processing, periodic fan-outs). This is the market where Temporal competes with Airflow, Prefect, and Dagster.
-
-FY27 alignment:
-- Objective 2: Sharpen & Scale Use Cases
-- Objective 4: Earn Enterprise Credibility
-
-### Solution and Requirements
-
-This document proposes a solution to the first user problem: intentional bursts get rejected. But the implementation must be able to solve the second and third without rearchitecting.
-
-Temporal needs two new capabilities:
-1. **Burst absorption.** Persist work on arrival, decoupling acceptance from execution. Buffered durably, drained at a sustainable rate.
-2. **Batch semantics.** Submit, track, and manage a group of Workflows as a unit.
-
-#### How it works
-
-Users submit Workflows as a Batch. Temporal accepts them at rates far above what it can execute immediately. Target: acceptance latency competitive with Kafka/SQS (single-digit ms per item). Workflows then start at a platform-controlled rate.
-
-Batches must scale to: 1M (SailPoint), "millions" (Roblox), 500M (OpenAI).
-
-**Supported Batch operations:**
-- **Create**: open a Batch, submit Workflow start requests (same params as `StartWorkflow`)
-- **Query**: aggregate status (pending, started, completed, failed counts) and per-Workflow status. Failed Workflows queryable with failure reasons.
-- **Cancel**: stop pending Workflows from starting, cancel running Workflows
-- **Pause/Resume**: stop draining new Workflows from the buffer; running Workflows unaffected
-
-#### Guarantees
-1. **Durable acceptance.** Once acknowledged, a Batch survives crashes, restarts, and failovers.
-2. **No silent loss.** Every accepted Batch and Workflow reaches a terminal state (completed, failed, or cancelled).
-3. **Batch tracking.** Each Batch has a client-provided ID for querying full status.
-4. **Cancellation completeness.** Cancel stops pending and cancels already-running.
-5. **Idempotent submission.** Retrying with the same Batch ID doesn't recreate the Batch.
-
-#### Out of Scope, But Design for Extensibility
-- Reactive overflow buffering
-- Unavailability recovery
-- Streaming/open-ended submission
-- SignalWorkflow and standalone Activity support (Meta needs 10K signals/sec; current Batch Operations cap at 50 RPS)
-- User-configurable drain rate (Stripe has requested)
-
-#### Out of Scope
-- Mutation of Batches after submission is complete
-- Recurring Batches (composition with Schedules)
-- Ordering, prioritization, or dependency guarantees between Workflows
-- Fire-and-forget delivery tier
-
-### Open Questions
-
-#### Data Gaps
-
-| Data point | Why it matters | What we know |
-|---|---|---|
-| Burst duration | Seconds vs hours changes buffer/storage requirements | Snap: sustained minutes. OpenAI: "in seconds". Most: unknown. |
-| Burst frequency | Daily/weekly/event-driven affects capacity planning | Stripe: weekly (payday). Most: unknown. |
-| Latency tolerance | "Start in seconds" vs "start within an hour" are different architectures | No customer has stated this explicitly |
-| Processing rate needs | Max execution rate actually needed post-burst | Stripe: "process 100/sec". Only explicit data point. |
-| Batch size distribution | Determines API design, default limits, memory/storage design | Upper end known (SailPoint 1M, OpenAI 500M). Typical batch size unknown. |
-
-#### Proposed Defaults
-- **Cost model:** Meter starts at execution, not submission. Buffering is platform overhead. Invalid requests not billed.
-- **APS consumption**: Batched Workflows consume APS at execution, not submission.
-- **Drain rate**: Platform-controlled, not configurable.
-- **Batch priority**: Direct (non-Batch) starts take priority over Batch draining.
-- **Batch completion**: Complete when all Workflows reach terminal state (including continue-as-new chains and child Workflows).
-- **Partial submission**: Accepted Workflows are never lost, even if connection drops mid-submission.
-
-#### Design Questions
-1. Extensibility for traffic spikes and unavailability?
-2. Architecture tiering (3x vs 1000x+ execution rate)?
-3. API shape: streaming, chunked, or repeated RPCs?
-4. Submission rate limits?
-5. Partial submission recovery?
-6. Drain rate mechanics: fixed or variable?
-7. Batch priority: explicit priority levels between Batches?
-8. Batch TTL for abandoned Batches?
-9. Observability surfaces?
-
-#### Business Questions
-1. Pricing model: billing event for submission/buffering, or absorbed into action pricing?
-2. Submission abuse: if buffering is free, what prevents unbounded invalid submissions?
-
 ### Customer Evidence (Appendix)
 
 **Tier 1 — Explicitly asking:** OpenAI (Kafka buffer, 1M+ "in seconds"), Stripe (Kafka buffer, "accept 1000/sec, process 100/sec"), Netflix (SQS for backpressure)
@@ -163,9 +47,6 @@ Batches must scale to: 1M (SailPoint), "millions" (Roblox), 500M (OpenAI).
 
 **Unknown user** (2026-03-10 17:58):
 > does this need to be explicit? iiuc in some case the customer can't predict the burst volume.... that was certainly Snap's use case.
-
-**Jessica Laughlin** (2026-03-11 15:15):
-> Good callout - Snap's case is a traffic spike, not a planned batch, so they can't pre-define what to submit. The problem statement now describes three failure modes: intentional bursts, traffic spikes, and unavailability. This phase solves the first (intentional batches with a defined submission), but the infrastructure should extend to reactive cases like Snap's without rearchitecting. Adding streaming/drip submission to Out of Scope to make this explicit.
 
 **Roey Berman** (2026-03-11 17:39):
 > Agree this is different from a batch for some of the use cases. The couple of use cases I've seen require a queue to decouple Temporal frontend's rate limiting from producers.
@@ -197,9 +78,6 @@ Batches must scale to: 1M (SailPoint), "millions" (Roblox), 500M (OpenAI).
 **Unknown user** (2026-03-10 13:32):
 > even if we're not changing anything, it would be worth understanding how this interacts with priority + fairness, right? eg, do the ergonomics allow someone to submit a batch as essentially "work on this when not pre-empted by something else". maybe this is already implicit?
 
-**Jessica Laughlin** (2026-03-10 14:31):
-> yes, great question! in the "Proposed Defaults" section, I'm claiming that this should be our default behavior: "work on this when not pre-empted by something else". I can make this bullet clearer.
-
 **Roey Berman** (2026-03-11 17:42):
 > 100% this should interact with priority and fairness. I don't think we can make this out of scope at this point.
 </details>
@@ -209,9 +87,6 @@ Batches must scale to: 1M (SailPoint), "millions" (Roblox), 500M (OpenAI).
 
 **Yimin Chen** (2026-03-10 02:32):
 > Currently, we only charge for successful start. Failed StartWorkflowExecution API call is not charged. We have to be careful about edge case where user submit 100M invalid start workflow requests.
-
-**Jessica Laughlin** (2026-03-10 14:36):
-> added open business question below from this, thank you!
 
 **Roey Berman** (2026-03-11 17:46):
 > Agree with Yimin, and don't fully understand the proposal here.
@@ -223,8 +98,6 @@ Batches must scale to: 1M (SailPoint), "millions" (Roblox), 500M (OpenAI).
 **Unknown user** (2026-03-10 13:27):
 > seems low - rough framing of revenue on order of $100k over 3 years for 12+ person months of eng. understandably a feature where revenue attribution is hard, but over 3 years $1m is on the order of 0.1% of total revenue - that doesn't seem crazy at all, does it?
 
-**Jessica Laughlin** (2026-03-10 14:19):
-> great question! I updated the revenue potential to $1M+ ARR in next three years, and added my reasoning to the impact classification section.
 </details>
 
 <details>
@@ -243,8 +116,6 @@ Batches must scale to: 1M (SailPoint), "millions" (Roblox), 500M (OpenAI).
 **Unknown user** (2026-03-10 05:50):
 > how will we control this rate? Is it fixed, or variable? Will there be different iterations based on if customers want their batch workflows completed in minutes vs hours vs days?
 
-**Jessica Laughlin** (2026-03-10 15:03):
-> good questions! I dropped into design open questions.
 </details>
 
 <details>
@@ -253,8 +124,6 @@ Batches must scale to: 1M (SailPoint), "millions" (Roblox), 500M (OpenAI).
 **Unknown user** (2026-03-10 05:52):
 > Once we have the shape of the solution we will need to evaluate. The ideal goal would be to reduce the cost of batch workflows by running them more efficiently. This can either come from more efficient queue/architecture or by allowing us to spread out rate limit spikes that force the use of TRUs.
 
-**Jessica Laughlin** (2026-03-10 14:45):
-> okay great, sounds good to me.
 </details>
 
 <details>
@@ -274,8 +143,6 @@ Batches must scale to: 1M (SailPoint), "millions" (Roblox), 500M (OpenAI).
 <details>
 <summary>Discussion 11: "Our biggest customers are building infrastructure..." (1 comment, unresolved)</summary>
 
-**Jessica Laughlin** (2026-03-11 14:47):
-> saving comment from unknown user: "huge anti-patterns we should both eliminate the need for and make sure users know is not necessary. probably covered later, but this emphasizes the value of GTM and having a best-practices reference available to devs (and coding agents)"
 </details>
 
 <details>
@@ -372,15 +239,11 @@ Batches must scale to: 1M (SailPoint), "millions" (Roblox), 500M (OpenAI).
 <details>
 <summary>Discussion 25: "Batch completion" (1 comment, unresolved)</summary>
 
-**Jessica Laughlin** (2026-03-10 14:35):
-> @Yimin Chen updated this -- is it clearer?
 </details>
 
 <details>
 <summary>Discussion 26: "Submission abuse" (1 comment, unresolved)</summary>
 
-**Jessica Laughlin** (2026-03-10 14:36):
-> @Yimin Chen -- added this question per your comment above, thank you!
 </details>
 
 <details>
@@ -391,142 +254,6 @@ Batches must scale to: 1M (SailPoint), "millions" (Roblox), 500M (OpenAI).
 </details>
 
 ---
-
-## 1.2 Proposal: Buffering — Accept Work Now, Execute Later
-
-**Source:** [Notion](https://www.notion.so/temporalio/3248fc5677388157b2cbc4def089146d)
-**Parent:** Buffering + Batching: Handling Work Temporal Can't Immediately Process
-
-**Start millions of Workflows without building a queue in front of Temporal.**
-
-### The problem
-
-When you need to start millions of Workflows from a background job, Temporal rejects what it can't immediately process. So you put a queue in front of Temporal and build the retry, pagination, backoff, and reconciliation yourself.
-
-> In our Feb 2026 sync, your team described pumping millions of records into Kafka just to pace Workflow starts - building and maintaining a consumer that Temporal should make unnecessary.
-
-### How it would work
-
-Temporal accepts every Workflow start request on arrival and starts Workflows as capacity allows.
-
-### Walkthrough: a background backfill job
-
-| Step | Today | With buffering |
-|------|-------|----------------|
-| 1. Your job scans the database, finds 2M records that need to turn into Workflows | Same | Same |
-| 2. Your job sends 2M Workflow starts | Build a Kafka consumer to dequeue, pace, and retry. You own this infrastructure. | Temporal accepts each item immediately and persists it. Drains at sustainable rate behind the scenes. |
-| 3. 50 Workflows fail to start (duplicate Workflow ID, invalid arguments) | Failures may surface in consumer logs, DLQ, or silently disappear depending on your retry logic. | Temporal marks each as failed with a reason. No silent loss. |
-| 4. Job is done. Did all 2M Workflows execute? | You diff your database against Temporal to find gaps. Some may have been silently dropped by your consumer. | Temporal accepted all 2M durably. Any that couldn't start are marked failed with a reason. You monitor Workflow completion the same way you do today. |
-
-### The contract
-
-**We guarantee:**
-- **Durable acceptance.** Survives crashes and failovers.
-- **No silent loss.** Every request either starts or fails with a reason.
-- **Acceptance speed.** Acceptance latency competitive with Kafka/SQS.
-- **Non-disruptive.** Direct starts are never slowed by buffered work draining. Buffered Workflows start as capacity becomes available.
-
-**We don't guarantee:**
-- **Start latency.** Workflows start when capacity is available, not on a deadline.
-- **User-controlled drain rate** in v1.
-- **Unlimited buffer size.** Platform limits apply.
-
-**Needs design:** How you check on buffered Workflows before they start. Today, a started Workflow is a running Workflow - buffering adds a new state in between.
-
-### What this doesn't do
-
-- No way to manage a group of Workflows as a unit (query progress, cancel, pause). Buffering handles individual Workflow starts, not groups.
-- No dependencies between items. One buffered Workflow can't wait for another to complete.
-- No guaranteed start order. Buffered Workflows may start in any order, regardless of acceptance order.
-- Not a job scheduler. This doesn't decide when to start work - your application triggers it.
-
-### Best fit when
-
-1. The Kafka/queue overhead is the sharpest pain - more than the lack of lifecycle management for groups of Workflows.
-2. You would use this for new workloads going forward. Some existing Kafka-buffered workloads might migrate too.
-3. "Backfill when idle" (buffered Workflows drain behind direct traffic) is acceptable for most use cases.
-4. Submission speed matters - if acceptance latency were 100ms+ per item, this wouldn't be competitive with Kafka.
-
-### Specific feedback we're looking for
-
-1. Your highest-volume job today: how many Workflows per burst, how long does the burst last, how often does it run?
-2. What acceptance latency per item do you need? Kafka/SQS return in single-digit ms.
-3. What latency between acceptance and first Workflow execution is acceptable?
-4. Buffered Workflows drain behind direct StartWorkflow calls. Does that work, or do some workloads need to drain faster?
-5. Which workloads would use this first? Would you migrate existing Kafka-buffered workloads?
-6. Where does this rank against everything else you're solving with Temporal?
-7. Buffered Workflows sit in an "accepted but not yet started" state. How would you want to check on them?
-
-**Comments:** None.
-
----
-
-## 1.3 Proposal: Batch Semantics — Manage a Group of Workflows as a Unit
-
-**Source:** [Notion](https://www.notion.so/temporalio/3248fc56773881e490d9c7c5eac429b2)
-**Parent:** Buffering + Batching: Handling Work Temporal Can't Immediately Process
-
-**Manage millions of Workflows as a group without building your own tracking infrastructure.**
-
-### The problem
-
-When you start thousands or millions of Workflows from a single job, there's no way to manage them as a group. You can't ask "is this batch done?" or "cancel everything I just started." So you build tracking and reconciliation yourself.
-
-> In our Feb 2026 sync, your team described needing a batch ID to track groups of Workflows - especially for use cases like external partner data where records arrive in bulk and need to be managed as a unit.
-
-### How it would work
-
-Temporal tracks a batch of Workflow starts as a single unit with a shared lifecycle.
-
-### Walkthrough: an external data ingestion job
-
-| Step | Today | With batch semantics |
-|---|---|---|
-| 1. External partner drops a file with 500K records that each need a Workflow | Same | Same |
-| 2. Your job sends 500K Workflow starts | Call StartWorkflow in a loop. Track IDs yourself (database table, Redis set, etc.). | Add Workflow starts to a batch. Temporal tracks membership. You still pace to stay within rate limits. |
-| 3. You need to cancel the batch | Query your tracking store for all IDs you recorded. Loop through and cancel each. Any you missed keep running. | Cancel the batch. Temporal cancels pending and running Workflows in the batch. |
-| 4. Job is done. Did all 500K Workflows execute? What failed? | Poll your tracking store. Diff against Temporal. Investigate failures individually. | Query the batch. Temporal returns counts by status. Drill into failed items - each has a reason. |
-
-### The contract
-
-**We guarantee:**
-- **Batch tracking.** Every Workflow submitted to a batch is tracked. Query returns full accounting: completed, failed, cancelled, running, pending.
-- **Batch completion.** When Temporal reports a batch as complete, every Workflow in the batch has finished.
-- **Cancellation.** Cancel stops pending items and cancels running Workflows in the batch.
-- **Idempotent submission.** Client-provided batch ID. No double-create.
-
-**We don't guarantee:**
-- **Batch-level retry policy.** Individual Workflow retry policies still apply.
-- **Unlimited batch size.** Platform limits apply.
-- **Fire-and-forget (untracked) submission** in v1. Every item is tracked until it finishes.
-
-### What this doesn't do
-
-- No burst absorption or queueing. If you submit faster than Temporal can process, you still hit rate limits.
-- No dependencies between items within a batch.
-- No guaranteed processing order.
-- No cross-batch dependencies.
-- Not a job scheduler.
-
-### Best fit when
-
-1. The reconciliation overhead is the sharpest pain.
-2. You need to cancel or query groups of Workflows regularly.
-3. "Is this batch done?" is a question you currently answer with custom infrastructure.
-4. You have multiple use cases that submit groups of Workflows and each has its own tracking logic.
-
-### Specific feedback we're looking for
-
-1. How large are your batches and how many run concurrently per namespace?
-2. Do you submit all items upfront or stream them in over time?
-3. If you cancel a batch mid-flight, how fast do you need running Workflows to stop?
-4. At your batch sizes, do you need to query individual items, or are aggregate counts enough?
-5. How do you want to know a batch is done — poll, webhook, or something else?
-6. Which use case would you batch first? What does your tracking infrastructure look like today?
-7. Where does this rank against everything else you're solving with Temporal?
-
-**Comments:** None.
-
 ---
 
 ## 1.4 Meeting: March 11, 2025
