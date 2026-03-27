@@ -11,7 +11,6 @@ import (
 	"go.temporal.io/api/workflowservice/v1"
 	"go.temporal.io/server/chasm"
 	"go.temporal.io/server/chasm/lib/activity/gen/activitypb/v1"
-	"go.temporal.io/server/common"
 	"go.temporal.io/server/common/log"
 	"go.temporal.io/server/common/metrics"
 	"go.temporal.io/server/common/namespace"
@@ -358,11 +357,12 @@ func (h *frontendHandler) validateAndPopulateStartRequest(
 	req *workflowservice.StartActivityExecutionRequest,
 	namespaceID namespace.ID,
 ) (*workflowservice.StartActivityExecutionRequest, error) {
+	// All mutations below are idempotent across retries from the
+	// RetryableInterceptor, which re-invokes the handler with the same request
+	// pointer.
 	if req.GetRequestId() == "" {
 		req.RequestId = uuid.NewString()
 	}
-	// Since validation includes mutation of the request, we clone it first so that any retries use the original request.
-	req = common.CloneProto(req)
 	activityType := req.ActivityType.GetName()
 
 	if req.RetryPolicy == nil {
@@ -394,8 +394,8 @@ func (h *frontendHandler) validateAndPopulateStartRequest(
 }
 
 // validateAndNormalizeStartActivityExecutionRequest validates and normalizes the standalone
-// activity specific attributes. Note that this method mutates the input params; the caller must
-// clone the request if necessary (e.g. if it may be retried).
+// activity specific attributes. All mutations are guarded (applied only when the field is
+// zero/unspecified) and therefore idempotent across retries.
 func (h *frontendHandler) validateAndNormalizeStartActivityExecutionRequest(
 	req *workflowservice.StartActivityExecutionRequest,
 ) error {
