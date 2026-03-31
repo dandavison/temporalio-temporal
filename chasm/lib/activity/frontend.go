@@ -293,11 +293,7 @@ func (h *frontendHandler) TerminateActivityExecution(
 		return nil, err
 	}
 
-	if req.GetRequestId() == "" {
-		req.RequestId = uuid.NewString()
-	}
-
-	if err := validateTerminateActivityExecutionRequest(
+	if err := validateAndNormalizeTerminateRequest(
 		req,
 		h.config.MaxIDLengthLimit(),
 		h.config.BlobSizeLimitError,
@@ -330,11 +326,7 @@ func (h *frontendHandler) RequestCancelActivityExecution(
 		return nil, err
 	}
 
-	if req.GetRequestId() == "" {
-		req.RequestId = uuid.NewString()
-	}
-
-	if err := validateRequestCancelActivityExecutionRequest(
+	if err := validateAndNormalizeCancelRequest(
 		req,
 		h.config.MaxIDLengthLimit(),
 		h.config.BlobSizeLimitError,

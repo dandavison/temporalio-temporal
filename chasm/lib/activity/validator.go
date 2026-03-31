@@ -317,7 +317,7 @@ func validatePollActivityExecutionRequest(
 	return nil
 }
 
-func validateRequestCancelActivityExecutionRequest(
+func validateAndNormalizeCancelRequest(
 	req *workflowservice.RequestCancelActivityExecutionRequest,
 	maxIDLengthLimit int,
 	blobSizeLimitError dynamicconfig.IntPropertyFnWithNamespaceFilter,
@@ -333,7 +333,9 @@ func validateRequestCancelActivityExecutionRequest(
 			len(req.GetActivityId()), maxIDLengthLimit)
 	}
 
-	if len(req.GetRequestId()) > maxIDLengthLimit {
+	if req.GetRequestId() == "" {
+		req.RequestId = uuid.NewString()
+	} else if len(req.GetRequestId()) > maxIDLengthLimit {
 		return serviceerror.NewInvalidArgumentf("request ID exceeds length limit. Length=%d Limit=%d",
 			len(req.GetRequestId()), maxIDLengthLimit)
 	}
@@ -388,7 +390,7 @@ func validateDeleteActivityExecutionRequest(
 	return nil
 }
 
-func validateTerminateActivityExecutionRequest(
+func validateAndNormalizeTerminateRequest(
 	req *workflowservice.TerminateActivityExecutionRequest,
 	maxIDLengthLimit int,
 	blobSizeLimitError dynamicconfig.IntPropertyFnWithNamespaceFilter,
@@ -404,7 +406,9 @@ func validateTerminateActivityExecutionRequest(
 			len(req.GetActivityId()), maxIDLengthLimit)
 	}
 
-	if len(req.GetRequestId()) > maxIDLengthLimit {
+	if req.GetRequestId() == "" {
+		req.RequestId = uuid.NewString()
+	} else if len(req.GetRequestId()) > maxIDLengthLimit {
 		return serviceerror.NewInvalidArgumentf("request ID exceeds length limit. Length=%d Limit=%d",
 			len(req.GetRequestId()), maxIDLengthLimit)
 	}

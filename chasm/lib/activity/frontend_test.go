@@ -62,4 +62,32 @@ func TestRequestIdStableAcrossRetries(t *testing.T) {
 	t.Run("client-provided", func(t *testing.T) {
 		validateTwoAttempts(t, newReq("my-request-id"))
 	})
+
+	t.Run("terminate/server-generated", func(t *testing.T) {
+		req := &workflowservice.TerminateActivityExecutionRequest{
+			Namespace:  "test-namespace",
+			ActivityId: "test-activity",
+		}
+		require.NoError(t, validateAndNormalizeTerminateRequest(
+			req, defaultMaxIDLengthLimit, defaultBlobSizeLimitError, defaultBlobSizeLimitWarn, log.NewNoopLogger()))
+		require.NotEmpty(t, req.RequestId)
+		firstID := req.RequestId
+		require.NoError(t, validateAndNormalizeTerminateRequest(
+			req, defaultMaxIDLengthLimit, defaultBlobSizeLimitError, defaultBlobSizeLimitWarn, log.NewNoopLogger()))
+		require.Equal(t, firstID, req.RequestId)
+	})
+
+	t.Run("cancel/server-generated", func(t *testing.T) {
+		req := &workflowservice.RequestCancelActivityExecutionRequest{
+			Namespace:  "test-namespace",
+			ActivityId: "test-activity",
+		}
+		require.NoError(t, validateAndNormalizeCancelRequest(
+			req, defaultMaxIDLengthLimit, defaultBlobSizeLimitError, defaultBlobSizeLimitWarn, log.NewNoopLogger()))
+		require.NotEmpty(t, req.RequestId)
+		firstID := req.RequestId
+		require.NoError(t, validateAndNormalizeCancelRequest(
+			req, defaultMaxIDLengthLimit, defaultBlobSizeLimitError, defaultBlobSizeLimitWarn, log.NewNoopLogger()))
+		require.Equal(t, firstID, req.RequestId)
+	})
 }
