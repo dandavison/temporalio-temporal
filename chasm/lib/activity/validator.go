@@ -329,7 +329,9 @@ func validateAndNormalizeStartRequest(
 	saMapperProvider searchattribute.MapperProvider,
 	saValidator *searchattribute.Validator,
 ) error {
-	if len(req.GetRequestId()) > maxIDLengthLimit {
+	if req.GetRequestId() == "" {
+		req.RequestId = uuid.NewString()
+	} else if len(req.GetRequestId()) > maxIDLengthLimit {
 		return serviceerror.NewInvalidArgumentf("request ID exceeds length limit. Length=%d Limit=%d",
 			len(req.GetRequestId()), maxIDLengthLimit)
 	}
@@ -416,7 +418,7 @@ func validateAndNormalizeCancelRequest(
 	return nil
 }
 
-func validateDeleteActivityExecutionRequest(
+func validateAndNormalizeDeleteRequest(
 	req *workflowservice.DeleteActivityExecutionRequest,
 	maxIDLengthLimit int,
 ) error {

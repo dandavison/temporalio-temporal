@@ -258,7 +258,7 @@ func (h *frontendHandler) DeleteActivityExecution(
 		return nil, ErrStandaloneActivityDisabled
 	}
 
-	if err := validateDeleteActivityExecutionRequest(req, h.config.MaxIDLengthLimit()); err != nil {
+	if err := validateAndNormalizeDeleteRequest(req, h.config.MaxIDLengthLimit()); err != nil {
 		return nil, err
 	}
 
@@ -384,7 +384,6 @@ func (h *frontendHandler) validateAndPopulateStartRequest(
 
 	return req, nil
 }
-
 
 // activityOptionsFromStartRequest builds an ActivityOptions from the inlined fields
 // of a StartActivityExecutionRequest for use with shared validation logic.
