@@ -350,10 +350,12 @@ func (h *frontendHandler) validateAndPopulateStartRequest(
 	req *workflowservice.StartActivityExecutionRequest,
 	namespaceID namespace.ID,
 ) (*workflowservice.StartActivityExecutionRequest, error) {
+	// Since validation mutates the request, clone it first so that retries use the original
+	// request. However if the client did not set a request ID then set that before cloning so that
+	// retries use the same request ID.
 	if req.GetRequestId() == "" {
 		req.RequestId = uuid.NewString()
 	}
-	// Since validation includes mutation of the request, we clone it first so that any retries use the original request.
 	req = common.CloneProto(req)
 	activityType := req.ActivityType.GetName()
 
