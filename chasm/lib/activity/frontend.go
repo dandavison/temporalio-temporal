@@ -16,7 +16,6 @@ import (
 	"go.temporal.io/server/common/metrics"
 	"go.temporal.io/server/common/namespace"
 	"go.temporal.io/server/common/searchattribute"
-	"go.temporal.io/server/common/testing/testhooks"
 	"google.golang.org/protobuf/types/known/durationpb"
 	"google.golang.org/protobuf/types/known/emptypb"
 	"google.golang.org/protobuf/types/known/timestamppb"
@@ -45,7 +44,6 @@ type frontendHandler struct {
 	namespaceRegistry namespace.Registry
 	saMapperProvider  searchattribute.MapperProvider
 	saValidator       *searchattribute.Validator
-	testHooks         testhooks.TestHooks
 }
 
 // NewFrontendHandler creates a new FrontendHandler instance for processing activity frontend requests.
@@ -57,7 +55,6 @@ func NewFrontendHandler(
 	namespaceRegistry namespace.Registry,
 	saMapperProvider searchattribute.MapperProvider,
 	saValidator *searchattribute.Validator,
-	testHooks testhooks.TestHooks,
 ) FrontendHandler {
 	return &frontendHandler{
 		client:            client,
@@ -67,7 +64,6 @@ func NewFrontendHandler(
 		namespaceRegistry: namespaceRegistry,
 		saMapperProvider:  saMapperProvider,
 		saValidator:       saValidator,
-		testHooks:         testHooks,
 	}
 }
 
@@ -98,12 +94,6 @@ func (h *frontendHandler) StartActivityExecution(ctx context.Context, req *workf
 	modifiedReq, err := h.validateAndPopulateStartRequest(req, namespaceID)
 	if err != nil {
 		return nil, err
-	}
-
-	if hook, ok := testhooks.Get(h.testHooks, testhooks.ActivityStartBeforeResponse, namespaceID); ok {
-		if err := hook(modifiedReq); err != nil {
-			return nil, err
-		}
 	}
 
 	resp, err := h.client.StartActivityExecution(ctx, &activitypb.StartActivityExecutionRequest{
