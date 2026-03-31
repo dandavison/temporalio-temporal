@@ -3,6 +3,7 @@ package testhooks
 import (
 	"time"
 
+	"go.temporal.io/api/workflowservice/v1"
 	"go.temporal.io/server/common/namespace"
 )
 
@@ -18,6 +19,7 @@ var (
 	MatchingIgnoreRoutingConfigRevisionCheck = newKey[bool, namespace.ID]()
 	MatchingDeploymentRegisterErrorBackoff   = newKey[time.Duration, namespace.ID]()
 	MatchingForwardTaskDelay                 = newKey[time.Duration, namespace.ID]()
+	ActivityStartBeforeResponse              = newKey[func(*workflowservice.StartActivityExecutionRequest) error, namespace.ID]()
 )
 
 // keyID is a unique identifier for a key, used as a map key.

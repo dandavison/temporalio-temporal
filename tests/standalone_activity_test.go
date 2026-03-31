@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -26,6 +27,7 @@ import (
 	"go.temporal.io/server/common/payloads"
 	"go.temporal.io/server/common/tasktoken"
 	"go.temporal.io/server/common/testing/protorequire"
+	"go.temporal.io/server/common/testing/testhooks"
 	"go.temporal.io/server/common/testing/testvars"
 	"go.temporal.io/server/tests/testcore"
 	"google.golang.org/grpc/codes"
@@ -268,6 +270,47 @@ func (s *standaloneActivityTestSuite) TestIDConflictPolicy() {
 			require.True(t, resp.GetStarted())
 		})
 	})
+}
+
+func (s *standaloneActivityTestSuite) TestServerGeneratedRequestIDStableAcrossRetries() {
+	t := s.T()
+	ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
+	defer cancel()
+
+	activityID := testcore.RandomizeStr(t.Name())
+	taskQueue := testcore.RandomizeStr(t.Name())
+
+	var requestIDs []string
+	var calls atomic.Int32
+	cleanup := s.InjectHook(testhooks.NewHook(
+		testhooks.ActivityStartBeforeResponse,
+		func(req *workflowservice.StartActivityExecutionRequest) error {
+			requestIDs = append(requestIDs, req.GetRequestId())
+			if calls.Add(1) == 1 {
+				return serviceerror.NewUnavailable("injected failure")
+			}
+			return nil
+		},
+	))
+	defer cleanup()
+
+	resp, err := s.FrontendClient().StartActivityExecution(ctx, &workflowservice.StartActivityExecutionRequest{
+		Namespace:    s.Namespace().String(),
+		ActivityId:   activityID,
+		ActivityType: s.tv.ActivityType(),
+		Identity:     s.tv.WorkerIdentity(),
+		Input:        defaultInput,
+		TaskQueue: &taskqueuepb.TaskQueue{
+			Name: taskQueue,
+		},
+		StartToCloseTimeout: durationpb.New(defaultStartToCloseTimeout),
+		// No RequestId — server generates one.
+	})
+	require.NoError(t, err)
+	require.True(t, resp.GetStarted())
+	require.Equal(t, int32(2), calls.Load(), "expected exactly two handler attempts")
+	require.Len(t, requestIDs, 2)
+	require.Equal(t, requestIDs[0], requestIDs[1], "server-generated request ID must be stable across retries")
 }
 
 func (s *standaloneActivityTestSuite) TestPollActivityTaskQueue() {
