@@ -377,7 +377,7 @@ func (h *frontendHandler) validateAndPopulateStartRequest(
 	}
 	applyActivityOptionsToStartRequest(opts, req)
 
-	err = h.validateAndNormalizeStartActivityExecutionRequest(req)
+	err = validateAndNormalizeStartRequest(req, h.config.MaxIDLengthLimit(), h.config.BlobSizeLimitError, h.config.BlobSizeLimitWarn, h.logger, h.saMapperProvider, h.saValidator)
 	if err != nil {
 		return nil, err
 	}
@@ -385,50 +385,6 @@ func (h *frontendHandler) validateAndPopulateStartRequest(
 	return req, nil
 }
 
-// validateAndNormalizeStartActivityExecutionRequest validates and normalizes the standalone
-// activity specific attributes. Note that this method mutates the input params; the caller must
-// clone the request if necessary (e.g. if it may be retried).
-func (h *frontendHandler) validateAndNormalizeStartActivityExecutionRequest(
-	req *workflowservice.StartActivityExecutionRequest,
-) error {
-	maxIDLengthLimit := h.config.MaxIDLengthLimit()
-
-	if len(req.GetRequestId()) > maxIDLengthLimit {
-		return serviceerror.NewInvalidArgumentf("request ID exceeds length limit. Length=%d Limit=%d",
-			len(req.GetRequestId()), maxIDLengthLimit)
-	}
-
-	if len(req.GetIdentity()) > maxIDLengthLimit {
-		return serviceerror.NewInvalidArgumentf("identity exceeds length limit. Length=%d Limit=%d",
-			len(req.GetIdentity()), maxIDLengthLimit)
-	}
-
-	if err := normalizeAndValidateIDPolicy(req); err != nil {
-		return err
-	}
-
-	if err := validateBlobSize(
-		req.GetActivityId(),
-		"StartActivityExecution",
-		h.config.BlobSizeLimitError,
-		h.config.BlobSizeLimitWarn,
-		req.Input.Size(),
-		h.logger,
-		req.GetNamespace()); err != nil {
-		return serviceerror.NewInvalidArgument("input exceeds length limit")
-	}
-
-	if req.GetSearchAttributes() != nil {
-		if err := validateAndNormalizeSearchAttributes(
-			req,
-			h.saMapperProvider,
-			h.saValidator); err != nil {
-			return err
-		}
-	}
-
-	return nil
-}
 
 // activityOptionsFromStartRequest builds an ActivityOptions from the inlined fields
 // of a StartActivityExecutionRequest for use with shared validation logic.

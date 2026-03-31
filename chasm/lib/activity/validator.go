@@ -317,6 +317,55 @@ func validatePollActivityExecutionRequest(
 	return nil
 }
 
+// validateAndNormalizeStartRequest validates and normalizes the standalone
+// activity specific attributes. Note that this function mutates the input params; the caller must
+// clone the request if necessary (e.g. if it may be retried).
+func validateAndNormalizeStartRequest(
+	req *workflowservice.StartActivityExecutionRequest,
+	maxIDLengthLimit int,
+	blobSizeLimitError dynamicconfig.IntPropertyFnWithNamespaceFilter,
+	blobSizeLimitWarn dynamicconfig.IntPropertyFnWithNamespaceFilter,
+	logger log.Logger,
+	saMapperProvider searchattribute.MapperProvider,
+	saValidator *searchattribute.Validator,
+) error {
+	if len(req.GetRequestId()) > maxIDLengthLimit {
+		return serviceerror.NewInvalidArgumentf("request ID exceeds length limit. Length=%d Limit=%d",
+			len(req.GetRequestId()), maxIDLengthLimit)
+	}
+
+	if len(req.GetIdentity()) > maxIDLengthLimit {
+		return serviceerror.NewInvalidArgumentf("identity exceeds length limit. Length=%d Limit=%d",
+			len(req.GetIdentity()), maxIDLengthLimit)
+	}
+
+	if err := normalizeAndValidateIDPolicy(req); err != nil {
+		return err
+	}
+
+	if err := validateBlobSize(
+		req.GetActivityId(),
+		"StartActivityExecution",
+		blobSizeLimitError,
+		blobSizeLimitWarn,
+		req.Input.Size(),
+		logger,
+		req.GetNamespace()); err != nil {
+		return serviceerror.NewInvalidArgument("input exceeds length limit")
+	}
+
+	if req.GetSearchAttributes() != nil {
+		if err := validateAndNormalizeSearchAttributes(
+			req,
+			saMapperProvider,
+			saValidator); err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+
 func validateAndNormalizeCancelRequest(
 	req *workflowservice.RequestCancelActivityExecutionRequest,
 	maxIDLengthLimit int,
