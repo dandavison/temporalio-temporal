@@ -61,7 +61,7 @@ start_path: "Start path\n(no RunID known yet)" {
   style.stroke-width: 2
 }
 
-lease_path: "Read/Mutate path\n(RunID known)" {
+lease_path: "Read/Mutate path" {
   style.fill: "#c8b8e8"
   style.stroke: "#4a2d8a"
   style.stroke-width: 2
@@ -199,34 +199,96 @@ brand_new_check -> conflict: "conflict\n(CurrentWorkflowConditionFailedError)" {
 }
 
 # ================================================================
-# READ/MUTATE PATH (non-empty RunID)
+# READ/MUTATE PATH
 # ================================================================
 
-get_exec_lease: "getExecutionLease\nchasm_engine.go:1084\nref.RunID is non-empty" {
+get_exec_lease: "getExecutionLease\nchasm_engine.go:1084" {
   style.fill: "#ffffff"
 }
 
 lease_path -> get_exec_lease
 
-consistency_check: "GetChasmLeaseWithConsistencyCheck\nconsistency_checker.go:164\nWorkflowKey has RunID set" {
+consistency_check: "GetChasmLeaseWithConsistencyCheck\nconsistency_checker.go:164" {
   style.fill: "#ffffff"
 }
 
 get_exec_lease -> consistency_check
 
-branch: "getWorkflowLeaseImpl\nconsistency_checker.go:175\nlen(RunID) != 0 -> getWorkflowLease" {
+branch: "getWorkflowLeaseImpl\nconsistency_checker.go:175" {
   style.fill: "#ffffff"
 }
 
 consistency_check -> branch
 
+# ----------------------------------------------------------------
+# Sub-path A: RunID present -> straight to getWorkflowLease
+# ----------------------------------------------------------------
+
+branch -> get_wf_lease: "len(RunID) != 0"
+
+# ----------------------------------------------------------------
+# Sub-path B: RunID absent -> resolve via getCurrentWorkflowLease
+# ----------------------------------------------------------------
+
+get_current_lease: "getCurrentWorkflowLease\nconsistency_checker.go:228" {
+  style.fill: "#ffffff"
+}
+
+branch -> get_current_lease: "RunID == \"\"" {
+  style.stroke-dash: 5
+}
+
+resolve_run_id: "GetCurrentChasmRunID\nconsistency_checker.go:236\n-> cache.GetCurrentRunID" {
+  style.fill: "#ffffff"
+}
+
+get_current_lease -> resolve_run_id
+
+lock_sentinel: "GetOrCreateCurrentExecution\ncache.go:451\nLocks empty-RunID sentinel slot" {
+  style.fill: "#ffe066"
+  style.stroke: "#8a6d00"
+  style.stroke-width: 3
+}
+
+resolve_run_id -> lock_sentinel: "memory (sentinel lock)" {
+  style.stroke: "#8a6d00"
+  style.stroke-width: 3
+}
+
+get_current_exec: "shardContext.GetCurrentExecution\ncache.go:464\nReads current RunID from DB" {
+  style.fill: "#f5a0a0"
+  style.stroke: "#a01010"
+  style.stroke-width: 3
+}
+
+lock_sentinel -> get_current_exec: "persistence read" {
+  style.stroke: "#a01010"
+  style.stroke-width: 3
+}
+
+get_current_exec -> get_wf_lease: "resolved RunID"
+
+# After getWorkflowLease, if execution is not running,
+# double-checks current RunID hasn't changed
+recheck: "Re-check: GetCurrentChasmRunID\nconsistency_checker.go:261\n(only if execution not running;\nguards against current-run races)" {
+  style.fill: "#f5a0a0"
+  style.stroke: "#a01010"
+  style.stroke-width: 3
+}
+
+get_current_lease -> recheck: "if not running" {
+  style.stroke-dash: 5
+}
+
+# ----------------------------------------------------------------
+# Shared: getWorkflowLease onwards (both sub-paths converge)
+# ----------------------------------------------------------------
+
 get_wf_lease: "getWorkflowLease\nconsistency_checker.go:275" {
   style.fill: "#ffffff"
 }
 
-branch -> get_wf_lease
-
-get_or_create_chasm: "GetOrCreateChasmExecution\ncache.go:216\nRunID is non-empty -> skip\nGetCurrentRunID persistence lookup\n(validateWorkflowExecutionInfo:412-427)" {
+get_or_create_chasm: "GetOrCreateChasmExecution\ncache.go:216" {
   style.fill: "#ffffff"
 }
 
