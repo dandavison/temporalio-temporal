@@ -20,7 +20,6 @@ import (
 	"go.temporal.io/server/chasm"
 	"go.temporal.io/server/chasm/lib/activity/gen/activitypb/v1"
 	"go.temporal.io/server/chasm/lib/callback"
-	callbackspb "go.temporal.io/server/chasm/lib/callback/gen/callbackpb/v1"
 	"go.temporal.io/server/common"
 	"go.temporal.io/server/common/backoff"
 	"go.temporal.io/server/common/metrics"
@@ -266,7 +265,7 @@ func (a *Activity) RecordCompleted(ctx chasm.MutableContext, applyFn func(ctx ch
 	if err := applyFn(ctx); err != nil {
 		return err
 	}
-	return a.processCloseCallbacks(ctx)
+	return callback.ScheduleStandbyCallbacks(ctx, a.Callbacks)
 }
 
 func (a *Activity) addCompletionCallbacks(
@@ -275,61 +274,8 @@ func (a *Activity) addCompletionCallbacks(
 	completionCallbacks []*commonpb.Callback,
 	maxCallbacks int,
 ) error {
-	if len(completionCallbacks) == 0 {
-		return nil
-	}
-
-	currentCount := len(a.Callbacks)
-	if len(completionCallbacks)+currentCount > maxCallbacks {
-		return serviceerror.NewFailedPreconditionf(
-			"cannot attach more than %d callbacks to an activity (%d callbacks already attached)",
-			maxCallbacks,
-			currentCount,
-		)
-	}
-
-	if a.Callbacks == nil {
-		a.Callbacks = make(chasm.Map[string, *callback.Callback], len(completionCallbacks))
-	}
-
 	registrationTime := timestamppb.New(ctx.Now(a))
-
-	for idx, cb := range completionCallbacks {
-		chasmCB := &callbackspb.Callback{
-			Links: cb.GetLinks(),
-		}
-		switch variant := cb.Variant.(type) {
-		case *commonpb.Callback_Nexus_:
-			chasmCB.Variant = &callbackspb.Callback_Nexus_{
-				Nexus: &callbackspb.Callback_Nexus{
-					Url:    variant.Nexus.GetUrl(),
-					Header: variant.Nexus.GetHeader(),
-				},
-			}
-		default:
-			return serviceerror.NewInvalidArgumentf("unsupported callback variant: %T", variant)
-		}
-
-		id := fmt.Sprintf("%s-%d", requestID, idx)
-		callbackObj := callback.NewCallback(requestID, registrationTime, &callbackspb.CallbackState{}, chasmCB)
-		a.Callbacks[id] = chasm.NewComponentField(ctx, callbackObj)
-	}
-	return nil
-}
-
-// processCloseCallbacks triggers all STANDBY completion callbacks by transitioning them
-// to SCHEDULED state, which causes the callback library to invoke them.
-func (a *Activity) processCloseCallbacks(ctx chasm.MutableContext) error {
-	for _, field := range a.Callbacks {
-		cb := field.Get(ctx)
-		if cb.Status != callbackspb.CALLBACK_STATUS_STANDBY {
-			continue
-		}
-		if err := callback.TransitionScheduled.Apply(cb, ctx, callback.EventScheduled{}); err != nil {
-			return err
-		}
-	}
-	return nil
+	return callback.AddCallbacks(ctx, &a.Callbacks, registrationTime, requestID, completionCallbacks, maxCallbacks)
 }
 
 // GetNexusCompletion returns the activity's completion data in the format required by the Nexus callback invocation.

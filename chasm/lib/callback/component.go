@@ -141,6 +141,71 @@ func (c *Callback) saveResult(
 	}
 }
 
+// AddCallbacks converts API callbacks to CHASM Callback components and adds them to the provided
+// map. It enforces the maxCallbacks limit and returns FailedPrecondition if exceeded.
+func AddCallbacks(
+	ctx chasm.MutableContext,
+	callbacks *chasm.Map[string, *Callback],
+	registrationTime *timestamppb.Timestamp,
+	requestID string,
+	apiCallbacks []*commonpb.Callback,
+	maxCallbacks int,
+) error {
+	if len(apiCallbacks) == 0 {
+		return nil
+	}
+
+	currentCount := len(*callbacks)
+	if len(apiCallbacks)+currentCount > maxCallbacks {
+		return serviceerror.NewFailedPreconditionf(
+			"cannot attach more than %d callbacks to an execution (%d callbacks already attached)",
+			maxCallbacks,
+			currentCount,
+		)
+	}
+
+	if *callbacks == nil {
+		*callbacks = make(chasm.Map[string, *Callback], len(apiCallbacks))
+	}
+
+	for idx, cb := range apiCallbacks {
+		chasmCB := &callbackspb.Callback{
+			Links: cb.GetLinks(),
+		}
+		switch variant := cb.Variant.(type) {
+		case *commonpb.Callback_Nexus_:
+			chasmCB.Variant = &callbackspb.Callback_Nexus_{
+				Nexus: &callbackspb.Callback_Nexus{
+					Url:    variant.Nexus.GetUrl(),
+					Header: variant.Nexus.GetHeader(),
+				},
+			}
+		default:
+			return serviceerror.NewInvalidArgumentf("unsupported callback variant: %T", variant)
+		}
+
+		id := fmt.Sprintf("%s-%d", requestID, idx)
+		callbackObj := NewCallback(requestID, registrationTime, &callbackspb.CallbackState{}, chasmCB)
+		(*callbacks)[id] = chasm.NewComponentField(ctx, callbackObj)
+	}
+	return nil
+}
+
+// ScheduleStandbyCallbacks transitions all STANDBY callbacks in the map to SCHEDULED state,
+// which causes the callback library to invoke them.
+func ScheduleStandbyCallbacks(ctx chasm.MutableContext, callbacks chasm.Map[string, *Callback]) error {
+	for _, field := range callbacks {
+		cb := field.Get(ctx)
+		if cb.Status != callbackspb.CALLBACK_STATUS_STANDBY {
+			continue
+		}
+		if err := TransitionScheduled.Apply(cb, ctx, EventScheduled{}); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 // ToAPICallback converts a CHASM callback to API callback proto.
 func (c *Callback) ToAPICallback() (*commonpb.Callback, error) {
 	// Convert CHASM callback proto to API callback proto
