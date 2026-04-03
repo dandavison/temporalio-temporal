@@ -1,0 +1,222 @@
+Meeting: Standalone Activities - Async Deduplication
+Participants: Max, Roey, Dan, Lina
+
+---
+
+Dan: Okay, can you hear me?
+
+Max: I can hear you, Dan.
+
+Dan: Yep.
+
+Roey: We hear you.
+
+Dan: Okay.
+
+Max: Oh, interesting, this was before that. I thought it would only work for the cloud. You are saying that even in Cassandra, this is slower because... are you talking about CDS only or are you talking about OSS as well?
+
+Max: No, because my understanding is that in OSS it is just a batch update to Cassandra using a conditional, practically, lightweight transaction. And in CDS, there is no conditional update at all, because in CDS we never write an additional lightweight transaction with Cassandra, we just do read from Cassandra before doing write. So practically we are saving read, but given that we are still doing it for Cassandra, reads in Cassandra are actually even slower than writes, so at least not good performance. So frankly, my understanding is that it will not help OSS, unless we put something like a queue in front of that, which is also possible, right? And then we will save the read in OSS, which will at least help the latency.
+
+Roey: There's definitely some read, though, right? Because you have to get the current run, and then you have to do a request ID and like dedupe check, so you at least have to get the current execution row. Sorry. You can't just, before you actually create the execution, you have to do some of the... yes.
+
+Max: Right now, yes, but that's in both. Oh, actually, I don't know. Are you saying that in OSS we do read also?
+
+Roey: Some sort of read, because you have to basically check... am I going to... okay, maybe there's like... I'm not quite sure exactly how, maybe there's a retry or a fallback or something like that, but there's definitely some logic that runs, right? Before we create this thing, we check because you have to do like duplicate policy never duplicate, so you have to know if there was anything before you even try to insert the record, so you have to do some sort of read.
+
+Max: Well, you can try to insert it and then it will fail. That's why it's conditional update.
+
+Roey: Yeah, okay, maybe it's done at the database level. So, yeah.
+
+Max: I think it should be done at the database level but I might be wrong. I wouldn't be surprised that OSS also needs it. But I would double check.
+
+Roey: Yeah, I don't really know the flows very well there.
+
+Max: Yeah, but I think this is different because, okay, so there are two parts. Is it even possible, in theory, if you are doing read in OSS, then the question is, can we even avoid read in both OSS and CDS, right? And my understanding, the reason we talked about this feature was that we can kind of create something in memory, kind of cache this request, right, and then write it to write-ahead log only, right, and only then do validation that this thing is deduped or failed.
+
+Max: No, that's the point. They're not going to get run ID from the sync call. This is the idea.
+
+Dan: OK.
+
+Max: They will get OK. They just, they will not get run ID, they practically will need to just use the workflow ID or task-like business ID.
+
+Dan: Yes.
+
+Max: But this is exactly the question we need to define semantics. Okay, I think we are going into the weeds. Let's try to understand what semantics are possible, right? And like, my understanding is...
+
+Max: I think that, okay, let's look at the use case. Use case is we want to process a message, right, like a task. Task has some business ID. And there are different use cases. One use case, at least, I'm inventing on the fly, it's not like a very old use case, but my one use case would be that content of this message is linked to this business ID, and even if you are trying that with different request ID.
+
+Max: For example, we are reading from Kafka, right? On every Kafka message, I start a workflow, right? Or start a workflow, like create a task, right? I think this should apply for both workflows and standalone activities. I don't think it's different, right?
+
+Max: And then, let's say, your Kafka producer crashes. It retries, right? But if you use the message ID, the content of the message will be exactly the same, right? Even if request ID is different, because it goes from different processes. There is no reason to drop the message with the duplicate check here. And also, you don't expect more than one running, right, with the same ID, right? Unless it's, like, failed, right?
+
+Dan: Thank you.
+
+Max: That is an interesting question because it depends on your duplicate... because if it's closed or not, right?
+
+Roey: Yeah, but wait, let's just clarify. There has to be something on the request that says, I'm using different semantics from...
+
+Max: Obviously, it's a... I think the tricky part is the conflict policies. The reuse policies is something else, right? And... because, okay, let's create a logical model. Logical model is, there is a queue in front, right? Like how we exactly implement that is our topic, right? You put stuff in the queue, you don't get anything beyond like "okay, accepted", right. And also it's kind of a nice thing, it's atomic. It's not like non-atomic.
+
+Max: But conceptually, still, the point is you put it in, you get acknowledgement back, and then this thing will try to start a workflow. And then we need to decide what it does if workflow already exists, right? And then there are two use cases: one, workflow closed; one, workflow is still open. Right, or standalone activities -- it's the same thing, right?
+
+Max: And I think that we just need to go over these three and see if it makes sense. But I think the use case is very simple. Again, as I said, use case is there is an external message or whatever, right, which links to business ID, and we guarantee that this business ID content will not change. For example, you're reading this from Kafka, right, and forwarding into Temporal. And I think it's pretty straightforward, at least from what I can see, that should be supported without problem.
+
+Roey: But what are we trying to solve? Throughput problems? Latency problems?
+
+Dan: Latency.
+
+Max: And if you actually can put something like a queue in front, then it can be also spikiness and other things.
+
+Roey: Okay, queue in front is a different...
+
+Max: No, no, no, but this is exactly the thing. Initially we talked about that just to save the read, right? But now, openly, [a customer] came to us and said no, no, no, we have this queue in front, right, we don't like that, can you guys do it for us? Right, so at least conceptually, and again I'm thinking out loud now, maybe I'm missing something important there, but conceptually you probably should have one API which solves for both of these use cases. And then initially maybe we just do read optimization, but tomorrow we can put something in front, right? Like, I don't know, Kafka, whatever. Like, we create our own whatever thing. And from user point of view, nothing changed, maybe beyond that this thing took longer, right?
+
+Max: I think there is a slight difference because it's still atomic, right? Like, if you just save the read, right, it still kind of goes from the same point, so reads will see this thing, right? And if you put in the queue, reads will not see this thing. So there is a semantic difference between a queue in front or not. And I think that is a significant difference, but we can decide if it's worth maybe an additional option or something.
+
+Roey: I guess if we just had the queue in front, would customers be requesting this?
+
+Max: Requesting what?
+
+Roey: This feature.
+
+Max: Thinking out loud, they solve different problems. Because this feature is about saving latency on start, right? Which for some people is important, right? Like you do batches of payments, right? Like, you know, you probably save like additional, I don't know how many milliseconds...
+
+Roey: I guess, but is it going to actually save latency? I mean, just for the start request, yes. But end-to-end, until the whole thing gets processed, is it actually going to save anything? Because it's not like you're going to... you still need to flush into the database.
+
+Max: That is a very good point. You're absolutely right that it's not going to help with end-to-end. But I do believe there are use cases when people absolutely care about the actual API latency and not as much about the processing latency.
+
+Roey: I think that makes sense, but then it's basically they just want to dump the load into some queue, right? And then have that be absorbed.
+
+Max: Yeah, it can be humans pressing buttons and they return the screen the moment the button is accepted. And then I think it depends on the use case. Yeah, I'm just saying I don't think there is one size fits all here, but I clearly can see the customers which would like the start being faster, right? And just have... because right now, start is practically double latency of signal probably, right, because of this read.
+
+Max: Actually, it's an interesting question. If it's cached, probably it will not be much different from signal. Yeah.
+
+Max: So I think the queue in front and this one are different. There is another difference, because if you say start workflow and then you say signal workflow, right, that signal will have high latency because we are still deduping in the workflow, right? But after that it will be accepted, right, because the workflow will be there.
+
+Max: If you put stuff in the queue, there's no guarantee. This entity doesn't exist in our system. This is a very different semantic, actually. So, yeah, I would not mix these two cases, but options we add should kind of account for both of them.
+
+Max: I mean, the use case of just removing read and making shorter latency for start is different from queue in front, because reducing latency on start, workflow is still fully consistent, right? For example, if you start workflow, then signal workflow right away in the next line of code, it will go through, okay, right? If you have queue in front, you say start workflow, it returns, then you say signal... it says "I don't know what you're talking about."
+
+Roey: Basically, you would have to say, queue the signal. But I think that the queuing for signals and stuff like that, if we have this inbox for execution, that gets interesting.
+
+Max: Okay, then there is the whole story of queue and everything we send to the queue. Then the question is, do we guarantee ordering in that queue? Is it like a queue, you know, that will be a big open question, like, will requests for the same workflow in that queue be ordered by workflow ID? Probably we can, but actually you're bringing a very good point. If we ever do that, we should kind of think about that.
+
+Roey: So, yeah, I mean, there's a lot of queuing.
+
+Max: That's why I personally don't like the queuing idea, because it kills so many things about Temporal and makes so many things harder, right? Because the whole idea of Temporal is that you have all this consistency, you have all this visibility, you have all these guarantees. The moment we put a queue in front, it becomes a mess, right?
+
+Max: My personal opinion was always: start workflow, create mutable state, and then don't run workflow. I know that Tushant doesn't like that too much because it means we still need to carry capacity for that. But I still think that would be the first one which I would implement, is just separate out the execution from creation of the workflow, from like rate limits and stuff. And I think it already will support a lot of use cases, not all of them but some of them.
+
+Roey: Just, I guess, like, I'm not sure I quite understand, though, what would you do with the tasks for that workflow if you create it?
+
+Max: It's the same thing as delay, right? Like you just probably put some task in some queue somewhere and then iterate over that collection and unblock those workflows, more like a semaphore. You don't create more workflows, like delay. You don't create more workflows.
+
+Roey: Yeah, but you still have to put some... something has to make sure that this workflow actually starts running.
+
+Max: Yeah, but again, I don't want to go there.
+
+Roey: Yeah, I'm not sure quite how that works and if it actually saves anything. I haven't heard a design that actually works there.
+
+Max: No, it's only saving because users want to say "I want to create workflows, up to 100,000 workflows per second, but I don't want to process more than five per second."
+
+Roey: Sure, we have matching. Like, matching is already a queue that will just absorb all of this, right? People want workflows, not tasks.
+
+Max: Yeah, but, no, the people say as many as they want, right? Parallelism of workflows is not solved by Temporal. People say, I want no more than 10 workflows in parallel.
+
+Roey: Well, that's a different thing, right? We can solve this with, we have this whole flow control on the task queue.
+
+Max: No, I cannot solve it on task queue. Because task queue doesn't control workflows. Task queues only control tasks.
+
+Roey: Ah, I see. So workflow IDs, essentially, that's what you're talking about, that granularity.
+
+Max: Yes. And this is like, if you go to the user forums, it's asked like multiple times a month, "how do I get that?" Because people assume it's easy to do and then they're like, "yeah, you cannot do that," and they get frustrated.
+
+Lina: So that explicit idea of having like an explicit buffer that they can put with like a concurrency limit, do you consider that like pretty separate, though, from like being able to burst standalone activities and essentially, you know, do that async deduplication? Or is that part of the same solution?
+
+Max: Yeah, yeah, yeah, this is orthogonal. Because obviously, for the activities, but we don't support parallelism of workflows, we don't support parallelism of activities, we don't have any support right now for any parallelism limits outside of single worker. Worker can do it but you cannot do it globally. This is probably the biggest feature gap. Any other solutions out there, like Airflow, like Conductor, they cannot scale, but they support that and people are heavily reliant on it.
+
+Roey: Gotcha. Okay, makes sense. So I guess we have nine minutes left, are they eight now?
+
+Max: Okay, but let's think about the first scenario. Let's say we have a flag, but let's think about the behavior. So we have, let's say, the request ID is easy, right? Let's say different request ID, the same workflow ID, the workflow is open. So we can practically say, oh, it's the same, right? We're talking about some sort of async stuff, right? I don't know, let's call it async start, I probably need a different name, right? It would be a different API probably, right? In fact, I think from a user point of view, let's call it SyncDG, right? Like, restart, and it returns, they don't get run ID.
+
+Roey: Do you know of any users that want this, by the way?
+
+Max: I don't think you come to the user and nobody wants that, because they want low latency. It's not like they explicitly want this API shape. I think the user...
+
+Roey: Yeah, I guess, can we do something different and say we can generate an ID for you and then you just handle idempotency in your workers?
+
+Max: I don't understand what you mean by that.
+
+Roey: Basically, it's kind of like, don't give us an ID. There'll be duplicates. We can say we're using unique IDs for all of these executions. There's never async dedupe. And then, you know, maybe you don't care about addressing this thing later because you want something that's more like an SQS or something, right? It's basically just take the load, I don't want to address it later.
+
+Max: Yeah, but sorry, the whole idea of that... no, but then you're practically saying... because think, there is a reason people would want to use our tasks, like a standalone activity versus SQS, because exactly visibility. You can create a specific message by ID and get status on that and troubleshoot that and pause that. And whatever, you're saying throw that away, right? And this is useless. And for me then it becomes a queue. I mean, some people want that. Yeah, by the way, I killed that API. I killed it because then this case will be much more expensive, right? I want to make it cheap.
+
+Max: And we might have different products which will be queues. But this is not a queue. What we are building here is standalone activity, which is much more powerful than a queue. It replaces a queue. And saying we're throwing it away... and again, it's fine to have a separate mode, but I think this is not what we are talking about here.
+
+Roey: So I'm just kind of wondering, how would users use this?
+
+Max: The main use is: you don't allow duplicate. Process once. And my dedupe key is ID, and anything which is duplicated, same ID, is treated as duplicate and thrown away. It's a very obvious thing. How we exactly model it to our APIs is a separate conversation. But I don't think there is any complexity to explain to the user.
+
+Max: That is okay, I think, let's agree on the use case first, right? Like it doesn't make logical sense to go to the user and say "we have a mode, right, then we will accept only one task with that ID, right, and all other tasks will be kind of accepted but will be silently dropped if they are duplicates." I think this is a very reasonable thing to tell people.
+
+Roey: We have three minutes. Is this something that you think should be the default behavior for standalone activities? Because if it is, we're going to need to figure this out before... like we're going to public preview at Replay, right? And then maybe GA was supposed to be a very quick follow-up. So if this is going to be default behavior, then we'd have to do it now, ASAP, right?
+
+Max: No, no, I understand what you mean. Is it default behavior? No, it's too late. I cannot imagine us making it default. It'll be relatively... I don't know. We have three minutes left. I cannot design it. I don't understand the specific design, how it will affect our API. That is what I don't understand. If it's one flag change, fine. If it's like we require additional methods or whatever, it can be more complicated, right?
+
+Roey: Yeah, I feel like it should be a different path, right? Because start, you get back a run ID, and then you expect to be able to interact with this thing and cancel it and it's like...
+
+Max: It feels like the thing that you get back is basically... no, you're getting all the same. It's just the only difference is that, practically, again to me these things are only meaningful if you dedupe on both open and closed, right? Because otherwise it becomes a mess, right? I just cannot imagine the use case. Maybe there is a use case when it's like, oh, I will dedupe if it's open but I will not dedupe if it's closed, right?
+
+Dan: Mm-hmm.
+
+Max: By the way, no, no, no, okay, okay, let's think. If I'm designing that, you absolutely can return something, right? You absolutely can return something which you can use to make sure that you hit the same instance, right? Because this thing will be durable, right? Because we only return to you when this thing is durable, right? So you absolutely can generate some sort of UUID, give it back to the user and say "if you use this one, we guarantee you'll hit this thing."
+
+Roey: Maybe the UUID will change, right? Like, but I guess, are you suggesting that we flush it? Flush this execution in Cassandra?
+
+Max: It becomes... but then you need to save it every time into the mutable state, which would kind of suck.
+
+Roey: Yeah, I guess that you'd also want to basically... no, that would be weird. The question is, if you flush it out to Cassandra, then what status does it get created with?
+
+Max: No, no, no. All I'm saying, it's possible. Is it a good idea? I'm not saying. But all I'm saying is, the system could return something, some sort of token or UID, which would guarantee that you will hit exactly the same instance, right? And then you can incorporate the UID into the mutable state, and it will keep working, a kind of separate run ID.
+
+Roey: So you're saying we'll flush it from the WAL to Cassandra?
+
+Max: We can. Why not? We have to, right? If you want to make it durable, yes, you have to. But I'm not saying it's a good idea. Other option is... again, my point is still the same. This thing only makes sense if you're deduping on both open and closed. And then run ID doesn't matter at all, right? Because we just guarantee the same thing by ID. So it's more like... you address it by workflow ID, right? Like, forget about run ID. We only guarantee like... it only makes sense if you don't allow duplicate, right? And it only makes sense if you... what are the other options in the...
+
+Max: Maybe you can still allow duplicates? Right, no, because, okay, don't forget this is the request to start. You can always allow it if somebody else starts it, but if you use this option to start, right, then it should by default be like "don't allow duplicates." And again, I don't remember if we refactored this. There is a reuse policy and there is a conflict policy. What are conflict policies?
+
+Dan: So practically, the only time it makes sense if you use existing and...
+
+Max: Reject duplicate. No, no, use existing for duplicate as well.
+
+Roey: But it's not the same. How is it called? No, there isn't. No, it's the ID reuse policy, which is: allow, don't allow any. Never create a new execution if there was a previous one with the same ID still on retention. Never create one if there's... only create a new...
+
+Max: How do I get the result of an already-run workflow by default, without... like, if I say start workflow, execute workflow, and I want to get the result independently of whether it's open or closed?
+
+Roey: So it depends on the policies that you put in.
+
+Max: Okay, what policy should I set to have that behavior?
+
+Roey: You want to say, even if it's closed already, then just return to me? So the reuse policy should be "never reuse this ID." Because you want to say basically don't create a new one if there's one that...
+
+Max: Okay, but my claim is this is the only one, right, when this feature makes sense. Like if you have, practically, in some way, I don't know how, we specify these two flags or we do something else, then it makes sense, right? Because we are saying: no duplicates, right, use existing, and return existing even if it's closed. Then deduping is practically kind of...
+
+Roey: But I think for activities there's going to be deduping anyways, right? Because like essentially most activities people run and expect them to run at least once, unless you have a...
+
+Max: You're talking about implementation, I'm talking about the creation of it.
+
+Roey: The creation, yeah.
+
+Max: I'm saying it doesn't matter if there's duplicates most of the time. The problem is if you start with different arguments, so you want to run it again. In this case you're not running it again if it's already running, and you're not changing the payload because it's already accepted once. But there are a lot of use cases when it makes sense.
+
+Max: Okay, guys, I have to run to the next one, but we can talk more about that.
+
+Roey: So, just a decision: we're not blocking standalone activities on this.
+
+Max: Yeah, my claim is I don't think we need to block standalone activities on that. It's probably going to be an additional feature, when people say "I want low latency and I understand what I'm getting."
+
+Roey: Okay, I think we need to talk to Phil and see, you know, all of the other things that we want to build.
+
+Max: There is a use case. How to design the API, it looks like we don't have a very clear way to do that because I think we introduced this conflict policy and I think it messed up a little bit. I wasn't part of the discussion so I don't know. I think we didn't think through all use cases there.
+
+Roey: Okay, yeah, okay cool.
