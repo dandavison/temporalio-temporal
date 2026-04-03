@@ -274,8 +274,33 @@ func (a *Activity) addCompletionCallbacks(
 	completionCallbacks []*commonpb.Callback,
 	maxCallbacks int,
 ) error {
+	if len(completionCallbacks) == 0 {
+		return nil
+	}
+
+	currentCount := len(a.Callbacks)
+	if len(completionCallbacks)+currentCount > maxCallbacks {
+		return serviceerror.NewFailedPreconditionf(
+			"cannot attach more than %d callbacks to an execution (%d callbacks already attached)",
+			maxCallbacks,
+			currentCount,
+		)
+	}
+
+	if a.Callbacks == nil {
+		a.Callbacks = make(chasm.Map[string, *callback.Callback], len(completionCallbacks))
+	}
+
 	registrationTime := timestamppb.New(ctx.Now(a))
-	return callback.AddCallbacks(ctx, &a.Callbacks, registrationTime, requestID, completionCallbacks, maxCallbacks)
+	for idx, cb := range completionCallbacks {
+		callbackObj, err := callback.NewCallbackFromAPICallback(requestID, registrationTime, cb)
+		if err != nil {
+			return err
+		}
+		id := fmt.Sprintf("%s-%d", requestID, idx)
+		a.Callbacks[id] = chasm.NewComponentField(ctx, callbackObj)
+	}
+	return nil
 }
 
 // GetNexusCompletion returns the activity's completion data in the format required by the Nexus callback invocation.

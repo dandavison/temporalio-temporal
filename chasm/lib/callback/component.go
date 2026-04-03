@@ -141,54 +141,28 @@ func (c *Callback) saveResult(
 	}
 }
 
-// AddCallbacks converts API callbacks to CHASM Callback components and adds them to the provided
-// map. It enforces the maxCallbacks limit and returns FailedPrecondition if exceeded.
-func AddCallbacks(
-	ctx chasm.MutableContext,
-	callbacks *chasm.Map[string, *Callback],
-	registrationTime *timestamppb.Timestamp,
+// NewCallbackFromAPICallback converts an API callback proto to a CHASM Callback component.
+// Returns an error if the callback variant is not supported.
+func NewCallbackFromAPICallback(
 	requestID string,
-	apiCallbacks []*commonpb.Callback,
-	maxCallbacks int,
-) error {
-	if len(apiCallbacks) == 0 {
-		return nil
+	registrationTime *timestamppb.Timestamp,
+	apiCallback *commonpb.Callback,
+) (*Callback, error) {
+	chasmCB := &callbackspb.Callback{
+		Links: apiCallback.GetLinks(),
 	}
-
-	currentCount := len(*callbacks)
-	if len(apiCallbacks)+currentCount > maxCallbacks {
-		return serviceerror.NewFailedPreconditionf(
-			"cannot attach more than %d callbacks to an execution (%d callbacks already attached)",
-			maxCallbacks,
-			currentCount,
-		)
-	}
-
-	if *callbacks == nil {
-		*callbacks = make(chasm.Map[string, *Callback], len(apiCallbacks))
-	}
-
-	for idx, cb := range apiCallbacks {
-		chasmCB := &callbackspb.Callback{
-			Links: cb.GetLinks(),
+	switch variant := apiCallback.Variant.(type) {
+	case *commonpb.Callback_Nexus_:
+		chasmCB.Variant = &callbackspb.Callback_Nexus_{
+			Nexus: &callbackspb.Callback_Nexus{
+				Url:    variant.Nexus.GetUrl(),
+				Header: variant.Nexus.GetHeader(),
+			},
 		}
-		switch variant := cb.Variant.(type) {
-		case *commonpb.Callback_Nexus_:
-			chasmCB.Variant = &callbackspb.Callback_Nexus_{
-				Nexus: &callbackspb.Callback_Nexus{
-					Url:    variant.Nexus.GetUrl(),
-					Header: variant.Nexus.GetHeader(),
-				},
-			}
-		default:
-			return serviceerror.NewInvalidArgumentf("unsupported callback variant: %T", variant)
-		}
-
-		id := fmt.Sprintf("%s-%d", requestID, idx)
-		callbackObj := NewCallback(requestID, registrationTime, &callbackspb.CallbackState{}, chasmCB)
-		(*callbacks)[id] = chasm.NewComponentField(ctx, callbackObj)
+	default:
+		return nil, serviceerror.NewInvalidArgumentf("unsupported callback variant: %T", variant)
 	}
-	return nil
+	return NewCallback(requestID, registrationTime, &callbackspb.CallbackState{}, chasmCB), nil
 }
 
 // ScheduleStandbyCallbacks transitions all STANDBY callbacks in the map to SCHEDULED state,

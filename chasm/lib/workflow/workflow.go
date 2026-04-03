@@ -1,7 +1,10 @@
 package workflow
 
 import (
+	"fmt"
+
 	commonpb "go.temporal.io/api/common/v1"
+	"go.temporal.io/api/serviceerror"
 	"go.temporal.io/server/chasm"
 	"go.temporal.io/server/chasm/lib/callback"
 	"go.temporal.io/server/common/nexus/nexusrpc"
@@ -57,7 +60,28 @@ func (w *Workflow) AddCompletionCallbacks(
 	completionCallbacks []*commonpb.Callback,
 	maxCallbacksPerWorkflow int,
 ) error {
-	return callback.AddCallbacks(ctx, &w.Callbacks, eventTime, requestID, completionCallbacks, maxCallbacksPerWorkflow)
+	currentCount := len(w.Callbacks)
+	if len(completionCallbacks)+currentCount > maxCallbacksPerWorkflow {
+		return serviceerror.NewFailedPreconditionf(
+			"cannot attach more than %d callbacks to an execution (%d callbacks already attached)",
+			maxCallbacksPerWorkflow,
+			currentCount,
+		)
+	}
+
+	if w.Callbacks == nil {
+		w.Callbacks = make(chasm.Map[string, *callback.Callback], len(completionCallbacks))
+	}
+
+	for idx, cb := range completionCallbacks {
+		callbackObj, err := callback.NewCallbackFromAPICallback(requestID, eventTime, cb)
+		if err != nil {
+			return err
+		}
+		id := fmt.Sprintf("%s-%d", requestID, idx)
+		w.Callbacks[id] = chasm.NewComponentField(ctx, callbackObj)
+	}
+	return nil
 }
 
 func (w *Workflow) GetNexusCompletion(
