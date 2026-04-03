@@ -1,9 +1,36 @@
 direction: down
 
-title: |md
-  # CHASM Activity: Cache Key Usage and Memory vs Persistence Lookups
-  RunID="" keys are sentinel/lock slots. RunID=uuid keys hold real WorkflowContext + MutableState.
-|
+# ---------- Legend (horizontal, at top) ----------
+
+legend: {
+  direction: right
+  style.fill: "#f0f0f0"
+  style.stroke: "#ccc"
+
+  green: "Start path\n(empty RunID)" {
+    style.fill: "#b8e6b8"
+    style.stroke: "#1a6b1a"
+    style.stroke-width: 2
+  }
+  purple: "Read/Mutate path\n(non-empty RunID)" {
+    style.fill: "#c8b8e8"
+    style.stroke: "#4a2d8a"
+    style.stroke-width: 2
+  }
+  yellow: "In-memory\n(LRU cache)" {
+    style.fill: "#ffe066"
+    style.stroke: "#8a6d00"
+    style.stroke-width: 3
+  }
+  red: "Persistence\n(SQL/DB)" {
+    style.fill: "#f5a0a0"
+    style.stroke: "#a01010"
+    style.stroke-width: 3
+  }
+  white: "Call chain\n(neutral)" {
+    style.fill: "#ffffff"
+  }
+}
 
 # ---------- Activity handler operations ----------
 
@@ -270,35 +297,7 @@ load_ms -> get_wf_exec: "MutableState == nil\n(cache miss)" {
   style.stroke-width: 3
 }
 
-# ================================================================
-# Legend
-# ================================================================
-
-legend: Legend {
-  style.fill: "#f9f9f9"
-  style.stroke: "#aaa"
-
-  green: "Start path (empty RunID)" {
-    style.fill: "#b8e6b8"
-    style.stroke: "#1a6b1a"
-    style.stroke-width: 2
-  }
-  purple: "Read/Mutate path (non-empty RunID)" {
-    style.fill: "#c8b8e8"
-    style.stroke: "#4a2d8a"
-    style.stroke-width: 2
-  }
-  yellow: "In-memory (LRU cache)" {
-    style.fill: "#ffe066"
-    style.stroke: "#8a6d00"
-    style.stroke-width: 3
-  }
-  red: "Persistence (SQL/DB)" {
-    style.fill: "#f5a0a0"
-    style.stroke: "#a01010"
-    style.stroke-width: 3
-  }
-  white: "Call chain (neutral)" {
-    style.fill: "#ffffff"
-  }
+# Legend -> Handler ordering
+legend -> handler: {
+  style.opacity: 0
 }
