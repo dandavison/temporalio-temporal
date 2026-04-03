@@ -1,0 +1,304 @@
+direction: down
+
+title: |md
+  # CHASM Activity: Cache Key Usage and Memory vs Persistence Lookups
+  RunID="" keys are sentinel/lock slots. RunID=uuid keys hold real WorkflowContext + MutableState.
+|
+
+# ---------- Activity handler operations ----------
+
+handler: Activity Handler {
+  start: StartActivityExecution {
+    style.fill: "#b8e6b8"
+    style.stroke: "#1a6b1a"
+    style.stroke-width: 2
+  }
+  describe: DescribeActivityExecution {
+    style.fill: "#c8b8e8"
+    style.stroke: "#4a2d8a"
+    style.stroke-width: 2
+  }
+  poll: PollActivityExecution {
+    style.fill: "#c8b8e8"
+    style.stroke: "#4a2d8a"
+    style.stroke-width: 2
+  }
+  terminate: TerminateActivityExecution {
+    style.fill: "#c8b8e8"
+    style.stroke: "#4a2d8a"
+    style.stroke-width: 2
+  }
+  cancel: RequestCancelActivityExecution {
+    style.fill: "#c8b8e8"
+    style.stroke: "#4a2d8a"
+    style.stroke-width: 2
+  }
+  delete: DeleteActivityExecution {
+    style.fill: "#c8b8e8"
+    style.stroke: "#4a2d8a"
+    style.stroke-width: 2
+  }
+}
+
+# ---------- Two divergent paths ----------
+
+start_path: "Start path\n(no RunID known yet)" {
+  style.fill: "#b8e6b8"
+  style.stroke: "#1a6b1a"
+  style.stroke-width: 2
+}
+
+lease_path: "Read/Mutate path\n(RunID known)" {
+  style.fill: "#c8b8e8"
+  style.stroke: "#4a2d8a"
+  style.stroke-width: 2
+}
+
+handler.start -> start_path
+handler.describe -> lease_path
+handler.poll -> lease_path
+handler.terminate -> lease_path
+handler.cancel -> lease_path
+handler.delete -> lease_path
+
+# ================================================================
+# START PATH (empty RunID)
+# ================================================================
+
+lock_current: "lockCurrentExecution\nchasm_engine.go:733" {
+  style.fill: "#ffffff"
+}
+
+start_path -> lock_current
+
+get_or_create_current: "GetOrCreateCurrentExecution\ncache.go:172\nSets RunID = \"\" explicitly (line 196)" {
+  style.fill: "#ffffff"
+}
+
+lock_current -> get_or_create_current
+
+cache_lookup_empty: "LRU cache.Get(key)\nlru.go:190" {
+  style.fill: "#ffe066"
+  style.stroke: "#8a6d00"
+  style.stroke-width: 3
+  style.bold: true
+}
+
+cache_key_empty: "Cache Key (sentinel):\n{nsID, businessID, \"\", archetypeID, shardUUID}\nRunID is empty" {
+  style.fill: "#ffe066"
+  style.stroke: "#8a6d00"
+  style.stroke-width: 3
+  style.italic: true
+}
+
+get_or_create_current -> cache_lookup_empty: "memory lookup" {
+  style.stroke: "#8a6d00"
+  style.stroke-width: 3
+}
+cache_lookup_empty -> cache_key_empty: uses {
+  style.stroke: "#8a6d00"
+  style.stroke-width: 3
+}
+
+create_new_exec: "createNewExecution\nchasm_engine.go:156\nBuilds MutableState in memory\n(no persistence read)" {
+  style.fill: "#ffffff"
+}
+
+cache_lookup_empty -> create_new_exec: "lock acquired\n(hit or miss, just a lock)"
+
+persist_brand_new: "persistAsBrandNew\nchasm_engine.go:851\nOptimistic conditional write" {
+  style.fill: "#ffffff"
+}
+
+create_new_exec -> persist_brand_new
+
+# Descent into persistence
+
+ctx_create: "ContextImpl.CreateWorkflowExecution\ncontext.go:237" {
+  style.fill: "#ffffff"
+}
+
+persist_brand_new -> ctx_create
+
+shard_create: "shardContext.CreateWorkflowExecution\ncontext_impl.go:569\nAcquires shard lock, assigns rangeID" {
+  style.fill: "#ffffff"
+}
+
+ctx_create -> shard_create
+
+exec_mgr_create: "executionManager.CreateWorkflowExecution\nexecution_manager.go:72\nSerializes snapshot + events" {
+  style.fill: "#ffffff"
+}
+
+shard_create -> exec_mgr_create
+
+sql_create: "sqlExecutionStore.CreateWorkflowExecution\nsql/execution.go:60\nAppends history nodes, then TX:" {
+  style.fill: "#f5a0a0"
+  style.stroke: "#a01010"
+  style.stroke-width: 3
+}
+
+exec_mgr_create -> sql_create {
+  style.stroke: "#a01010"
+  style.stroke-width: 3
+}
+
+sql_lock_current: "lockCurrentExecutionIfExists\nexecution_util.go:575\nSELECT ... FOR UPDATE on\ncurrent_executions JOIN executions\nKey: {shardID, nsID, workflowID, archetypeID}" {
+  style.fill: "#f5a0a0"
+  style.stroke: "#a01010"
+  style.stroke-width: 3
+}
+
+sql_create -> sql_lock_current: "within SQL TX" {
+  style.stroke: "#a01010"
+  style.stroke-width: 3
+}
+
+brand_new_check: "CreateWorkflowModeBrandNew check\nsql/execution.go:108-124\n\ncurrentRow == nil -> proceed\ncurrentRow != nil -> CurrentWorkflowConditionFailedError\n(carries existing RunID + RequestIDs)" {
+  style.fill: "#f5a0a0"
+  style.stroke: "#a01010"
+  style.stroke-width: 3
+}
+
+sql_lock_current -> brand_new_check {
+  style.stroke: "#a01010"
+  style.stroke-width: 3
+}
+
+create_or_update: "createOrUpdateCurrentExecution\nexecution_util.go:604\nINSERT into current_executions" {
+  style.fill: "#f5a0a0"
+  style.stroke: "#a01010"
+  style.stroke-width: 3
+}
+
+brand_new_check -> create_or_update: "no conflict" {
+  style.stroke: "#a01010"
+  style.stroke-width: 3
+}
+
+conflict: "handleExecutionConflict\nchasm_engine.go:902\nChecks requestID idempotency,\nthen applies reuse/conflict policy" {
+  style.fill: "#ffffff"
+}
+
+brand_new_check -> conflict: "conflict\n(CurrentWorkflowConditionFailedError)" {
+  style.stroke-dash: 5
+  style.stroke-width: 3
+}
+
+# ================================================================
+# READ/MUTATE PATH (non-empty RunID)
+# ================================================================
+
+get_exec_lease: "getExecutionLease\nchasm_engine.go:1084\nref.RunID is non-empty" {
+  style.fill: "#ffffff"
+}
+
+lease_path -> get_exec_lease
+
+consistency_check: "GetChasmLeaseWithConsistencyCheck\nconsistency_checker.go:164\nWorkflowKey has RunID set" {
+  style.fill: "#ffffff"
+}
+
+get_exec_lease -> consistency_check
+
+branch: "getWorkflowLeaseImpl\nconsistency_checker.go:175\nlen(RunID) != 0 -> getWorkflowLease" {
+  style.fill: "#ffffff"
+}
+
+consistency_check -> branch
+
+get_wf_lease: "getWorkflowLease\nconsistency_checker.go:275" {
+  style.fill: "#ffffff"
+}
+
+branch -> get_wf_lease
+
+get_or_create_chasm: "GetOrCreateChasmExecution\ncache.go:216\nRunID is non-empty -> skip\nGetCurrentRunID persistence lookup\n(validateWorkflowExecutionInfo:412-427)" {
+  style.fill: "#ffffff"
+}
+
+get_wf_lease -> get_or_create_chasm
+
+cache_lookup_run: "LRU cache.Get(key)\nlru.go:190" {
+  style.fill: "#ffe066"
+  style.stroke: "#8a6d00"
+  style.stroke-width: 3
+  style.bold: true
+}
+
+cache_key_run: "Cache Key (run-specific):\n{nsID, businessID, runID, archetypeID, shardUUID}\nRunID is a UUID" {
+  style.fill: "#ffe066"
+  style.stroke: "#8a6d00"
+  style.stroke-width: 3
+  style.italic: true
+}
+
+get_or_create_chasm -> cache_lookup_run: "memory lookup" {
+  style.stroke: "#8a6d00"
+  style.stroke-width: 3
+}
+cache_lookup_run -> cache_key_run: uses {
+  style.stroke: "#8a6d00"
+  style.stroke-width: 3
+}
+
+load_ms: "LoadMutableState\ncontext.go:137\nGuard: c.MutableState == nil" {
+  style.fill: "#ffffff"
+}
+
+cache_lookup_run -> load_ms: "hit or miss ->\nlock WorkflowContext"
+
+ms_in_memory: "MutableState already loaded\n-> return from memory" {
+  style.fill: "#ffe066"
+  style.stroke: "#8a6d00"
+  style.stroke-width: 3
+}
+
+load_ms -> ms_in_memory: "MutableState != nil\n(cache hit)" {
+  style.stroke: "#8a6d00"
+  style.stroke-width: 3
+}
+
+get_wf_exec: "getWorkflowExecution\ntransaction_impl.go:466\n-> shardContext.GetWorkflowExecution" {
+  style.fill: "#f5a0a0"
+  style.stroke: "#a01010"
+  style.stroke-width: 3
+}
+
+load_ms -> get_wf_exec: "MutableState == nil\n(cache miss)" {
+  style.stroke: "#a01010"
+  style.stroke-width: 3
+}
+
+# ================================================================
+# Legend
+# ================================================================
+
+legend: Legend {
+  style.fill: "#f9f9f9"
+  style.stroke: "#aaa"
+
+  green: "Start path (empty RunID)" {
+    style.fill: "#b8e6b8"
+    style.stroke: "#1a6b1a"
+    style.stroke-width: 2
+  }
+  purple: "Read/Mutate path (non-empty RunID)" {
+    style.fill: "#c8b8e8"
+    style.stroke: "#4a2d8a"
+    style.stroke-width: 2
+  }
+  yellow: "In-memory (LRU cache)" {
+    style.fill: "#ffe066"
+    style.stroke: "#8a6d00"
+    style.stroke-width: 3
+  }
+  red: "Persistence (SQL/DB)" {
+    style.fill: "#f5a0a0"
+    style.stroke: "#a01010"
+    style.stroke-width: 3
+  }
+  white: "Call chain (neutral)" {
+    style.fill: "#ffffff"
+  }
+}
