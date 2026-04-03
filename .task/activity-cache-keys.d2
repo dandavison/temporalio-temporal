@@ -80,12 +80,14 @@ handler.delete -> lease_path
 
 lock_current: "lockCurrentExecution\nchasm_engine.go:733" {
   style.fill: "#ffffff"
+  link: "https://github.com/temporalio/temporal/blob/f8bbf7c78/service/history/chasm_engine.go#L733"
 }
 
 start_path -> lock_current
 
-get_or_create_current: "GetOrCreateCurrentExecution\ncache.go:172\nSets RunID = \"\" explicitly (line 196)" {
+get_or_create_current: "GetOrCreateCurrentExecution\ncache.go:172\nSets RunID = '' explicitly (line 196)" {
   style.fill: "#ffffff"
+  link: "https://github.com/temporalio/temporal/blob/f8bbf7c78/service/history/workflow/cache/cache.go#L172"
 }
 
 lock_current -> get_or_create_current
@@ -95,13 +97,15 @@ cache_lookup_empty: "LRU cache.Get(key)\nlru.go:190" {
   style.stroke: "#8a6d00"
   style.stroke-width: 3
   style.bold: true
+  link: "https://github.com/temporalio/temporal/blob/f8bbf7c78/common/cache/lru.go#L190"
 }
 
-cache_key_empty: "Cache Key (sentinel):\n{nsID, businessID, \"\", archetypeID, shardUUID}\nRunID is empty" {
+cache_key_empty: "Cache Key (sentinel):\n{nsID, businessID, '', archetypeID, shardUUID}\nRunID is empty" {
   style.fill: "#ffe066"
   style.stroke: "#8a6d00"
   style.stroke-width: 3
   style.italic: true
+  link: "https://github.com/temporalio/temporal/blob/f8bbf7c78/service/history/workflow/cache/cache.go#L73-L79"
 }
 
 get_or_create_current -> cache_lookup_empty: "memory lookup" {
@@ -115,12 +119,14 @@ cache_lookup_empty -> cache_key_empty: uses {
 
 create_new_exec: "createNewExecution\nchasm_engine.go:156\nBuilds MutableState in memory\n(no persistence read)" {
   style.fill: "#ffffff"
+  link: "https://github.com/temporalio/temporal/blob/f8bbf7c78/service/history/chasm_engine.go#L156"
 }
 
 cache_lookup_empty -> create_new_exec: "lock acquired\n(hit or miss, just a lock)"
 
 persist_brand_new: "persistAsBrandNew\nchasm_engine.go:851\nOptimistic conditional write" {
   style.fill: "#ffffff"
+  link: "https://github.com/temporalio/temporal/blob/f8bbf7c78/service/history/chasm_engine.go#L851"
 }
 
 create_new_exec -> persist_brand_new
@@ -129,18 +135,21 @@ create_new_exec -> persist_brand_new
 
 ctx_create: "ContextImpl.CreateWorkflowExecution\ncontext.go:237" {
   style.fill: "#ffffff"
+  link: "https://github.com/temporalio/temporal/blob/f8bbf7c78/service/history/workflow/context.go#L237"
 }
 
 persist_brand_new -> ctx_create
 
 shard_create: "shardContext.CreateWorkflowExecution\ncontext_impl.go:569\nAcquires shard lock, assigns rangeID" {
   style.fill: "#ffffff"
+  link: "https://github.com/temporalio/temporal/blob/f8bbf7c78/service/history/shard/context_impl.go#L569"
 }
 
 ctx_create -> shard_create
 
 exec_mgr_create: "executionManager.CreateWorkflowExecution\nexecution_manager.go:72\nSerializes snapshot + events" {
   style.fill: "#ffffff"
+  link: "https://github.com/temporalio/temporal/blob/f8bbf7c78/common/persistence/execution_manager.go#L72"
 }
 
 shard_create -> exec_mgr_create
@@ -149,6 +158,7 @@ sql_create: "sqlExecutionStore.CreateWorkflowExecution\nsql/execution.go:60\nApp
   style.fill: "#f5a0a0"
   style.stroke: "#a01010"
   style.stroke-width: 3
+  link: "https://github.com/temporalio/temporal/blob/f8bbf7c78/common/persistence/sql/execution.go#L60"
 }
 
 exec_mgr_create -> sql_create {
@@ -160,6 +170,7 @@ sql_lock_current: "lockCurrentExecutionIfExists\nexecution_util.go:575\nSELECT .
   style.fill: "#f5a0a0"
   style.stroke: "#a01010"
   style.stroke-width: 3
+  link: "https://github.com/temporalio/temporal/blob/f8bbf7c78/common/persistence/sql/execution_util.go#L575"
 }
 
 sql_create -> sql_lock_current: "within SQL TX" {
@@ -171,6 +182,7 @@ brand_new_check: "CreateWorkflowModeBrandNew check\nsql/execution.go:108-124\n\n
   style.fill: "#f5a0a0"
   style.stroke: "#a01010"
   style.stroke-width: 3
+  link: "https://github.com/temporalio/temporal/blob/f8bbf7c78/common/persistence/sql/execution.go#L108-L124"
 }
 
 sql_lock_current -> brand_new_check {
@@ -182,6 +194,7 @@ create_or_update: "createOrUpdateCurrentExecution\nexecution_util.go:604\nINSERT
   style.fill: "#f5a0a0"
   style.stroke: "#a01010"
   style.stroke-width: 3
+  link: "https://github.com/temporalio/temporal/blob/f8bbf7c78/common/persistence/sql/execution_util.go#L604"
 }
 
 brand_new_check -> create_or_update: "no conflict" {
@@ -191,6 +204,7 @@ brand_new_check -> create_or_update: "no conflict" {
 
 conflict: "handleExecutionConflict\nchasm_engine.go:902\nChecks requestID idempotency,\nthen applies reuse/conflict policy" {
   style.fill: "#ffffff"
+  link: "https://github.com/temporalio/temporal/blob/f8bbf7c78/service/history/chasm_engine.go#L902"
 }
 
 brand_new_check -> conflict: "conflict\n(CurrentWorkflowConditionFailedError)" {
@@ -204,18 +218,21 @@ brand_new_check -> conflict: "conflict\n(CurrentWorkflowConditionFailedError)" {
 
 get_exec_lease: "getExecutionLease\nchasm_engine.go:1084" {
   style.fill: "#ffffff"
+  link: "https://github.com/temporalio/temporal/blob/f8bbf7c78/service/history/chasm_engine.go#L1084"
 }
 
 lease_path -> get_exec_lease
 
 consistency_check: "GetChasmLeaseWithConsistencyCheck\nconsistency_checker.go:164" {
   style.fill: "#ffffff"
+  link: "https://github.com/temporalio/temporal/blob/f8bbf7c78/service/history/api/consistency_checker.go#L164"
 }
 
 get_exec_lease -> consistency_check
 
 branch: "getWorkflowLeaseImpl\nconsistency_checker.go:175" {
   style.fill: "#ffffff"
+  link: "https://github.com/temporalio/temporal/blob/f8bbf7c78/service/history/api/consistency_checker.go#L175"
 }
 
 consistency_check -> branch
@@ -232,14 +249,16 @@ branch -> get_wf_lease: "len(RunID) != 0"
 
 get_current_lease: "getCurrentWorkflowLease\nconsistency_checker.go:228" {
   style.fill: "#ffffff"
+  link: "https://github.com/temporalio/temporal/blob/f8bbf7c78/service/history/api/consistency_checker.go#L228"
 }
 
-branch -> get_current_lease: "RunID == \"\"" {
+branch -> get_current_lease: "RunID is empty" {
   style.stroke-dash: 5
 }
 
 resolve_run_id: "GetCurrentChasmRunID\nconsistency_checker.go:236\n-> cache.GetCurrentRunID" {
   style.fill: "#ffffff"
+  link: "https://github.com/temporalio/temporal/blob/f8bbf7c78/service/history/api/consistency_checker.go#L236"
 }
 
 get_current_lease -> resolve_run_id
@@ -248,6 +267,7 @@ lock_sentinel: "GetOrCreateCurrentExecution\ncache.go:451\nLocks empty-RunID sen
   style.fill: "#ffe066"
   style.stroke: "#8a6d00"
   style.stroke-width: 3
+  link: "https://github.com/temporalio/temporal/blob/f8bbf7c78/service/history/workflow/cache/cache.go#L451"
 }
 
 resolve_run_id -> lock_sentinel: "memory (sentinel lock)" {
@@ -259,6 +279,7 @@ get_current_exec: "shardContext.GetCurrentExecution\ncache.go:464\nReads current
   style.fill: "#f5a0a0"
   style.stroke: "#a01010"
   style.stroke-width: 3
+  link: "https://github.com/temporalio/temporal/blob/f8bbf7c78/service/history/workflow/cache/cache.go#L464"
 }
 
 lock_sentinel -> get_current_exec: "persistence read" {
@@ -274,6 +295,7 @@ recheck: "Re-check: GetCurrentChasmRunID\nconsistency_checker.go:261\n(only if e
   style.fill: "#f5a0a0"
   style.stroke: "#a01010"
   style.stroke-width: 3
+  link: "https://github.com/temporalio/temporal/blob/f8bbf7c78/service/history/api/consistency_checker.go#L261"
 }
 
 get_current_lease -> recheck: "if not running" {
@@ -286,10 +308,12 @@ get_current_lease -> recheck: "if not running" {
 
 get_wf_lease: "getWorkflowLease\nconsistency_checker.go:275" {
   style.fill: "#ffffff"
+  link: "https://github.com/temporalio/temporal/blob/f8bbf7c78/service/history/api/consistency_checker.go#L275"
 }
 
 get_or_create_chasm: "GetOrCreateChasmExecution\ncache.go:216" {
   style.fill: "#ffffff"
+  link: "https://github.com/temporalio/temporal/blob/f8bbf7c78/service/history/workflow/cache/cache.go#L216"
 }
 
 get_wf_lease -> get_or_create_chasm
@@ -299,6 +323,7 @@ cache_lookup_run: "LRU cache.Get(key)\nlru.go:190" {
   style.stroke: "#8a6d00"
   style.stroke-width: 3
   style.bold: true
+  link: "https://github.com/temporalio/temporal/blob/f8bbf7c78/common/cache/lru.go#L190"
 }
 
 cache_key_run: "Cache Key (run-specific):\n{nsID, businessID, runID, archetypeID, shardUUID}\nRunID is a UUID" {
@@ -306,6 +331,7 @@ cache_key_run: "Cache Key (run-specific):\n{nsID, businessID, runID, archetypeID
   style.stroke: "#8a6d00"
   style.stroke-width: 3
   style.italic: true
+  link: "https://github.com/temporalio/temporal/blob/f8bbf7c78/service/history/workflow/cache/cache.go#L73-L79"
 }
 
 get_or_create_chasm -> cache_lookup_run: "memory lookup" {
@@ -319,6 +345,7 @@ cache_lookup_run -> cache_key_run: uses {
 
 load_ms: "LoadMutableState\ncontext.go:137\nGuard: c.MutableState == nil" {
   style.fill: "#ffffff"
+  link: "https://github.com/temporalio/temporal/blob/f8bbf7c78/service/history/workflow/context.go#L137"
 }
 
 cache_lookup_run -> load_ms: "hit or miss ->\nlock WorkflowContext"
@@ -338,6 +365,7 @@ get_wf_exec: "getWorkflowExecution\ntransaction_impl.go:466\n-> shardContext.Get
   style.fill: "#f5a0a0"
   style.stroke: "#a01010"
   style.stroke-width: 3
+  link: "https://github.com/temporalio/temporal/blob/f8bbf7c78/service/history/workflow/transaction_impl.go#L466"
 }
 
 load_ms -> get_wf_exec: "MutableState == nil\n(cache miss)" {
