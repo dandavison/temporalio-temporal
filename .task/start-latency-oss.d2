@@ -1,0 +1,109 @@
+direction: down
+
+title: "StartExecution — OSS (SQL)" {
+  near: top-center
+  style.font-size: 28
+  style.bold: true
+}
+
+start: "StartExecution(businessID)" {
+  style.fill: "#b8e6b8"
+  style.stroke: "#1a6b1a"
+  style.stroke-width: 2
+  style.bold: true
+}
+
+# ── In-memory lookup ──
+
+lookup: "Look up businessID in\nexecution cache + persistence" {
+  style.fill: "#ffffff"
+}
+
+start -> lookup
+
+# ── Branch: found vs not found ──
+
+found: "Execution found\n(current run state known)" {
+  style.fill: "#ffe066"
+  style.stroke: "#8a6d00"
+  style.stroke-width: 3
+}
+
+not_found: "Execution not found\nin memory" {
+  style.fill: "#ffffff"
+}
+
+lookup -> found: "cache hit\n(fast)" {
+  style.stroke: "#8a6d00"
+  style.stroke-width: 3
+}
+lookup -> not_found: "cache miss"
+
+# ── Slow persistence query ──
+
+db_read: "Query persistence\n(SQL SELECT ... FOR UPDATE\nwithin conditional write TX)\n~round-trip latency" {
+  style.fill: "#f5a0a0"
+  style.stroke: "#a01010"
+  style.stroke-width: 3
+  style.bold: true
+}
+
+not_found -> db_read {
+  style.stroke: "#a01010"
+  style.stroke-width: 3
+}
+
+exists_in_db: "Execution exists in DB\n(current run state returned\nin condition-failed error)" {
+  style.fill: "#ffe066"
+  style.stroke: "#8a6d00"
+  style.stroke-width: 3
+}
+
+not_exists_in_db: "Execution does not\nexist in DB" {
+  style.fill: "#ffffff"
+}
+
+db_read -> exists_in_db: "row found" {
+  style.stroke: "#8a6d00"
+  style.stroke-width: 2
+}
+db_read -> not_exists_in_db: "no row"
+
+# ── Fast paths (no I/O or minimal I/O) ──
+
+fast_paths: "Fast paths (no I/O)" {
+  style.fill: "#e8f5e8"
+  style.stroke: "#1a6b1a"
+  style.stroke-width: 2
+
+  dedup: "Dedup\n(requestID match or\nconflictPolicy=UseExisting)\n→ return existing runID"
+  fail: "Fail\n(conflict or reuse\npolicy rejection)\n→ return error"
+}
+
+found -> fast_paths
+exists_in_db -> fast_paths
+
+# ── Replace closed execution ──
+
+replace: "Replace closed execution\n(reuse policy permits)\n→ generate new runID\n→ DB write in same TX" {
+  style.fill: "#f5a0a0"
+  style.stroke: "#a01010"
+  style.stroke-width: 2
+}
+
+found -> replace: "reuse after\ncompletion" {
+  style.stroke-dash: 5
+}
+exists_in_db -> replace: "reuse after\ncompletion" {
+  style.stroke-dash: 5
+}
+
+# ── New execution (no prior existence) ──
+
+create_new: "Create new execution\n→ generate new runID\n→ DB write succeeds\n(no prior row)" {
+  style.fill: "#f5a0a0"
+  style.stroke: "#a01010"
+  style.stroke-width: 2
+}
+
+not_exists_in_db -> create_new

@@ -1,0 +1,86 @@
+direction: down
+
+title: "StartExecution — Temporal Cloud (CDS/WAL)" {
+  near: top-center
+  style.font-size: 28
+  style.bold: true
+}
+
+start: "StartExecution(businessID)" {
+  style.fill: "#b8e6b8"
+  style.stroke: "#1a6b1a"
+  style.stroke-width: 2
+  style.bold: true
+}
+
+lookup: "Look up Element by\nDataKey{nsID, businessID, archetypeID}" {
+  style.fill: "#b8d4f0"
+  style.stroke: "#1a5276"
+  style.stroke-width: 2
+}
+
+start -> lookup
+
+found: "Element in memory\n(current run state known)" {
+  style.fill: "#ffe066"
+  style.stroke: "#8a6d00"
+  style.stroke-width: 3
+}
+
+not_found: "Element not in memory\n(evicted or never loaded)" {
+  style.fill: "#ffffff"
+}
+
+lookup -> found: "Element cached (fast)"
+lookup -> not_found: "Element cache miss"
+
+db_read: "Recover Element from\nWAL or read from DB\n\n~50-80ms\nTHIS IS THE PROBLEM" {
+  style.fill: "#f5a0a0"
+  style.stroke: "#a01010"
+  style.stroke-width: 3
+  style.bold: true
+}
+
+not_found -> db_read
+
+exists_in_db: "Execution exists\n(Element now populated;\ncurrent run state known)" {
+  style.fill: "#ffe066"
+  style.stroke: "#8a6d00"
+  style.stroke-width: 3
+}
+
+not_exists_in_db: "Execution does not exist\n(Element now populated; empty)" {
+  style.fill: "#ffffff"
+}
+
+db_read -> exists_in_db: "found in WAL/DB"
+db_read -> not_exists_in_db: "not found"
+
+fast_paths: "Fast paths (no I/O)" {
+  style.fill: "#e8f5e8"
+  style.stroke: "#1a6b1a"
+  style.stroke-width: 2
+
+  dedup: "Dedup\n(requestID match or\nconflictPolicy=UseExisting)\n→ return existing runID"
+  fail: "Fail\n(conflict or reuse\npolicy rejection)\n→ return error"
+}
+
+found -> fast_paths
+exists_in_db -> fast_paths
+
+replace: "Replace closed execution\n(reuse policy permits)\n→ generate new runID\n→ WAL write (MSWAL + HEWAL)" {
+  style.fill: "#b8e8b8"
+  style.stroke: "#1a6b1a"
+  style.stroke-width: 2
+}
+
+found -> replace: "reuse after completion"
+exists_in_db -> replace: "reuse after completion"
+
+create_new: "Create new execution\n→ generate new runID\n→ WAL write (MSWAL + HEWAL)\n→ Element populated in memory" {
+  style.fill: "#b8e8b8"
+  style.stroke: "#1a6b1a"
+  style.stroke-width: 2
+}
+
+not_exists_in_db -> create_new
