@@ -11,12 +11,12 @@ legend: {
     style.stroke: "#8a6d00"
     style.stroke-width: 3
   }
-  red: "Persistence (SQL/DB)" {
+  red: "Persistence (Cassandra)" {
     style.fill: "#f5a0a0"
     style.stroke: "#a01010"
     style.stroke-width: 3
   }
-  blue: "Temporal Cloud decorator\n(saas-temporal)" {
+  blue: "Cloud decorator\n(saas-temporal)" {
     style.fill: "#b8d4f0"
     style.stroke: "#1a5276"
     style.stroke-width: 3
@@ -174,7 +174,7 @@ shard_create -> cloud_decorator_chain_write {
   style.stroke-width: 3
 }
 
-exec_mgr_create: "executionManager.CreateWorkflowExecution\nexecution_manager.go:72\nSerializes snapshot + events\n(OSS — via embedded ExecutionManager)" {
+exec_mgr_create: "OSS executionManager.CreateWorkflowExecution\nexecution_manager.go:72\nSerializes snapshot + events" {
   style.fill: "#ffffff"
   link: "https://github.com/temporalio/temporal/blob/f8bbf7c78/common/persistence/execution_manager.go#L72"
 }
@@ -184,50 +184,76 @@ cloud_decorator_chain_write -> exec_mgr_create: "cds rate limiter\n-> cds metric
   style.stroke-width: 2
 }
 
-sql_create: "sqlExecutionStore.CreateWorkflowExecution\nsql/execution.go:60\nAppends history nodes, then TX:" {
+# OSS Cassandra ExecutionStore
+
+cass_exec_store: "cassandra.ExecutionStore.CreateWorkflowExecution\ncassandra/execution_store.go:97\nAppends history nodes, then delegates\nto MutableStateStore" {
   style.fill: "#f5a0a0"
   style.stroke: "#a01010"
   style.stroke-width: 3
-  link: "https://github.com/temporalio/temporal/blob/f8bbf7c78/common/persistence/sql/execution.go#L60"
+  link: "https://github.com/temporalio/temporal/blob/main/common/persistence/cassandra/execution_store.go#L97"
 }
 
-exec_mgr_create -> sql_create {
+exec_mgr_create -> cass_exec_store {
   style.stroke: "#a01010"
   style.stroke-width: 3
 }
 
-sql_lock_current: "lockCurrentExecutionIfExists\nexecution_util.go:575\nSELECT ... FOR UPDATE on\ncurrent_executions JOIN executions\nKey: {shardID, nsID, workflowID, archetypeID}" {
+cass_ms_create: "MutableStateStore.CreateWorkflowExecution\ncassandra/mutable_state_store.go:383\nBuilds a logged batch (gocql.LoggedBatch)" {
   style.fill: "#f5a0a0"
   style.stroke: "#a01010"
   style.stroke-width: 3
-  link: "https://github.com/temporalio/temporal/blob/f8bbf7c78/common/persistence/sql/execution_util.go#L575"
+  link: "https://github.com/temporalio/temporal/blob/main/common/persistence/cassandra/mutable_state_store.go#L383"
 }
 
-sql_create -> sql_lock_current: "within SQL TX" {
+cass_exec_store -> cass_ms_create {
   style.stroke: "#a01010"
   style.stroke-width: 3
 }
 
-brand_new_check: "CreateWorkflowModeBrandNew check\nsql/execution.go:108-124\n\ncurrentRow == nil -> proceed\ncurrentRow != nil -> CurrentWorkflowConditionFailedError\n(carries existing RunID + RequestIDs)" {
+cass_brand_new_insert: "CreateWorkflowModeBrandNew\nmutable_state_store.go:425-438\n\nINSERT into executions\n(current-execution marker row)\nIF NOT EXISTS\nKey: {shardID, nsID, workflowID}" {
   style.fill: "#f5a0a0"
   style.stroke: "#a01010"
   style.stroke-width: 3
-  link: "https://github.com/temporalio/temporal/blob/f8bbf7c78/common/persistence/sql/execution.go#L108-L124"
+  link: "https://github.com/temporalio/temporal/blob/main/common/persistence/cassandra/mutable_state_store.go#L425"
 }
 
-sql_lock_current -> brand_new_check {
+cass_ms_create -> cass_brand_new_insert {
   style.stroke: "#a01010"
   style.stroke-width: 3
 }
 
-create_or_update: "createOrUpdateCurrentExecution\nexecution_util.go:604\nINSERT into current_executions" {
+cass_snapshot: "applyWorkflowSnapshotBatchAsNew\ncassandra/util.go:264\nAdds to batch: execution row,\nactivities, timers, child execs,\nchasm nodes, tasks, etc." {
   style.fill: "#f5a0a0"
   style.stroke: "#a01010"
   style.stroke-width: 3
-  link: "https://github.com/temporalio/temporal/blob/f8bbf7c78/common/persistence/sql/execution_util.go#L604"
+  link: "https://github.com/temporalio/temporal/blob/main/common/persistence/cassandra/util.go#L264"
 }
 
-brand_new_check -> create_or_update: "no conflict" {
+cass_brand_new_insert -> cass_snapshot {
+  style.stroke: "#a01010"
+  style.stroke-width: 3
+}
+
+cass_cas: "MapExecuteBatchCAS\nmutable_state_store.go:466\nExecutes entire logged batch atomically\nwith Compare-And-Set" {
+  style.fill: "#f5a0a0"
+  style.stroke: "#a01010"
+  style.stroke-width: 3
+  style.bold: true
+  link: "https://github.com/temporalio/temporal/blob/main/common/persistence/cassandra/mutable_state_store.go#L466"
+}
+
+cass_snapshot -> cass_cas {
+  style.stroke: "#a01010"
+  style.stroke-width: 3
+}
+
+cass_cas_ok: "CAS succeeded\n(IF NOT EXISTS satisfied)" {
+  style.fill: "#f5a0a0"
+  style.stroke: "#a01010"
+  style.stroke-width: 3
+}
+
+cass_cas -> cass_cas_ok: "applied = true" {
   style.stroke: "#a01010"
   style.stroke-width: 3
 }
@@ -237,7 +263,7 @@ conflict: "handleExecutionConflict\nchasm_engine.go:902\nChecks requestID idempo
   link: "https://github.com/temporalio/temporal/blob/f8bbf7c78/service/history/chasm_engine.go#L902"
 }
 
-brand_new_check -> conflict: "conflict\n(CurrentWorkflowConditionFailedError)" {
+cass_cas -> conflict: "applied = false\n(current-execution row exists)\n-> CurrentWorkflowConditionFailedError\n(carries existing RunID + RequestIDs)" {
   style.stroke-dash: 5
   style.stroke-width: 3
 }
@@ -305,7 +331,7 @@ resolve_run_id -> lock_sentinel: "memory (sentinel lock)" {
   style.stroke-width: 3
 }
 
-get_current_exec: "shardContext.GetCurrentExecution\ncache.go:464\nReads current RunID from DB" {
+get_current_exec: "shardContext.GetCurrentExecution\ncache.go:464\nReads current RunID from Cassandra" {
   style.fill: "#f5a0a0"
   style.stroke: "#a01010"
   style.stroke-width: 3
@@ -419,7 +445,7 @@ get_wf_exec -> cloud_decorator_chain_read: "cds rate limiter\n-> cds metrics\n->
   style.stroke-width: 3
 }
 
-oss_get_wf_exec: "OSS ExecutionManager.GetWorkflowExecution\nexecution_manager.go\nReads execution state from DB" {
+oss_get_wf_exec: "OSS executionManager.GetWorkflowExecution\n-> cassandra.ExecutionStore reads\nexecution state from Cassandra" {
   style.fill: "#f5a0a0"
   style.stroke: "#a01010"
   style.stroke-width: 3
@@ -445,7 +471,7 @@ oss_get_wf_exec -> ts_check: "response" {
   style.stroke-width: 3
 }
 
-no_warm_tier: "No warm-tier metadata\n-> return DB response as-is" {
+no_warm_tier: "No warm-tier metadata\n-> return Cassandra response as-is" {
   style.fill: "#f5a0a0"
   style.stroke: "#a01010"
   style.stroke-width: 3
