@@ -6,75 +6,72 @@ title: "StartExecution — OSS (SQL)" {
   style.bold: true
 }
 
-start: "StartExecution(businessID)" {
+start: "StartExecution(businessID)\nChasmEngine.startExecution" {
   style.fill: "#b8e6b8"
   style.stroke: "#1a6b1a"
   style.stroke-width: 2
   style.bold: true
+  link: "https://github.com/temporalio/temporal/blob/f8bbf7c78/service/history/chasm_engine.go#L111"
 }
 
 # ── In-memory lookup ──
 
-lookup: "Look up businessID in\nexecution cache + persistence" {
+lookup: "Look up businessID in\nexecution cache + persistence\npersistAsBrandNew → CreateWorkflowExecution" {
   style.fill: "#ffffff"
+  link: "https://github.com/temporalio/temporal/blob/f8bbf7c78/service/history/chasm_engine.go#L851"
 }
 
 start -> lookup
 
 # ── Branch: found vs not found ──
 
-found: "Execution found\n(current run state known)" {
+found: "Execution found\n(current run state known)\nCurrentWorkflowConditionFailedError" {
   style.fill: "#ffe066"
   style.stroke: "#8a6d00"
   style.stroke-width: 3
+  link: "https://github.com/temporalio/temporal/blob/f8bbf7c78/common/persistence/sql/execution.go#L108"
 }
 
 not_found: "Execution not found\nin memory" {
   style.fill: "#ffffff"
 }
 
-lookup -> found: "cache hit\n(fast)" {
-  style.stroke: "#8a6d00"
-  style.stroke-width: 3
-}
+lookup -> found: "cache hit\n(fast)"
 lookup -> not_found: "cache miss"
 
 # ── Slow persistence query ──
 
-db_read: "Query persistence\n(SQL SELECT ... FOR UPDATE\nwithin conditional write TX)\n~round-trip latency" {
+db_read: "Query persistence\nlockCurrentExecutionIfExists\n(SELECT ... FOR UPDATE within TX)\n~round-trip latency" {
   style.fill: "#f5a0a0"
   style.stroke: "#a01010"
   style.stroke-width: 3
   style.bold: true
+  link: "https://github.com/temporalio/temporal/blob/f8bbf7c78/common/persistence/sql/execution_util.go#L575"
 }
 
-not_found -> db_read {
-  style.stroke: "#a01010"
-  style.stroke-width: 3
-}
+not_found -> db_read
 
-exists_in_db: "Execution exists in DB\n(current run state returned\nin condition-failed error)" {
+exists_in_db: "Execution exists in DB\n(current run state returned\nin condition-failed error)\nCurrentWorkflowConditionFailedError" {
   style.fill: "#ffe066"
   style.stroke: "#8a6d00"
   style.stroke-width: 3
+  link: "https://github.com/temporalio/temporal/blob/f8bbf7c78/common/persistence/sql/execution.go#L108"
 }
 
 not_exists_in_db: "Execution does not\nexist in DB" {
   style.fill: "#ffffff"
 }
 
-db_read -> exists_in_db: "row found" {
-  style.stroke: "#8a6d00"
-  style.stroke-width: 2
-}
+db_read -> exists_in_db: "row found"
 db_read -> not_exists_in_db: "no row"
 
 # ── Fast paths (no I/O or minimal I/O) ──
 
-fast_paths: "Fast paths (no I/O)" {
+fast_paths: "Fast paths (no I/O)\nhandleExecutionConflict" {
   style.fill: "#e8f5e8"
   style.stroke: "#1a6b1a"
   style.stroke-width: 2
+  link: "https://github.com/temporalio/temporal/blob/f8bbf7c78/service/history/chasm_engine.go#L902"
 
   dedup: "Dedup\n(requestID match or\nconflictPolicy=UseExisting)\n→ return existing runID"
   fail: "Fail\n(conflict or reuse\npolicy rejection)\n→ return error"
@@ -85,25 +82,23 @@ exists_in_db -> fast_paths
 
 # ── Replace closed execution ──
 
-replace: "Replace closed execution\n(reuse policy permits)\n→ generate new runID\n→ DB write in same TX" {
+replace: "Replace closed execution\n(reuse policy permits)\n→ generate new runID\n→ DB write in same TX\nCreateWorkflowModeUpdateCurrent" {
   style.fill: "#f5a0a0"
   style.stroke: "#a01010"
   style.stroke-width: 2
+  link: "https://github.com/temporalio/temporal/blob/f8bbf7c78/common/persistence/sql/execution.go#L126"
 }
 
-found -> replace: "reuse after\ncompletion" {
-  style.stroke-dash: 5
-}
-exists_in_db -> replace: "reuse after\ncompletion" {
-  style.stroke-dash: 5
-}
+found -> replace: "reuse after\ncompletion"
+exists_in_db -> replace: "reuse after\ncompletion"
 
 # ── New execution (no prior existence) ──
 
-create_new: "Create new execution\n→ generate new runID\n→ DB write succeeds\n(no prior row)" {
+create_new: "Create new execution\n→ generate new runID\n→ DB write succeeds\n(no prior row)\nCreateWorkflowModeBrandNew" {
   style.fill: "#f5a0a0"
   style.stroke: "#a01010"
   style.stroke-width: 2
+  link: "https://github.com/temporalio/temporal/blob/f8bbf7c78/common/persistence/sql/execution.go#L108"
 }
 
 not_exists_in_db -> create_new
