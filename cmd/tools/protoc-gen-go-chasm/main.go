@@ -113,6 +113,11 @@ func (p *Plugin) Run(plugin *protogen.Plugin) error {
 	return nil
 }
 
+// genAssignShard emits Go code that computes the target shardID for a given RPC, using the
+// RoutingOptions proto. There are two modes:
+//   - Random: pick a random shard.
+//   - Business ID: use common.WorkflowIDToHistoryShard to map (namespaceID, businessID) to a shard.
+//     If routing options contain multiple businessIDs, the first non-empty one is used.
 func genAssignShard(m *protogen.Method) (string, error) {
 	opts, err := routingOptions(m)
 	if err != nil {
