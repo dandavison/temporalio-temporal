@@ -1,0 +1,69 @@
+import asyncio
+from concurrent.futures import ThreadPoolExecutor
+from datetime import timedelta
+from typing import List
+
+from temporalio import activity, workflow
+from temporalio.client import Client
+from temporalio.envconfig import ClientConfig
+from temporalio.worker import Worker
+
+
+@activity.defn
+def say_hello_activity(name: str) -> str:
+    return f"Hello, {name}!"
+
+
+@workflow.defn
+class SayHelloWorkflow:
+    @workflow.run
+    async def run(self) -> List[str]:
+        # Run 5 activities at the same time
+        results = await asyncio.gather(
+            workflow.execute_activity(
+                say_hello_activity, "user1", start_to_close_timeout=timedelta(seconds=5)
+            ),
+            workflow.execute_activity(
+                say_hello_activity, "user2", start_to_close_timeout=timedelta(seconds=5)
+            ),
+            workflow.execute_activity(
+                say_hello_activity, "user3", start_to_close_timeout=timedelta(seconds=5)
+            ),
+            workflow.execute_activity(
+                say_hello_activity, "user4", start_to_close_timeout=timedelta(seconds=5)
+            ),
+            workflow.execute_activity(
+                say_hello_activity, "user5", start_to_close_timeout=timedelta(seconds=5)
+            ),
+        )
+        # Sort the results because they can complete in any order
+        return list(sorted(results))
+
+
+async def main():
+    # Start client
+    config = ClientConfig.load_client_connect_config()
+    config.setdefault("target_host", "localhost:7233")
+    client = await Client.connect(**config)
+
+    # Run a worker for the workflow
+    async with Worker(
+        client,
+        task_queue="hello-parallel-activity-task-queue",
+        workflows=[SayHelloWorkflow],
+        activities=[say_hello_activity],
+        activity_executor=ThreadPoolExecutor(10),
+    ):
+        # While the worker is running, use the client to run the workflow and
+        # print out its result. Note, in many production setups, the client
+        # would be in a completely separate process from the worker.
+        result = await client.execute_workflow(
+            SayHelloWorkflow.run,
+            id="hello-parallel-activity-workflow-id",
+            task_queue="hello-parallel-activity-task-queue",
+        )
+        print(f"Result: {result}")
+
+
+if __name__ == "__main__":
+    asyncio.run(main())
