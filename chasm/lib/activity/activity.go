@@ -440,7 +440,8 @@ func (a *Activity) UpdateActivityExecutionOptions(
 
 	attempt.Stamp++
 
-	if a.GetStatus() == activitypb.ACTIVITY_EXECUTION_STATUS_STARTED {
+	if a.GetStatus() == activitypb.ACTIVITY_EXECUTION_STATUS_STARTED ||
+		a.GetStatus() == activitypb.ACTIVITY_EXECUTION_STATUS_CANCEL_REQUESTED {
 		// Re-create the start-to-close timeout task with the new stamp and (possibly updated) timeout.
 		// The old task was invalidated by the stamp increment above.
 		if timeout := a.GetStartToCloseTimeout().AsDuration(); timeout > 0 {
@@ -449,6 +450,17 @@ func (a *Activity) UpdateActivityExecutionOptions(
 				a,
 				chasm.TaskAttributes{ScheduledTime: deadline},
 				&activitypb.StartToCloseTimeoutTask{Stamp: attempt.GetStamp()},
+			)
+		}
+		// Re-create the heartbeat timeout task. The deadline is anchored to the most recent
+		// heartbeat (or attempt start if no heartbeats yet), matching the validator's logic.
+		if heartbeatTimeout := a.GetHeartbeatTimeout().AsDuration(); heartbeatTimeout > 0 {
+			lastHb, _ := a.LastHeartbeat.TryGet(ctx)
+			baseTime := util.MaxTime(lastHb.GetRecordedTime().AsTime(), attempt.GetStartedTime().AsTime())
+			ctx.AddTask(
+				a,
+				chasm.TaskAttributes{ScheduledTime: baseTime.Add(heartbeatTimeout)},
+				&activitypb.HeartbeatTimeoutTask{Stamp: attempt.GetStamp()},
 			)
 		}
 	}
