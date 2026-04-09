@@ -5324,6 +5324,122 @@ func (s *standaloneActivityTestSuite) TestUpdateActivityExecutionOptions() {
 			pollOutcome.GetOutcome().GetFailure().GetTimeoutFailureInfo().GetTimeoutType(),
 		)
 	})
+
+	// Bug repro: removing ScheduleToCloseTimeout (setting to 0) while an old
+	// ScheduleToCloseTimeoutTask is in the timer queue. The old task should be
+	// discarded, but the validator falls through to true when timeout is 0.
+	t.Run("Standalone_RemoveScheduleToCloseTimeout", func(t *testing.T) {
+		ctx, cancel := context.WithTimeout(t.Context(), 30*time.Second)
+		defer cancel()
+
+		activityID := testcore.RandomizeStr(t.Name())
+		taskQueue := testcore.RandomizeStr(t.Name())
+
+		startResp, err := s.FrontendClient().StartActivityExecution(ctx, &workflowservice.StartActivityExecutionRequest{
+			Namespace:              s.Namespace().String(),
+			ActivityId:             activityID,
+			ActivityType:           &commonpb.ActivityType{Name: "test-activity"},
+			TaskQueue:              &taskqueuepb.TaskQueue{Name: taskQueue},
+			StartToCloseTimeout:    durationpb.New(30 * time.Minute),
+			ScheduleToCloseTimeout: durationpb.New(2 * time.Second),
+			RetryPolicy:            &commonpb.RetryPolicy{MaximumAttempts: 1},
+		})
+		require.NoError(t, err)
+
+		// Remove the schedule-to-close timeout before the worker picks up the task.
+		_, err = s.FrontendClient().UpdateActivityExecutionOptions(ctx, &workflowservice.UpdateActivityExecutionOptionsRequest{
+			Namespace:  s.Namespace().String(),
+			ActivityId: activityID,
+			RunId:      startResp.RunId,
+			ActivityOptions: &activitypb.ActivityOptions{
+				ScheduleToCloseTimeout: durationpb.New(0),
+			},
+			UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"schedule_to_close_timeout"}},
+		})
+		require.NoError(t, err)
+
+		// Worker accepts the task.
+		pollResp, err := s.FrontendClient().PollActivityTaskQueue(ctx, &workflowservice.PollActivityTaskQueueRequest{
+			Namespace: s.Namespace().String(),
+			TaskQueue: &taskqueuepb.TaskQueue{Name: taskQueue, Kind: enumspb.TASK_QUEUE_KIND_NORMAL},
+		})
+		require.NoError(t, err)
+
+		// Wait past the original 2s deadline, then complete the activity.
+		// If the old timeout task incorrectly fires, DescribeActivityExecution
+		// will show a timed-out status.
+		time.Sleep(3 * time.Second)
+
+		// The activity should still be running (STARTED), not timed out.
+		descResp, err := s.FrontendClient().DescribeActivityExecution(ctx, &workflowservice.DescribeActivityExecutionRequest{
+			Namespace:  s.Namespace().String(),
+			ActivityId: activityID,
+			RunId:      startResp.RunId,
+		})
+		require.NoError(t, err)
+		require.Equal(t, enumspb.PENDING_ACTIVITY_STATE_STARTED, descResp.GetInfo().GetRunState(),
+			"activity should still be STARTED after removing schedule-to-close timeout")
+
+		// Complete the activity successfully.
+		_, err = s.FrontendClient().RespondActivityTaskCompleted(ctx, &workflowservice.RespondActivityTaskCompletedRequest{
+			Namespace: s.Namespace().String(),
+			TaskToken: pollResp.TaskToken,
+			Result:    payloads.EncodeString("done"),
+		})
+		require.NoError(t, err)
+	})
+
+	// Bug repro: updating options on a STARTED activity bumps the stamp, which
+	// invalidates the in-flight HeartbeatTimeoutTask without creating a replacement.
+	// The activity should still time out after the (shortened) heartbeat timeout.
+	t.Run("Standalone_ShortenHeartbeatTimeoutWhileStarted", func(t *testing.T) {
+		ctx, cancel := context.WithTimeout(t.Context(), 30*time.Second)
+		defer cancel()
+
+		activityID := testcore.RandomizeStr(t.Name())
+		taskQueue := testcore.RandomizeStr(t.Name())
+
+		startResp, err := s.FrontendClient().StartActivityExecution(ctx, &workflowservice.StartActivityExecutionRequest{
+			Namespace:           s.Namespace().String(),
+			ActivityId:          activityID,
+			ActivityType:        &commonpb.ActivityType{Name: "test-activity"},
+			TaskQueue:           &taskqueuepb.TaskQueue{Name: taskQueue},
+			StartToCloseTimeout: durationpb.New(30 * time.Minute),
+			HeartbeatTimeout:    durationpb.New(30 * time.Minute),
+			RetryPolicy:         &commonpb.RetryPolicy{MaximumAttempts: 1},
+		})
+		require.NoError(t, err)
+
+		// Worker accepts the task — activity is now STARTED.
+		pollResp, err := s.FrontendClient().PollActivityTaskQueue(ctx, &workflowservice.PollActivityTaskQueueRequest{
+			Namespace: s.Namespace().String(),
+			TaskQueue: &taskqueuepb.TaskQueue{Name: taskQueue, Kind: enumspb.TASK_QUEUE_KIND_NORMAL},
+		})
+		require.NoError(t, err)
+		require.NotEmpty(t, pollResp.TaskToken)
+
+		// Shorten heartbeat timeout to 1s while the activity is running.
+		_, err = s.FrontendClient().UpdateActivityExecutionOptions(ctx, &workflowservice.UpdateActivityExecutionOptionsRequest{
+			Namespace:  s.Namespace().String(),
+			ActivityId: activityID,
+			RunId:      startResp.RunId,
+			ActivityOptions: &activitypb.ActivityOptions{
+				HeartbeatTimeout: durationpb.New(1 * time.Second),
+			},
+			UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"heartbeat_timeout"}},
+		})
+		require.NoError(t, err)
+
+		// The activity should time out with HEARTBEAT.
+		pollOutcome, err := s.FrontendClient().PollActivityExecution(ctx, &workflowservice.PollActivityExecutionRequest{
+			Namespace:  s.Namespace().String(),
+			ActivityId: activityID,
+			RunId:      startResp.RunId,
+		})
+		require.NoError(t, err)
+		require.Equal(t, enumspb.TIMEOUT_TYPE_HEARTBEAT,
+			pollOutcome.GetOutcome().GetFailure().GetTimeoutFailureInfo().GetTimeoutType())
+	})
 }
 
 func (s *standaloneActivityTestSuite) pollActivityTaskQueue(ctx context.Context, taskQueue string) (*workflowservice.PollActivityTaskQueueResponse, error) {
