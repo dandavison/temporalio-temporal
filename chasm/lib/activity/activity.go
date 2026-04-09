@@ -362,16 +362,7 @@ func (a *Activity) GetNexusCompletion(ctx chasm.Context, _ string) (nexusrpc.Com
 		return opts, nil
 	}
 
-	var failure *failurepb.Failure
-	if f := outcome.GetFailed(); f != nil {
-		failure = f.GetFailure()
-	}
-	if failure == nil {
-		if details := attempt.GetLastFailureDetails(); details != nil {
-			failure = details.GetFailure()
-		}
-	}
-
+	failure := a.terminalFailure(ctx)
 	if failure != nil {
 		state := nexus.OperationStateFailed
 		message := "operation failed"
@@ -947,15 +938,23 @@ func (a *Activity) outcome(ctx chasm.Context) *apiactivitypb.ActivityExecutionOu
 			Value: &apiactivitypb.ActivityExecutionOutcome_Result{Result: successful.GetOutput()},
 		}
 	}
-	if failure := activityOutcome.GetFailed().GetFailure(); failure != nil {
+	if failure := a.terminalFailure(ctx); failure != nil {
 		return &apiactivitypb.ActivityExecutionOutcome{
 			Value: &apiactivitypb.ActivityExecutionOutcome_Failure{Failure: failure},
 		}
 	}
+	return nil
+}
+
+// terminalFailure returns the failure for a closed activity. The failure may be stored in
+// Outcome.Failed (terminated, canceled, timed out) or in LastAttempt.LastFailureDetails
+// (failed after exhausting retries). Returns nil if no failure is found.
+func (a *Activity) terminalFailure(ctx chasm.Context) *failurepb.Failure {
+	if f := a.Outcome.Get(ctx).GetFailed(); f != nil {
+		return f.GetFailure()
+	}
 	if details := a.LastAttempt.Get(ctx).GetLastFailureDetails(); details != nil {
-		return &apiactivitypb.ActivityExecutionOutcome{
-			Value: &apiactivitypb.ActivityExecutionOutcome_Failure{Failure: details.GetFailure()},
-		}
+		return details.GetFailure()
 	}
 	return nil
 }
