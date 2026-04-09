@@ -5334,4 +5334,67 @@ func (s *standaloneActivityTestSuite) TestCallbacks() {
 		require.NoError(t, err)
 		require.Equal(t, enumspb.ACTIVITY_EXECUTION_STATUS_CANCELED, descResp.GetInfo().GetStatus())
 	})
+
+	t.Run("HeartbeatTimeoutWithCallbacks", func(t *testing.T) {
+		activityID := testcore.RandomizeStr(t.Name())
+		taskQueue := testcore.RandomizeStr(t.Name())
+
+		ch := &completionHandler{
+			requestCh:         make(chan *nexusrpc.CompletionRequest, 1),
+			requestCompleteCh: make(chan error, 1),
+		}
+		defer func() {
+			close(ch.requestCh)
+			close(ch.requestCompleteCh)
+		}()
+		callbackAddress := s.runNexusCompletionHTTPServer(t, ch)
+
+		_, err := s.FrontendClient().StartActivityExecution(ctx, &workflowservice.StartActivityExecutionRequest{
+			Namespace:    s.Namespace().String(),
+			ActivityId:   activityID,
+			ActivityType: s.tv.ActivityType(),
+			Identity:     s.tv.WorkerIdentity(),
+			Input:        defaultInput,
+			TaskQueue: &taskqueuepb.TaskQueue{
+				Name: taskQueue,
+			},
+			StartToCloseTimeout: durationpb.New(1 * time.Minute),
+			HeartbeatTimeout:    durationpb.New(1 * time.Second),
+			RetryPolicy: &commonpb.RetryPolicy{
+				MaximumAttempts: 1, // No retries -- timeout is terminal
+			},
+			CompletionCallbacks: []*commonpb.Callback{{
+				Variant: &commonpb.Callback_Nexus_{Nexus: &commonpb.Callback_Nexus{Url: callbackAddress}},
+			}},
+		})
+		require.NoError(t, err)
+
+		// Worker accepts task (starts the activity), then never heartbeats.
+		pollTaskResp, err := s.FrontendClient().PollActivityTaskQueue(ctx, &workflowservice.PollActivityTaskQueueRequest{
+			Namespace: s.Namespace().String(),
+			TaskQueue: &taskqueuepb.TaskQueue{Name: taskQueue, Kind: enumspb.TASK_QUEUE_KIND_NORMAL},
+			Identity:  s.tv.WorkerIdentity(),
+		})
+		require.NoError(t, err)
+		require.NotEmpty(t, pollTaskResp.TaskToken)
+
+		// Verify the callback was delivered with failure state (heartbeat timeout).
+		select {
+		case completion := <-ch.requestCh:
+			require.Equal(t, nexus.OperationStateFailed, completion.State)
+			var failureErr *nexus.FailureError
+			require.ErrorAs(t, completion.Error.Cause, &failureErr)
+			require.Contains(t, failureErr.Failure.Message, "Heartbeat")
+			ch.requestCompleteCh <- nil
+		case <-ctx.Done():
+			require.Fail(t, "timed out waiting for completion callback")
+		}
+
+		descResp, err := s.FrontendClient().DescribeActivityExecution(ctx, &workflowservice.DescribeActivityExecutionRequest{
+			Namespace:  s.Namespace().String(),
+			ActivityId: activityID,
+		})
+		require.NoError(t, err)
+		require.Equal(t, enumspb.ACTIVITY_EXECUTION_STATUS_TIMED_OUT, descResp.GetInfo().GetStatus())
+	})
 }
