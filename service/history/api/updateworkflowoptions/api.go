@@ -180,11 +180,20 @@ func getOptionsFromMutableState(ms historyi.MutableState) *workflowpb.WorkflowEx
 // The field-exhaustiveness test validates that every field of WorkflowExecutionOptions
 // is either handled by the merge or listed here.
 var mergeSkippedFields = map[string]string{
-	"versioningOverride.behavior":     "deprecated; whole versioningOverride is set as a unit",
-	"versioningOverride.deployment":   "deprecated; whole versioningOverride is set as a unit",
+	// Deprecated fields — whole versioningOverride is set as a unit.
+	"versioningOverride.behavior":      "deprecated; whole versioningOverride is set as a unit",
+	"versioningOverride.deployment":    "deprecated; whole versioningOverride is set as a unit",
 	"versioningOverride.pinnedVersion": "deprecated; whole versioningOverride is set as a unit",
-	"versioningOverride.pinned":       "oneof variant; set via top-level versioningOverride path",
-	"versioningOverride.autoUpgrade":  "oneof variant; set via top-level versioningOverride path",
+	// Oneof variants and their sub-fields — set via top-level versioningOverride path.
+	"versioningOverride.pinned":                        "oneof variant; set via top-level versioningOverride path",
+	"versioningOverride.pinned.behavior":               "sub-field of oneof variant; set via top-level versioningOverride path",
+	"versioningOverride.pinned.version":                "sub-field of oneof variant; set via top-level versioningOverride path",
+	"versioningOverride.pinned.version.buildId":        "sub-field of oneof variant; set via top-level versioningOverride path",
+	"versioningOverride.pinned.version.deploymentName": "sub-field of oneof variant; set via top-level versioningOverride path",
+	"versioningOverride.autoUpgrade":                   "oneof variant; set via top-level versioningOverride path",
+	// Deprecated sub-fields of deployment.
+	"versioningOverride.deployment.seriesName": "deprecated; whole versioningOverride is set as a unit",
+	"versioningOverride.deployment.buildId":    "deprecated; whole versioningOverride is set as a unit",
 }
 
 // mergeWorkflowExecutionOptions copies the given paths in `src` struct to `dst` struct

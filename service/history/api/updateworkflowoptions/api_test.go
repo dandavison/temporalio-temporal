@@ -292,7 +292,7 @@ func (s *updateWorkflowOptionsSuite) TestInvoke_Success() {
 // mergeSkippedFields with a reason.
 func TestMergeWorkflowExecutionOptions_FieldExhaustiveness(t *testing.T) {
 	allPaths := protoutils.EnumerateFieldPaths(
-		(&workflowpb.WorkflowExecutionOptions{}).ProtoReflect().Descriptor(), "", "", 2,
+		(&workflowpb.WorkflowExecutionOptions{}).ProtoReflect().Descriptor(),
 	)
 
 	// Verify that every mergeSkippedFields entry corresponds to a real path.

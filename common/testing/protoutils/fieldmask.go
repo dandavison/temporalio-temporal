@@ -11,16 +11,14 @@ type FieldPath struct {
 	JSONPath  string // camelCase, for display and skip-list lookup
 }
 
-// EnumerateFieldPaths walks a proto message descriptor and returns all field paths
-// up to the given depth. Depth 1 = top-level fields only; depth 2 = also sub-fields
-// of message-typed fields; etc. Well-known scalar wrappers (Duration, Timestamp, etc.)
-// are treated as leaves and not recursed into.
-func EnumerateFieldPaths(
-	md protoreflect.MessageDescriptor, protoPrefix, jsonPrefix string, depth int,
-) []FieldPath {
-	if depth <= 0 {
-		return nil
-	}
+// EnumerateFieldPaths walks a proto message descriptor and returns all field
+// paths, recursing into sub-messages. Well-known scalar wrappers (Duration,
+// Timestamp, etc.) are treated as leaves and not recursed into.
+func EnumerateFieldPaths(md protoreflect.MessageDescriptor) []FieldPath {
+	return enumerateFieldPaths(md, "", "")
+}
+
+func enumerateFieldPaths(md protoreflect.MessageDescriptor, protoPrefix, jsonPrefix string) []FieldPath {
 	var paths []FieldPath
 	fields := md.Fields()
 	for i := 0; i < fields.Len(); i++ {
@@ -33,7 +31,7 @@ func EnumerateFieldPaths(
 		}
 		paths = append(paths, FieldPath{ProtoPath: pp, JSONPath: jp})
 		if fd.Kind() == protoreflect.MessageKind && !isWellKnownScalar(fd.Message().FullName()) {
-			paths = append(paths, EnumerateFieldPaths(fd.Message(), pp, jp, depth-1)...)
+			paths = append(paths, enumerateFieldPaths(fd.Message(), pp, jp)...)
 		}
 	}
 	return paths

@@ -184,7 +184,7 @@ func TestMergeActivityOptionsErrors(t *testing.T) {
 // function or added to mergeSkippedFields with a reason.
 func TestMergeActivityOptions_FieldExhaustiveness(t *testing.T) {
 	allPaths := protoutils.EnumerateFieldPaths(
-		(&activitypb.ActivityOptions{}).ProtoReflect().Descriptor(), "", "", 2,
+		(&activitypb.ActivityOptions{}).ProtoReflect().Descriptor(),
 	)
 
 	// Verify that every mergeSkippedFields entry corresponds to a real path.
