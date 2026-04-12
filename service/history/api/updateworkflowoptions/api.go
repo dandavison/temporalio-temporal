@@ -175,6 +175,18 @@ func getOptionsFromMutableState(ms historyi.MutableState) *workflowpb.WorkflowEx
 	return opts
 }
 
+// mergeSkippedFields lists field paths (camelCase, as returned by util.ParseFieldMask)
+// that are intentionally not handled by mergeWorkflowExecutionOptions.
+// The field-exhaustiveness test validates that every field of WorkflowExecutionOptions
+// is either handled by the merge or listed here.
+var mergeSkippedFields = map[string]string{
+	"versioningOverride.behavior":     "deprecated; whole versioningOverride is set as a unit",
+	"versioningOverride.deployment":   "deprecated; whole versioningOverride is set as a unit",
+	"versioningOverride.pinnedVersion": "deprecated; whole versioningOverride is set as a unit",
+	"versioningOverride.pinned":       "oneof variant; set via top-level versioningOverride path",
+	"versioningOverride.autoUpgrade":  "oneof variant; set via top-level versioningOverride path",
+}
+
 // mergeWorkflowExecutionOptions copies the given paths in `src` struct to `dst` struct
 func mergeWorkflowExecutionOptions(
 	mergeInto, mergeFrom *workflowpb.WorkflowExecutionOptions,

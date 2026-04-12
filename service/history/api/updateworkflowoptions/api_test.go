@@ -29,6 +29,7 @@ import (
 	"go.uber.org/mock/gomock"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/fieldmaskpb"
+	"go.temporal.io/server/common/testing/protoutils"
 )
 
 type noopVersionMembershipCache struct{}
@@ -282,4 +283,49 @@ func (s *updateWorkflowOptionsSuite) TestInvoke_Success() {
 	s.NoError(err)
 	s.NotNil(resp)
 	proto.Equal(expectedOverrideOptions, resp.GetWorkflowExecutionOptions())
+}
+
+// TestMergeWorkflowExecutionOptions_FieldExhaustiveness ensures every field of
+// WorkflowExecutionOptions and its direct sub-messages is handled by
+// mergeWorkflowExecutionOptions. When a field is added to the proto, this test
+// fails until the field is either handled in the merge function or added to
+// mergeSkippedFields with a reason.
+func TestMergeWorkflowExecutionOptions_FieldExhaustiveness(t *testing.T) {
+	allPaths := protoutils.EnumerateFieldPaths(
+		(&workflowpb.WorkflowExecutionOptions{}).ProtoReflect().Descriptor(), "", "", 2,
+	)
+
+	// Verify that every mergeSkippedFields entry corresponds to a real path.
+	allPathSet := make(map[string]bool, len(allPaths))
+	for _, fp := range allPaths {
+		allPathSet[fp.JSONPath] = true
+	}
+	for path := range mergeSkippedFields {
+		if !allPathSet[path] {
+			t.Errorf("mergeSkippedFields contains unknown path %q — was the field removed?", path)
+		}
+	}
+
+	// Build a fully-populated source message using reflection so that new fields
+	// are automatically covered without manual updates to this test.
+	mergeFrom := &workflowpb.WorkflowExecutionOptions{}
+	protoutils.PopulateNonZero(mergeFrom.ProtoReflect())
+
+	for _, fp := range allPaths {
+		if reason, ok := mergeSkippedFields[fp.JSONPath]; ok {
+			t.Logf("Skipping %s: %s", fp.JSONPath, reason)
+			continue
+		}
+		t.Run(fp.JSONPath, func(t *testing.T) {
+			mergeInto := &workflowpb.WorkflowExecutionOptions{}
+			mask := &fieldmaskpb.FieldMask{Paths: []string{fp.ProtoPath}}
+
+			result, err := mergeWorkflowExecutionOptions(mergeInto, mergeFrom, mask)
+			require.NoError(t, err, "merge should handle path %s", fp.ProtoPath)
+			require.False(t, proto.Equal(result, &workflowpb.WorkflowExecutionOptions{}),
+				"path %s: merge produced empty result — either handle it in mergeWorkflowExecutionOptions "+
+					"or add to mergeSkippedFields with a reason", fp.JSONPath,
+			)
+		})
+	}
 }
