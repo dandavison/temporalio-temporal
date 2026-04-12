@@ -6,6 +6,17 @@ import (
 	"go.temporal.io/api/serviceerror"
 )
 
+// mergeSkippedFields lists field paths (camelCase, as returned by util.ParseFieldMask)
+// that are intentionally not handled by MergeActivityOptions.
+// The field-exhaustiveness test validates that every field of ActivityOptions
+// is either handled by the merge or listed here.
+var mergeSkippedFields = map[string]string{
+	"taskQueue":                          "only name sub-field is user-settable; use taskQueue.name path",
+	"taskQueue.kind":                     "sticky queue metadata; not user-updatable",
+	"taskQueue.normalName":               "sticky queue metadata; not user-updatable",
+	"retryPolicy.nonRetryableErrorTypes": "retry policy error filtering; not user-updatable",
+}
+
 // MergeActivityOptions applies the fields specified in updateFields from mergeFrom into mergeInto in-place.
 // updateFields is a map of camelCase JSON field paths, as returned by util.ParseFieldMask.
 // Returns an error if a required parent field (TaskQueue, Priority, RetryPolicy) is nil in mergeFrom

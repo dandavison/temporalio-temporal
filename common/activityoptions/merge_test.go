@@ -9,7 +9,9 @@ import (
 	activitypb "go.temporal.io/api/activity/v1"
 	commonpb "go.temporal.io/api/common/v1"
 	taskqueuepb "go.temporal.io/api/taskqueue/v1"
+	"go.temporal.io/server/common/testing/protoutils"
 	"go.temporal.io/server/common/util"
+	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/durationpb"
 	"google.golang.org/protobuf/types/known/fieldmaskpb"
 )
@@ -174,4 +176,49 @@ func TestMergeActivityOptionsErrors(t *testing.T) {
 
 	err = MergeActivityOptions(&activitypb.ActivityOptions{}, emptyOpts, makeReq("priority.fairness_weight"))
 	require.ErrorContains(t, err, "Priority is not provided")
+}
+
+// TestMergeActivityOptions_FieldExhaustiveness ensures every field of ActivityOptions
+// and its direct sub-messages is handled by MergeActivityOptions. When a field is
+// added to the proto, this test fails until the field is either handled in the merge
+// function or added to mergeSkippedFields with a reason.
+func TestMergeActivityOptions_FieldExhaustiveness(t *testing.T) {
+	allPaths := protoutils.EnumerateFieldPaths(
+		(&activitypb.ActivityOptions{}).ProtoReflect().Descriptor(), "", "", 2,
+	)
+
+	// Verify that every mergeSkippedFields entry corresponds to a real path.
+	allPathSet := make(map[string]bool, len(allPaths))
+	for _, fp := range allPaths {
+		allPathSet[fp.JSONPath] = true
+	}
+	for path := range mergeSkippedFields {
+		if !allPathSet[path] {
+			t.Errorf("mergeSkippedFields contains unknown path %q — was the field removed?", path)
+		}
+	}
+
+	// Build a fully-populated source message using reflection so that new fields
+	// are automatically covered without manual updates to this test.
+	mergeFrom := &activitypb.ActivityOptions{}
+	protoutils.PopulateNonZero(mergeFrom.ProtoReflect())
+
+	for _, fp := range allPaths {
+		if reason, ok := mergeSkippedFields[fp.JSONPath]; ok {
+			t.Logf("Skipping %s: %s", fp.JSONPath, reason)
+			continue
+		}
+		t.Run(fp.JSONPath, func(t *testing.T) {
+			mergeInto := &activitypb.ActivityOptions{}
+			mask := &fieldmaskpb.FieldMask{Paths: []string{fp.ProtoPath}}
+			updateFields := util.ParseFieldMask(mask)
+
+			err := MergeActivityOptions(mergeInto, mergeFrom, updateFields)
+			require.NoError(t, err, "merge should handle path %s", fp.ProtoPath)
+			require.False(t, proto.Equal(mergeInto, &activitypb.ActivityOptions{}),
+				"path %s: merge produced empty result — either handle it in MergeActivityOptions "+
+					"or add to mergeSkippedFields with a reason", fp.JSONPath,
+			)
+		})
+	}
 }
