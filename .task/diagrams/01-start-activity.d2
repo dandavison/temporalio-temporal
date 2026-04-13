@@ -1,0 +1,42 @@
+vars: {
+  d2-config: {
+    theme-id: 200
+    dark-theme-id: 200
+  }
+}
+
+style: {
+  fill: transparent
+}
+
+shape: sequence_diagram
+
+client: "Temporal\nClient" {
+  style: {
+    font-color: "#ffffff"
+    stroke: "#6c72cb"
+    fill: "#1a1d2e"
+  }
+}
+
+server: " " {
+  shape: image
+  icon: ./temporal-logo-white.svg
+  width: 72
+  height: 72
+}
+
+client -> server: "start_activity(my_job_handler, input)" {
+  style: {
+    stroke: "#8b5cf6"
+    font-color: "#c4b5fd"
+  }
+}
+
+server -> client: {
+  style: {
+    stroke: "#8b5cf6"
+    font-color: "#c4b5fd"
+    stroke-dash: 3
+  }
+}

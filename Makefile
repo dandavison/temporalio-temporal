@@ -8,6 +8,10 @@ bins: temporal-server temporal-cassandra-tool temporal-sql-tool temporal-elastic
 # Install all tools, recompile proto files, run all possible checks and tests (long but comprehensive).
 all: clean proto bins check test
 
+# Build PNGs for D2 diagrams.
+build-pngs:
+	@./.task/diagrams/build-pngs.sh
+
 # Used in CI.
 ci-build-misc: \
 	print-go-version \
@@ -27,7 +31,7 @@ clean: clean-bins clean-tools clean-test-output
 proto: lint-protos lint-api protoc proto-codegen
 ########################################################################
 
-.PHONY: proto protoc install bins ci-build-misc clean
+.PHONY: proto protoc install bins build-pngs ci-build-misc clean
 
 ##### Arguments ######
 GOOS        ?= $(shell go env GOOS)
