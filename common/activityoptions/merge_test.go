@@ -208,6 +208,8 @@ func TestMergeActivityOptions_FieldExhaustiveness(t *testing.T) {
 			t.Logf("Skipping %s: %s", fp.JSONPath, reason)
 			continue
 		}
+		// Each subtest exercises one field-mask path and fails if that path
+		// neither produces a merge effect nor has an explicit skip rationale.
 		t.Run(fp.JSONPath, func(t *testing.T) {
 			mergeInto := &activitypb.ActivityOptions{}
 			mask := &fieldmaskpb.FieldMask{Paths: []string{fp.ProtoPath}}

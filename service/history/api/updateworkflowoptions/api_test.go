@@ -22,6 +22,7 @@ import (
 	"go.temporal.io/server/common/cluster/clustertest"
 	"go.temporal.io/server/common/locks"
 	"go.temporal.io/server/common/namespace"
+	"go.temporal.io/server/common/testing/protoutils"
 	"go.temporal.io/server/service/history/api"
 	historyi "go.temporal.io/server/service/history/interfaces"
 	"go.temporal.io/server/service/history/tests"
@@ -29,7 +30,6 @@ import (
 	"go.uber.org/mock/gomock"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/fieldmaskpb"
-	"go.temporal.io/server/common/testing/protoutils"
 )
 
 type noopVersionMembershipCache struct{}
@@ -316,6 +316,8 @@ func TestMergeWorkflowExecutionOptions_FieldExhaustiveness(t *testing.T) {
 			t.Logf("Skipping %s: %s", fp.JSONPath, reason)
 			continue
 		}
+		// Each subtest exercises one field-mask path and fails if that path
+		// neither produces a merge effect nor has an explicit skip rationale.
 		t.Run(fp.JSONPath, func(t *testing.T) {
 			mergeInto := &workflowpb.WorkflowExecutionOptions{}
 			mask := &fieldmaskpb.FieldMask{Paths: []string{fp.ProtoPath}}
