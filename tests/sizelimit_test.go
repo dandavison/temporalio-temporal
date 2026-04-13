@@ -47,7 +47,7 @@ func (s *SizeLimitFunctionalSuite) SetupSuite() {
 		dynamicconfig.MutableStateSizeLimitWarn.Key():  200,
 		dynamicconfig.MutableStateSizeLimitError.Key(): 1100,
 	}
-	s.FunctionalTestBase.SetupSuiteWithCluster(testcore.WithDynamicConfigOverrides(dynamicConfigOverrides))
+	s.SetupSuiteWithCluster(testcore.WithDynamicConfigOverrides(dynamicConfigOverrides))
 }
 
 func (s *SizeLimitFunctionalSuite) TestTerminateWorkflowCausedByHistoryCountLimit() {
