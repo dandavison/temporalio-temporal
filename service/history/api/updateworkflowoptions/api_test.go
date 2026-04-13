@@ -306,28 +306,53 @@ func TestMergeWorkflowExecutionOptions_FieldExhaustiveness(t *testing.T) {
 		}
 	}
 
-	// Build a fully-populated source message using reflection so that new fields
-	// are automatically covered without manual updates to this test.
-	mergeFrom := &workflowpb.WorkflowExecutionOptions{}
-	protoutils.PopulateNonZero(mergeFrom.ProtoReflect())
+	baseline := &workflowpb.WorkflowExecutionOptions{}
+	protoutils.PopulateNonZeroVariant(baseline.ProtoReflect(), 1)
+
+	mutated := &workflowpb.WorkflowExecutionOptions{}
+	protoutils.PopulateNonZeroVariant(mutated.ProtoReflect(), 2)
 
 	for _, fp := range allPaths {
-		if reason, ok := mergeSkippedFields[fp.JSONPath]; ok {
-			t.Logf("Skipping %s: %s", fp.JSONPath, reason)
+		if _, ok := mergeSkippedFields[fp.JSONPath]; ok {
 			continue
 		}
-		// Each subtest exercises one field-mask path and fails if that path
-		// neither produces a merge effect nor has an explicit skip rationale.
 		t.Run(fp.JSONPath, func(t *testing.T) {
-			mergeInto := &workflowpb.WorkflowExecutionOptions{}
 			mask := &fieldmaskpb.FieldMask{Paths: []string{fp.ProtoPath}}
 
-			result, err := mergeWorkflowExecutionOptions(mergeInto, mergeFrom, mask)
-			require.NoError(t, err, "merge should handle path %s", fp.ProtoPath)
-			require.False(t, proto.Equal(result, &workflowpb.WorkflowExecutionOptions{}),
-				"path %s: merge produced empty result — either handle it in mergeWorkflowExecutionOptions "+
-					"or add to mergeSkippedFields with a reason", fp.JSONPath,
-			)
+			t.Run("mutates", func(t *testing.T) {
+				mergeInto := cloneWorkflowExecutionOptions(baseline)
+				mergeFrom := cloneWorkflowExecutionOptions(mutated)
+				expected := cloneWorkflowExecutionOptions(baseline)
+				protoutils.CopyPath(expected.ProtoReflect(), mergeFrom.ProtoReflect(), fp.ProtoPath)
+
+				result, err := mergeWorkflowExecutionOptions(mergeInto, mergeFrom, mask)
+				require.NoError(t, err, "merge should handle path %s", fp.ProtoPath)
+				require.True(t, proto.Equal(expected, result),
+					"path %s: merge result mismatch for mutation", fp.JSONPath,
+				)
+			})
+
+			t.Run("clears", func(t *testing.T) {
+				mergeInto := cloneWorkflowExecutionOptions(baseline)
+				mergeFrom := cloneWorkflowExecutionOptions(mutated)
+				protoutils.ClearPath(mergeFrom.ProtoReflect(), fp.ProtoPath)
+				expected := cloneWorkflowExecutionOptions(baseline)
+				protoutils.CopyPath(expected.ProtoReflect(), mergeFrom.ProtoReflect(), fp.ProtoPath)
+
+				result, err := mergeWorkflowExecutionOptions(mergeInto, mergeFrom, mask)
+				require.NoError(t, err, "merge should clear path %s", fp.ProtoPath)
+				require.True(t, proto.Equal(expected, result),
+					"path %s: merge result mismatch for clearing", fp.JSONPath,
+				)
+			})
 		})
 	}
+}
+
+func cloneWorkflowExecutionOptions(v *workflowpb.WorkflowExecutionOptions) *workflowpb.WorkflowExecutionOptions {
+	cloned, ok := proto.Clone(v).(*workflowpb.WorkflowExecutionOptions)
+	if !ok {
+		panic("unexpected clone type for WorkflowExecutionOptions")
+	}
+	return cloned
 }

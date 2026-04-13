@@ -1,6 +1,9 @@
 package protoutils
 
 import (
+	"strings"
+
+	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/reflect/protoreflect"
 )
 
@@ -58,6 +61,13 @@ func isWellKnownScalar(name protoreflect.FullName) bool {
 // PopulateNonZero recursively sets every field on a proto message to a
 // distinguishable non-zero value. For oneofs, only the first variant is set.
 func PopulateNonZero(msg protoreflect.Message) {
+	PopulateNonZeroVariant(msg, 1)
+}
+
+// PopulateNonZeroVariant recursively sets every field on a proto message to a
+// distinguishable non-zero value derived from variant. For oneofs, only the
+// first variant is set.
+func PopulateNonZeroVariant(msg protoreflect.Message, variant int) {
 	fields := msg.Descriptor().Fields()
 	oneofsSeen := make(map[protoreflect.Name]bool)
 	for i := 0; i < fields.Len(); i++ {
@@ -72,10 +82,10 @@ func PopulateNonZero(msg protoreflect.Message) {
 			list := msg.Mutable(fd).List()
 			if fd.Kind() == protoreflect.MessageKind {
 				elem := list.NewElement()
-				PopulateNonZero(elem.Message())
+				PopulateNonZeroVariant(elem.Message(), variant)
 				list.Append(elem)
 			} else {
-				list.Append(nonZeroScalarValue(fd))
+				list.Append(nonZeroScalarValue(fd, variant))
 			}
 			continue
 		}
@@ -83,35 +93,94 @@ func PopulateNonZero(msg protoreflect.Message) {
 			continue
 		}
 		if fd.Kind() == protoreflect.MessageKind || fd.Kind() == protoreflect.GroupKind {
-			PopulateNonZero(msg.Mutable(fd).Message())
+			PopulateNonZeroVariant(msg.Mutable(fd).Message(), variant)
 		} else {
-			msg.Set(fd, nonZeroScalarValue(fd))
+			msg.Set(fd, nonZeroScalarValue(fd, variant))
 		}
 	}
 }
 
-func nonZeroScalarValue(fd protoreflect.FieldDescriptor) protoreflect.Value {
+func CopyPath(dst, src protoreflect.Message, protoPath string) {
+	copyPath(dst, src, strings.Split(protoPath, "."))
+}
+
+func ClearPath(msg protoreflect.Message, protoPath string) {
+	clearPath(msg, strings.Split(protoPath, "."))
+}
+
+func copyPath(dst, src protoreflect.Message, parts []string) {
+	fd := mustFindField(dst.Descriptor(), parts[0])
+	if len(parts) == 1 {
+		if !src.Has(fd) {
+			dst.Clear(fd)
+			return
+		}
+		switch {
+		case fd.IsList():
+			dstList := dst.Mutable(fd).List()
+			srcList := src.Get(fd).List()
+			for dstList.Len() > 0 {
+				dstList.Truncate(dstList.Len() - 1)
+			}
+			for i := 0; i < srcList.Len(); i++ {
+				dstList.Append(cloneListElement(srcList.Get(i)))
+			}
+		case fd.Kind() == protoreflect.MessageKind || fd.Kind() == protoreflect.GroupKind:
+			dst.Set(fd, protoreflect.ValueOfMessage(proto.Clone(src.Get(fd).Message().Interface()).ProtoReflect()))
+		default:
+			dst.Set(fd, src.Get(fd))
+		}
+		return
+	}
+	copyPath(dst.Mutable(fd).Message(), src.Get(fd).Message(), parts[1:])
+}
+
+func clearPath(msg protoreflect.Message, parts []string) {
+	fd := mustFindField(msg.Descriptor(), parts[0])
+	if len(parts) == 1 {
+		msg.Clear(fd)
+		return
+	}
+	clearPath(msg.Mutable(fd).Message(), parts[1:])
+}
+
+func cloneListElement(v protoreflect.Value) protoreflect.Value {
+	if m := v.Message(); m.IsValid() {
+		return protoreflect.ValueOfMessage(proto.Clone(m.Interface()).ProtoReflect())
+	}
+	return v
+}
+
+func mustFindField(md protoreflect.MessageDescriptor, name string) protoreflect.FieldDescriptor {
+	fd := md.Fields().ByName(protoreflect.Name(name))
+	if fd == nil {
+		panic("unknown proto field path component: " + name)
+	}
+	return fd
+}
+
+func nonZeroScalarValue(fd protoreflect.FieldDescriptor, variant int) protoreflect.Value {
 	switch fd.Kind() {
 	case protoreflect.BoolKind:
 		return protoreflect.ValueOfBool(true)
 	case protoreflect.Int32Kind, protoreflect.Sint32Kind, protoreflect.Sfixed32Kind:
-		return protoreflect.ValueOfInt32(42)
+		return protoreflect.ValueOfInt32(int32(41 + variant))
 	case protoreflect.Int64Kind, protoreflect.Sint64Kind, protoreflect.Sfixed64Kind:
-		return protoreflect.ValueOfInt64(42)
+		return protoreflect.ValueOfInt64(int64(41 + variant))
 	case protoreflect.Uint32Kind, protoreflect.Fixed32Kind:
-		return protoreflect.ValueOfUint32(42)
+		return protoreflect.ValueOfUint32(uint32(41 + variant))
 	case protoreflect.Uint64Kind, protoreflect.Fixed64Kind:
-		return protoreflect.ValueOfUint64(42)
+		return protoreflect.ValueOfUint64(uint64(41 + variant))
 	case protoreflect.FloatKind:
-		return protoreflect.ValueOfFloat32(1.5)
+		return protoreflect.ValueOfFloat32(float32(variant) + 0.5)
 	case protoreflect.DoubleKind:
-		return protoreflect.ValueOfFloat64(1.5)
+		return protoreflect.ValueOfFloat64(float64(variant) + 0.5)
 	case protoreflect.StringKind:
-		return protoreflect.ValueOfString("test")
+		return protoreflect.ValueOfString("test-" + string(rune('0'+variant)))
 	case protoreflect.BytesKind:
-		return protoreflect.ValueOfBytes([]byte("test"))
+		return protoreflect.ValueOfBytes([]byte("test-" + string(rune('0'+variant))))
 	case protoreflect.EnumKind:
-		return protoreflect.ValueOfEnum(1)
+		return protoreflect.ValueOfEnum(protoreflect.EnumNumber(variant))
 	default:
 		return protoreflect.Value{}
 	}

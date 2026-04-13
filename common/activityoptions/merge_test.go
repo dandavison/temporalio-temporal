@@ -198,29 +198,54 @@ func TestMergeActivityOptions_FieldExhaustiveness(t *testing.T) {
 		}
 	}
 
-	// Build a fully-populated source message using reflection so that new fields
-	// are automatically covered without manual updates to this test.
-	mergeFrom := &activitypb.ActivityOptions{}
-	protoutils.PopulateNonZero(mergeFrom.ProtoReflect())
+	baseline := &activitypb.ActivityOptions{}
+	protoutils.PopulateNonZeroVariant(baseline.ProtoReflect(), 1)
+
+	mutated := &activitypb.ActivityOptions{}
+	protoutils.PopulateNonZeroVariant(mutated.ProtoReflect(), 2)
 
 	for _, fp := range allPaths {
-		if reason, ok := mergeSkippedFields[fp.JSONPath]; ok {
-			t.Logf("Skipping %s: %s", fp.JSONPath, reason)
+		if _, ok := mergeSkippedFields[fp.JSONPath]; ok {
 			continue
 		}
-		// Each subtest exercises one field-mask path and fails if that path
-		// neither produces a merge effect nor has an explicit skip rationale.
 		t.Run(fp.JSONPath, func(t *testing.T) {
-			mergeInto := &activitypb.ActivityOptions{}
 			mask := &fieldmaskpb.FieldMask{Paths: []string{fp.ProtoPath}}
 			updateFields := util.ParseFieldMask(mask)
 
-			err := MergeActivityOptions(mergeInto, mergeFrom, updateFields)
-			require.NoError(t, err, "merge should handle path %s", fp.ProtoPath)
-			require.False(t, proto.Equal(mergeInto, &activitypb.ActivityOptions{}),
-				"path %s: merge produced empty result — either handle it in MergeActivityOptions "+
-					"or add to mergeSkippedFields with a reason", fp.JSONPath,
-			)
+			t.Run("mutates", func(t *testing.T) {
+				mergeInto := cloneActivityOptions(baseline)
+				mergeFrom := cloneActivityOptions(mutated)
+				expected := cloneActivityOptions(baseline)
+				protoutils.CopyPath(expected.ProtoReflect(), mergeFrom.ProtoReflect(), fp.ProtoPath)
+
+				err := MergeActivityOptions(mergeInto, mergeFrom, updateFields)
+				require.NoError(t, err, "merge should handle path %s", fp.ProtoPath)
+				require.True(t, proto.Equal(expected, mergeInto),
+					"path %s: merge result mismatch for mutation", fp.JSONPath,
+				)
+			})
+
+			t.Run("clears", func(t *testing.T) {
+				mergeInto := cloneActivityOptions(baseline)
+				mergeFrom := cloneActivityOptions(mutated)
+				protoutils.ClearPath(mergeFrom.ProtoReflect(), fp.ProtoPath)
+				expected := cloneActivityOptions(baseline)
+				protoutils.CopyPath(expected.ProtoReflect(), mergeFrom.ProtoReflect(), fp.ProtoPath)
+
+				err := MergeActivityOptions(mergeInto, mergeFrom, updateFields)
+				require.NoError(t, err, "merge should clear path %s", fp.ProtoPath)
+				require.True(t, proto.Equal(expected, mergeInto),
+					"path %s: merge result mismatch for clearing", fp.JSONPath,
+				)
+			})
 		})
 	}
+}
+
+func cloneActivityOptions(v *activitypb.ActivityOptions) *activitypb.ActivityOptions {
+	cloned, ok := proto.Clone(v).(*activitypb.ActivityOptions)
+	if !ok {
+		panic("unexpected clone type for ActivityOptions")
+	}
+	return cloned
 }
