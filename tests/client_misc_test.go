@@ -841,7 +841,7 @@ func (s *ClientMiscTestSuite) Test_BufferedQuery() {
 			},
 			Archetype: chasm.WorkflowArchetype,
 		})
-		s.Assert().NoError(err)
+		s.NoError(err)
 	}()
 
 	// this query will be buffered in mutable state because workflow task is in-flight.

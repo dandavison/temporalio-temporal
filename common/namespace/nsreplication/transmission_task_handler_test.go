@@ -141,7 +141,7 @@ func (s *transmissionTaskSuite) TestHandleTransmissionTask_RegisterNamespaceTask
 		nil,
 		false, // forceReplicate
 	)
-	s.Nil(err)
+	s.NoError(err)
 }
 
 func (s *transmissionTaskSuite) TestHandleTransmissionTask_RegisterNamespaceTask_NotGlobalNamespace() {
@@ -197,7 +197,7 @@ func (s *transmissionTaskSuite) TestHandleTransmissionTask_RegisterNamespaceTask
 		nil,
 		false, // forceReplicate
 	)
-	s.Nil(err)
+	s.NoError(err)
 }
 
 func (s *transmissionTaskSuite) TestHandleTransmissionTask_UpdateNamespaceTask_IsGlobalNamespace() {
@@ -286,7 +286,7 @@ func (s *transmissionTaskSuite) TestHandleTransmissionTask_UpdateNamespaceTask_I
 		nil,
 		false, // forceReplicate
 	)
-	s.Nil(err)
+	s.NoError(err)
 }
 
 func (s *transmissionTaskSuite) TestHandleTransmissionTask_UpdateNamespaceTask_NotGlobalNamespace() {
@@ -341,7 +341,7 @@ func (s *transmissionTaskSuite) TestHandleTransmissionTask_UpdateNamespaceTask_N
 		nil,
 		false, // forceReplicate
 	)
-	s.Nil(err)
+	s.NoError(err)
 }
 
 func (s *transmissionTaskSuite) TestHandleTransmissionTask_UpdateNamespaceTask_ReplicationClusterListUpdated() {
@@ -430,7 +430,7 @@ func (s *transmissionTaskSuite) TestHandleTransmissionTask_UpdateNamespaceTask_R
 		nil,
 		false, // forceReplicate
 	)
-	s.Nil(err)
+	s.NoError(err)
 
 	err = s.namespaceReplicator.HandleTransmissionTask(
 		context.Background(),
@@ -445,5 +445,5 @@ func (s *transmissionTaskSuite) TestHandleTransmissionTask_UpdateNamespaceTask_R
 		nil,
 		false, // forceReplicate
 	)
-	s.Nil(err)
+	s.NoError(err)
 }

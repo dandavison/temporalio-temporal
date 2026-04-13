@@ -37,7 +37,7 @@ func TestWorkerDeploymentSuite(t *testing.T) {
 
 func (s *WorkerDeploymentSuite) SetupTest() {
 	s.controller = gomock.NewController(s.T())
-	s.env = s.WorkflowTestSuite.NewTestWorkflowEnvironment()
+	s.env = s.NewTestWorkflowEnvironment()
 	s.env.RegisterWorkflowWithOptions(s.getDeploymentWorkflowFunc(), workflow.RegisterOptions{Name: WorkerDeploymentWorkflowType})
 
 	// Initialize an empty ClientImpl to use its helper methods
