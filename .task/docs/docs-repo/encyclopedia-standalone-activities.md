@@ -1,0 +1,1 @@
+/Users/dan/src/temporal-all/repos/documentation/docs/encyclopedia/activities/standalone-activity.mdx

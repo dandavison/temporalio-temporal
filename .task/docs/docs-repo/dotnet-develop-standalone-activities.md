@@ -1,0 +1,1 @@
+/Users/dan/src/temporal-all/repos/documentation/docs/develop/dotnet/activities/standalone-activities.mdx

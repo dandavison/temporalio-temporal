@@ -1,0 +1,1 @@
+/Users/dan/src/temporal-all/repos/documentation/docs/develop/go/activities/standalone-activities.mdx
