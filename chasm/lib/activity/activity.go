@@ -143,6 +143,7 @@ func NewStandaloneActivity(
 			HeartbeatTimeout:       request.GetHeartbeatTimeout(),
 			RetryPolicy:            request.GetRetryPolicy(),
 			Priority:               request.Priority,
+			StartDelay:             request.GetStartDelay(),
 		},
 		LastAttempt: chasm.NewDataField(ctx, &activitypb.ActivityAttemptState{}),
 		RequestData: chasm.NewDataField(ctx, &activitypb.ActivityRequestData{
@@ -653,7 +654,7 @@ func (a *Activity) hasEnoughTimeForRetry(ctx chasm.Context, overridingRetryInter
 		return true, retryInterval
 	}
 
-	deadline := a.ScheduleTime.AsTime().Add(scheduleToClose)
+	deadline := a.ScheduleTime.AsTime().Add(a.GetStartDelay().AsDuration()).Add(scheduleToClose)
 	return ctx.Now(a).Add(retryInterval).Before(deadline), retryInterval
 }
 
