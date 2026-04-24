@@ -256,6 +256,15 @@ func (a *Activity) attemptScheduleTime(attempt *activitypb.ActivityAttemptState)
 	return attemptScheduleTimeForRetry(attempt)
 }
 
+// effectiveExpirationTime returns the wall-clock time at which the activity's ScheduleToClose
+// timeout fires, accounting for StartDelay. Callers must first check that ScheduleToCloseTimeout
+// is set (> 0), otherwise the returned time is meaningless.
+func (a *Activity) effectiveExpirationTime() time.Time {
+	return a.GetScheduleTime().AsTime().
+		Add(a.GetStartDelay().AsDuration()).
+		Add(a.GetScheduleToCloseTimeout().AsDuration())
+}
+
 // attemptScheduleTimeForRetry computes the time a retried attempt is scheduled to start,
 // as complete_time + retry_interval. Returns nil if either field is missing or zero.
 func attemptScheduleTimeForRetry(attempt *activitypb.ActivityAttemptState) *timestamppb.Timestamp {
@@ -654,7 +663,7 @@ func (a *Activity) hasEnoughTimeForRetry(ctx chasm.Context, overridingRetryInter
 		return true, retryInterval
 	}
 
-	deadline := a.ScheduleTime.AsTime().Add(a.GetStartDelay().AsDuration()).Add(scheduleToClose)
+	deadline := a.effectiveExpirationTime()
 	return ctx.Now(a).Add(retryInterval).Before(deadline), retryInterval
 }
 
@@ -773,8 +782,8 @@ func (a *Activity) buildActivityExecutionInfo(ctx chasm.Context) *apiactivitypb.
 	}
 
 	var expirationTime *timestamppb.Timestamp
-	if timeout := a.GetScheduleToCloseTimeout().AsDuration(); timeout > 0 {
-		expirationTime = timestamppb.New(a.GetScheduleTime().AsTime().Add(timeout))
+	if a.GetScheduleToCloseTimeout().AsDuration() > 0 {
+		expirationTime = timestamppb.New(a.effectiveExpirationTime())
 	}
 
 	sa := &commonpb.SearchAttributes{
