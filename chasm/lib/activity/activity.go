@@ -56,6 +56,7 @@ type ActivityStore interface {
 
 // Activity component represents an activity execution persistence object and can be either standalone activity or one
 // embedded within a workflow.
+
 type Activity struct {
 	chasm.UnimplementedComponent
 
@@ -64,17 +65,12 @@ type Activity struct {
 	Visibility    chasm.Field[*chasm.Visibility]
 	LastAttempt   chasm.Field[*activitypb.ActivityAttemptState]
 	LastHeartbeat chasm.Field[*activitypb.ActivityHeartbeatState]
-	// Standalone only
+
 	RequestData chasm.Field[*activitypb.ActivityRequestData]
 	Outcome     chasm.Field[*activitypb.ActivityOutcome]
-	// Pointer to an implementation of the "store". For a workflow activity this would be a parent
-	// pointer back to the workflow. For a standalone activity this is nil (Activity itself
-	// implements the ActivityStore interface).
-	// TODO(saa-preview): figure out better naming.
+
 	Store chasm.ParentPtr[ActivityStore]
 
-	// Callbacks holds completion callbacks to be invoked when this standalone activity reaches a terminal state. Nil
-	// for workflow-embedded activities as the workflow handles its own callbacks.
 	Callbacks chasm.Map[string, *callback.Callback]
 }
 
