@@ -4125,6 +4125,7 @@ func (ms *MutableStateImpl) AddActivityTaskScheduledEvent(
 //   - RequestCancelActivity routing through CHASM instead of legacy ActivityInfo lookup
 //   - RespondActivityTaskFailed / RespondActivityTaskTimedOut CHASM branches
 //   - Cross-cluster replication of the CHASM activity sub-tree
+//     (dan): replication should occur automatically
 func (ms *MutableStateImpl) AddActivityTaskScheduledEventCHASM(
 	workflowTaskCompletedEventID int64,
 	command *commandpb.ScheduleActivityTaskCommandAttributes,
@@ -4141,6 +4142,7 @@ func (ms *MutableStateImpl) AddActivityTaskScheduledEventCHASM(
 		tag.ActivityID(command.GetActivityId()),
 	)
 	// 1. Write history event — CHASM activities still appear in workflow history.
+	// (dan) aren't we doing that in the
 	event := ms.hBuilder.AddActivityTaskScheduledEvent(workflowTaskCompletedEventID, command, ms.namespaceEntry.Name())
 	ms.writeEventToCache(event)
 	scheduledEventID := event.GetEventId()

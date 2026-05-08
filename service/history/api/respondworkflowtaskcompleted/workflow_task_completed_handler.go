@@ -333,6 +333,7 @@ func (handler *workflowTaskCompletedHandler) handleCommand(
 		return nil, handler.handleCommandProtocolMessage(ctx, command.GetProtocolMessageCommandAttributes(), msgs)
 
 	default:
+		// Would CHASM Activity ultimatekly be handled here?
 		// TODO: need to handle migration between HSM and CHASM
 
 		handlerOpts := chasmworkflow.CommandHandlerOptions{

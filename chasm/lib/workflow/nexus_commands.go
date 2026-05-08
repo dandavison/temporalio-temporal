@@ -48,7 +48,6 @@ func (ch *nexusCommandHandler) handleScheduleCommand(
 	}
 
 	requestID := uuid.NewString()
-	var endpointID string
 	// Skip endpoint registry lookup for __temporal_system endpoint
 	if attrs.Endpoint == commonnexus.SystemEndpoint {
 		if len(attrs.NexusHeader) > 0 {
