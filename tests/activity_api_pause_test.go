@@ -591,6 +591,16 @@ func TestActivityApiPauseClientTestSuite(t *testing.T) {
 
 				activityWasReset = true
 
+				// BREAK-PROBE #8: spurious Unpause(resetAttempts=true) before the
+				// intentional one. The spurious call already unpauses the activity and
+				// resets attempts to 1; the intentional Unpause below is then a no-op on
+				// an already-unpaused activity (Unpause on non-paused is idempotent).
+				// Test SHOULD fail (it claims to verify the second-call unpause-with-reset
+				// behaviour). Test DOES pass because the assertion `Attempt == int32(1) &&
+				// State == STARTED` cannot distinguish "the second Unpause did the work"
+				// from "an earlier spurious Unpause did the work".
+				s.NoError(api.unpause(ctx, s, workflowRun.GetID(), "activity-id", "", true))
+
 				// unpause the activity with reset
 				s.NoError(api.unpause(ctx, s, workflowRun.GetID(), "activity-id", "", true))
 
@@ -797,6 +807,14 @@ func TestActivityApiPauseClientTestSuite(t *testing.T) {
 					require.Len(t, description.PendingActivities, 1)
 					require.Equal(t, enumspb.PENDING_ACTIVITY_STATE_PAUSED, description.PendingActivities[0].State)
 				}, 5*time.Second, 100*time.Millisecond)
+
+				// BREAK-PROBE #5: spurious Unpause between the two pauses means the second
+				// pause is NOT exercising same-request-id idempotency — it's pausing a
+				// non-paused activity. Test SHOULD fail (the scenario the test name claims
+				// to verify is no longer being exercised). Test DOES pass because the only
+				// assertion is `s.NoError(...)` on the second pause; no Describe verifies
+				// that the activity's pause state was preserved across the second call.
+				s.NoError(api.unpause(ctx, s, workflowRun.GetID(), "activity-id", "identity", false))
 
 				// Second pause with the same request ID — must succeed (idempotent no-op).
 				s.NoError(api.pause(ctx, s, workflowRun.GetID(), "activity-id", "identity", "reason", "my-pause-request-id"))

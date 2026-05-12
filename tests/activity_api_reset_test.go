@@ -520,6 +520,13 @@ func (s *ActivityApiResetClientTestSuite) TestActivityReset_HeartbeatDetails() {
 		require.Equal(t, int32(0), activityIteration.Load())
 	}, 5*time.Second, 500*time.Millisecond)
 
+	// BREAK-PROBE #7: spurious Reset(resetHeartbeat=true) before the intentional one.
+	// Test SHOULD fail — the test's claim is that THIS Reset call clears the heartbeat.
+	// Test DOES pass because the spurious call already cleared heartbeat; the
+	// intentional call is then a redundant no-op-on-already-cleared state. The
+	// assertion `require.Nil(t, ap.HeartbeatDetails)` cannot distinguish the cases.
+	s.NoError(s.resetFn(ctx, workflowRun.GetID(), activityId, true, false))
+
 	// reset the activity, with heartbeats
 	s.NoError(s.resetFn(ctx, workflowRun.GetID(), activityId, true, false))
 
@@ -684,8 +691,12 @@ func (s *ActivityApiResetClientTestSuite) TestActivityResetApi_TerminateWhileDef
 		require.Equal(t, enumspb.PENDING_ACTIVITY_STATE_STARTED, desc.PendingActivities[0].State)
 	}, 5*time.Second, 200*time.Millisecond)
 
-	// reset while running — sets ActivityReset=true as deferred flag
-	s.NoError(s.resetFn(ctx, wfID, "activity-id", false, false))
+	// BREAK-PROBE #6: skip the Reset call. Test SHOULD fail (it claims to verify that
+	// terminating a workflow while a Reset is in deferred state works cleanly). Test
+	// DOES pass because the workflow ends up TERMINATED via the explicit
+	// TerminateWorkflow below — that outcome is independent of whether Reset was ever
+	// called. The test does not verify Reset did anything.
+	// s.NoError(s.resetFn(ctx, wfID, "activity-id", false, false))
 
 	// terminate the workflow before the activity retries
 	err = s.SdkClient().TerminateWorkflow(ctx, wfID, workflowRun.GetRunID(), "test termination")

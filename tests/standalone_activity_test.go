@@ -7044,6 +7044,18 @@ func (s *standaloneActivityTestSuite) TestPauseActivityExecution() {
 		require.NoError(t, err)
 		require.Equal(t, enumspb.PENDING_ACTIVITY_STATE_PAUSED, descResp.GetInfo().GetRunState())
 
+		// BREAK-PROBE #1: spurious Unpause re-dispatches the activity, contradicting the
+		// "no task should be available" intent below. Test SHOULD fail (poll returns the
+		// dispatched activity). Test DOES pass because the assertion is wrapped in
+		// `if err == nil { ... }`, which is vacuously satisfied on poll deadline-exceeded.
+		_, err = env.FrontendClient().UnpauseActivityExecution(ctx, &workflowservice.UnpauseActivityExecutionRequest{
+			Namespace:  env.Namespace().String(),
+			ActivityId: activityID,
+			RunId:      runID,
+			Identity:   "test-identity",
+		})
+		require.NoError(t, err)
+
 		// Attempt to poll — the dispatch task was invalidated by the stamp bump, so no task should
 		// be available. Use a short-lived context to avoid blocking the test.
 		shortCtx, shortCancel := context.WithTimeout(ctx, 2*time.Second)
@@ -8105,8 +8117,23 @@ func (s *standaloneActivityTestSuite) TestUnpauseActivityExecution() {
 		startResp := env.startAndValidateActivity(ctx, t, activityID, taskQueue)
 		runID := startResp.RunId
 
+		// BREAK-PROBE #2: spurious Pause means the subsequent Unpause is no longer being
+		// tested against a non-paused activity; the test name's claim ("Unpause on a
+		// non-paused activity is idempotent") is no longer being exercised. Test SHOULD
+		// fail (or at least: assert post-state to detect that the scenario changed).
+		// Test DOES pass because the only assertion below is `require.NoError(err)` on
+		// the Unpause; no Describe verifies that the activity was never paused.
+		_, err := env.FrontendClient().PauseActivityExecution(ctx, &workflowservice.PauseActivityExecutionRequest{
+			Namespace:  env.Namespace().String(),
+			ActivityId: activityID,
+			RunId:      runID,
+			Identity:   "test-identity",
+			Reason:     "probe",
+		})
+		require.NoError(t, err)
+
 		// Unpause a non-paused activity — should succeed with no error.
-		_, err := env.FrontendClient().UnpauseActivityExecution(ctx, &workflowservice.UnpauseActivityExecutionRequest{
+		_, err = env.FrontendClient().UnpauseActivityExecution(ctx, &workflowservice.UnpauseActivityExecutionRequest{
 			Namespace:  env.Namespace().String(),
 			ActivityId: activityID,
 			RunId:      runID,
@@ -8772,8 +8799,13 @@ func (s *standaloneActivityTestSuite) TestResetActivityExecution() {
 		require.NoError(t, err)
 		require.Equal(t, enumspb.PENDING_ACTIVITY_STATE_CANCEL_REQUESTED, desc.GetInfo().GetRunState())
 
+		// BREAK-PROBE #3: skip the Reset call entirely. Test SHOULD fail (it claims to
+		// verify Reset-while-CANCEL_REQUESTED behaviour). Test DOES pass because the
+		// activity stays in CANCEL_REQUESTED from the prior RequestCancel and the worker
+		// then completes successfully — neither outcome depends on the Reset call having
+		// occurred. The test does not verify Reset did anything.
 		// Reset while CANCEL_REQUESTED — must succeed without error
-		resetActivity(ctx, t, activityID, startResp.GetRunId(), false)
+		// resetActivity(ctx, t, activityID, startResp.GetRunId(), false)
 
 		// Activity must still be in CANCEL_REQUESTED (reset is deferred, no immediate side effect)
 		desc, err = env.FrontendClient().DescribeActivityExecution(ctx, &workflowservice.DescribeActivityExecutionRequest{
@@ -9085,6 +9117,20 @@ func (s *standaloneActivityTestSuite) TestResetActivityExecution() {
 		})
 		require.NoError(t, err)
 		require.Greater(t, desc.GetInfo().GetAttempt(), int32(1))
+
+		// BREAK-PROBE #4: spurious Reset(KeepPaused=true) before the intentional one.
+		// Test SHOULD fail — the test's claim is that THIS Reset call resets the attempt
+		// counter while preserving pause. Test DOES pass because the spurious call already
+		// reset attempt to 1; the intentional call below is a no-op on already-reset
+		// state. The assertion of `Attempt == int32(1)` cannot distinguish "this Reset
+		// did the work" from "an earlier Reset did the work".
+		_, err = env.FrontendClient().ResetActivityExecution(ctx, &workflowservice.ResetActivityExecutionRequest{
+			Namespace:  env.Namespace().String(),
+			ActivityId: activityID,
+			RunId:      startResp.GetRunId(),
+			KeepPaused: true,
+		})
+		require.NoError(t, err)
 
 		// Reset with keepPaused=true — activity should remain paused but attempt reset to 1
 		_, err = env.FrontendClient().ResetActivityExecution(ctx, &workflowservice.ResetActivityExecutionRequest{
