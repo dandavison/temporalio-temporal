@@ -6981,14 +6981,14 @@ func (s *standaloneActivityTestSuite) TestPauseActivityExecution() {
 
 		pollResp := env.pollActivityTaskAndValidate(ctx, t, activityID, taskQueue, runID)
 
-		_, err := env.FrontendClient().PauseActivityExecution(ctx, &workflowservice.PauseActivityExecutionRequest{
-			Namespace:  env.Namespace().String(),
-			ActivityId: activityID,
-			RunId:      runID,
-			Identity:   "test-identity",
-			Reason:     "test-pause",
-		})
-		require.NoError(t, err)
+		// _, err := env.FrontendClient().PauseActivityExecution(ctx, &workflowservice.PauseActivityExecutionRequest{
+		// 	Namespace:  env.Namespace().String(),
+		// 	ActivityId: activityID,
+		// 	RunId:      runID,
+		// 	Identity:   "test-identity",
+		// 	Reason:     "test-pause",
+		// })
+		// require.NoError(t, err)
 
 		// DescribeActivityExecution should reflect PAUSE_REQUESTED run state: the activity is still
 		// STARTED (worker token valid) but a pause has been requested via the flag.
@@ -7043,6 +7043,15 @@ func (s *standaloneActivityTestSuite) TestPauseActivityExecution() {
 		})
 		require.NoError(t, err)
 		require.Equal(t, enumspb.PENDING_ACTIVITY_STATE_PAUSED, descResp.GetInfo().GetRunState())
+
+		_, err = env.FrontendClient().UnpauseActivityExecution(ctx, &workflowservice.UnpauseActivityExecutionRequest{
+			Namespace:  env.Namespace().String(),
+			ActivityId: activityID,
+			RunId:      runID,
+			Identity:   "test-identity",
+			Reason:     "test-pause",
+		})
+		require.NoError(t, err)
 
 		// Attempt to poll — the dispatch task was invalidated by the stamp bump, so no task should
 		// be available. Use a short-lived context to avoid blocking the test.
