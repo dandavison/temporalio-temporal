@@ -7126,9 +7126,28 @@ func (s *standaloneActivityTestSuite) TestPauseActivityExecution() {
 		_, err := env.FrontendClient().PauseActivityExecution(ctx, pauseReq)
 		require.NoError(t, err)
 
+		desc1, err := env.FrontendClient().DescribeActivityExecution(ctx, &workflowservice.DescribeActivityExecutionRequest{
+			Namespace:  env.Namespace().String(),
+			ActivityId: activityID,
+			RunId:      runID,
+		})
+		require.NoError(t, err)
+
 		// Second pause with the same request ID should succeed (idempotent no-op).
 		_, err = env.FrontendClient().PauseActivityExecution(ctx, pauseReq)
 		require.NoError(t, err)
+
+		desc2, err := env.FrontendClient().DescribeActivityExecution(ctx, &workflowservice.DescribeActivityExecutionRequest{
+			Namespace:  env.Namespace().String(),
+			ActivityId: activityID,
+			RunId:      runID,
+		})
+		require.NoError(t, err)
+
+		// StateTransitionCount captures CHASM state mutations; a true no-op short-circuit
+		// must not increment it. RunState being unchanged is a weaker secondary check.
+		require.Equal(t, desc1.GetInfo().GetStateTransitionCount(), desc2.GetInfo().GetStateTransitionCount(),
+			"second pause with duplicate request_id must not cause a state transition")
 	})
 
 	t.Run("PauseNotFound", func(t *testing.T) {
