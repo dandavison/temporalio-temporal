@@ -7044,10 +7044,22 @@ func (s *standaloneActivityTestSuite) TestPauseActivityExecution() {
 		require.NoError(t, err)
 		require.Equal(t, enumspb.PENDING_ACTIVITY_STATE_PAUSED, descResp.GetInfo().GetRunState())
 
+		// Run: go test -run 'TestStandaloneActivityTestSuite/TestPauseActivityExecution/PauseWhileScheduled' -count=1 ./tests/...
 		// BREAK-PROBE #1: spurious Unpause re-dispatches the activity, contradicting the
 		// "no task should be available" intent below. Test SHOULD fail (poll returns the
 		// dispatched activity). Test DOES pass because the assertion is wrapped in
 		// `if err == nil { ... }`, which is vacuously satisfied on poll deadline-exceeded.
+		//
+		// FIX: Don't infer "no dispatch" from a poll that's allowed to time out. Either:
+		// (a) require the poll to return DeadlineExceeded — `require.ErrorIs(t, err,
+		//     context.DeadlineExceeded)` instead of `if err == nil`; this guarantees the
+		//     poll actually observed the absence of a task, not just timed out for an
+		//     unrelated reason; or
+		// (b) observe the invalidation directly: Describe before/after Pause and assert
+		//     the activity's dispatch-task stamp / attempt-stamp increased — i.e. that
+		//     Pause caused a state transition that would invalidate any pending dispatch
+		//     task. This is causal rather than absence-based and is robust to matcher
+		//     scheduling races.
 		_, err = env.FrontendClient().UnpauseActivityExecution(ctx, &workflowservice.UnpauseActivityExecutionRequest{
 			Namespace:  env.Namespace().String(),
 			ActivityId: activityID,
@@ -8117,12 +8129,20 @@ func (s *standaloneActivityTestSuite) TestUnpauseActivityExecution() {
 		startResp := env.startAndValidateActivity(ctx, t, activityID, taskQueue)
 		runID := startResp.RunId
 
+		// Run: go test -run 'TestStandaloneActivityTestSuite/TestUnpauseActivityExecution/UnpauseIdempotent' -count=1 ./tests/...
 		// BREAK-PROBE #2: spurious Pause means the subsequent Unpause is no longer being
 		// tested against a non-paused activity; the test name's claim ("Unpause on a
 		// non-paused activity is idempotent") is no longer being exercised. Test SHOULD
 		// fail (or at least: assert post-state to detect that the scenario changed).
 		// Test DOES pass because the only assertion below is `require.NoError(err)` on
 		// the Unpause; no Describe verifies that the activity was never paused.
+		//
+		// FIX: After Unpause, Describe the activity and assert RunState == SCHEDULED and
+		// PauseInfo == nil (or equivalent — whatever Describe exposes about pause state).
+		// That converts the test from "Unpause-on-anything returns nil" to "Unpause on a
+		// never-paused activity preserves the SCHEDULED state". Optionally also poll the
+		// task queue to confirm the dispatch task is still in flight, proving the Unpause
+		// was a true no-op (didn't re-emit a dispatch task).
 		_, err := env.FrontendClient().PauseActivityExecution(ctx, &workflowservice.PauseActivityExecutionRequest{
 			Namespace:  env.Namespace().String(),
 			ActivityId: activityID,
@@ -8799,11 +8819,22 @@ func (s *standaloneActivityTestSuite) TestResetActivityExecution() {
 		require.NoError(t, err)
 		require.Equal(t, enumspb.PENDING_ACTIVITY_STATE_CANCEL_REQUESTED, desc.GetInfo().GetRunState())
 
+		// Run: go test -run 'TestStandaloneActivityTestSuite/TestResetActivityExecution/WhileCancelRequested' -count=1 ./tests/...
 		// BREAK-PROBE #3: skip the Reset call entirely. Test SHOULD fail (it claims to
 		// verify Reset-while-CANCEL_REQUESTED behaviour). Test DOES pass because the
 		// activity stays in CANCEL_REQUESTED from the prior RequestCancel and the worker
 		// then completes successfully — neither outcome depends on the Reset call having
 		// occurred. The test does not verify Reset did anything.
+		//
+		// FIX: As the existing test comment acknowledges, the only observable Reset
+		// effect in this state is the deferred-reset on the next retry, which requires
+		// extending TransitionRescheduled to source from CANCEL_REQUESTED. Until then
+		// this test doesn't have a meaningful positive assertion — it should either be
+		// deleted, or rewritten as a negative assertion ("Reset in this state returns
+		// success without changing state"): capture pre-Reset Describe state, call
+		// Reset, capture post-Reset Describe state, and assert they are equal
+		// field-for-field. That at least proves Reset is a no-op (and would fail if a
+		// future change started having Reset throw or mutate state here).
 		// Reset while CANCEL_REQUESTED — must succeed without error
 		// resetActivity(ctx, t, activityID, startResp.GetRunId(), false)
 
@@ -9118,12 +9149,23 @@ func (s *standaloneActivityTestSuite) TestResetActivityExecution() {
 		require.NoError(t, err)
 		require.Greater(t, desc.GetInfo().GetAttempt(), int32(1))
 
+		// Run: go test -run 'TestStandaloneActivityTestSuite/TestResetActivityExecution/KeepPaused' -count=1 ./tests/...
 		// BREAK-PROBE #4: spurious Reset(KeepPaused=true) before the intentional one.
 		// Test SHOULD fail — the test's claim is that THIS Reset call resets the attempt
 		// counter while preserving pause. Test DOES pass because the spurious call already
 		// reset attempt to 1; the intentional call below is a no-op on already-reset
 		// state. The assertion of `Attempt == int32(1)` cannot distinguish "this Reset
 		// did the work" from "an earlier Reset did the work".
+		//
+		// FIX: Tighten the before/after bracket so it's causal:
+		// (a) Capture `preDesc` via Describe immediately before the intentional Reset
+		//     and assert `preDesc.Info.Attempt > 1` and `RunState == PAUSED`. The probe
+		//     would then fail the pre-Reset assertion (attempt would already be 1).
+		// (b) Capture `preDesc.Info.StateTransitionCount` (or whatever monotonic CHASM
+		//     state-version field is exposed). After the Reset, assert the count
+		//     incremented by exactly the expected amount. This proves the intentional
+		//     Reset call itself caused a state transition rather than relying on the
+		//     end-state alone — robust against any number of spurious extra Reset calls.
 		_, err = env.FrontendClient().ResetActivityExecution(ctx, &workflowservice.ResetActivityExecutionRequest{
 			Namespace:  env.Namespace().String(),
 			ActivityId: activityID,

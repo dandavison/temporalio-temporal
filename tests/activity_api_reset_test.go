@@ -520,11 +520,22 @@ func (s *ActivityApiResetClientTestSuite) TestActivityReset_HeartbeatDetails() {
 		require.Equal(t, int32(0), activityIteration.Load())
 	}, 5*time.Second, 500*time.Millisecond)
 
+	// Run: go test -run 'TestActivityApiResetClientTestSuite/.*/TestActivityReset_HeartbeatDetails' -count=1 ./tests/...
 	// BREAK-PROBE #7: spurious Reset(resetHeartbeat=true) before the intentional one.
 	// Test SHOULD fail — the test's claim is that THIS Reset call clears the heartbeat.
 	// Test DOES pass because the spurious call already cleared heartbeat; the
 	// intentional call is then a redundant no-op-on-already-cleared state. The
 	// assertion `require.Nil(t, ap.HeartbeatDetails)` cannot distinguish the cases.
+	//
+	// FIX: Tighten the before/after bracket so it is causal. Immediately before the
+	// intentional Reset, Describe the activity and assert HeartbeatDetails is the
+	// recently-recorded "first" payload (it already does this further up at line 519
+	// — duplicate or move that assertion to right before the Reset). The probe would
+	// then fail the pre-Reset assertion. Alternatively, capture a state-version /
+	// transition-count via Describe immediately before and immediately after the
+	// Reset, and assert it incremented by exactly the expected amount — this proves
+	// the intentional call itself caused the state transition, regardless of any
+	// spurious extras.
 	s.NoError(s.resetFn(ctx, workflowRun.GetID(), activityId, true, false))
 
 	// reset the activity, with heartbeats
@@ -691,11 +702,25 @@ func (s *ActivityApiResetClientTestSuite) TestActivityResetApi_TerminateWhileDef
 		require.Equal(t, enumspb.PENDING_ACTIVITY_STATE_STARTED, desc.PendingActivities[0].State)
 	}, 5*time.Second, 200*time.Millisecond)
 
+	// Run: go test -run 'TestActivityApiResetClientTestSuite/.*/TestActivityResetApi_TerminateWhileDeferredReset' -count=1 ./tests/...
 	// BREAK-PROBE #6: skip the Reset call. Test SHOULD fail (it claims to verify that
 	// terminating a workflow while a Reset is in deferred state works cleanly). Test
 	// DOES pass because the workflow ends up TERMINATED via the explicit
 	// TerminateWorkflow below — that outcome is independent of whether Reset was ever
 	// called. The test does not verify Reset did anything.
+	//
+	// FIX: The test's positive claim hinges on the deferred-reset flag being SET when
+	// the workflow is terminated — which today is not externally observable. Options:
+	// (a) Delete the test. With no observable state change attributable to Reset, it
+	//     verifies nothing beyond "Terminate works", which is covered elsewhere.
+	// (b) Expose the deferred-reset flag (`ActivityReset` on the activity component)
+	//     through Describe or pending-activity info; assert it is true after the
+	//     Reset call and before the Terminate. Then the test name's claim is real.
+	// (c) Convert the test into a positive end-state assertion by having the activity
+	//     return successfully (instead of being terminated): after Reset on a STARTED
+	//     activity, fail it retryably; assert the retry runs at attempt=1; assert the
+	//     workflow completes. That matches what TestActivityResetApi_WhileRunning
+	//     already does, so this test would become a duplicate — likely (a) is best.
 	// s.NoError(s.resetFn(ctx, wfID, "activity-id", false, false))
 
 	// terminate the workflow before the activity retries

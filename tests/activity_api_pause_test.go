@@ -591,6 +591,7 @@ func TestActivityApiPauseClientTestSuite(t *testing.T) {
 
 				activityWasReset = true
 
+				// Run: go test -run 'TestActivityApiPauseClientTestSuite/.*/TestActivityPauseApi_WithReset' -count=1 ./tests/...
 				// BREAK-PROBE #8: spurious Unpause(resetAttempts=true) before the
 				// intentional one. The spurious call already unpauses the activity and
 				// resets attempts to 1; the intentional Unpause below is then a no-op on
@@ -599,6 +600,15 @@ func TestActivityApiPauseClientTestSuite(t *testing.T) {
 				// behaviour). Test DOES pass because the assertion `Attempt == int32(1) &&
 				// State == STARTED` cannot distinguish "the second Unpause did the work"
 				// from "an earlier spurious Unpause did the work".
+				//
+				// FIX: Tighten the bracket. Immediately before the intentional Unpause,
+				// re-Describe and re-assert `State == PAUSED && Attempt > 1` (the test
+				// already does this at lines 583-590, but several lines earlier — close
+				// the gap by repeating the assertion right above the Unpause call). The
+				// probe would then fail because the pre-Unpause state is no longer PAUSED.
+				// More robust: capture StateTransitionCount before and after the
+				// intentional Unpause and assert it incremented by exactly the expected
+				// amount, which directly proves the Unpause itself caused the transition.
 				s.NoError(api.unpause(ctx, s, workflowRun.GetID(), "activity-id", "", true))
 
 				// unpause the activity with reset
@@ -808,12 +818,20 @@ func TestActivityApiPauseClientTestSuite(t *testing.T) {
 					require.Equal(t, enumspb.PENDING_ACTIVITY_STATE_PAUSED, description.PendingActivities[0].State)
 				}, 5*time.Second, 100*time.Millisecond)
 
+				// Run: go test -run 'TestActivityApiPauseClientTestSuite/.*/TestActivityPauseApi_SameRequestID_IsIdempotent' -count=1 ./tests/...
 				// BREAK-PROBE #5: spurious Unpause between the two pauses means the second
 				// pause is NOT exercising same-request-id idempotency — it's pausing a
 				// non-paused activity. Test SHOULD fail (the scenario the test name claims
 				// to verify is no longer being exercised). Test DOES pass because the only
 				// assertion is `s.NoError(...)` on the second pause; no Describe verifies
 				// that the activity's pause state was preserved across the second call.
+				//
+				// FIX: Capture `PauseInfo.PauseTime` (and `PauseInfo.RequestId`) via
+				// Describe AFTER the first pause and again AFTER the second pause, and
+				// assert both fields are identical across the two reads. A true idempotent
+				// no-op preserves pause_time; an implementation that replaces pause state
+				// on every call (or that the probe above exposes — unpause then re-pause)
+				// would produce a different pause_time and fail the assertion.
 				s.NoError(api.unpause(ctx, s, workflowRun.GetID(), "activity-id", "identity", false))
 
 				// Second pause with the same request ID — must succeed (idempotent no-op).
