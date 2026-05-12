@@ -818,6 +818,7 @@ func TestActivityApiPauseClientTestSuite(t *testing.T) {
 					require.Equal(t, enumspb.PENDING_ACTIVITY_STATE_PAUSED, description.PendingActivities[0].State)
 				}, 5*time.Second, 100*time.Millisecond)
 
+				//
 				// Run: go test -run 'TestActivityApiPauseClientTestSuite/.*/TestActivityPauseApi_SameRequestID_IsIdempotent' -count=1 ./tests/...
 				// BREAK-PROBE #5: spurious Unpause between the two pauses means the second
 				// pause is NOT exercising same-request-id idempotency — it's pausing a

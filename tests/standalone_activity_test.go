@@ -7126,9 +7126,12 @@ func (s *standaloneActivityTestSuite) TestPauseActivityExecution() {
 		_, err := env.FrontendClient().PauseActivityExecution(ctx, pauseReq)
 		require.NoError(t, err)
 
+		pauseReq.Reason = "test-pause-2"
+
 		// Second pause with the same request ID should succeed (idempotent no-op).
 		_, err = env.FrontendClient().PauseActivityExecution(ctx, pauseReq)
 		require.NoError(t, err)
+
 	})
 
 	t.Run("PauseNotFound", func(t *testing.T) {
@@ -8836,7 +8839,7 @@ func (s *standaloneActivityTestSuite) TestResetActivityExecution() {
 		// field-for-field. That at least proves Reset is a no-op (and would fail if a
 		// future change started having Reset throw or mutate state here).
 		// Reset while CANCEL_REQUESTED — must succeed without error
-		// resetActivity(ctx, t, activityID, startResp.GetRunId(), false)
+		resetActivity(ctx, t, activityID, startResp.GetRunId(), false)
 
 		// Activity must still be in CANCEL_REQUESTED (reset is deferred, no immediate side effect)
 		desc, err = env.FrontendClient().DescribeActivityExecution(ctx, &workflowservice.DescribeActivityExecutionRequest{
