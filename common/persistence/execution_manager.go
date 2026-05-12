@@ -3,6 +3,7 @@ package persistence
 import (
 	"context"
 	"errors"
+	"fmt"
 	"strings"
 
 	commonpb "go.temporal.io/api/common/v1"
@@ -204,6 +205,17 @@ func (m *executionManagerImpl) UpdateWorkflowExecution(
 		NewWorkflowSnapshot:     serializedNewWorkflowSnapshot,
 		NewWorkflowNewEvents:    newWorkflowNewEvents,
 	}
+
+	// BREAK-PROBE persistence trace: prints every persistence-layer write before the
+	// call branches to the backend-specific ExecutionStore (Cassandra / SQL / mock).
+	// Grep for `PERSIST-WRITE` to see one line per UpdateWorkflowExecution call.
+	fmt.Printf("PERSIST-WRITE UpdateWorkflowExecution: shard=%d namespace=%s workflowID=%s runID=%s stateTransitionCount=%d\n",
+		request.ShardID,
+		updateMutation.ExecutionInfo.NamespaceId,
+		updateMutation.ExecutionInfo.WorkflowId,
+		updateMutation.ExecutionState.RunId,
+		updateMutation.ExecutionInfo.StateTransitionCount,
+	)
 
 	err = m.persistence.UpdateWorkflowExecution(ctx, newRequest)
 	switch err.(type) {
