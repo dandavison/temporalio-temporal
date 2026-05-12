@@ -7115,20 +7115,50 @@ func (s *standaloneActivityTestSuite) TestPauseActivityExecution() {
 		startResp := env.startAndValidateActivity(ctx, t, activityID, taskQueue)
 		runID := startResp.RunId
 
-		pauseReq := &workflowservice.PauseActivityExecutionRequest{
+		// First pause.
+		_, err := env.FrontendClient().PauseActivityExecution(ctx, &workflowservice.PauseActivityExecutionRequest{
 			Namespace:  env.Namespace().String(),
 			ActivityId: activityID,
 			RunId:      runID,
-			Identity:   "test-identity",
-			Reason:     "test-pause",
+			Identity:   "first-identity",
+			Reason:     "first-reason",
 			RequestId:  "some-request-id",
-		}
-		_, err := env.FrontendClient().PauseActivityExecution(ctx, pauseReq)
+		})
 		require.NoError(t, err)
 
-		// Second pause with the same request ID should succeed (idempotent no-op).
-		_, err = env.FrontendClient().PauseActivityExecution(ctx, pauseReq)
+		desc1, err := env.FrontendClient().DescribeActivityExecution(ctx, &workflowservice.DescribeActivityExecutionRequest{
+			Namespace:  env.Namespace().String(),
+			ActivityId: activityID,
+			RunId:      runID,
+		})
 		require.NoError(t, err)
+
+		// Second pause with the same request_id but different body. The duplicate
+		// request_id must cause the server to short-circuit and ignore the new body —
+		// any observable change between desc1 and desc2 would mean the second call
+		// applied state, violating the idempotency contract.
+		_, err = env.FrontendClient().PauseActivityExecution(ctx, &workflowservice.PauseActivityExecutionRequest{
+			Namespace:  env.Namespace().String(),
+			ActivityId: activityID,
+			RunId:      runID,
+			Identity:   "second-identity",
+			Reason:     "second-reason",
+			RequestId:  "some-request-id",
+		})
+		require.NoError(t, err)
+
+		desc2, err := env.FrontendClient().DescribeActivityExecution(ctx, &workflowservice.DescribeActivityExecutionRequest{
+			Namespace:  env.Namespace().String(),
+			ActivityId: activityID,
+			RunId:      runID,
+		})
+		require.NoError(t, err)
+
+		// StateTransitionCount captures CHASM state mutations; a true no-op short-circuit
+		// must not increment it. RunState being unchanged is a weaker secondary check.
+		require.Equal(t, desc1.GetInfo().GetStateTransitionCount(), desc2.GetInfo().GetStateTransitionCount(),
+			"second pause with duplicate request_id must not cause a state transition")
+		require.Equal(t, desc1.GetInfo().GetRunState(), desc2.GetInfo().GetRunState())
 	})
 
 	t.Run("PauseNotFound", func(t *testing.T) {
