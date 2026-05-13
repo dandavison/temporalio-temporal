@@ -7123,8 +7123,12 @@ func (s *standaloneActivityTestSuite) TestPauseActivityExecution() {
 			Reason:     "test-pause",
 			RequestId:  "some-request-id",
 		}
+
+		fmt.Println("Doing Pause 1")
+
 		_, err := env.FrontendClient().PauseActivityExecution(ctx, pauseReq)
 		require.NoError(t, err)
+		fmt.Println("Done Pause 1")
 
 		desc1, err := env.FrontendClient().DescribeActivityExecution(ctx, &workflowservice.DescribeActivityExecutionRequest{
 			Namespace:  env.Namespace().String(),
@@ -7133,8 +7137,13 @@ func (s *standaloneActivityTestSuite) TestPauseActivityExecution() {
 		})
 		require.NoError(t, err)
 
+		pauseReq.RequestId += "-x"
+
+		fmt.Println("Doing Pause 2")
+
 		// Second pause with the same request ID should succeed (idempotent no-op).
 		_, err = env.FrontendClient().PauseActivityExecution(ctx, pauseReq)
+		fmt.Println("Done Pause 2")
 		require.NoError(t, err)
 
 		desc2, err := env.FrontendClient().DescribeActivityExecution(ctx, &workflowservice.DescribeActivityExecutionRequest{

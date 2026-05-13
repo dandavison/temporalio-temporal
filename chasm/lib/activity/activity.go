@@ -797,8 +797,12 @@ func (a *Activity) handlePauseRequested(ctx chasm.MutableContext, req *activityp
 		newReqID := req.GetFrontendRequest().GetRequestId()
 		existingReqID := a.PauseState.GetRequestId()
 		if newReqID != "" && existingReqID == newReqID {
+
+			fmt.Println("Same request ID")
+
 			return &activitypb.PauseActivityExecutionResponse{}, nil
 		}
+		fmt.Println("Different request ID")
 		return nil, serviceerror.NewFailedPrecondition("activity is already paused")
 	}
 
