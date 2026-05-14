@@ -61,31 +61,32 @@ const (
 	// Additionally, after all retries are exhausted for start-to-close or heartbeat timeouts, the activity will also
 	// transition to timed out status.
 	ACTIVITY_EXECUTION_STATUS_TIMED_OUT ActivityExecutionStatus = 8
-	// The activity has been paused while in the SCHEDULED state. No worker will be dispatched until
-	// the activity is unpaused. The activity's pause_state field is populated with the identity,
-	// reason, and time of the pause request.
-	//
-	// Note: pausing a STARTED activity does not transition to this status. Instead, the pause is
-	// delivered as a flag (pause_state is set, status stays STARTED) and the worker is notified
-	// via ActivityPaused=true on its next heartbeat. The external run state in that case is
-	// PAUSE_REQUESTED. If the worker fails and retries while the flag is set, the retry lands in
-	// SCHEDULED with pause_state still populated and the dispatch task is blocked until unpause.
+	// The activity is paused and no worker is currently executing the attempt. No dispatch task
+	// will be issued until the activity is unpaused. Reachable from SCHEDULED via an operator pause,
+	// and from PAUSE_REQUESTED when the worker yields (failure with retries remaining, or timeout
+	// with retries remaining).
 	ACTIVITY_EXECUTION_STATUS_PAUSED ActivityExecutionStatus = 9
+	// An operator pause was issued while the activity was STARTED. The worker is still executing
+	// under its existing task token; status remains in the worker-token-valid set so heartbeat and
+	// completion calls continue to authenticate. The worker is notified via ActivityPaused=true on
+	// its next heartbeat response. When the worker yields, the activity transitions to PAUSED.
+	ACTIVITY_EXECUTION_STATUS_PAUSE_REQUESTED ActivityExecutionStatus = 10
 )
 
 // Enum value maps for ActivityExecutionStatus.
 var (
 	ActivityExecutionStatus_name = map[int32]string{
-		0: "ACTIVITY_EXECUTION_STATUS_UNSPECIFIED",
-		1: "ACTIVITY_EXECUTION_STATUS_SCHEDULED",
-		2: "ACTIVITY_EXECUTION_STATUS_STARTED",
-		3: "ACTIVITY_EXECUTION_STATUS_CANCEL_REQUESTED",
-		4: "ACTIVITY_EXECUTION_STATUS_COMPLETED",
-		5: "ACTIVITY_EXECUTION_STATUS_FAILED",
-		6: "ACTIVITY_EXECUTION_STATUS_CANCELED",
-		7: "ACTIVITY_EXECUTION_STATUS_TERMINATED",
-		8: "ACTIVITY_EXECUTION_STATUS_TIMED_OUT",
-		9: "ACTIVITY_EXECUTION_STATUS_PAUSED",
+		0:  "ACTIVITY_EXECUTION_STATUS_UNSPECIFIED",
+		1:  "ACTIVITY_EXECUTION_STATUS_SCHEDULED",
+		2:  "ACTIVITY_EXECUTION_STATUS_STARTED",
+		3:  "ACTIVITY_EXECUTION_STATUS_CANCEL_REQUESTED",
+		4:  "ACTIVITY_EXECUTION_STATUS_COMPLETED",
+		5:  "ACTIVITY_EXECUTION_STATUS_FAILED",
+		6:  "ACTIVITY_EXECUTION_STATUS_CANCELED",
+		7:  "ACTIVITY_EXECUTION_STATUS_TERMINATED",
+		8:  "ACTIVITY_EXECUTION_STATUS_TIMED_OUT",
+		9:  "ACTIVITY_EXECUTION_STATUS_PAUSED",
+		10: "ACTIVITY_EXECUTION_STATUS_PAUSE_REQUESTED",
 	}
 	ActivityExecutionStatus_value = map[string]int32{
 		"ACTIVITY_EXECUTION_STATUS_UNSPECIFIED":      0,
@@ -98,6 +99,7 @@ var (
 		"ACTIVITY_EXECUTION_STATUS_TERMINATED":       7,
 		"ACTIVITY_EXECUTION_STATUS_TIMED_OUT":        8,
 		"ACTIVITY_EXECUTION_STATUS_PAUSED":           9,
+		"ACTIVITY_EXECUTION_STATUS_PAUSE_REQUESTED":  10,
 	}
 )
 
@@ -131,6 +133,8 @@ func (x ActivityExecutionStatus) String() string {
 		// Deprecated: Use ActivityExecutionStatus.Descriptor instead.
 	case ACTIVITY_EXECUTION_STATUS_PAUSED:
 		return "Paused"
+	case ACTIVITY_EXECUTION_STATUS_PAUSE_REQUESTED:
+		return "PauseRequested"
 	default:
 		return strconv.Itoa(int(x))
 	}
@@ -208,9 +212,11 @@ type ActivityState struct {
 	// and on each options update that re-schedules the task). Unlike attempt.stamp, this counter
 	// is NOT incremented on retries, because schedule-to-close spans the full activity lifetime.
 	ScheduleToCloseStamp int32 `protobuf:"varint,15,opt,name=schedule_to_close_stamp,json=scheduleToCloseStamp,proto3" json:"schedule_to_close_stamp,omitempty"`
-	// Set if the activity was paused.
-	PauseState *ActivityPauseState `protobuf:"bytes,16,opt,name=pause_state,json=pauseState,proto3" json:"pause_state,omitempty"`
-	// (dan) Wouldn't it be cleaner to store ResetHeartbeats and ActivityReset in a ResetOptions struct rather than splatted at the top-level?
+	// Audit record of the most recent pause request. Written by every pause transition; outlives
+	// the paused condition. The activity's paused-ness is determined by Status, not by the presence
+	// of this field. The request_id is consulted by handlePauseRequested for idempotency on
+	// retried pause RPCs.
+	LastPauseInfo *LastPauseInfo `protobuf:"bytes,16,opt,name=last_pause_info,json=lastPauseInfo,proto3" json:"last_pause_info,omitempty"`
 	// Set when reset was requested while the activity was running.
 	// On the next retry, TransitionRescheduled will reset the attempt count to 1 before incrementing.
 	ActivityReset bool `protobuf:"varint,17,opt,name=activity_reset,json=activityReset,proto3" json:"activity_reset,omitempty"`
@@ -355,9 +361,9 @@ func (x *ActivityState) GetScheduleToCloseStamp() int32 {
 	return 0
 }
 
-func (x *ActivityState) GetPauseState() *ActivityPauseState {
+func (x *ActivityState) GetLastPauseInfo() *LastPauseInfo {
 	if x != nil {
-		return x.PauseState
+		return x.LastPauseInfo
 	}
 	return nil
 }
@@ -488,7 +494,7 @@ func (x *ActivityTerminateState) GetRequestId() string {
 	return ""
 }
 
-type ActivityPauseState struct {
+type LastPauseInfo struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	PauseTime     *timestamppb.Timestamp `protobuf:"bytes,1,opt,name=pause_time,json=pauseTime,proto3" json:"pause_time,omitempty"`
 	Identity      string                 `protobuf:"bytes,2,opt,name=identity,proto3" json:"identity,omitempty"`
@@ -498,20 +504,20 @@ type ActivityPauseState struct {
 	sizeCache     protoimpl.SizeCache
 }
 
-func (x *ActivityPauseState) Reset() {
-	*x = ActivityPauseState{}
+func (x *LastPauseInfo) Reset() {
+	*x = LastPauseInfo{}
 	mi := &file_temporal_server_chasm_lib_activity_proto_v1_activity_state_proto_msgTypes[3]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
 
-func (x *ActivityPauseState) String() string {
+func (x *LastPauseInfo) String() string {
 	return protoimpl.X.MessageStringOf(x)
 }
 
-func (*ActivityPauseState) ProtoMessage() {}
+func (*LastPauseInfo) ProtoMessage() {}
 
-func (x *ActivityPauseState) ProtoReflect() protoreflect.Message {
+func (x *LastPauseInfo) ProtoReflect() protoreflect.Message {
 	mi := &file_temporal_server_chasm_lib_activity_proto_v1_activity_state_proto_msgTypes[3]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
@@ -523,33 +529,33 @@ func (x *ActivityPauseState) ProtoReflect() protoreflect.Message {
 	return mi.MessageOf(x)
 }
 
-// Deprecated: Use ActivityPauseState.ProtoReflect.Descriptor instead.
-func (*ActivityPauseState) Descriptor() ([]byte, []int) {
+// Deprecated: Use LastPauseInfo.ProtoReflect.Descriptor instead.
+func (*LastPauseInfo) Descriptor() ([]byte, []int) {
 	return file_temporal_server_chasm_lib_activity_proto_v1_activity_state_proto_rawDescGZIP(), []int{3}
 }
 
-func (x *ActivityPauseState) GetPauseTime() *timestamppb.Timestamp {
+func (x *LastPauseInfo) GetPauseTime() *timestamppb.Timestamp {
 	if x != nil {
 		return x.PauseTime
 	}
 	return nil
 }
 
-func (x *ActivityPauseState) GetIdentity() string {
+func (x *LastPauseInfo) GetIdentity() string {
 	if x != nil {
 		return x.Identity
 	}
 	return ""
 }
 
-func (x *ActivityPauseState) GetReason() string {
+func (x *LastPauseInfo) GetReason() string {
 	if x != nil {
 		return x.Reason
 	}
 	return ""
 }
 
-func (x *ActivityPauseState) GetRequestId() string {
+func (x *LastPauseInfo) GetRequestId() string {
 	if x != nil {
 		return x.RequestId
 	}
@@ -1043,7 +1049,7 @@ var File_temporal_server_chasm_lib_activity_proto_v1_activity_state_proto protor
 
 const file_temporal_server_chasm_lib_activity_proto_v1_activity_state_proto_rawDesc = "" +
 	"\n" +
-	"@temporal/server/chasm/lib/activity/proto/v1/activity_state.proto\x12+temporal.server.chasm.lib.activity.proto.v1\x1a\x1egoogle/protobuf/duration.proto\x1a\x1fgoogle/protobuf/timestamp.proto\x1a&temporal/api/activity/v1/message.proto\x1a$temporal/api/common/v1/message.proto\x1a(temporal/api/deployment/v1/message.proto\x1a%temporal/api/failure/v1/message.proto\x1a'temporal/api/sdk/v1/user_metadata.proto\x1a'temporal/api/taskqueue/v1/message.proto\"\xd8\n" +
+	"@temporal/server/chasm/lib/activity/proto/v1/activity_state.proto\x12+temporal.server.chasm.lib.activity.proto.v1\x1a\x1egoogle/protobuf/duration.proto\x1a\x1fgoogle/protobuf/timestamp.proto\x1a&temporal/api/activity/v1/message.proto\x1a$temporal/api/common/v1/message.proto\x1a(temporal/api/deployment/v1/message.proto\x1a%temporal/api/failure/v1/message.proto\x1a'temporal/api/sdk/v1/user_metadata.proto\x1a'temporal/api/taskqueue/v1/message.proto\"\xda\n" +
 	"\n" +
 	"\rActivityState\x12I\n" +
 	"\ractivity_type\x18\x01 \x01(\v2$.temporal.api.common.v1.ActivityTypeR\factivityType\x12C\n" +
@@ -1063,9 +1069,8 @@ const file_temporal_server_chasm_lib_activity_proto_v1_activity_state_proto_rawD
 	"\vstart_delay\x18\r \x01(\v2\x19.google.protobuf.DurationR\n" +
 	"startDelay\x12T\n" +
 	"\x10original_options\x18\x0e \x01(\v2).temporal.api.activity.v1.ActivityOptionsR\x0foriginalOptions\x125\n" +
-	"\x17schedule_to_close_stamp\x18\x0f \x01(\x05R\x14scheduleToCloseStamp\x12`\n" +
-	"\vpause_state\x18\x10 \x01(\v2?.temporal.server.chasm.lib.activity.proto.v1.ActivityPauseStateR\n" +
-	"pauseState\x12%\n" +
+	"\x17schedule_to_close_stamp\x18\x0f \x01(\x05R\x14scheduleToCloseStamp\x12b\n" +
+	"\x0flast_pause_info\x18\x10 \x01(\v2:.temporal.server.chasm.lib.activity.proto.v1.LastPauseInfoR\rlastPauseInfo\x12%\n" +
 	"\x0eactivity_reset\x18\x11 \x01(\bR\ractivityReset\x12)\n" +
 	"\x10reset_heartbeats\x18\x12 \x01(\bR\x0fresetHeartbeats\"\xa7\x01\n" +
 	"\x13ActivityCancelState\x12\x1d\n" +
@@ -1076,8 +1081,8 @@ const file_temporal_server_chasm_lib_activity_proto_v1_activity_state_proto_rawD
 	"\x06reason\x18\x04 \x01(\tR\x06reason\"7\n" +
 	"\x16ActivityTerminateState\x12\x1d\n" +
 	"\n" +
-	"request_id\x18\x01 \x01(\tR\trequestId\"\xa2\x01\n" +
-	"\x12ActivityPauseState\x129\n" +
+	"request_id\x18\x01 \x01(\tR\trequestId\"\x9d\x01\n" +
+	"\rLastPauseInfo\x129\n" +
 	"\n" +
 	"pause_time\x18\x01 \x01(\v2\x1a.google.protobuf.TimestampR\tpauseTime\x12\x1a\n" +
 	"\bidentity\x18\x02 \x01(\tR\bidentity\x12\x16\n" +
@@ -1115,7 +1120,7 @@ const file_temporal_server_chasm_lib_activity_proto_v1_activity_state_proto_rawD
 	"\x06output\x18\x01 \x01(\v2 .temporal.api.common.v1.PayloadsR\x06output\x1aD\n" +
 	"\x06Failed\x12:\n" +
 	"\afailure\x18\x01 \x01(\v2 .temporal.api.failure.v1.FailureR\afailureB\t\n" +
-	"\avariant*\xb4\x03\n" +
+	"\avariant*\xe3\x03\n" +
 	"\x17ActivityExecutionStatus\x12)\n" +
 	"%ACTIVITY_EXECUTION_STATUS_UNSPECIFIED\x10\x00\x12'\n" +
 	"#ACTIVITY_EXECUTION_STATUS_SCHEDULED\x10\x01\x12%\n" +
@@ -1126,7 +1131,9 @@ const file_temporal_server_chasm_lib_activity_proto_v1_activity_state_proto_rawD
 	"\"ACTIVITY_EXECUTION_STATUS_CANCELED\x10\x06\x12(\n" +
 	"$ACTIVITY_EXECUTION_STATUS_TERMINATED\x10\a\x12'\n" +
 	"#ACTIVITY_EXECUTION_STATUS_TIMED_OUT\x10\b\x12$\n" +
-	" ACTIVITY_EXECUTION_STATUS_PAUSED\x10\tBDZBgo.temporal.io/server/chasm/lib/activity/gen/activitypb;activitypbb\x06proto3"
+	" ACTIVITY_EXECUTION_STATUS_PAUSED\x10\t\x12-\n" +
+	")ACTIVITY_EXECUTION_STATUS_PAUSE_REQUESTED\x10\n" +
+	"BDZBgo.temporal.io/server/chasm/lib/activity/gen/activitypb;activitypbb\x06proto3"
 
 var (
 	file_temporal_server_chasm_lib_activity_proto_v1_activity_state_proto_rawDescOnce sync.Once
@@ -1147,7 +1154,7 @@ var file_temporal_server_chasm_lib_activity_proto_v1_activity_state_proto_goType
 	(*ActivityState)(nil),                           // 1: temporal.server.chasm.lib.activity.proto.v1.ActivityState
 	(*ActivityCancelState)(nil),                     // 2: temporal.server.chasm.lib.activity.proto.v1.ActivityCancelState
 	(*ActivityTerminateState)(nil),                  // 3: temporal.server.chasm.lib.activity.proto.v1.ActivityTerminateState
-	(*ActivityPauseState)(nil),                      // 4: temporal.server.chasm.lib.activity.proto.v1.ActivityPauseState
+	(*LastPauseInfo)(nil),                           // 4: temporal.server.chasm.lib.activity.proto.v1.LastPauseInfo
 	(*ActivityAttemptState)(nil),                    // 5: temporal.server.chasm.lib.activity.proto.v1.ActivityAttemptState
 	(*ActivityHeartbeatState)(nil),                  // 6: temporal.server.chasm.lib.activity.proto.v1.ActivityHeartbeatState
 	(*ActivityRequestData)(nil),                     // 7: temporal.server.chasm.lib.activity.proto.v1.ActivityRequestData
@@ -1183,9 +1190,9 @@ var file_temporal_server_chasm_lib_activity_proto_v1_activity_state_proto_depIdx
 	3,  // 11: temporal.server.chasm.lib.activity.proto.v1.ActivityState.terminate_state:type_name -> temporal.server.chasm.lib.activity.proto.v1.ActivityTerminateState
 	14, // 12: temporal.server.chasm.lib.activity.proto.v1.ActivityState.start_delay:type_name -> google.protobuf.Duration
 	18, // 13: temporal.server.chasm.lib.activity.proto.v1.ActivityState.original_options:type_name -> temporal.api.activity.v1.ActivityOptions
-	4,  // 14: temporal.server.chasm.lib.activity.proto.v1.ActivityState.pause_state:type_name -> temporal.server.chasm.lib.activity.proto.v1.ActivityPauseState
+	4,  // 14: temporal.server.chasm.lib.activity.proto.v1.ActivityState.last_pause_info:type_name -> temporal.server.chasm.lib.activity.proto.v1.LastPauseInfo
 	16, // 15: temporal.server.chasm.lib.activity.proto.v1.ActivityCancelState.request_time:type_name -> google.protobuf.Timestamp
-	16, // 16: temporal.server.chasm.lib.activity.proto.v1.ActivityPauseState.pause_time:type_name -> google.protobuf.Timestamp
+	16, // 16: temporal.server.chasm.lib.activity.proto.v1.LastPauseInfo.pause_time:type_name -> google.protobuf.Timestamp
 	14, // 17: temporal.server.chasm.lib.activity.proto.v1.ActivityAttemptState.current_retry_interval:type_name -> google.protobuf.Duration
 	16, // 18: temporal.server.chasm.lib.activity.proto.v1.ActivityAttemptState.started_time:type_name -> google.protobuf.Timestamp
 	16, // 19: temporal.server.chasm.lib.activity.proto.v1.ActivityAttemptState.complete_time:type_name -> google.protobuf.Timestamp

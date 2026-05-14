@@ -199,11 +199,11 @@ var TransitionCompleted = chasm.NewTransition(
 	[]activitypb.ActivityExecutionStatus{
 		activitypb.ACTIVITY_EXECUTION_STATUS_STARTED,
 		activitypb.ACTIVITY_EXECUTION_STATUS_CANCEL_REQUESTED,
+		activitypb.ACTIVITY_EXECUTION_STATUS_PAUSE_REQUESTED,
 	},
 	activitypb.ACTIVITY_EXECUTION_STATUS_COMPLETED,
 	func(a *Activity, ctx chasm.MutableContext, event completeEvent) error {
 		return a.StoreOrSelf(ctx).RecordCompleted(ctx, func(ctx chasm.MutableContext) error {
-			a.PauseState = nil
 			a.ActivityReset = false
 			a.ResetHeartbeats = false
 
@@ -236,12 +236,12 @@ var TransitionFailed = chasm.NewTransition(
 	[]activitypb.ActivityExecutionStatus{
 		activitypb.ACTIVITY_EXECUTION_STATUS_STARTED,
 		activitypb.ACTIVITY_EXECUTION_STATUS_CANCEL_REQUESTED,
+		activitypb.ACTIVITY_EXECUTION_STATUS_PAUSE_REQUESTED,
 	},
 	activitypb.ACTIVITY_EXECUTION_STATUS_FAILED,
 	func(a *Activity, ctx chasm.MutableContext, event failedEvent) error {
 		return a.StoreOrSelf(ctx).RecordCompleted(ctx, func(ctx chasm.MutableContext) error {
 			req := event.req.GetFailedRequest()
-			a.PauseState = nil
 			a.ActivityReset = false
 			a.ResetHeartbeats = false
 
@@ -277,6 +277,7 @@ var TransitionTerminated = chasm.NewTransition(
 		activitypb.ACTIVITY_EXECUTION_STATUS_STARTED,
 		activitypb.ACTIVITY_EXECUTION_STATUS_CANCEL_REQUESTED,
 		activitypb.ACTIVITY_EXECUTION_STATUS_PAUSED,
+		activitypb.ACTIVITY_EXECUTION_STATUS_PAUSE_REQUESTED,
 	},
 	activitypb.ACTIVITY_EXECUTION_STATUS_TERMINATED,
 	func(a *Activity, ctx chasm.MutableContext, event terminateEvent) error {
@@ -284,7 +285,6 @@ var TransitionTerminated = chasm.NewTransition(
 			a.TerminateState = &activitypb.ActivityTerminateState{
 				RequestId: event.request.RequestID,
 			}
-			a.PauseState = nil
 			a.ActivityReset = false
 			a.ResetHeartbeats = false
 			outcome := a.Outcome.Get(ctx)
@@ -310,14 +310,17 @@ var TransitionTerminated = chasm.NewTransition(
 )
 
 // TransitionCancelRequested transitions to CancelRequested status.
-// PAUSED activities (real status, no worker) are cancelled immediately in handleCancellationRequested
-// rather than waiting for a worker response.
+// PAUSED activities (no worker) are cancelled immediately in handleCancellationRequested
+// rather than waiting for a worker response. Cancel from PAUSE_REQUESTED supersedes the pause:
+// status drops to CANCEL_REQUESTED and the worker observes CancelRequested=true on its next
+// heartbeat.
 var TransitionCancelRequested = chasm.NewTransition(
 	[]activitypb.ActivityExecutionStatus{
 		activitypb.ACTIVITY_EXECUTION_STATUS_STARTED,
 		activitypb.ACTIVITY_EXECUTION_STATUS_SCHEDULED,
 		activitypb.ACTIVITY_EXECUTION_STATUS_CANCEL_REQUESTED,
 		activitypb.ACTIVITY_EXECUTION_STATUS_PAUSED,
+		activitypb.ACTIVITY_EXECUTION_STATUS_PAUSE_REQUESTED,
 	},
 	activitypb.ACTIVITY_EXECUTION_STATUS_CANCEL_REQUESTED,
 	func(a *Activity, ctx chasm.MutableContext, req *workflowservice.RequestCancelActivityExecutionRequest) error {
@@ -361,7 +364,6 @@ var TransitionCanceled = chasm.NewTransition(
 					Failure: failure,
 				},
 			}
-			a.PauseState = nil
 			a.ActivityReset = false
 			a.ResetHeartbeats = false
 
@@ -385,6 +387,7 @@ var TransitionTimedOut = chasm.NewTransition(
 		activitypb.ACTIVITY_EXECUTION_STATUS_STARTED,
 		activitypb.ACTIVITY_EXECUTION_STATUS_CANCEL_REQUESTED,
 		activitypb.ACTIVITY_EXECUTION_STATUS_PAUSED,
+		activitypb.ACTIVITY_EXECUTION_STATUS_PAUSE_REQUESTED,
 	},
 	activitypb.ACTIVITY_EXECUTION_STATUS_TIMED_OUT,
 	func(a *Activity, ctx chasm.MutableContext, event timeoutEvent) error {
@@ -409,7 +412,6 @@ var TransitionTimedOut = chasm.NewTransition(
 				return err
 			}
 
-			a.PauseState = nil
 			a.ActivityReset = false
 			a.ResetHeartbeats = false
 
@@ -427,20 +429,31 @@ type pauseEvent struct {
 
 // TransitionPaused transitions a SCHEDULED activity to PAUSED status. The stamp is bumped to
 // invalidate any pending dispatch task so the activity is not dispatched while paused.
-//
-// Note: STARTED activities are NOT paused via this transition. Pausing a STARTED activity is a
-// flag-only operation (PauseState is set, status stays STARTED) so the worker's token remains
-// valid and the worker is notified via ActivityPaused=true on its next heartbeat. See
-// handlePauseRequested for the full hybrid logic.
 var TransitionPaused = chasm.NewTransition(
 	[]activitypb.ActivityExecutionStatus{
 		activitypb.ACTIVITY_EXECUTION_STATUS_SCHEDULED,
 	},
 	activitypb.ACTIVITY_EXECUTION_STATUS_PAUSED,
 	func(a *Activity, ctx chasm.MutableContext, event pauseEvent) error {
-		a.pause(ctx, event)
+		a.recordPauseState(ctx, event)
 		attempt := a.LastAttempt.Get(ctx)
 		attempt.Stamp++
+		return nil
+	},
+)
+
+// TransitionPauseRequested transitions a STARTED activity to PAUSE_REQUESTED. The worker is still
+// executing under its task token; status remains in the token-valid set ({STARTED,
+// CANCEL_REQUESTED, PAUSE_REQUESTED}) so heartbeat/complete/fail calls continue to authenticate.
+// No stamp bump: the StartToCloseTimeoutTask and HeartbeatTimeoutTask armed at start stay valid.
+// The worker is notified via ActivityPaused=true on its next heartbeat response.
+var TransitionPauseRequested = chasm.NewTransition(
+	[]activitypb.ActivityExecutionStatus{
+		activitypb.ACTIVITY_EXECUTION_STATUS_STARTED,
+	},
+	activitypb.ACTIVITY_EXECUTION_STATUS_PAUSE_REQUESTED,
+	func(a *Activity, ctx chasm.MutableContext, event pauseEvent) error {
+		a.recordPauseState(ctx, event)
 		return nil
 	},
 )
@@ -450,6 +463,7 @@ type unpauseEvent struct {
 	metricsHandler metrics.Handler
 }
 
+// TransitionUnpaused transitions PAUSED → SCHEDULED, emitting a fresh dispatch task.
 var TransitionUnpaused = chasm.NewTransition(
 	[]activitypb.ActivityExecutionStatus{
 		activitypb.ACTIVITY_EXECUTION_STATUS_PAUSED,
@@ -458,6 +472,48 @@ var TransitionUnpaused = chasm.NewTransition(
 	func(a *Activity, ctx chasm.MutableContext, event unpauseEvent) error {
 		a.unpause(ctx, event)
 		return nil
+	},
+)
+
+// TransitionUnpausedToStarted transitions PAUSE_REQUESTED → STARTED. The worker is still running
+// under its existing token; clearing the pause-requested status causes ActivityPaused=false on
+// the next heartbeat. No stamp bump, no dispatch task.
+var TransitionUnpausedToStarted = chasm.NewTransition(
+	[]activitypb.ActivityExecutionStatus{
+		activitypb.ACTIVITY_EXECUTION_STATUS_PAUSE_REQUESTED,
+	},
+	activitypb.ACTIVITY_EXECUTION_STATUS_STARTED,
+	func(a *Activity, ctx chasm.MutableContext, event unpauseEvent) error {
+		a.emitOnUnpausedMetrics(event.metricsHandler)
+		return nil
+	},
+)
+
+// TransitionAttemptFailedToPaused transitions PAUSE_REQUESTED → PAUSED when the worker yields (failure
+// or timeout) with retries remaining. The failed attempt is recorded and Count is incremented but
+// no dispatch task is emitted — dispatch resumes on TransitionUnpaused.
+var TransitionAttemptFailedToPaused = chasm.NewTransition(
+	[]activitypb.ActivityExecutionStatus{
+		activitypb.ACTIVITY_EXECUTION_STATUS_PAUSE_REQUESTED,
+	},
+	activitypb.ACTIVITY_EXECUTION_STATUS_PAUSED,
+	func(a *Activity, ctx chasm.MutableContext, event rescheduleEvent) error {
+		attempt := a.LastAttempt.Get(ctx)
+		currentTime := ctx.Now(a)
+
+		if a.ActivityReset {
+			attempt.Count = 0
+			a.ActivityReset = false
+			if a.ResetHeartbeats {
+				a.ResetHeartbeats = false
+				a.clearHeartbeat(ctx)
+			}
+		}
+
+		attempt.Count++
+		attempt.Stamp++
+
+		return a.recordFailedAttempt(ctx, event.retryInterval, event.failure, currentTime, false)
 	},
 )
 

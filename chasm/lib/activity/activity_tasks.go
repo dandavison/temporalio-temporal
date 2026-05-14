@@ -35,12 +35,7 @@ func (h *activityDispatchTaskHandler) Validate(
 	_ chasm.TaskAttributes,
 	task *activitypb.ActivityDispatchTask,
 ) (bool, error) {
-	// Do not dispatch while the activity has a pause flag set (SCHEDULED + PauseState from a retry
-	// while a STARTED activity was flag-paused). TransitionStarted.Possible already returns false for
-	// real PAUSED status activities (source must be SCHEDULED, and PAUSED → SCHEDULED via unpause).
-	// (dan) What other tasks do we want to invalidate while paused?
 	return (TransitionStarted.Possible(activity) &&
-		activity.PauseState == nil &&
 		task.Stamp == activity.LastAttempt.Get(ctx).GetStamp()), nil
 }
 
@@ -97,9 +92,7 @@ func (h *scheduleToStartTimeoutTaskHandler) Validate(
 	_ chasm.TaskAttributes,
 	task *activitypb.ScheduleToStartTimeoutTask,
 ) (bool, error) {
-	// Do not time out a SCHEDULED activity that has the pause flag set (retry while paused).
 	return (activity.Status == activitypb.ACTIVITY_EXECUTION_STATUS_SCHEDULED &&
-		activity.PauseState == nil &&
 		task.Stamp == activity.LastAttempt.Get(ctx).GetStamp()), nil
 }
 

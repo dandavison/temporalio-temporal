@@ -922,7 +922,7 @@ func TestTransitionResetFromPaused(t *testing.T) {
 					StartToCloseTimeout:    durationpb.New(defaultStartToCloseTimeout),
 					Status:                 activitypb.ACTIVITY_EXECUTION_STATUS_PAUSED,
 					TaskQueue:              &taskqueuepb.TaskQueue{Name: "test-task-queue"},
-					PauseState: &activitypb.ActivityPauseState{
+					LastPauseInfo: &activitypb.LastPauseInfo{
 						Identity: "test-identity",
 						Reason:   "test reason",
 					},
