@@ -438,11 +438,18 @@ func (e *ChasmEngine) applyUpdateWithLease(
 
 	e.setContextMetadata(ctx, chasmTree)
 
-	if err := executionLease.GetContext().UpdateWorkflowExecutionAsActive(
-		ctx,
-		shardContext,
-	); err != nil {
-		return nil, err
+	// Skip the close-transaction + persistence write when the update fn made no
+	// changes (e.g. an idempotent request_id retry that hit a per-component dedup
+	// guard). Without this, closeTransaction would still bump StateTransitionCount,
+	// LastUpdateTime, and dbRecordVersion, producing a DB write and a spurious
+	// versioned transition for a semantic no-op.
+	if mutableState.IsDirty() {
+		if err := executionLease.GetContext().UpdateWorkflowExecutionAsActive(
+			ctx,
+			shardContext,
+		); err != nil {
+			return nil, err
+		}
 	}
 
 	serializedRef, err := mutableContext.Ref(component)
