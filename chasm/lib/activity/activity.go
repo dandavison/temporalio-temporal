@@ -855,6 +855,9 @@ func (a *Activity) handleUnpauseRequested(ctx chasm.MutableContext, req *activit
 		// Worker continues with its existing token — no stamp bump needed, no dispatch task.
 		// Cancel takes precedence over pause. Unpause clears the pause flag but does not re-dispatch;
 		// the activity remains CANCEL_REQUESTED and will be cancelled when the worker responds.
+
+		// (dan) is there a reason to allow the Unpause request? Maybe it should fail since it will
+		// never result in an Unpause.
 		a.PauseState = nil
 		a.emitOnUnpausedMetrics(metricsHandler)
 		return &activitypb.UnpauseActivityExecutionResponse{}, nil
