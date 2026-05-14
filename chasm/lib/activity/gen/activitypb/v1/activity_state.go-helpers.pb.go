@@ -118,35 +118,35 @@ func (this *ActivityTerminateState) Equal(that interface{}) bool {
 	return proto.Equal(this, that1)
 }
 
-// Marshal an object of type LastPauseInfo to the protobuf v3 wire format
-func (val *LastPauseInfo) Marshal() ([]byte, error) {
+// Marshal an object of type ActivityPauseState to the protobuf v3 wire format
+func (val *ActivityPauseState) Marshal() ([]byte, error) {
 	return proto.Marshal(val)
 }
 
-// Unmarshal an object of type LastPauseInfo from the protobuf v3 wire format
-func (val *LastPauseInfo) Unmarshal(buf []byte) error {
+// Unmarshal an object of type ActivityPauseState from the protobuf v3 wire format
+func (val *ActivityPauseState) Unmarshal(buf []byte) error {
 	return proto.Unmarshal(buf, val)
 }
 
 // Size returns the size of the object, in bytes, once serialized
-func (val *LastPauseInfo) Size() int {
+func (val *ActivityPauseState) Size() int {
 	return proto.Size(val)
 }
 
-// Equal returns whether two LastPauseInfo values are equivalent by recursively
+// Equal returns whether two ActivityPauseState values are equivalent by recursively
 // comparing the message's fields.
 // For more information see the documentation for
 // https://pkg.go.dev/google.golang.org/protobuf/proto#Equal
-func (this *LastPauseInfo) Equal(that interface{}) bool {
+func (this *ActivityPauseState) Equal(that interface{}) bool {
 	if that == nil {
 		return this == nil
 	}
 
-	var that1 *LastPauseInfo
+	var that1 *ActivityPauseState
 	switch t := that.(type) {
-	case *LastPauseInfo:
+	case *ActivityPauseState:
 		that1 = t
-	case LastPauseInfo:
+	case ActivityPauseState:
 		that1 = &t
 	default:
 		return false
