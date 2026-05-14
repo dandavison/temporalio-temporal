@@ -1188,6 +1188,8 @@ func (a *Activity) RecordHeartbeat(
 	return &historyservice.RecordActivityTaskHeartbeatResponse{
 		CancelRequested: a.Status == activitypb.ACTIVITY_EXECUTION_STATUS_CANCEL_REQUESTED,
 		ActivityPaused:  a.PauseState != nil,
+		// Why don't we want to give a long-running activity a chance to stop executing on reset?
+		// Why is the field in the proto if we're not using it for that purpose?
 		// ActivityReset is intentionally not reported via heartbeat; reset takes effect on the next retry.
 	}, nil
 }

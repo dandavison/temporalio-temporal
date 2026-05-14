@@ -210,6 +210,7 @@ type ActivityState struct {
 	ScheduleToCloseStamp int32 `protobuf:"varint,15,opt,name=schedule_to_close_stamp,json=scheduleToCloseStamp,proto3" json:"schedule_to_close_stamp,omitempty"`
 	// Set if the activity was paused.
 	PauseState *ActivityPauseState `protobuf:"bytes,16,opt,name=pause_state,json=pauseState,proto3" json:"pause_state,omitempty"`
+	// (dan) Wouldn't it be cleaner to store ResetHeartbeats and ActivityReset in a ResetOptions struct rather than splatted at the top-level?
 	// Set when reset was requested while the activity was running.
 	// On the next retry, TransitionRescheduled will reset the attempt count to 1 before incrementing.
 	ActivityReset bool `protobuf:"varint,17,opt,name=activity_reset,json=activityReset,proto3" json:"activity_reset,omitempty"`
