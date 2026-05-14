@@ -795,7 +795,7 @@ func (a *Activity) handlePauseRequested(ctx chasm.MutableContext, req *activityp
 	}
 	if a.isPaused() {
 		newReqID := req.GetFrontendRequest().GetRequestId()
-		existingReqID := a.PauseState.GetRequestId()
+		existingReqID := a.LastPauseInfo.GetRequestId()
 		if newReqID != "" && existingReqID == newReqID {
 			return &activitypb.PauseActivityExecutionResponse{}, nil
 		}
@@ -868,7 +868,7 @@ func (a *Activity) unpause(
 	ctx chasm.MutableContext,
 	event unpauseEvent,
 ) {
-	a.PauseState = nil
+	a.LastPauseInfo = nil
 	attempt := a.LastAttempt.Get(ctx)
 	if event.req.GetResetAttempts() {
 		attempt.Count = 1
@@ -903,7 +903,7 @@ func (a *Activity) recordPauseState(
 	ctx chasm.MutableContext,
 	event pauseEvent,
 ) {
-	a.PauseState = &activitypb.ActivityPauseState{
+	a.LastPauseInfo = &activitypb.LastPauseInfo{
 		PauseTime: timestamppb.New(ctx.Now(a)),
 		Identity:  event.req.GetIdentity(),
 		Reason:    event.req.GetReason(),

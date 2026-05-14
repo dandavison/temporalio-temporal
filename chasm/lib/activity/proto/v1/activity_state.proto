@@ -116,8 +116,11 @@ message ActivityState {
   // is NOT incremented on retries, because schedule-to-close spans the full activity lifetime.
   int32 schedule_to_close_stamp = 15;
 
-  // Set if the activity was paused.
-  ActivityPauseState pause_state = 16;
+  // Audit record of the most recent pause request. Written by every pause transition; outlives
+  // the paused condition. The activity's paused-ness is determined by Status, not by the presence
+  // of this field. The request_id is consulted by handlePauseRequested for idempotency on
+  // retried pause RPCs.
+  LastPauseInfo last_pause_info = 16;
 
   // Set when reset was requested while the activity was running.
   // On the next retry, TransitionRescheduled will reset the attempt count to 1 before incrementing.
@@ -138,7 +141,7 @@ message ActivityTerminateState {
   string request_id = 1;
 }
 
-message ActivityPauseState {
+message LastPauseInfo {
   google.protobuf.Timestamp pause_time = 1;
   string identity = 2;
   string reason = 3;
