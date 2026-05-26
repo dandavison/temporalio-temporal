@@ -7836,15 +7836,14 @@ func (s *standaloneActivityTestSuite) TestPauseActivityExecution() {
 		taskQueue := testcore.RandomizeStr(t.Name())
 
 		_, err := env.FrontendClient().StartActivityExecution(ctx, &workflowservice.StartActivityExecutionRequest{
-			Namespace:              env.Namespace().String(),
-			ActivityId:             activityID,
-			ActivityType:           env.Tv().ActivityType(),
-			Identity:               env.Tv().WorkerIdentity(),
-			Input:                  defaultInput,
-			TaskQueue:              &taskqueuepb.TaskQueue{Name: taskQueue},
-			StartToCloseTimeout:    durationpb.New(1 * time.Second),
-			ScheduleToCloseTimeout: durationpb.New(5 * time.Minute),
-			RequestId:              env.Tv().RequestID(),
+			Namespace:           env.Namespace().String(),
+			ActivityId:          activityID,
+			ActivityType:        env.Tv().ActivityType(),
+			Identity:            env.Tv().WorkerIdentity(),
+			Input:               defaultInput,
+			TaskQueue:           &taskqueuepb.TaskQueue{Name: taskQueue},
+			StartToCloseTimeout: durationpb.New(1 * time.Second),
+			RequestId:           env.Tv().RequestID(),
 			RetryPolicy: &commonpb.RetryPolicy{
 				MaximumAttempts:    10,
 				InitialInterval:    durationpb.New(1 * time.Millisecond),
@@ -7898,7 +7897,6 @@ func (s *standaloneActivityTestSuite) TestPauseActivityExecution() {
 			Identity:               env.Tv().WorkerIdentity(),
 			Input:                  defaultInput,
 			TaskQueue:              &taskqueuepb.TaskQueue{Name: taskQueue},
-			StartToCloseTimeout:    durationpb.New(1 * time.Minute),
 			HeartbeatTimeout:       durationpb.New(1 * time.Second),
 			ScheduleToCloseTimeout: durationpb.New(5 * time.Minute),
 			RequestId:              env.Tv().RequestID(),
