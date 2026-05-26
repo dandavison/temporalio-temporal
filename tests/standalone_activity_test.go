@@ -7825,6 +7825,10 @@ func (s *standaloneActivityTestSuite) TestPauseActivityExecution() {
 		require.EqualValues(t, 1, descResp.GetInfo().GetAttempt(), "non-retryable fail must not increment attempt")
 	})
 
+	// StartToCloseTimeoutWhilePauseRequested: a STARTED activity with a pending pause must still
+	// observe its StartToClose timeout. The worker stops responding, the timer fires, the retry
+	// path consumes the pause-request and lands the activity in PAUSED with the attempt count
+	// incremented.
 	t.Run("StartToCloseTimeoutWhilePauseRequested", func(t *testing.T) {
 		ctx, cancel := context.WithTimeout(testcore.NewContext(), 30*time.Second)
 		defer cancel()
@@ -7849,6 +7853,7 @@ func (s *standaloneActivityTestSuite) TestPauseActivityExecution() {
 		})
 		require.NoError(t, err)
 
+		// Worker polls → activity is STARTED.
 		_, err = env.FrontendClient().PollActivityTaskQueue(ctx, &workflowservice.PollActivityTaskQueueRequest{
 			Namespace: env.Namespace().String(),
 			TaskQueue: &taskqueuepb.TaskQueue{Name: taskQueue, Kind: enumspb.TASK_QUEUE_KIND_NORMAL},
@@ -7856,6 +7861,7 @@ func (s *standaloneActivityTestSuite) TestPauseActivityExecution() {
 		})
 		require.NoError(t, err)
 
+		// Pause while STARTED → PAUSE_REQUESTED.
 		_, err = env.FrontendClient().PauseActivityExecution(ctx, &workflowservice.PauseActivityExecutionRequest{
 			Namespace:  env.Namespace().String(),
 			ActivityId: activityID,
@@ -7864,6 +7870,8 @@ func (s *standaloneActivityTestSuite) TestPauseActivityExecution() {
 		})
 		require.NoError(t, err)
 
+		// Worker stops responding. StartToCloseTimeout must fire and the pause-request must be
+		// consumed by a retry, landing the activity in PAUSED at attempt 2.
 		require.EventuallyWithT(t, func(c *assert.CollectT) {
 			dr, dErr := env.FrontendClient().DescribeActivityExecution(ctx, &workflowservice.DescribeActivityExecutionRequest{
 				Namespace:  env.Namespace().String(),
@@ -7875,6 +7883,8 @@ func (s *standaloneActivityTestSuite) TestPauseActivityExecution() {
 		}, 10*time.Second, 200*time.Millisecond)
 	})
 
+	// HeartbeatTimeoutWhilePauseRequested: as StartToCloseTimeoutWhilePauseRequested but for the
+	// heartbeat timer.
 	t.Run("HeartbeatTimeoutWhilePauseRequested", func(t *testing.T) {
 		ctx, cancel := context.WithTimeout(testcore.NewContext(), 30*time.Second)
 		defer cancel()
@@ -7915,6 +7925,7 @@ func (s *standaloneActivityTestSuite) TestPauseActivityExecution() {
 		})
 		require.NoError(t, err)
 
+		// No heartbeat → HeartbeatTimeoutTask fires → retry consumes pause-request → PAUSED at attempt 2.
 		require.EventuallyWithT(t, func(c *assert.CollectT) {
 			dr, dErr := env.FrontendClient().DescribeActivityExecution(ctx, &workflowservice.DescribeActivityExecutionRequest{
 				Namespace:  env.Namespace().String(),
@@ -7926,6 +7937,11 @@ func (s *standaloneActivityTestSuite) TestPauseActivityExecution() {
 		}, 10*time.Second, 200*time.Millisecond)
 	})
 
+	// UpdateOptionsPreservesTimeoutsWhilePauseRequested: UpdateActivityExecutionOptions bumps the
+	// attempt stamp, which invalidates all attempt-scoped timeout tasks. The handler must re-emit
+	// fresh StartToClose and Heartbeat timeout tasks for PAUSE_REQUESTED activities, otherwise the
+	// running worker is left with no server-side timeout enforcement (only the long
+	// ScheduleToCloseTimeout would eventually catch a hung worker).
 	t.Run("UpdateOptionsPreservesTimeoutsWhilePauseRequested", func(t *testing.T) {
 		ctx, cancel := context.WithTimeout(testcore.NewContext(), 30*time.Second)
 		defer cancel()
@@ -7957,6 +7973,7 @@ func (s *standaloneActivityTestSuite) TestPauseActivityExecution() {
 		})
 		require.NoError(t, err)
 
+		// Pause while STARTED → PAUSE_REQUESTED.
 		_, err = env.FrontendClient().PauseActivityExecution(ctx, &workflowservice.PauseActivityExecutionRequest{
 			Namespace:  env.Namespace().String(),
 			ActivityId: activityID,
@@ -7965,6 +7982,9 @@ func (s *standaloneActivityTestSuite) TestPauseActivityExecution() {
 		})
 		require.NoError(t, err)
 
+		// Update StartToCloseTimeout to 1s. The handler bumps the attempt stamp (invalidating the
+		// old 1-minute timeout task) and must re-emit a fresh 1-second timeout task that fires
+		// while the activity is PAUSE_REQUESTED.
 		_, err = env.FrontendClient().UpdateActivityExecutionOptions(ctx, &workflowservice.UpdateActivityExecutionOptionsRequest{
 			Namespace:  env.Namespace().String(),
 			ActivityId: activityID,
@@ -7976,6 +7996,7 @@ func (s *standaloneActivityTestSuite) TestPauseActivityExecution() {
 		})
 		require.NoError(t, err)
 
+		// New StartToCloseTimeout fires → retry consumes pause-request → PAUSED at attempt 2.
 		require.EventuallyWithT(t, func(c *assert.CollectT) {
 			dr, dErr := env.FrontendClient().DescribeActivityExecution(ctx, &workflowservice.DescribeActivityExecutionRequest{
 				Namespace:  env.Namespace().String(),
