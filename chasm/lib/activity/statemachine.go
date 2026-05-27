@@ -204,6 +204,7 @@ var TransitionCompleted = chasm.NewTransition(
 	activitypb.ACTIVITY_EXECUTION_STATUS_COMPLETED,
 	func(a *Activity, ctx chasm.MutableContext, event completeEvent) error {
 		return a.StoreOrSelf(ctx).RecordCompleted(ctx, func(ctx chasm.MutableContext) error {
+			a.PauseState = nil
 			a.ActivityReset = false
 			a.ResetHeartbeats = false
 
@@ -242,6 +243,7 @@ var TransitionFailed = chasm.NewTransition(
 	func(a *Activity, ctx chasm.MutableContext, event failedEvent) error {
 		return a.StoreOrSelf(ctx).RecordCompleted(ctx, func(ctx chasm.MutableContext) error {
 			req := event.req.GetFailedRequest()
+			a.PauseState = nil
 			a.ActivityReset = false
 			a.ResetHeartbeats = false
 
@@ -285,6 +287,7 @@ var TransitionTerminated = chasm.NewTransition(
 			a.TerminateState = &activitypb.ActivityTerminateState{
 				RequestId: event.request.RequestID,
 			}
+			a.PauseState = nil
 			a.ActivityReset = false
 			a.ResetHeartbeats = false
 			outcome := a.Outcome.Get(ctx)
@@ -360,6 +363,7 @@ var TransitionCanceled = chasm.NewTransition(
 					Failure: failure,
 				},
 			}
+			a.PauseState = nil
 			a.ActivityReset = false
 			a.ResetHeartbeats = false
 
@@ -408,6 +412,7 @@ var TransitionTimedOut = chasm.NewTransition(
 				return err
 			}
 
+			a.PauseState = nil
 			a.ActivityReset = false
 			a.ResetHeartbeats = false
 
