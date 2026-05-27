@@ -293,13 +293,13 @@ func TestRecordHeartbeatPauseResetCancelFlags(t *testing.T) {
 		},
 		{
 			name:       "pause set propagates ActivityPaused",
-			status:     activitypb.ACTIVITY_EXECUTION_STATUS_STARTED,
+			status:     activitypb.ACTIVITY_EXECUTION_STATUS_PAUSE_REQUESTED,
 			pauseState: &activitypb.ActivityPauseState{PauseTime: timestamppb.New(testTime)},
 			wantPaused: true,
 		},
 		{
 			name:          "pause and reset both propagate",
-			status:        activitypb.ACTIVITY_EXECUTION_STATUS_STARTED,
+			status:        activitypb.ACTIVITY_EXECUTION_STATUS_PAUSE_REQUESTED,
 			pauseState:    &activitypb.ActivityPauseState{PauseTime: timestamppb.New(testTime)},
 			activityReset: true,
 			wantPaused:    true,
