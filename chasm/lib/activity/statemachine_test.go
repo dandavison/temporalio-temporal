@@ -974,3 +974,137 @@ func TestTransitionResetClearsCurrentRetryInterval(t *testing.T) {
 	require.Nil(t, attemptState.GetCurrentRetryInterval(), "TransitionReset must clear CurrentRetryInterval")
 	require.Equal(t, int32(1), attemptState.Count, "TransitionReset must reset Count to 1")
 }
+
+// TestTransitionUnpausedToStartedClearsPauseState verifies that transitioning PAUSE_REQUESTED →
+// STARTED clears the PauseState metadata so the invariant "PauseState set ⇔ status ∈ {PAUSED,
+// PAUSE_REQUESTED}" holds.
+func TestTransitionUnpausedToStartedClearsPauseState(t *testing.T) {
+	ctx := &chasm.MockMutableContext{}
+	ctx.HandleNow = func(chasm.Component) time.Time { return defaultTime }
+
+	act := &Activity{
+		ActivityState: &activitypb.ActivityState{
+			ActivityType:           &commonpb.ActivityType{Name: "test-activity-type"},
+			RetryPolicy:            defaultRetryPolicy,
+			ScheduleToCloseTimeout: durationpb.New(defaultScheduleToCloseTimeout),
+			ScheduleToStartTimeout: durationpb.New(defaultScheduleToStartTimeout),
+			StartToCloseTimeout:    durationpb.New(defaultStartToCloseTimeout),
+			Status:                 activitypb.ACTIVITY_EXECUTION_STATUS_PAUSE_REQUESTED,
+			TaskQueue:              &taskqueuepb.TaskQueue{Name: "test-task-queue"},
+			PauseState: &activitypb.ActivityPauseState{
+				Identity:  "operator",
+				Reason:    "stale",
+				RequestId: "req-1",
+				PauseTime: timestamppb.New(defaultTime),
+			},
+		},
+		LastAttempt: chasm.NewDataField(ctx, &activitypb.ActivityAttemptState{Count: 1}),
+		Outcome:     chasm.NewDataField(ctx, &activitypb.ActivityOutcome{}),
+	}
+
+	err := TransitionUnpausedToStarted.Apply(act, ctx, unpauseEvent{
+		req:            &workflowservice.UnpauseActivityExecutionRequest{},
+		metricsHandler: metrics.NoopMetricsHandler,
+	})
+	require.NoError(t, err)
+	require.Equal(t, activitypb.ACTIVITY_EXECUTION_STATUS_STARTED, act.Status)
+	require.Nil(t, act.PauseState, "PauseState must be cleared on PAUSE_REQUESTED → STARTED")
+}
+
+// TestTransitionCompletedClearsPauseState verifies that completing from PAUSE_REQUESTED clears
+// the PauseState metadata so it does not leak into the persisted terminal record.
+func TestTransitionCompletedClearsPauseState(t *testing.T) {
+	ctx := &chasm.MockMutableContext{}
+	ctx.HandleNow = func(chasm.Component) time.Time { return defaultTime }
+	attemptState := &activitypb.ActivityAttemptState{Count: 1}
+
+	activity := &Activity{
+		ActivityState: &activitypb.ActivityState{
+			ActivityType:           &commonpb.ActivityType{Name: "test-activity-type"},
+			RetryPolicy:            defaultRetryPolicy,
+			ScheduleToCloseTimeout: durationpb.New(defaultScheduleToCloseTimeout),
+			ScheduleToStartTimeout: durationpb.New(defaultScheduleToStartTimeout),
+			StartToCloseTimeout:    durationpb.New(defaultStartToCloseTimeout),
+			Status:                 activitypb.ACTIVITY_EXECUTION_STATUS_PAUSE_REQUESTED,
+			TaskQueue:              &taskqueuepb.TaskQueue{Name: "test-task-queue"},
+			PauseState: &activitypb.ActivityPauseState{
+				Identity:  "operator",
+				Reason:    "stale",
+				RequestId: "req-1",
+				PauseTime: timestamppb.New(defaultTime),
+			},
+		},
+		LastAttempt: chasm.NewDataField(ctx, attemptState),
+		Outcome:     chasm.NewDataField(ctx, &activitypb.ActivityOutcome{}),
+	}
+
+	controller := gomock.NewController(t)
+	metricsHandler := metrics.NewMockHandler(controller)
+
+	timerStartToCloseLatency := metrics.NewMockTimerIface(controller)
+	timerStartToCloseLatency.EXPECT().Record(gomock.Any()).Times(1)
+	metricsHandler.EXPECT().Timer(metrics.ActivityStartToCloseLatency.Name()).Return(timerStartToCloseLatency)
+
+	timerScheduleToCloseLatency := metrics.NewMockTimerIface(controller)
+	timerScheduleToCloseLatency.EXPECT().Record(gomock.Any()).Times(1)
+	metricsHandler.EXPECT().Timer(metrics.ActivityScheduleToCloseLatency.Name()).Return(timerScheduleToCloseLatency)
+
+	counterSuccess := metrics.NewMockCounterIface(controller)
+	counterSuccess.EXPECT().Record(int64(1)).Times(1)
+	metricsHandler.EXPECT().Counter(metrics.ActivitySuccess.Name()).Return(counterSuccess)
+
+	req := &historyservice.RespondActivityTaskCompletedRequest{
+		CompleteRequest: &workflowservice.RespondActivityTaskCompletedRequest{
+			Result:   payloads.EncodeString("Done"),
+			Identity: "worker",
+		},
+	}
+
+	err := TransitionCompleted.Apply(activity, ctx, completeEvent{req: req, metricsHandler: metricsHandler})
+	require.NoError(t, err)
+	require.Equal(t, activitypb.ACTIVITY_EXECUTION_STATUS_COMPLETED, activity.Status)
+	require.Nil(t, activity.PauseState, "PauseState must be cleared on terminal transition")
+}
+
+// TestTransitionTerminatedClearsPauseState verifies that terminating from PAUSE_REQUESTED clears
+// the PauseState metadata so it does not leak into the persisted terminal record.
+func TestTransitionTerminatedClearsPauseState(t *testing.T) {
+	ctx := &chasm.MockMutableContext{}
+	ctx.HandleNow = func(chasm.Component) time.Time { return defaultTime }
+	attemptState := &activitypb.ActivityAttemptState{Count: 1, LastWorkerIdentity: "worker"}
+
+	activity := &Activity{
+		ActivityState: &activitypb.ActivityState{
+			ActivityType:           &commonpb.ActivityType{Name: "test-activity-type"},
+			RetryPolicy:            defaultRetryPolicy,
+			ScheduleToCloseTimeout: durationpb.New(defaultScheduleToCloseTimeout),
+			ScheduleToStartTimeout: durationpb.New(defaultScheduleToStartTimeout),
+			StartToCloseTimeout:    durationpb.New(defaultStartToCloseTimeout),
+			Status:                 activitypb.ACTIVITY_EXECUTION_STATUS_PAUSE_REQUESTED,
+			TaskQueue:              &taskqueuepb.TaskQueue{Name: "test-task-queue"},
+			PauseState: &activitypb.ActivityPauseState{
+				Identity:  "operator",
+				Reason:    "stale",
+				RequestId: "req-1",
+				PauseTime: timestamppb.New(defaultTime),
+			},
+		},
+		LastAttempt: chasm.NewDataField(ctx, attemptState),
+		Outcome:     chasm.NewDataField(ctx, &activitypb.ActivityOutcome{}),
+	}
+
+	controller := gomock.NewController(t)
+	metricsHandler := metrics.NewMockHandler(controller)
+	counterTerminate := metrics.NewMockCounterIface(controller)
+	counterTerminate.EXPECT().Record(int64(1)).Times(1)
+	metricsHandler.EXPECT().Counter(metrics.ActivityTerminate.Name()).Return(counterTerminate)
+
+	err := TransitionTerminated.Apply(activity, ctx, terminateEvent{
+		request:        chasm.TerminateComponentRequest{Reason: "Test", Identity: "terminator", RequestID: "req"},
+		metricsHandler: metricsHandler,
+		fromStatus:     activitypb.ACTIVITY_EXECUTION_STATUS_PAUSE_REQUESTED,
+	})
+	require.NoError(t, err)
+	require.Equal(t, activitypb.ACTIVITY_EXECUTION_STATUS_TERMINATED, activity.Status)
+	require.Nil(t, activity.PauseState, "PauseState must be cleared on terminal transition")
+}
