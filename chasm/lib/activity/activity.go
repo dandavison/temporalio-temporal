@@ -1117,7 +1117,7 @@ func (a *Activity) tryReschedule(
 	if a.GetStatus() == activitypb.ACTIVITY_EXECUTION_STATUS_RESET_REQUESTED {
 		// keepPaused=true on a paused activity (ResetKeepPaused) requires the yield to land in
 		// PAUSED rather than SCHEDULED so the activity stays paused until unpaused.
-		if a.ResetKeepPaused {
+		if false && a.ResetKeepPaused {
 			return true, TransitionResetAttemptFailedToPaused.Apply(a, ctx, event)
 		}
 		return true, TransitionResetAttemptFailedToScheduled.Apply(a, ctx, event)
