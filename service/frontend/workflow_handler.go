@@ -1552,6 +1552,7 @@ func (wh *WorkflowHandler) RecordActivityTaskHeartbeatById(ctx context.Context, 
 		common.EmptyVersion,
 		common.EmptyVersion,
 		componentRef,
+		0,
 	)
 	token, err := wh.tokenSerializer.Serialize(taskToken)
 	if err != nil {
@@ -1749,6 +1750,7 @@ func (wh *WorkflowHandler) RespondActivityTaskCompletedById(ctx context.Context,
 		common.EmptyVersion,
 		common.EmptyVersion,
 		componentRef,
+		0,
 	)
 	token, err := wh.tokenSerializer.Serialize(taskToken)
 	if err != nil {
@@ -1959,6 +1961,7 @@ func (wh *WorkflowHandler) RespondActivityTaskFailedById(ctx context.Context, re
 		common.EmptyVersion,
 		common.EmptyVersion,
 		componentRef,
+		0,
 	)
 	token, err := wh.tokenSerializer.Serialize(taskToken)
 	if err != nil {
@@ -2161,6 +2164,7 @@ func (wh *WorkflowHandler) RespondActivityTaskCanceledById(ctx context.Context, 
 		common.EmptyVersion,
 		common.EmptyVersion,
 		componentRef,
+		0,
 	)
 	token, err := wh.tokenSerializer.Serialize(taskToken)
 	if err != nil {
@@ -7297,20 +7301,4 @@ func (wh *WorkflowHandler) UnpauseWorkflowExecution(ctx context.Context, request
 	}
 
 	return &workflowservice.UnpauseWorkflowExecutionResponse{}, nil
-}
-
-func (wh *WorkflowHandler) PauseActivityExecution(context.Context, *workflowservice.PauseActivityExecutionRequest) (*workflowservice.PauseActivityExecutionResponse, error) {
-	return nil, serviceerror.NewUnimplemented("PauseActivityExecution not implemented")
-}
-
-func (wh *WorkflowHandler) ResetActivityExecution(context.Context, *workflowservice.ResetActivityExecutionRequest) (*workflowservice.ResetActivityExecutionResponse, error) {
-	return nil, serviceerror.NewUnimplemented("ResetActivityExecution not implemented")
-}
-
-func (wh *WorkflowHandler) UnpauseActivityExecution(context.Context, *workflowservice.UnpauseActivityExecutionRequest) (*workflowservice.UnpauseActivityExecutionResponse, error) {
-	return nil, serviceerror.NewUnimplemented("UnpauseActivityExecution not implemented")
-}
-
-func (wh *WorkflowHandler) UpdateActivityExecutionOptions(context.Context, *workflowservice.UpdateActivityExecutionOptionsRequest) (*workflowservice.UpdateActivityExecutionOptionsResponse, error) {
-	return nil, serviceerror.NewUnimplemented("UpdateActivityExecutionOptions not implemented")
 }
