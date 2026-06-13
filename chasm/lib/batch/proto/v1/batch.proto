@@ -1,0 +1,108 @@
+syntax = "proto3";
+
+package temporal.server.chasm.lib.batch.proto.v1;
+
+import "google/protobuf/timestamp.proto";
+import "temporal/api/common/v1/message.proto";
+import "temporal/api/failure/v1/message.proto";
+
+option go_package = "go.temporal.io/server/chasm/lib/batch/gen/batchpb;batchpb";
+
+// BatchExecutionStatus is the lifecycle status of a Batch root or a Partition.
+enum BatchExecutionStatus {
+  BATCH_EXECUTION_STATUS_UNSPECIFIED = 0;
+  BATCH_EXECUTION_STATUS_RUNNING = 1;
+  BATCH_EXECUTION_STATUS_COMPLETED = 2;
+  BATCH_EXECUTION_STATUS_FAILED = 3;
+}
+
+// ItemStatus is the status of a single item.
+enum ItemStatus {
+  ITEM_STATUS_UNSPECIFIED = 0;
+  ITEM_STATUS_ADMITTED = 1;
+  ITEM_STATUS_RUNNING = 2;
+  ITEM_STATUS_COMPLETED = 3;
+  ITEM_STATUS_FAILED = 4;
+}
+
+message BatchPolicy {
+  // Default per-item retry policy.
+  temporal.api.common.v1.RetryPolicy retry_policy = 1;
+  // Maximum number of items carried by a single Pack (dispatch unit).
+  int32 max_pack_size = 2;
+  // Maximum number of items a partition keeps in flight.
+  int64 max_concurrency = 3;
+}
+
+// Manifest is the durable description of a batch's input set. Pending items live in the
+// source (an object-store prefix, a query, a topic); the batch holds only this description
+// plus a per-partition cursor.
+message Manifest {
+  // Opaque, reader-interpreted description of the source (prefix, query, offset range).
+  temporal.api.common.v1.Payload source = 1;
+  // Activity type of the reader that turns source ranges into items.
+  string reader = 2;
+}
+
+// BatchState is the persisted state of the Batch root execution.
+message BatchState {
+  BatchExecutionStatus status = 1;
+  BatchPolicy policy = 2;
+  int32 partition_count = 3;
+  google.protobuf.Timestamp open_time = 4;
+  google.protobuf.Timestamp close_time = 5;
+}
+
+// AdmissionCursor is a partition's durable position in the manifest source. It, plus the
+// source itself, is the entire representation of every not-yet-admitted item.
+message AdmissionCursor {
+  // Opaque, reader-defined position in the source (offset, page token, range end).
+  temporal.api.common.v1.Payload position = 1;
+  // Set once the reader reports the assigned source range is fully drained.
+  bool exhausted = 2;
+}
+
+// PartitionState is the persisted state of an internal Partition execution, which owns a
+// subset of a batch's items as rows in its tree.
+message PartitionState {
+  BatchExecutionStatus status = 1;
+  int32 index = 2;
+  AdmissionCursor cursor = 3;
+  // Number of items currently dispatched (in Packs) but not yet terminal.
+  int64 in_flight = 4;
+}
+
+// ItemState is the persisted state of one item: a durable, addressable unit of
+// accountability that is not itself an execution.
+message ItemState {
+  ItemStatus status = 1;
+  // The work this item represents. Records carry an input (or a claim-check reference);
+  // operations over executions carry the target execution.
+  oneof subject {
+    temporal.api.common.v1.Payload input = 2;
+    temporal.api.common.v1.WorkflowExecution target = 3;
+  }
+  // The current attempt; persisted on the item because Packs are ephemeral and an item is
+  // repacked across retries.
+  int32 attempt = 4;
+  temporal.api.failure.v1.Failure last_failure = 5;
+}
+
+message ItemOutcome {
+  // Reference to (or inline value of) the successful result.
+  temporal.api.common.v1.Payload result = 1;
+  google.protobuf.Timestamp complete_time = 2;
+}
+
+message PackMember {
+  string item_id = 1;
+  int32 attempt = 2;
+}
+
+// PackState is the persisted state of a Pack: the ephemeral dispatch unit carrying many
+// items to a worker in one task. For record processing it embeds an Activity.
+message PackState {
+  // Per-dispatch identifier, used for completion idempotency.
+  string pack_id = 1;
+  repeated PackMember members = 2;
+}
