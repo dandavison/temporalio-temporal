@@ -9,7 +9,6 @@ import (
 	"go.temporal.io/server/chasm"
 	"go.temporal.io/server/chasm/lib/activity"
 	"go.temporal.io/server/chasm/lib/callback"
-	"go.temporal.io/server/chasm/lib/collection"
 	chasmnexus "go.temporal.io/server/chasm/lib/nexusoperation"
 	nexusoperationpb "go.temporal.io/server/chasm/lib/nexusoperation/gen/nexusoperationpb/v1"
 	chasmscheduler "go.temporal.io/server/chasm/lib/scheduler"
@@ -134,7 +133,6 @@ var Module = fx.Options(
 	chasmworkflow.Module,
 	callback.Module,
 	activity.FrontendModule,
-	collection.Module,
 	fx.Provide(visibility.ChasmVisibilityManagerProvider),
 	fx.Provide(chasm.ChasmVisibilityInterceptorProvider),
 )
