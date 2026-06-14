@@ -1,0 +1,10 @@
+syntax = "proto3";
+
+package temporal.server.chasm.lib.collection.proto.v1;
+
+option go_package = "go.temporal.io/server/chasm/lib/collection/gen/collectionpb;collectionpb";
+
+// CollectionState is the persisted state of the Collection root component.
+// Empty for now; the data model follows in a subsequent change.
+message CollectionState {
+}
