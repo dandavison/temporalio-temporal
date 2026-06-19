@@ -7067,6 +7067,87 @@ func (s *standaloneActivityTestSuite) TestStartDelay() {
 		require.Less(t, time.Since(failTime), retryInterval+startDelay,
 			"retry was delayed beyond the retry interval, suggesting start_delay was incorrectly re-applied")
 	})
+
+	// REPRO: Reset+RestoreOriginalOptions restores start_delay but does NOT re-anchor the pending
+	// ScheduleToCloseTimeoutTask. If start_delay is first shortened via UpdateActivityExecutionOptions
+	// (which re-emits the close timer at the shortened deadline) and then restored to its original
+	// larger value via Reset+RestoreOriginalOptions, the stale close timer still fires at the
+	// shortened deadline and times the activity out before its restored dispatch target.
+	//
+	// Asserts the correct (post-fix) behavior: the activity must not time out before the restored
+	// schedule-to-close deadline (scheduleTime + originalDelay + scheduleToClose). Fails on current
+	// code because the activity times out early at scheduleTime + 0 + scheduleToClose.
+	s.Run("ResetRestoreOriginal_ReanchorsScheduleToClose", func(s *standaloneActivityTestSuite) {
+		t := s.T()
+		env := s.newTestEnv()
+
+		activityID := testcore.RandomizeStr(t.Name())
+		taskQueue := testcore.RandomizeStr(t.Name())
+		originalDelay := 20 * time.Second
+		scheduleToCloseTimeout := 3 * time.Second
+		// Restored close deadline = scheduleTime + originalDelay + scheduleToClose ~ T+23s.
+		// Buggy stale close deadline = scheduleTime + 0 + scheduleToClose ~ T+3s.
+
+		startResp, err := env.FrontendClient().StartActivityExecution(s.Context(), &workflowservice.StartActivityExecutionRequest{
+			Namespace:              env.Namespace().String(),
+			ActivityId:             activityID,
+			ActivityType:           env.Tv().ActivityType(),
+			Identity:               env.Tv().WorkerIdentity(),
+			Input:                  defaultInput,
+			TaskQueue:              &taskqueuepb.TaskQueue{Name: taskQueue},
+			StartToCloseTimeout:    durationpb.New(defaultStartToCloseTimeout),
+			ScheduleToCloseTimeout: durationpb.New(scheduleToCloseTimeout),
+			StartDelay:             durationpb.New(originalDelay),
+		})
+		require.NoError(t, err)
+
+		// Shorten start_delay to 0 while in the delay window. The update path re-emits the close
+		// timer at scheduleTime + 0 + scheduleToClose. No worker polls, so it stays SCHEDULED.
+		_, err = env.FrontendClient().UpdateActivityExecutionOptions(s.Context(), &workflowservice.UpdateActivityExecutionOptionsRequest{
+			Namespace:       env.Namespace().String(),
+			ActivityId:      activityID,
+			RunId:           startResp.RunId,
+			ActivityOptions: &activitypb.ActivityOptions{StartDelay: durationpb.New(0)},
+			UpdateMask:      &fieldmaskpb.FieldMask{Paths: []string{"start_delay"}},
+		})
+		require.NoError(t, err)
+
+		// Restore original options (start_delay back to originalDelay). The next dispatch is
+		// re-anchored to scheduleTime + originalDelay, but the stale close timer is not re-anchored.
+		_, err = env.FrontendClient().ResetActivityExecution(s.Context(), &workflowservice.ResetActivityExecutionRequest{
+			Namespace:              env.Namespace().String(),
+			ActivityId:             activityID,
+			RunId:                  startResp.RunId,
+			RestoreOriginalOptions: true,
+		})
+		require.NoError(t, err)
+
+		// Sanity: start_delay restored and Describe reports the restored close deadline.
+		descResp, err := env.FrontendClient().DescribeActivityExecution(s.Context(), &workflowservice.DescribeActivityExecutionRequest{
+			Namespace:  env.Namespace().String(),
+			ActivityId: activityID,
+			RunId:      startResp.RunId,
+		})
+		require.NoError(t, err)
+		require.Equal(t, originalDelay, descResp.GetInfo().GetStartDelay().AsDuration())
+		scheduleTime := descResp.GetInfo().GetScheduleTime().AsTime()
+		require.Equal(t, scheduleTime.Add(originalDelay).Add(scheduleToCloseTimeout),
+			descResp.GetInfo().GetExpirationTime().AsTime(),
+			"Describe reports the restored close deadline")
+
+		// The activity must not time out before the restored close deadline. With the bug it times
+		// out at the stale (shortened) deadline ~scheduleTime + scheduleToClose instead.
+		require.Never(t, func() bool {
+			resp, err := env.FrontendClient().DescribeActivityExecution(s.Context(), &workflowservice.DescribeActivityExecutionRequest{
+				Namespace:  env.Namespace().String(),
+				ActivityId: activityID,
+				RunId:      startResp.RunId,
+			})
+			return err != nil || resp.GetInfo().GetStatus() == enumspb.ACTIVITY_EXECUTION_STATUS_TIMED_OUT
+		}, scheduleToCloseTimeout+2*timerSafetyMargin, 200*time.Millisecond,
+			"activity timed out before the restored schedule-to-close deadline; the "+
+				"ScheduleToCloseTimeoutTask was not re-anchored on Reset+RestoreOriginalOptions")
+	})
 }
 
 func (s *standaloneActivityTestSuite) TestUpdateActivityExecutionOptions() {
