@@ -7060,6 +7060,98 @@ func (s *standaloneActivityTestSuite) TestStartDelay() {
 			"start_delay should not be restored when the activity has already dispatched")
 	})
 
+	// Reset+RestoreOriginalOptions restores start_delay but must also recompute the ScheduleToClose
+	// deadline, which is anchored to firstDispatchTime (= scheduleTime + start_delay). The bug:
+	// reset does not re-emit the ScheduleToCloseTimeoutTask, so a stale task scheduled against the
+	// previously-updated (larger) start_delay survives — its stamp still matches
+	// ScheduleToCloseStamp (reset doesn't bump it) — and the activity times out late.
+	//
+	// Note: Describe's ExpirationTime is computed live from the restored start_delay, so it reports
+	// the CORRECT deadline even on buggy code; the divergence is only observable via the actual
+	// TIMED_OUT firing time. See .task/saa-start-delay-review.md (Error 1).
+	//
+	//    A repro could:
+	//   - schedule activity with 1s start_delay and 1s sched2close, no worker running.
+	//     The "real" sched2close is now  a.ScheduleTime + 2s time.
+	//   - issue UpdateActivityOptions immediately to change start_delay to 2s.
+	//     The real sched2close is now  a.ScheduleTime + 3s
+	//   - Issue reset + RestoreOriginalOptions immediately.
+	//     The real sched2close should be a.ScheduleTime + 2s but it will be seen to be a.ScheduleTime + 3s.
+	s.Run("ResetRestoreOriginal_RecomputesScheduleToCloseDeadline", func(s *standaloneActivityTestSuite) {
+		fmt.Printf(("\n\n\n"))
+		defer fmt.Printf(("\n\n\n"))
+
+		t := s.T()
+		env := s.newTestEnv()
+
+		activityID := testcore.RandomizeStr(t.Name())
+		taskQueue := testcore.RandomizeStr(t.Name())
+		originalDelay := 1 * time.Second
+		scheduleToCloseTimeout := 2 * time.Second
+
+		startResp, err := env.FrontendClient().StartActivityExecution(s.Context(), &workflowservice.StartActivityExecutionRequest{
+			Namespace:              env.Namespace().String(),
+			ActivityId:             activityID,
+			ActivityType:           env.Tv().ActivityType(),
+			Identity:               env.Tv().WorkerIdentity(),
+			Input:                  defaultInput,
+			TaskQueue:              &taskqueuepb.TaskQueue{Name: taskQueue},
+			StartToCloseTimeout:    durationpb.New(defaultStartToCloseTimeout),
+			ScheduleToCloseTimeout: durationpb.New(scheduleToCloseTimeout),
+			StartDelay:             durationpb.New(originalDelay),
+		})
+		require.NoError(t, err)
+
+		resp, err := env.FrontendClient().DescribeActivityExecution(s.Context(), &workflowservice.DescribeActivityExecutionRequest{
+			Namespace:  env.Namespace().String(),
+			ActivityId: activityID,
+			RunId:      startResp.RunId,
+		})
+
+		fmt.Println("ScheduleToCloseTimeout", resp.GetInfo().ScheduleToCloseTimeout)
+		fmt.Println("ExpirationTime", resp.GetInfo().ExpirationTime)
+
+		// updatedDelay := 30 * time.Second
+		// // Extend start_delay while in the delay window. This re-emits the S2C task at T+updatedDelay+S2C
+		// // and bumps ScheduleToCloseStamp.
+		// _, err = env.FrontendClient().UpdateActivityExecutionOptions(s.Context(), &workflowservice.UpdateActivityExecutionOptionsRequest{
+		// 	Namespace:       env.Namespace().String(),
+		// 	ActivityId:      activityID,
+		// 	RunId:           startResp.RunId,
+		// 	ActivityOptions: &activitypb.ActivityOptions{StartDelay: durationpb.New(updatedDelay)},
+		// 	UpdateMask:      &fieldmaskpb.FieldMask{Paths: []string{"start_delay"}},
+		// })
+		// require.NoError(t, err)
+
+		// // Reset+RestoreOriginalOptions: restores start_delay to originalDelay. The effective close
+		// // deadline should now be scheduleTime + originalDelay + S2C (= T+3s).
+		// _, err = env.FrontendClient().ResetActivityExecution(s.Context(), &workflowservice.ResetActivityExecutionRequest{
+		// 	Namespace:              env.Namespace().String(),
+		// 	ActivityId:             activityID,
+		// 	RunId:                  startResp.RunId,
+		// 	RestoreOriginalOptions: true,
+		// })
+		// require.NoError(t, err)
+
+		// TODO(dan): remove Skip and implement the discriminating assertion.
+		//
+		// No worker polls, and no ScheduleToStart is set, so the only terminal path is ScheduleToClose.
+		// Intended (fixed) behavior: the activity reaches TIMED_OUT at ~scheduleTime + originalDelay +
+		// scheduleToCloseTimeout (T+3s). On buggy code the stale task keeps it alive until T+32s, so an
+		// await with an ~8s budget will see it still SCHEDULED and fail.
+		//
+		//   await.Require(s.Context(), t, func(c *await.T) {
+		//       resp, err := env.FrontendClient().DescribeActivityExecution(c.Context(), &workflowservice.DescribeActivityExecutionRequest{
+		//           Namespace:  env.Namespace().String(),
+		//           ActivityId: activityID,
+		//           RunId:      startResp.RunId,
+		//       })
+		//       require.NoError(c, err)
+		//       require.Equal(c, enumspb.ACTIVITY_EXECUTION_STATUS_TIMED_OUT, resp.GetInfo().GetStatus())
+		//   }, 8*time.Second, 200*time.Millisecond)
+		// t.Skip("stub: implement ScheduleToClose-deadline-after-reset-restore assertion")
+	})
+
 	// The guard accepts the field mask path in either snake_case or camelCase form.
 	s.Run("UpdateCamelCaseFieldMask_Rejected", func(s *standaloneActivityTestSuite) {
 		t := s.T()
@@ -7771,6 +7863,7 @@ func (s *standaloneActivityTestSuite) TestStartDelay() {
 		require.GreaterOrEqual(t, actualStart.Add(timerSafetyMargin).UnixNano(), expectedRequested.UnixNano(),
 			"activity dispatched before its original requested_start_time; multiple pause cycles let the target drift")
 	})
+
 }
 
 func (s *standaloneActivityTestSuite) TestUpdateActivityExecutionOptions() {
@@ -12087,3 +12180,5 @@ func (s *standaloneActivityTestSuite) TestResetActivityExecution() {
 		require.NoError(t, err)
 	})
 }
+
+// edit-bench
