@@ -661,8 +661,12 @@ func (a *Activity) UpdateActivityExecutionOptions(
 		// the original value would shift ScheduleToClose without affecting dispatch timing.
 		if a.GetFirstAttemptStartedTime() == nil {
 			a.StartDelay = common.CloneProto(ogOptions.GetStartDelay())
+			fmt.Println("🔵 Update: set StartDelay -> ", a.StartDelay)
+		} else {
+			fmt.Println("🔵 Update: refused to set StartDelay")
 		}
 	} else {
+		fmt.Println("🔵 Update: restore original not set")
 		if err := a.mergeActivityOptions(frontendReq); err != nil {
 			return nil, err
 		}
@@ -686,6 +690,7 @@ func (a *Activity) UpdateActivityExecutionOptions(
 			chasm.TaskAttributes{ScheduledTime: deadline},
 			&activitypb.ScheduleToCloseTimeoutTask{Stamp: a.GetScheduleToCloseStamp()},
 		)
+		fmt.Println("🔵 Update: replacement sc2c task:", deadline.Sub(a.ScheduleTime.AsTime()))
 	}
 
 	attempt.Stamp++
@@ -1013,7 +1018,11 @@ func (a *Activity) handleReset(ctx chasm.MutableContext, req *activitypb.ResetAc
 		// the original value would shift ScheduleToClose without affecting dispatch timing.
 		if a.GetFirstAttemptStartedTime() == nil {
 			a.StartDelay = common.CloneProto(ogOptions.GetStartDelay())
+			fmt.Println("🔵 Reset: set StartDelay -> ", a.StartDelay)
+			// (dan) Is this correct? Why is reset respecting anything?
+			origScheduleTime := scheduleTime
 			scheduleTime = a.respectStartDelay(scheduleTime)
+			fmt.Println("🔵 Reset: ScheduleTime changed by", scheduleTime.Sub(origScheduleTime))
 		}
 	}
 
