@@ -103,22 +103,23 @@ func (h *scheduleToStartTimeoutTaskHandler) Execute(
 	_ chasm.TaskAttributes,
 	task *activitypb.ScheduleToStartTimeoutTask,
 ) error {
-	metricsHandler, err := activity.enrichMetricsHandler(ctx, metrics.TimerActiveTaskActivityTimeoutScope)
-	if err != nil {
-		return err
-	}
+	// metricsHandler, err := activity.enrichMetricsHandler(ctx, metrics.TimerActiveTaskActivityTimeoutScope)
+	// if err != nil {
+	// 	return err
+	// }
 
-	event := timeoutEvent{
-		timeoutType:    enumspb.TIMEOUT_TYPE_SCHEDULE_TO_START,
-		metricsHandler: metricsHandler,
-		fromStatus:     activity.GetStatus(),
-	}
+	// event := timeoutEvent{
+	// 	timeoutType:    enumspb.TIMEOUT_TYPE_SCHEDULE_TO_START,
+	// 	metricsHandler: metricsHandler,
+	// 	fromStatus:     activity.GetStatus(),
+	// }
 
-	fmt.Printf("🔵 [%s] ScheduleToStart Timeout Task firing for task with stamp=%d\n",
-		ctx.Now(activity).Sub(activity.GetScheduleTime().AsTime()),
-		task.GetStamp(),
-	)
-	return TransitionTimedOut.Apply(activity, ctx, event)
+	// fmt.Printf("🔵 [%s] ScheduleToStart Timeout Task firing for task with stamp=%d\n",
+	// 	ctx.Now(activity).Sub(activity.GetScheduleTime().AsTime()),
+	// 	task.GetStamp(),
+	// )
+	// return TransitionTimedOut.Apply(activity, ctx, event)
+	return nil
 }
 
 type scheduleToCloseTimeoutTaskHandler struct{ chasm.PureTaskHandlerBase }

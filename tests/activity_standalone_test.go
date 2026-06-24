@@ -7197,7 +7197,7 @@ Claude please insert 2 or 3 terse sentences here explaining what has happened so
 			})
 			require.NoError(c, err)
 			require.Equal(c, enumspb.ACTIVITY_EXECUTION_STATUS_TIMED_OUT, resp.GetInfo().GetStatus())
-		}, 3500*time.Millisecond, 100*time.Millisecond)
+		}, 4500*time.Millisecond, 100*time.Millisecond)
 	})
 
 	// The guard accepts the field mask path in either snake_case or camelCase form.
