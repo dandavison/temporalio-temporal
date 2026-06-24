@@ -2,6 +2,7 @@ package activity
 
 import (
 	"context"
+	"fmt"
 
 	enumspb "go.temporal.io/api/enums/v1"
 	"go.temporal.io/server/chasm"
@@ -160,6 +161,9 @@ func (h *scheduleToCloseTimeoutTaskHandler) Execute(
 		fromStatus:     activity.GetStatus(),
 	}
 
+	fmt.Printf("🔵 [%s] ScheduleToClose Timeout Task firing\n",
+		ctx.Now(activity).Sub(activity.ScheduleTime.AsTime()),
+	)
 	return TransitionTimedOut.Apply(activity, ctx, event)
 }
 
