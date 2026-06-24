@@ -1289,6 +1289,10 @@ func (a *Activity) reissueRunningAttemptTimers(ctx chasm.MutableContext, attempt
 			chasm.TaskAttributes{ScheduledTime: deadline},
 			&activitypb.StartToCloseTimeoutTask{Stamp: attempt.GetStamp()},
 		)
+		fmt.Printf("🔵 [%s] reissueRunningAttemptTimers: added StartToClose timeout task at %s with stamp=%d\n",
+			ctx.Now(a).Sub(a.ScheduleTime.AsTime()),
+			deadline.Sub(a.ScheduleTime.AsTime()),
+			attempt.GetStamp())
 	}
 	if hbTimeout := a.GetHeartbeatTimeout().AsDuration(); hbTimeout > 0 {
 		// Next heartbeat fires at max(last recorded heartbeat, current attempt start) + heartbeat timeout.
