@@ -7086,7 +7086,7 @@ func (s *standaloneActivityTestSuite) TestStartDelay() {
 
 		fmt.Printf("init: startDelay = %s, sc2c = %s\n", originalStartDelay, scheduleToCloseTimeout)
 
-		_, err := env.FrontendClient().StartActivityExecution(s.Context(), &workflowservice.StartActivityExecutionRequest{
+		startResp, err := env.FrontendClient().StartActivityExecution(s.Context(), &workflowservice.StartActivityExecutionRequest{
 			Namespace:              env.Namespace().String(),
 			ActivityId:             activityID,
 			ActivityType:           env.Tv().ActivityType(),
@@ -7099,86 +7099,113 @@ func (s *standaloneActivityTestSuite) TestStartDelay() {
 		})
 		require.NoError(t, err)
 
-		// resp, err := env.FrontendClient().DescribeActivityExecution(s.Context(), &workflowservice.DescribeActivityExecutionRequest{
-		// 	Namespace:  env.Namespace().String(),
-		// 	ActivityId: activityID,
-		// 	RunId:      startResp.RunId,
-		// })
+		resp, err := env.FrontendClient().DescribeActivityExecution(s.Context(), &workflowservice.DescribeActivityExecutionRequest{
+			Namespace:  env.Namespace().String(),
+			ActivityId: activityID,
+			RunId:      startResp.RunId,
+		})
 
-		// //   - schedule activity with StartDelay=1s and ScheduleToClose=1s, no worker running.
-		// //     The ScheduleToClose deadline (reported by Describe().ExpirationTime) is now 3s.
-		// fmt.Println("expiration time should be 3s")
-		// fmt.Println("ScheduleToCloseTimeout", resp.GetInfo().ScheduleToCloseTimeout)
-		// fmt.Println("ExpirationTime", resp.GetInfo().ExpirationTime.AsTime().Sub(resp.GetInfo().ScheduleTime.AsTime()))
+		//   - schedule activity with StartDelay=1s and ScheduleToClose=1s, no worker running.
+		//     The ScheduleToClose deadline (reported by Describe().ExpirationTime) is now 3s.
+		fmt.Println("expiration time should be 3s")
+		fmt.Println("ScheduleToCloseTimeout", resp.GetInfo().ScheduleToCloseTimeout)
+		fmt.Println("ExpirationTime", resp.GetInfo().ExpirationTime.AsTime().Sub(resp.GetInfo().ScheduleTime.AsTime()))
 
-		// require.Equal(t, resp.GetInfo().StartDelay.AsDuration(), originalStartDelay)
+		require.Equal(t, resp.GetInfo().StartDelay.AsDuration(), originalStartDelay)
 
-		// newStartDelay := 2 * time.Second
-		// fmt.Printf("update: startDelay -> %s\n", newStartDelay)
+		fmt.Print(`
 
-		// //   - issue UpdateActivityOptions: StartDelay -> 2s.
-		// //     The ScheduleToClose deadline becomes 4s
-		// //     **This is the time used for the replacement sc2c task.**
-		// _, err = env.FrontendClient().UpdateActivityExecutionOptions(s.Context(), &workflowservice.UpdateActivityExecutionOptionsRequest{
-		// 	Namespace:       env.Namespace().String(),
-		// 	ActivityId:      activityID,
-		// 	RunId:           startResp.RunId,
-		// 	ActivityOptions: &activitypb.ActivityOptions{StartDelay: durationpb.New(newStartDelay)},
-		// 	UpdateMask:      &fieldmaskpb.FieldMask{Paths: []string{"start_delay"}},
-		// })
-		// require.NoError(t, err)
+We submitted with delay 1s and ScC timeout 2s.
+Frontend input normalization clamped all timeouts at ScC = 2s.
+Then the CHASM component processed the delay, setting ScC and ScS deadlines at the pushed-back 3s point.
+All correct so far ✅
 
-		// resp, err = env.FrontendClient().DescribeActivityExecution(s.Context(), &workflowservice.DescribeActivityExecutionRequest{
-		// 	Namespace:  env.Namespace().String(),
-		// 	ActivityId: activityID,
-		// 	RunId:      startResp.RunId,
-		// })
-		// require.NoError(t, err)
-		// expirationTimeAfterUpdate := resp.GetInfo().ExpirationTime
+`)
 
-		// fmt.Println("expiration time should now be 4s")
-		// fmt.Println("ScheduleToCloseTimeout", resp.GetInfo().ScheduleToCloseTimeout)
-		// fmt.Println("ExpirationTime", expirationTimeAfterUpdate.AsTime().Sub(resp.GetInfo().ScheduleTime.AsTime()))
+		newStartDelay := 2 * time.Second
+		fmt.Printf("update: startDelay -> %s\n", newStartDelay)
 
-		// require.Equal(t, resp.GetInfo().StartDelay.AsDuration(), newStartDelay)
+		//   - issue UpdateActivityOptions: StartDelay -> 2s.
+		//     The ScheduleToClose deadline becomes 4s
+		//     **This is the time used for the replacement sc2c task.**
+		_, err = env.FrontendClient().UpdateActivityExecutionOptions(s.Context(), &workflowservice.UpdateActivityExecutionOptionsRequest{
+			Namespace:       env.Namespace().String(),
+			ActivityId:      activityID,
+			RunId:           startResp.RunId,
+			ActivityOptions: &activitypb.ActivityOptions{StartDelay: durationpb.New(newStartDelay)},
+			UpdateMask:      &fieldmaskpb.FieldMask{Paths: []string{"start_delay"}},
+		})
+		require.NoError(t, err)
 
-		// //   - Issue Reset(RestoreOriginalOptions).
-		// //     The ScheduleToClose deadline should go back to 3s
+		resp, err = env.FrontendClient().DescribeActivityExecution(s.Context(), &workflowservice.DescribeActivityExecutionRequest{
+			Namespace:  env.Namespace().String(),
+			ActivityId: activityID,
+			RunId:      startResp.RunId,
+		})
+		require.NoError(t, err)
+		expirationTimeAfterUpdate := resp.GetInfo().ExpirationTime
 
-		// fmt.Println("Reset(RestoreOriginal)")
+		fmt.Println("expiration time should now be 4s")
+		fmt.Println("ScheduleToCloseTimeout", resp.GetInfo().ScheduleToCloseTimeout)
+		fmt.Println("ExpirationTime", expirationTimeAfterUpdate.AsTime().Sub(resp.GetInfo().ScheduleTime.AsTime()))
 
-		// _, err = env.FrontendClient().ResetActivityExecution(s.Context(), &workflowservice.ResetActivityExecutionRequest{
-		// 	Namespace:              env.Namespace().String(),
-		// 	ActivityId:             activityID,
-		// 	RunId:                  startResp.RunId,
-		// 	RestoreOriginalOptions: true,
-		// })
-		// require.NoError(t, err)
-		// resp, err = env.FrontendClient().DescribeActivityExecution(s.Context(), &workflowservice.DescribeActivityExecutionRequest{
-		// 	Namespace:  env.Namespace().String(),
-		// 	ActivityId: activityID,
-		// 	RunId:      startResp.RunId,
-		// })
-		// require.NoError(t, err)
+		require.Equal(t, resp.GetInfo().StartDelay.AsDuration(), newStartDelay)
 
-		// expirationTimeAfterReset := resp.GetInfo().ExpirationTime
+		//   - Issue Reset(RestoreOriginalOptions).
+		//     The ScheduleToClose deadline should go back to 3s
 
-		// fmt.Println("expiration time should now be 3s")
-		// fmt.Println("ScheduleToCloseTimeout", resp.GetInfo().ScheduleToCloseTimeout)
-		// fmt.Println("ExpirationTime", expirationTimeAfterReset.AsTime().Sub(resp.GetInfo().ScheduleTime.AsTime()))
+		fmt.Print(`
 
-		// require.Equal(t, originalStartDelay, resp.GetInfo().StartDelay.AsDuration())
-		// require.Less(t, expirationTimeAfterReset.AsTime(), expirationTimeAfterUpdate.AsTime())
+We updated the delay -> 2s.
+Stamp bumps invalidated both the old ScS and ScC tasks.
+It should have created new ScC and ScS timer tasks, pushed back to 4s. But we have forgotten to create one for ScS ❌ bug.
 
-		// await.Require(s.Context(), t, func(c *await.T) {
-		// 	resp, err := env.FrontendClient().DescribeActivityExecution(c.Context(), &workflowservice.DescribeActivityExecutionRequest{
-		// 		Namespace:  env.Namespace().String(),
-		// 		ActivityId: activityID,
-		// 		RunId:      startResp.RunId,
-		// 	})
-		// 	require.NoError(c, err)
-		// 	require.Equal(c, enumspb.ACTIVITY_EXECUTION_STATUS_TIMED_OUT, resp.GetInfo().GetStatus())
-		// }, 3500*time.Millisecond, 100*time.Millisecond)
+`)
+
+		fmt.Println("Reset(RestoreOriginal)")
+
+		_, err = env.FrontendClient().ResetActivityExecution(s.Context(), &workflowservice.ResetActivityExecutionRequest{
+			Namespace:              env.Namespace().String(),
+			ActivityId:             activityID,
+			RunId:                  startResp.RunId,
+			RestoreOriginalOptions: true,
+		})
+		require.NoError(t, err)
+		resp, err = env.FrontendClient().DescribeActivityExecution(s.Context(), &workflowservice.DescribeActivityExecutionRequest{
+			Namespace:  env.Namespace().String(),
+			ActivityId: activityID,
+			RunId:      startResp.RunId,
+		})
+		require.NoError(t, err)
+
+		expirationTimeAfterReset := resp.GetInfo().ExpirationTime
+
+		fmt.Println("expiration time should now be 3s")
+		fmt.Println("ScheduleToCloseTimeout", resp.GetInfo().ScheduleToCloseTimeout)
+		fmt.Println("ExpirationTime", expirationTimeAfterReset.AsTime().Sub(resp.GetInfo().ScheduleTime.AsTime()))
+
+		fmt.Print(`
+
+Now we reset and restore the delay -> 1s.
+Stamp bump invalidates the attempt stamp (e.g. ScS) only; but it should invalidate the ScC stamp ❌.
+This should create new ScC and ScS timer tasks, pulled back in to 3s.
+For ScS we indeed recompute it at 1s + (ScS timeout=2s) = 3s.
+But we forget ScC, leaving it at 4s. ❌ bug.
+
+`)
+
+		require.Equal(t, originalStartDelay, resp.GetInfo().StartDelay.AsDuration())
+		require.Less(t, expirationTimeAfterReset.AsTime(), expirationTimeAfterUpdate.AsTime())
+
+		await.Require(s.Context(), t, func(c *await.T) {
+			resp, err := env.FrontendClient().DescribeActivityExecution(c.Context(), &workflowservice.DescribeActivityExecutionRequest{
+				Namespace:  env.Namespace().String(),
+				ActivityId: activityID,
+				RunId:      startResp.RunId,
+			})
+			require.NoError(c, err)
+			require.Equal(c, enumspb.ACTIVITY_EXECUTION_STATUS_TIMED_OUT, resp.GetInfo().GetStatus())
+		}, 3500*time.Millisecond, 100*time.Millisecond)
 	})
 
 	// The guard accepts the field mask path in either snake_case or camelCase form.
