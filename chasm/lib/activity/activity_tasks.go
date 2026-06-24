@@ -124,24 +124,33 @@ func newScheduleToCloseTimeoutTaskHandler() *scheduleToCloseTimeoutTaskHandler {
 }
 
 func (h *scheduleToCloseTimeoutTaskHandler) Validate(
-	_ chasm.Context,
+	ctx chasm.Context,
 	activity *Activity,
 	_ chasm.TaskAttributes,
 	task *activitypb.ScheduleToCloseTimeoutTask,
 ) (bool, error) {
+	rel := ctx.Now(activity).Sub(activity.GetScheduleTime().AsTime())
+	dbg := func(valid bool, why string) {
+		fmt.Printf("🟣 sc2c Validate: now=+%s task.Stamp=%d sc2cStamp=%d valid=%t (%s)\n",
+			rel, task.GetStamp(), activity.GetScheduleToCloseStamp(), valid, why)
+	}
 	if !TransitionTimedOut.Possible(activity) {
+		dbg(false, "timeout not possible")
 		return false, nil
 	}
 	// If schedule-to-close was disabled via an options update, discard this task.
 	if activity.GetScheduleToCloseTimeout().AsDuration() <= 0 {
+		dbg(false, "s2c<=0")
 		return false, nil
 	}
 	// Stamp check: discard tasks from before the most recent ScheduleToCloseTimeoutTask was
 	// scheduled (e.g. after a schedule-to-close extension or a disable+re-enable cycle).
 	// Tasks without a stamp (stamp=0) predate this field and are not validated by stamp.
 	if task.GetStamp() != 0 && task.GetStamp() != activity.GetScheduleToCloseStamp() {
+		dbg(false, "stamp mismatch")
 		return false, nil
 	}
+	dbg(true, "ok")
 	return true, nil
 }
 
@@ -151,6 +160,8 @@ func (h *scheduleToCloseTimeoutTaskHandler) Execute(
 	_ chasm.TaskAttributes,
 	_ *activitypb.ScheduleToCloseTimeoutTask,
 ) error {
+	fmt.Printf("🟣 sc2c Execute: FIRING at +%s status=%s\n",
+		ctx.Now(activity).Sub(activity.GetScheduleTime().AsTime()), activity.GetStatus())
 	metricsHandler, err := activity.enrichMetricsHandler(ctx, metrics.TimerActiveTaskActivityTimeoutScope)
 	if err != nil {
 		return err
