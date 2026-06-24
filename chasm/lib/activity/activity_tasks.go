@@ -101,7 +101,7 @@ func (h *scheduleToStartTimeoutTaskHandler) Execute(
 	ctx chasm.MutableContext,
 	activity *Activity,
 	_ chasm.TaskAttributes,
-	_ *activitypb.ScheduleToStartTimeoutTask,
+	task *activitypb.ScheduleToStartTimeoutTask,
 ) error {
 	metricsHandler, err := activity.enrichMetricsHandler(ctx, metrics.TimerActiveTaskActivityTimeoutScope)
 	if err != nil {
@@ -114,6 +114,10 @@ func (h *scheduleToStartTimeoutTaskHandler) Execute(
 		fromStatus:     activity.GetStatus(),
 	}
 
+	fmt.Printf("🔵 [%s] ScheduleToStart Timeout Task firing for task with stamp=%d\n",
+		ctx.Now(activity).Sub(activity.GetScheduleTime().AsTime()),
+		task.GetStamp(),
+	)
 	return TransitionTimedOut.Apply(activity, ctx, event)
 }
 
@@ -124,24 +128,33 @@ func newScheduleToCloseTimeoutTaskHandler() *scheduleToCloseTimeoutTaskHandler {
 }
 
 func (h *scheduleToCloseTimeoutTaskHandler) Validate(
-	_ chasm.Context,
+	ctx chasm.Context,
 	activity *Activity,
 	_ chasm.TaskAttributes,
 	task *activitypb.ScheduleToCloseTimeoutTask,
 ) (bool, error) {
+	rel := ctx.Now(activity).Sub(activity.GetScheduleTime().AsTime())
+	dbg := func(valid bool, why string) {
+		fmt.Printf("🟣 sc2c Validate: now=+%s task.Stamp=%d sc2cStamp=%d valid=%t (%s)\n",
+			rel, task.GetStamp(), activity.GetScheduleToCloseStamp(), valid, why)
+	}
 	if !TransitionTimedOut.Possible(activity) {
+		dbg(false, "timeout not possible")
 		return false, nil
 	}
 	// If schedule-to-close was disabled via an options update, discard this task.
 	if activity.GetScheduleToCloseTimeout().AsDuration() <= 0 {
+		dbg(false, "s2c<=0")
 		return false, nil
 	}
 	// Stamp check: discard tasks from before the most recent ScheduleToCloseTimeoutTask was
 	// scheduled (e.g. after a schedule-to-close extension or a disable+re-enable cycle).
 	// Tasks without a stamp (stamp=0) predate this field and are not validated by stamp.
 	if task.GetStamp() != 0 && task.GetStamp() != activity.GetScheduleToCloseStamp() {
+		dbg(false, "stamp mismatch")
 		return false, nil
 	}
+	dbg(true, "ok")
 	return true, nil
 }
 
@@ -149,8 +162,10 @@ func (h *scheduleToCloseTimeoutTaskHandler) Execute(
 	ctx chasm.MutableContext,
 	activity *Activity,
 	_ chasm.TaskAttributes,
-	_ *activitypb.ScheduleToCloseTimeoutTask,
+	task *activitypb.ScheduleToCloseTimeoutTask,
 ) error {
+	fmt.Printf("🟣 sc2c Execute: FIRING at +%s status=%s\n",
+		ctx.Now(activity).Sub(activity.GetScheduleTime().AsTime()), activity.GetStatus())
 	metricsHandler, err := activity.enrichMetricsHandler(ctx, metrics.TimerActiveTaskActivityTimeoutScope)
 	if err != nil {
 		return err
@@ -161,8 +176,9 @@ func (h *scheduleToCloseTimeoutTaskHandler) Execute(
 		fromStatus:     activity.GetStatus(),
 	}
 
-	fmt.Printf("🔵 [%s] ScheduleToClose Timeout Task firing\n",
+	fmt.Printf("🔵 [%s] ScheduleToClose Timeout Task firing for task with stamp=%d\n",
 		ctx.Now(activity).Sub(activity.ScheduleTime.AsTime()),
+		task.GetStamp(),
 	)
 	return TransitionTimedOut.Apply(activity, ctx, event)
 }
@@ -193,7 +209,7 @@ func (h *startToCloseTimeoutTaskHandler) Execute(
 	ctx chasm.MutableContext,
 	activity *Activity,
 	_ chasm.TaskAttributes,
-	_ *activitypb.StartToCloseTimeoutTask,
+	task *activitypb.StartToCloseTimeoutTask,
 ) error {
 	rescheduled, err := activity.tryReschedule(ctx, 0, createStartToCloseTimeoutFailure())
 	if err != nil {
@@ -211,6 +227,10 @@ func (h *startToCloseTimeoutTaskHandler) Execute(
 		return nil
 	}
 
+	fmt.Printf("🔵 [%s] StartToClose Timeout Task firing for task with stamp=%d\n",
+		ctx.Now(activity).Sub(activity.GetScheduleTime().AsTime()),
+		task.GetStamp(),
+	)
 	return TransitionTimedOut.Apply(activity, ctx, timeoutEvent{
 		timeoutType:    enumspb.TIMEOUT_TYPE_START_TO_CLOSE,
 		metricsHandler: metricsHandler,
