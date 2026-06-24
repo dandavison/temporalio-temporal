@@ -7115,10 +7115,7 @@ func (s *standaloneActivityTestSuite) TestStartDelay() {
 
 		fmt.Print(`
 
-We submitted with delay 1s and ScC timeout 2s.
-Frontend input normalization clamped all timeouts at ScC = 2s.
-Then the CHASM component processed the delay, setting ScC and ScS deadlines at the pushed-back 3s point.
-All correct so far ✅
+Claude please insert 2 or 3 terse sentences here explaining what request was submitted, what has happened so far, and whether there are any bugs yet.
 
 `)
 
@@ -7156,9 +7153,7 @@ All correct so far ✅
 
 		fmt.Print(`
 
-We updated the delay -> 2s.
-Stamp bumps invalidated both the old ScS and ScC tasks.
-It should have created new ScC and ScS timer tasks, pushed back to 4s. But we have forgotten to create one for ScS ❌ bug.
+Claude please insert 2 or 3 terse sentences here explaining what has happened so far, and whether there are any bugs yet.
 
 `)
 
@@ -7186,11 +7181,8 @@ It should have created new ScC and ScS timer tasks, pushed back to 4s. But we ha
 
 		fmt.Print(`
 
-Now we reset and restore the delay -> 1s.
-Stamp bump invalidates the attempt stamp (e.g. ScS) only; but it should invalidate the ScC stamp ❌.
-This should create new ScC and ScS timer tasks, pulled back in to 3s.
-For ScS we indeed recompute it at 1s + (ScS timeout=2s) = 3s.
-But we forget ScC, leaving it at 4s. ❌ bug.
+Claude please insert 2 or 3 terse sentences here explaining what has happened so far, and whether there are any bugs yet.
+
 
 `)
 
