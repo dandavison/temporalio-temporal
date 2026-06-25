@@ -72,6 +72,7 @@ var TransitionScheduled = chasm.NewTransition(
 		}
 
 		if timeout := a.GetScheduleToCloseTimeout().AsDuration(); timeout > 0 {
+			// (dan) can we use a.scheduleToCloseDeadline() here?
 			a.ScheduleToCloseStamp++
 			ctx.AddTask(
 				a,
