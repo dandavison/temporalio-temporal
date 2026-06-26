@@ -1,6 +1,8 @@
 package activity
 
 import (
+	"fmt"
+
 	"github.com/google/uuid"
 	activitypb "go.temporal.io/api/activity/v1"
 	commonpb "go.temporal.io/api/common/v1"
@@ -30,6 +32,8 @@ func ValidateAndNormalizeStandaloneActivity(
 	namespaceID namespace.ID,
 	options *activitypb.ActivityOptions,
 	priority *commonpb.Priority,
+	// (dan) AIUI this will only be used by the WF Activity case, so shouldn't be here. It's the
+	// enveloping WF run timeout.
 	runTimeout *durationpb.Duration,
 ) error {
 	// Standalone activities always use user defined task queues, so we can enforce user defined task queue validation
@@ -150,6 +154,7 @@ func validateActivityRetryPolicy(
 func validateAndNormalizeTimeouts(
 	activityID string,
 	activityType string,
+	// (dan) I don't see anything using this
 	runTimeout *durationpb.Duration,
 	options *activitypb.ActivityOptions,
 ) error {
@@ -174,13 +179,23 @@ func validateAndNormalizeTimeouts(
 	if scheduleToCloseSet {
 		if scheduleToStartSet {
 			options.ScheduleToStartTimeout = timestamp.MinDurationPtr(options.ScheduleToStartTimeout, options.ScheduleToCloseTimeout)
+			fmt.Printf("🔵 validateAndNormalizeTimeouts: ScheduleToStart set, using min of ScheduleToStart:%s and ScheduleToClose:%s\n",
+				options.ScheduleToStartTimeout.AsDuration(),
+				options.ScheduleToCloseTimeout.AsDuration())
 		} else {
 			options.ScheduleToStartTimeout = options.ScheduleToCloseTimeout
+			fmt.Printf("🔵 validateAndNormalizeTimeouts: ScheduleToStart not set, using ScheduleToClose:%s\n",
+				options.ScheduleToCloseTimeout.AsDuration())
 		}
 		if startToCloseSet {
 			options.StartToCloseTimeout = timestamp.MinDurationPtr(options.StartToCloseTimeout, options.ScheduleToCloseTimeout)
+			fmt.Printf("🔵 validateAndNormalizeTimeouts: StartToClose set, using min of StartToClose:%s and ScheduleToClose:%s\n",
+				options.StartToCloseTimeout.AsDuration(),
+				options.ScheduleToCloseTimeout.AsDuration())
 		} else {
 			options.StartToCloseTimeout = options.ScheduleToCloseTimeout
+			fmt.Printf("🔵 validateAndNormalizeTimeouts: StartToClose not set, using ScheduleToClose:%s\n",
+				options.ScheduleToCloseTimeout.AsDuration())
 		}
 	} else if startToCloseSet {
 		// We are in !validScheduleToClose due to the first if above
@@ -188,7 +203,10 @@ func validateAndNormalizeTimeouts(
 		if !scheduleToStartSet {
 			options.ScheduleToStartTimeout = runTimeout
 		}
+		fmt.Printf("🔵 validateAndNormalizeTimeouts: StartToClose not set, using RunTimeout:%s\n",
+			runTimeout.AsDuration())
 	} else {
+		fmt.Printf("🔵 validateAndNormalizeTimeouts: neither StartToClose nor ScheduleToClose set\n")
 		// Deduction failed as there's not enough information to fill in missing timeouts.
 		return serviceerror.NewInvalidArgumentf("a valid StartToCloseTimeout or ScheduleToCloseTimeout must be set on the activity. ActivityId=%s ActivityType=%s",
 			activityID, activityType)
@@ -211,6 +229,12 @@ func validateAndNormalizeTimeouts(
 	}
 
 	options.HeartbeatTimeout = timestamp.MinDurationPtr(options.HeartbeatTimeout, options.StartToCloseTimeout)
+
+	fmt.Printf("🔵 Frontend validateAndNormalizeTimeouts: ScheduleToCloseTimeout:%s, ScheduleToStartTimeout:%s, StartToCloseTimeout:%s, HeartbeatTimeout:%s\n",
+		options.ScheduleToCloseTimeout.AsDuration(),
+		options.ScheduleToStartTimeout.AsDuration(),
+		options.StartToCloseTimeout.AsDuration(),
+		options.HeartbeatTimeout.AsDuration())
 
 	return nil
 }
