@@ -210,6 +210,14 @@ func NewStandaloneActivity(
 
 	activity.ScheduleTime = timestamppb.New(ctx.Now(activity))
 
+	fmt.Printf("🔵 [%s] NewStandaloneActivity: schedule time at:%s, ScheduleToCloseTimeout:%s, ScheduleToStartTimeout:%s, StartToCloseTimeout:%s, HeartbeatTimeout:%s\n",
+		ctx.Now(activity).Sub(activity.ScheduleTime.AsTime()),
+		activity.ScheduleTime.AsTime(),
+		activity.ScheduleToCloseTimeout.AsDuration(),
+		activity.ScheduleToStartTimeout.AsDuration(),
+		activity.StartToCloseTimeout.AsDuration(),
+		activity.HeartbeatTimeout.AsDuration())
+
 	return activity, nil
 }
 
@@ -661,8 +669,14 @@ func (a *Activity) UpdateActivityExecutionOptions(
 		// the original value would shift ScheduleToClose without affecting dispatch timing.
 		if a.GetFirstAttemptStartedTime() == nil {
 			a.StartDelay = common.CloneProto(ogOptions.GetStartDelay())
+			fmt.Printf("🔵 [%s] Update: set StartDelay -> %s\n",
+				ctx.Now(a).Sub(a.ScheduleTime.AsTime()),
+				a.StartDelay)
+		} else {
+			fmt.Printf("🔵 [%s] Update: refused to set StartDelay\n", ctx.Now(a).Sub(a.ScheduleTime.AsTime()))
 		}
 	} else {
+		fmt.Printf("🔵 [%s] Update: restore original not set\n", ctx.Now(a).Sub(a.ScheduleTime.AsTime()))
 		if err := a.mergeActivityOptions(frontendReq); err != nil {
 			return nil, err
 		}
@@ -686,6 +700,10 @@ func (a *Activity) UpdateActivityExecutionOptions(
 			chasm.TaskAttributes{ScheduledTime: deadline},
 			&activitypb.ScheduleToCloseTimeoutTask{Stamp: a.GetScheduleToCloseStamp()},
 		)
+		fmt.Printf("🔵 [%s] Update: replacement ScheduleToClose task at:%s with stamp=%d\n",
+			ctx.Now(a).Sub(a.ScheduleTime.AsTime()),
+			deadline.Sub(a.ScheduleTime.AsTime()),
+			a.GetScheduleToCloseStamp())
 	}
 
 	attempt.Stamp++
@@ -963,18 +981,34 @@ func (a *Activity) reset(ctx chasm.MutableContext, event resetEvent) {
 	if event.req.GetResetHeartbeat() {
 		a.clearHeartbeat(ctx)
 	}
+
 	if timeout := a.GetScheduleToStartTimeout().AsDuration(); timeout > 0 {
+		// (dan) we seem to be resetting the ScS timeout so that its new baseline is the time that
+		// the reset request came in (which has the name event.scheduleTime, which I find confusing,
+		// so watch out for the possibility that I am misunderstanding something.) But with the
+		// caveat that if the reset request came in before the delayed dispatch time, then use the
+		// delayed dispatch time as the baseline.
 		ctx.AddTask(
 			a,
 			chasm.TaskAttributes{ScheduledTime: event.scheduleTime.Add(timeout)},
 			&activitypb.ScheduleToStartTimeoutTask{Stamp: attempt.GetStamp()},
 		)
+		fmt.Printf("🔵 [%s] Reset: replacement ScS timeout task at %s with stamp=%d\n",
+			ctx.Now(a).Sub(a.ScheduleTime.AsTime()),
+			event.scheduleTime.Add(timeout).Sub(a.ScheduleTime.AsTime()),
+			attempt.GetStamp())
 	}
+	// Dispatch at the time of the reset event
 	ctx.AddTask(
 		a,
 		chasm.TaskAttributes{ScheduledTime: event.scheduleTime},
 		&activitypb.ActivityDispatchTask{Stamp: attempt.GetStamp()},
 	)
+	fmt.Printf("🔵 [%s] Reset: replacement dispatch task at %s with stamp=%d\n",
+		ctx.Now(a).Sub(a.ScheduleTime.AsTime()),
+		event.scheduleTime.Sub(a.ScheduleTime.AsTime()),
+		attempt.GetStamp())
+
 	// Recreate the ScheduleToClose task at dispatchTime + timeout
 	if timeout := a.GetScheduleToCloseTimeout().AsDuration(); timeout > 0 {
 		a.ScheduleToCloseStamp++
@@ -1023,7 +1057,16 @@ func (a *Activity) handleReset(ctx chasm.MutableContext, req *activitypb.ResetAc
 		// the original value would shift ScheduleToClose without affecting dispatch timing.
 		if a.GetFirstAttemptStartedTime() == nil {
 			a.StartDelay = common.CloneProto(ogOptions.GetStartDelay())
+			fmt.Printf("🔵 [%s] Reset: set StartDelay -> %s\n",
+				ctx.Now(a).Sub(a.ScheduleTime.AsTime()),
+				a.StartDelay)
+			// (dan) Is this correct? Why is reset respecting anything?
+			origScheduleTime := scheduleTime
 			scheduleTime = a.respectStartDelay(scheduleTime)
+			fmt.Printf("🔵 [%s] Reset: new dispatch time changed by StartDelay:%s -> %s\n",
+				ctx.Now(a).Sub(a.ScheduleTime.AsTime()),
+				origScheduleTime.Sub(a.ScheduleTime.AsTime()),
+				scheduleTime.Sub(a.ScheduleTime.AsTime()))
 		}
 	}
 
@@ -1233,6 +1276,10 @@ func (a *Activity) reissueScheduledDispatch(ctx chasm.MutableContext, attempt *a
 			chasm.TaskAttributes{ScheduledTime: scheduleTime.Add(timeout)},
 			&activitypb.ScheduleToStartTimeoutTask{Stamp: attempt.GetStamp()},
 		)
+		fmt.Printf("🔵 [%s] reissueScheduledDispatch: added ScheduleToStart timeout task at %s with stamp=%d\n",
+			ctx.Now(a).Sub(a.ScheduleTime.AsTime()),
+			scheduleTime.Add(timeout).Sub(a.ScheduleTime.AsTime()),
+			attempt.GetStamp())
 	}
 }
 
@@ -1255,6 +1302,10 @@ func (a *Activity) reissueRunningAttemptTimers(ctx chasm.MutableContext, attempt
 			chasm.TaskAttributes{ScheduledTime: deadline},
 			&activitypb.StartToCloseTimeoutTask{Stamp: attempt.GetStamp()},
 		)
+		fmt.Printf("🔵 [%s] reissueRunningAttemptTimers: added StartToClose timeout task at %s with stamp=%d\n",
+			ctx.Now(a).Sub(a.ScheduleTime.AsTime()),
+			deadline.Sub(a.ScheduleTime.AsTime()),
+			attempt.GetStamp())
 	}
 	if hbTimeout := a.GetHeartbeatTimeout().AsDuration(); hbTimeout > 0 {
 		// Next heartbeat fires at max(last recorded heartbeat, current attempt start) + heartbeat timeout.
@@ -1274,6 +1325,9 @@ func (a *Activity) reissueRunningAttemptTimers(ctx chasm.MutableContext, attempt
 // respectStartDelay lifts a candidate dispatch time up to scheduleTime + start_delay when the
 // activity has not yet been picked up by a worker, so pre-dispatch re-scheduling (unpause, Reset+
 // RestoreOriginalOptions, options update) honors start_delay. No-op once dispatched.
+
+// In other words: if it has never started, then push the input time up to the delayed dispatch
+// time, unless it's already past that.
 func (a *Activity) respectStartDelay(scheduleTime time.Time) time.Time {
 	if a.GetFirstAttemptStartedTime() != nil {
 		return scheduleTime
