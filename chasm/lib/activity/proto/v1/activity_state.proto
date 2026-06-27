@@ -128,29 +128,31 @@ message ActivityState {
   // metadata only.
   ActivityPauseState last_pause_state = 16;
 
-  // Set when reset was requested while the activity was STARTED and the operator asked for
-  // heartbeat details to be cleared on the next retry. Consumed when the worker yields and the
-  // activity transitions out of RESET_REQUESTED.
-  bool reset_heartbeats = 17;
-
-  // Set when a reset is requested with keep_paused=true on a paused (PAUSE_REQUESTED) activity, so
-  // that when the worker yields the activity lands back in PAUSED rather than SCHEDULED. Consumed
-  // when the activity transitions out of RESET_REQUESTED.
-  bool reset_keep_paused = 18;
-
   // Time at which a worker first picked up the activity (the first attempt's started time). Set
   // once on the first SCHEDULED->STARTED transition and never updated thereafter, so it survives
   // retries and resets. Used as the discriminator for whether start_delay still applies on
   // pre-dispatch rescheduling paths.
-  google.protobuf.Timestamp first_attempt_started_time = 19;
+  google.protobuf.Timestamp first_attempt_started_time = 17;
 
-  // Set when a reset with restore_original_options=true is requested while a worker is running an
-  // attempt (STARTED / PAUSE_REQUESTED / RESET_REQUESTED). The per-attempt option restore
-  // (start_to_close / heartbeat timeouts) is deferred so the in-flight attempt is left undisturbed;
-  // it is applied when the worker yields and the activity transitions out of RESET_REQUESTED, so the
-  // restored values take effect on the next attempt. ScheduleToClose (lifetime) is restored
-  // immediately and is not governed by this flag.
-  bool reset_restore_options = 20;
+  // Modifiers of a reset that was deferred because a worker was running an attempt at reset time
+  // (STARTED / PAUSE_REQUESTED). Set when the activity enters RESET_REQUESTED and applied (then
+  // cleared) when the worker yields, so the modifiers take effect on the next attempt. Nil when no
+  // reset is in flight.
+  PendingReset pending_reset = 18;
+}
+
+// PendingReset holds the modifiers of a reset that could not be applied immediately because a worker
+// was running an attempt (the reset is deferred via RESET_REQUESTED). Applied and cleared when the
+// worker yields.
+message PendingReset {
+  // Clear heartbeat details on the next attempt (reset request's reset_heartbeat).
+  bool clear_heartbeats = 1;
+  // Land back in PAUSED rather than SCHEDULED when the worker yields (reset request's keep_paused).
+  bool keep_paused = 2;
+  // Restore the per-attempt option timeouts (start_to_close / heartbeat) to their original values on
+  // the next attempt (reset request's restore_original_options). Lifetime ScheduleToClose is restored
+  // immediately at reset time and is not governed by this flag.
+  bool restore_original_options = 3;
 }
 
 message ActivityCancelState {
