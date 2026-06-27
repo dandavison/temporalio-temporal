@@ -145,7 +145,36 @@ closer to SAA's behavior than WFA's. Meeting must pick one semantics for both pr
 Plain reset does NOT restart ScС (lifetime-anchored). Matches WFA. Open Q for the meeting only if the
 team wants reset to grant a fresh budget.
 
+### D3 — next_retry_delay (backoff) on unpause and reset
+Question: when an activity is in retry backoff (waiting complete_time + retry_interval for the next attempt)
+and the operator unpauses or resets it, should the remaining backoff be honored (dispatch at the original
+retry target) or skipped (dispatch now)?
+- start_delay precedent (B3, settled): the analogous remaining *start_delay* IS honored on both unpause and
+  reset. Fred's converged recap extends this to backoff ("respect remaining retry delay, mirroring the
+  start_delay decision").
+- Current code SKIPS remaining backoff on both: unpause() (activity.go:929) and reset() (activity.go:971)
+  clear CurrentRetryInterval and dispatch via clampToDispatchTime(now), which only honors the start_delay
+  target. So today backoff and start_delay are treated inconsistently.
+- Existing tests disagree with "honor":
+  - unpause: `PauseWhileRetryNoWait` (tests/activity_standalone_test.go:10005) DELIBERATELY asserts unpause
+    during backoff dispatches immediately (skips the remaining backoff). Name + comments encode the intent.
+  - reset: NO timing test either way (only ResetRestoreOriginal_OnRetryBackoff_LeavesStartDelayUnchanged,
+    which is about start_delay). Undecided and unpinned.
+Decision needed: either (a) honor remaining backoff on unpause+reset (consistent with start_delay; requires
+deleting/inverting PauseWhileRetryNoWait — a deliberate behavior reversal, re-confirm with author), or
+(b) keep "skip backoff" (PauseWhileRetryNoWait stands; correct the spec; accept that backoff and start_delay
+differ on reset/unpause). No code change until decided.
+
 ## Coverage status
-Whole operation×state matrix swept (Rounds 1-2). Residual / lower-priority not yet given a dedicated pass:
-start_delay as its own cross-cut (touched by every op's finder), Heartbeat-timer specifics (touched by
-update finder), Describe-field consistency vs actual tasks. Round 3 candidate if desired.
+Whole operation×state matrix audited (Rounds 1-3): bugs B1-B4 found+fixed; design questions D1-D3 open.
+Gap-fill test batch added (all pass on current code — confirmation/coverage, no new bugs):
+- B4 heartbeat dimension: inlined into TestStartDelay/ResetRestoreOriginal_OnStarted_DefersPerAttemptOptionRestore
+  (now asserts both StartToClose and Heartbeat stay at the in-flight value after reset+RestoreOriginal).
+- Precedence combos previously untested, now covered in TestPauseActivityExecution:
+  CancelWhilePauseRequested, CancelWhileResetRequested (both → cancel recorded, deferred),
+  PauseWhileResetRequested (→ FailedPrecondition), UpdateWhileCancelRequested (→ allowed).
+Remaining open: D1/D2/D3 design questions (meeting); the D3 backoff decision blocks any unpause/reset
+backoff code change. Cosmetic cleanups (create-path anchor, isRunningAttempt helper, handle* rename) deferred.
+
+# TODO
+TestStandaloneActivityTestSuite/TestStart/AttachLinksOnConflictUnionsLinks is flaky
