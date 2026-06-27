@@ -608,6 +608,7 @@ func (a *Activity) Terminate(
 	})
 }
 
+// (dan) why is this not named Handle*?
 func (a *Activity) UpdateActivityExecutionOptions(
 	ctx chasm.MutableContext,
 	req *activitypb.UpdateActivityExecutionOptionsRequest,
@@ -956,12 +957,18 @@ func (a *Activity) reset(ctx chasm.MutableContext, event resetEvent) {
 		a.clearHeartbeat(ctx)
 	}
 	if timeout := a.GetScheduleToStartTimeout().AsDuration(); timeout > 0 {
+		// (dan) we seem to be resetting the ScS timeout so that its new baseline is the time that
+		// the reset request came in (which has the name event.scheduleTime, which I find confusing,
+		// so watch out for the possibility that I am misunderstanding something.) But with the
+		// caveat that if the reset request came in before the delayed dispatch time, then use the
+		// delayed dispatch time as the baseline.
 		ctx.AddTask(
 			a,
 			chasm.TaskAttributes{ScheduledTime: event.scheduleTime.Add(timeout)},
 			&activitypb.ScheduleToStartTimeoutTask{Stamp: attempt.GetStamp()},
 		)
 	}
+	// Dispatch at the time of the reset event
 	ctx.AddTask(
 		a,
 		chasm.TaskAttributes{ScheduledTime: event.scheduleTime},
@@ -1274,6 +1281,9 @@ func (a *Activity) reissueScheduleToClose(ctx chasm.MutableContext) {
 // respectStartDelay lifts a candidate dispatch time up to scheduleTime + start_delay when the
 // activity has not yet been picked up by a worker, so pre-dispatch re-scheduling (unpause, Reset+
 // RestoreOriginalOptions, options update) honors start_delay. No-op once dispatched.
+// In other words: if it has never started, then push the input time up to the delayed dispatch
+// time, unless it's already past that.
+// (dan) This should be named something like advancetoDispatchTime
 func (a *Activity) respectStartDelay(scheduleTime time.Time) time.Time {
 	if a.GetFirstAttemptStartedTime() != nil {
 		return scheduleTime
