@@ -1,3 +1,17 @@
+// A note on times and terminology:
+//
+// We name 3 times in the lifecycle of an activity attempt:
+//
+// scheduleTime - the time at which the activity entered SCHEDULED state
+// dispatchTime - the time at which the activity task will be dispatched to Matching (AddActivityTask)
+// startTime    - the time at which the activity enters STARTED state (Matching task picked up by poller)
+//
+// They are always ordered as: scheduleTime <= dispatchTime < startTime.
+//
+// If there is a startDelay (i.e. a delay before dispatching the first attempt) or a backoff
+// interval / nextRetryDelay (i.e. a delay before dispatching a second or subsequent attempt) then
+// scheduleTime < dispatchTime. Otherwise, they are equal.
+
 package activity
 
 import (
