@@ -2,8 +2,8 @@ package activity
 
 import (
 	"context"
-	"fmt"
 
+	"github.com/dandavison/hyperlinked/go/ps"
 	enumspb "go.temporal.io/api/enums/v1"
 	"go.temporal.io/server/chasm"
 	"go.temporal.io/server/chasm/lib/activity/gen/activitypb/v1"
@@ -114,7 +114,7 @@ func (h *scheduleToStartTimeoutTaskHandler) Execute(
 		fromStatus:     activity.GetStatus(),
 	}
 
-	fmt.Printf("🔵 [%s] ScheduleToStart Timeout Task firing for task with stamp=%d\n",
+	ps.F("🕐 [%s] ScheduleToStart Timeout Task firing for task with stamp=%d\n",
 		ctx.Now(activity).Sub(activity.GetScheduleTime().AsTime()),
 		task.GetStamp(),
 	)
@@ -135,7 +135,7 @@ func (h *scheduleToCloseTimeoutTaskHandler) Validate(
 ) (bool, error) {
 	rel := ctx.Now(activity).Sub(activity.GetScheduleTime().AsTime())
 	dbg := func(valid bool, why string) {
-		fmt.Printf("🟣 sc2c Validate: now=+%s task.Stamp=%d sc2cStamp=%d valid=%t (%s)\n",
+		ps.F("🕐 [%s] sc2c Validate: task.Stamp=%d sc2cStamp=%d valid=%t (%s)\n",
 			rel, task.GetStamp(), activity.GetScheduleToCloseStamp(), valid, why)
 	}
 	if !TransitionTimedOut.Possible(activity) {
@@ -164,7 +164,7 @@ func (h *scheduleToCloseTimeoutTaskHandler) Execute(
 	_ chasm.TaskAttributes,
 	task *activitypb.ScheduleToCloseTimeoutTask,
 ) error {
-	fmt.Printf("🟣 sc2c Execute: FIRING at +%s status=%s\n",
+	ps.F("🕐 [%s] sc2c Execute: FIRING status=%s\n",
 		ctx.Now(activity).Sub(activity.GetScheduleTime().AsTime()), activity.GetStatus())
 	metricsHandler, err := activity.enrichMetricsHandler(ctx, metrics.TimerActiveTaskActivityTimeoutScope)
 	if err != nil {
@@ -176,8 +176,8 @@ func (h *scheduleToCloseTimeoutTaskHandler) Execute(
 		fromStatus:     activity.GetStatus(),
 	}
 
-	fmt.Printf("🔵 [%s] ScheduleToClose Timeout Task firing for task with stamp=%d\n",
-		ctx.Now(activity).Sub(activity.ScheduleTime.AsTime()),
+	ps.F("🕐 [%s] ScheduleToClose Timeout Task firing for task with stamp=%d\n",
+		ctx.Now(activity).Sub(activity.GetScheduleTime().AsTime()),
 		task.GetStamp(),
 	)
 	return TransitionTimedOut.Apply(activity, ctx, event)
@@ -227,7 +227,7 @@ func (h *startToCloseTimeoutTaskHandler) Execute(
 		return nil
 	}
 
-	fmt.Printf("🔵 [%s] StartToClose Timeout Task firing for task with stamp=%d\n",
+	ps.F("🕐 [%s] StartToClose Timeout Task firing for task with stamp=%d\n",
 		ctx.Now(activity).Sub(activity.GetScheduleTime().AsTime()),
 		task.GetStamp(),
 	)

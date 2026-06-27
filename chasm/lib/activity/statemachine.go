@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/dandavison/hyperlinked/go/ps"
 	commonpb "go.temporal.io/api/common/v1"
 	deploymentpb "go.temporal.io/api/deployment/v1"
 	enumspb "go.temporal.io/api/enums/v1"
@@ -66,7 +67,7 @@ var TransitionScheduled = chasm.NewTransition(
 				&activitypb.ScheduleToStartTimeoutTask{
 					Stamp: attempt.GetStamp(),
 				})
-			fmt.Printf("🔵 [%s] TransitionScheduled: initial ScheduleToStart task at:%s\n",
+			ps.F("🕐 [%s] TransitionScheduled: initial ScheduleToStart task at:%s\n",
 				ctx.Now(a).Sub(a.ScheduleTime.AsTime()),
 				startDelayEnd.Add(timeout).Sub(a.ScheduleTime.AsTime()))
 		}
@@ -80,12 +81,12 @@ var TransitionScheduled = chasm.NewTransition(
 					ScheduledTime: startDelayEnd.Add(timeout),
 				},
 				&activitypb.ScheduleToCloseTimeoutTask{Stamp: a.GetScheduleToCloseStamp()})
-			fmt.Printf("🔵 [%s] TransitionScheduled: initial ScheduleToClose task at:%s\n",
+			ps.F("🕐 [%s] TransitionScheduled: initial ScheduleToClose task at:%s\n",
 				ctx.Now(a).Sub(a.ScheduleTime.AsTime()),
 				startDelayEnd.Add(timeout).Sub(a.ScheduleTime.AsTime()))
 		}
 
-		fmt.Printf("🔵 [%s] TransitionScheduled: initial StartToClose duration is:%s\n",
+		ps.F("🕐 [%s] TransitionScheduled: initial StartToClose duration is:%s\n",
 			ctx.Now(a).Sub(a.ScheduleTime.AsTime()),
 			a.GetStartToCloseTimeout().AsDuration())
 
@@ -398,7 +399,7 @@ var TransitionTimedOut = chasm.NewTransition(
 	func(a *Activity, ctx chasm.MutableContext, event timeoutEvent) error {
 		timeoutType := event.timeoutType
 
-		fmt.Printf("🔵 [%s] TransitionTimedOut: %s\n",
+		ps.F("⚙️ [%s] TransitionTimedOut: %s\n",
 			ctx.Now(a).Sub(a.ScheduleTime.AsTime()),
 			timeoutType.String())
 
