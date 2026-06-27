@@ -21,6 +21,7 @@ import (
 	"slices"
 	"time"
 
+	"github.com/dandavison/hyperlinked/go/ps"
 	"github.com/nexus-rpc/sdk-go/nexus"
 	apiactivitypb "go.temporal.io/api/activity/v1" //nolint:importas
 	callbackpb "go.temporal.io/api/callback/v1"
@@ -223,6 +224,14 @@ func NewStandaloneActivity(
 	}
 
 	activity.ScheduleTime = timestamppb.New(ctx.Now(activity))
+
+	ps.F("⬇ [%s] NewStandaloneActivity: schedule time at:%s, ScheduleToCloseTimeout:%s, ScheduleToStartTimeout:%s, StartToCloseTimeout:%s, HeartbeatTimeout:%s\n",
+		ctx.Now(activity).Sub(activity.ScheduleTime.AsTime()),
+		activity.ScheduleTime.AsTime(),
+		activity.ScheduleToCloseTimeout.AsDuration(),
+		activity.ScheduleToStartTimeout.AsDuration(),
+		activity.StartToCloseTimeout.AsDuration(),
+		activity.HeartbeatTimeout.AsDuration())
 
 	return activity, nil
 }
@@ -676,8 +685,14 @@ func (a *Activity) UpdateActivityExecutionOptions(
 		// the original value would shift ScheduleToClose without affecting dispatch timing.
 		if a.GetFirstAttemptStartedTime() == nil {
 			a.StartDelay = common.CloneProto(ogOptions.GetStartDelay())
+			ps.F("⚙️ [%s] Update: set StartDelay -> %s\n",
+				ctx.Now(a).Sub(a.ScheduleTime.AsTime()),
+				a.StartDelay)
+		} else {
+			ps.F("⚙️ [%s] Update: refused to set StartDelay\n", ctx.Now(a).Sub(a.ScheduleTime.AsTime()))
 		}
 	} else {
+		ps.F("⚙️ [%s] Update: restore original not set\n", ctx.Now(a).Sub(a.ScheduleTime.AsTime()))
 		if err := a.mergeActivityOptions(frontendReq); err != nil {
 			return nil, err
 		}
@@ -976,6 +991,10 @@ func (a *Activity) reset(ctx chasm.MutableContext, event resetEvent) {
 			chasm.TaskAttributes{ScheduledTime: event.resetTime.Add(timeout)},
 			&activitypb.ScheduleToStartTimeoutTask{Stamp: attempt.GetStamp()},
 		)
+		ps.F("🕐 [%s] Reset: replacement ScS timeout task at %s with stamp=%d\n",
+			ctx.Now(a).Sub(a.ScheduleTime.AsTime()),
+			event.resetTime.Add(timeout).Sub(a.ScheduleTime.AsTime()),
+			attempt.GetStamp())
 	}
 	// (dan): Dispatch at the dispatch time appropriate for this reset event
 	ctx.AddTask(
@@ -1021,9 +1040,17 @@ func (a *Activity) handleReset(ctx chasm.MutableContext, req *activitypb.ResetAc
 		// the original value would shift ScheduleToClose without affecting dispatch timing.
 		if a.GetFirstAttemptStartedTime() == nil {
 			a.StartDelay = common.CloneProto(ogOptions.GetStartDelay())
+			ps.F("⚙️ [%s] Reset: set StartDelay -> %s\n",
+				ctx.Now(a).Sub(a.ScheduleTime.AsTime()),
+				a.StartDelay)
+			origResetTime := resetTime
 			// (dan) I think this may be in the wrong place; perhaps we do this later, in reset().
 			// This would allow the name resetTime to be correct in this function and on the struct.
 			resetTime = a.clampToDispatchTime(resetTime)
+			ps.F("⚙️ [%s] Reset: new dispatch time changed by StartDelay:%s -> %s\n",
+				ctx.Now(a).Sub(a.ScheduleTime.AsTime()),
+				origResetTime.Sub(a.ScheduleTime.AsTime()),
+				resetTime.Sub(a.ScheduleTime.AsTime()))
 		}
 
 		// Restoring options can move the ScheduleToClose deadline (via the timeout or start_delay).
@@ -1239,6 +1266,10 @@ func (a *Activity) reissueDispatchAndScheduleToStart(ctx chasm.MutableContext, a
 			chasm.TaskAttributes{ScheduledTime: dispatchTime.Add(timeout)},
 			&activitypb.ScheduleToStartTimeoutTask{Stamp: attempt.GetStamp()},
 		)
+		ps.F("🕐 [%s] reissueScheduledDispatch: added ScheduleToStart timeout task at %s with stamp=%d\n",
+			ctx.Now(a).Sub(a.ScheduleTime.AsTime()),
+			dispatchTime.Add(timeout).Sub(a.ScheduleTime.AsTime()),
+			attempt.GetStamp())
 	}
 }
 
@@ -1261,6 +1292,10 @@ func (a *Activity) reissueRunningAttemptTimers(ctx chasm.MutableContext, attempt
 			chasm.TaskAttributes{ScheduledTime: deadline},
 			&activitypb.StartToCloseTimeoutTask{Stamp: attempt.GetStamp()},
 		)
+		ps.F("🕐 [%s] reissueRunningAttemptTimers: added StartToClose timeout task at %s with stamp=%d\n",
+			ctx.Now(a).Sub(a.ScheduleTime.AsTime()),
+			deadline.Sub(a.ScheduleTime.AsTime()),
+			attempt.GetStamp())
 	}
 	if hbTimeout := a.GetHeartbeatTimeout().AsDuration(); hbTimeout > 0 {
 		// Next heartbeat fires at max(last recorded heartbeat, current attempt start) + heartbeat timeout.
