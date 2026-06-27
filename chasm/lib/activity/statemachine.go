@@ -43,45 +43,37 @@ var TransitionScheduled = chasm.NewTransition(
 	func(a *Activity, ctx chasm.MutableContext, _ any) error {
 		attempt := a.LastAttempt.Get(ctx)
 
-		// (dan) it looks like we should use a.ScheduleTime here
-		currentTime := ctx.Now(a)
 		attempt.Count++
 		attempt.Stamp++
 
 		// Start delay defers the dispatch and extends ScheduleToClose and ScheduleToStart timeouts. StartToClose and
 		// Heartbeat timeouts are unaffected as they only start when a worker picks up the task.
-
-		// (dan) lets not create this variable and instead check startDelayEnd > a.ScheduleTime below
-		startDelay := a.GetStartDelay().AsDuration()
-
-		// (dan) it looks like we should use a.firstDispatchTime() for this
-		startDelayEnd := currentTime.Add(startDelay)
+		dispatchTime := a.firstDispatchTime()
 
 		if timeout := a.GetScheduleToStartTimeout().AsDuration(); timeout > 0 {
 			ctx.AddTask(
 				a,
 				chasm.TaskAttributes{
-					ScheduledTime: startDelayEnd.Add(timeout),
+					ScheduledTime: dispatchTime.Add(timeout),
 				},
 				&activitypb.ScheduleToStartTimeoutTask{
 					Stamp: attempt.GetStamp(),
 				})
 		}
 
-		if timeout := a.GetScheduleToCloseTimeout().AsDuration(); timeout > 0 {
-			// (dan) can we use a.scheduleToCloseDeadline() here?
+		if deadline := a.scheduleToCloseDeadline(); !deadline.IsZero() {
 			a.ScheduleToCloseStamp++
 			ctx.AddTask(
 				a,
 				chasm.TaskAttributes{
-					ScheduledTime: startDelayEnd.Add(timeout),
+					ScheduledTime: deadline,
 				},
 				&activitypb.ScheduleToCloseTimeoutTask{Stamp: a.GetScheduleToCloseStamp()})
 		}
 
 		dispatchAttrs := chasm.TaskAttributes{}
-		if startDelay > 0 {
-			dispatchAttrs.ScheduledTime = startDelayEnd
+		if dispatchTime.After(a.ScheduleTime.AsTime()) {
+			dispatchAttrs.ScheduledTime = dispatchTime
 		}
 		ctx.AddTask(
 			a,
