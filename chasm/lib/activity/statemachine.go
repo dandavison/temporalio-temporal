@@ -124,7 +124,7 @@ var TransitionRescheduled = chasm.NewTransition(
 		}
 
 		attempt := a.LastAttempt.Get(ctx)
-		retryScheduledTime := attemptScheduleTimeForRetry(attempt).AsTime()
+		retryScheduledTime := attemptDispatchTimeForRetry(attempt).AsTime()
 
 		if timeout := a.GetScheduleToStartTimeout().AsDuration(); timeout > 0 {
 			ctx.AddTask(
@@ -511,12 +511,9 @@ var TransitionAttemptFailedWhilePauseRequested = chasm.NewTransition(
 )
 
 type resetEvent struct {
-	req *workflowservice.ResetActivityExecutionRequest
-	// (dan) This name is confusing. It is the time at which a reset request was received.
-	// 'scheduleTime' is already used in two different ways (the time at which an activity was
-	// created, and the time a CHASM task is scheduled at)
-	scheduleTime time.Time
-	handler      metrics.Handler
+	req       *workflowservice.ResetActivityExecutionRequest
+	resetTime time.Time
+	handler   metrics.Handler
 }
 
 // TransitionReset resets a SCHEDULED or PAUSED activity back to attempt 1. The stamp is bumped to
@@ -604,7 +601,7 @@ var TransitionResetAttemptFailedToScheduled = chasm.NewTransition(
 			return err
 		}
 
-		retryScheduledTime := attemptScheduleTimeForRetry(attempt).AsTime()
+		retryScheduledTime := attemptDispatchTimeForRetry(attempt).AsTime()
 		if timeout := a.GetScheduleToStartTimeout().AsDuration(); timeout > 0 {
 			ctx.AddTask(
 				a,
