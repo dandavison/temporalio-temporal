@@ -66,6 +66,9 @@ var TransitionScheduled = chasm.NewTransition(
 				&activitypb.ScheduleToStartTimeoutTask{
 					Stamp: attempt.GetStamp(),
 				})
+			fmt.Printf("🔵 [%s] TransitionScheduled: initial ScheduleToStart task at:%s\n",
+				ctx.Now(a).Sub(a.ScheduleTime.AsTime()),
+				startDelayEnd.Add(timeout).Sub(a.ScheduleTime.AsTime()))
 		}
 
 		if timeout := a.GetScheduleToCloseTimeout().AsDuration(); timeout > 0 {
@@ -77,7 +80,14 @@ var TransitionScheduled = chasm.NewTransition(
 					ScheduledTime: startDelayEnd.Add(timeout),
 				},
 				&activitypb.ScheduleToCloseTimeoutTask{Stamp: a.GetScheduleToCloseStamp()})
+			fmt.Printf("🔵 [%s] TransitionScheduled: initial ScheduleToClose task at:%s\n",
+				ctx.Now(a).Sub(a.ScheduleTime.AsTime()),
+				startDelayEnd.Add(timeout).Sub(a.ScheduleTime.AsTime()))
 		}
+
+		fmt.Printf("🔵 [%s] TransitionScheduled: initial StartToClose duration is:%s\n",
+			ctx.Now(a).Sub(a.ScheduleTime.AsTime()),
+			a.GetStartToCloseTimeout().AsDuration())
 
 		dispatchAttrs := chasm.TaskAttributes{}
 		if startDelay > 0 {
@@ -388,6 +398,10 @@ var TransitionTimedOut = chasm.NewTransition(
 	func(a *Activity, ctx chasm.MutableContext, event timeoutEvent) error {
 		timeoutType := event.timeoutType
 
+		fmt.Printf("🔵 [%s] TransitionTimedOut: %s\n",
+			ctx.Now(a).Sub(a.ScheduleTime.AsTime()),
+			timeoutType.String())
+
 		return a.StoreOrSelf(ctx).RecordCompleted(ctx, func(ctx chasm.MutableContext) error {
 			var err error
 			switch timeoutType {
@@ -496,7 +510,7 @@ var TransitionAttemptFailedWhilePauseRequested = chasm.NewTransition(
 )
 
 type resetEvent struct {
-	req          *workflowservice.ResetActivityExecutionRequest
+	req *workflowservice.ResetActivityExecutionRequest
 	// (dan) This name is confusing. It is the time at which a reset request was received.
 	// 'scheduleTime' is already used in two different ways (the time at which an activity was
 	// created, and the time a CHASM task is scheduled at)
