@@ -94,17 +94,27 @@ NOT skip or restart it. WFA has no analog (no per-activity start_delay), so this
 Repro: TestStartDelay/ResetDuringDelay_HonorsWallClockTarget (tests/activity_standalone_test.go) — mirrors
 the Unpause sibling; CONFIRMED failing on current code (dispatches ~ScheduleTime+1s vs the 5s target).
 
-### B4 (MEDIUM-LOW) — reset+RestoreOriginal on STARTED/PAUSE_REQUESTED doesn't re-arm StartToClose/Heartbeat
-Sibling gap of the B1 fix: the restore block re-arms ScС (reissueScheduleToClose) but never calls
-reissueRunningAttemptTimers, and the STARTED→RESET_REQUESTED path doesn't bump attempt.Stamp. So if a
-prior update changed StartToClose/heartbeatTimeout and the operator then does reset+RestoreOriginal on a
-running attempt, the live per-attempt timers keep the pre-restore anchors. Heartbeat is the sharp case:
-its Validate recomputes the deadline from the (now-restored) heartbeatTimeout while the task's fire-time
-was baked with the old value → fires at the wrong time (anchor-vs-Validate mismatch). StartToClose fires
-at the stale deadline (self-consistent but wrong value). UpdateOptions on STARTED handles this correctly
-(stamp bump + reissueRunningAttemptTimers); reset+restore should match.
-Fix: in the restore block, also `reissueRunningAttemptTimers` (with the needed attempt.Stamp bump) for
-running states — or defer the option-restore to the worker-yield landing.
+### B4 (MEDIUM-LOW) — reset+RestoreOriginal on a running attempt restores per-attempt options too early
+Resetting a STARTED activity is a DEFERRED reset: it goes to RESET_REQUESTED, the worker keeps running
+the in-flight attempt under its current terms, and the reset lands (attempt -> 1, re-dispatch) only when
+the worker yields. So RestoreOriginalOptions should leave the running attempt alone and apply the restored
+per-attempt options (StartToClose / Heartbeat) on the NEXT attempt.
+
+What goes wrong: the restore block mutates the option fields immediately, before entering RESET_REQUESTED,
+but the running attempt's per-attempt timers still fire at the pre-restore (updated) values. So Describe
+reports the restored value while the in-flight attempt is actually governed by the old one — reported and
+enforced disagree. (ScheduleToClose is exempt: it's a lifetime budget, restored immediately — B1.
+start_delay is already skipped for a started attempt.)
+
+Fix (deferred restore): for a running activity, don't restore the per-attempt option fields now — carry the
+restore intent through RESET_REQUESTED (like ResetKeepPaused) and apply it when the reset lands on the next
+attempt. (The alternative — re-arm the running attempt's timers to the restored values now, like
+UpdateOptions does — was rejected: it disturbs the in-flight attempt, contradicting the RESET_REQUESTED model.)
+
+Repro: TestStartDelay/ResetRestoreOriginal_OnStarted_DefersPerAttemptOptionRestore — CONFIRMED failing on
+current code (Describe reports the restored 60s mid-attempt; should stay 30s until the reset lands). Note:
+the timeout firing time can't distinguish buggy vs fixed (the timer fires at the updated value either way),
+so the repro asserts on the reported field, not on a timeout. Fix not yet written.
 
 ### Cosmetic (LOW) — create-path ScС anchor uses TransitionScheduled's ctx.Now(), not ScheduleTime
 Flagged independently by 2 finders. Constructor sets ScheduleTime=ctx.Now(); TransitionScheduled arms ScС
