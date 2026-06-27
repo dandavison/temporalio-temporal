@@ -74,7 +74,8 @@ does NOT re-arm ScС — so if options changed while paused, unpause leaves a st
   immutable across pause/unpause), so respectStartDelay clamps to the same anchor every cycle.
 - cancel / precedence / chains: CLEAN. Guards consistent (FailedPrecondition). The "mutate-then-reject"
   in handleReset restore branch is safe — chasm_engine rolls back all mutations on handler error.
-- Cosmetic (not a bug): ResetKeepPaused not cleared on terminal transitions (only ResetHeartbeats is);
+- Cosmetic (RESOLVED by the PendingReset consolidation — terminals now clear all via PendingReset = nil):
+  previously ResetKeepPaused was not cleared on terminal transitions (only ResetHeartbeats was);
   harmless — read only in RESET_REQUESTED-gated paths, unreachable once terminal.
 
 ### Round 3 (done) — start_delay cross-cut, Heartbeat, Describe consistency
@@ -107,16 +108,19 @@ enforced disagree. (ScheduleToClose is exempt: it's a lifetime budget, restored 
 start_delay is already skipped for a started attempt.)
 
 Fix (deferred restore): for a running activity, don't restore the per-attempt option fields now — carry the
-restore intent through RESET_REQUESTED (like ResetKeepPaused) and apply it when the reset lands on the next
-attempt. (The alternative — re-arm the running attempt's timers to the restored values now, like
-UpdateOptions does — was rejected: it disturbs the in-flight attempt, contradicting the RESET_REQUESTED model.)
+restore intent through RESET_REQUESTED and apply it when the reset lands on the next attempt. (The
+alternative — re-arm the running attempt's timers to the restored values now, like UpdateOptions does — was
+rejected: it disturbs the in-flight attempt, contradicting the RESET_REQUESTED model.)
 
 Repro: TestStartDelay/ResetRestoreOriginal_OnStarted_DefersPerAttemptOptionRestore (note: asserts on the
 reported field, not a timeout — the timer fires at the updated value either way).
-FIXED: new proto field reset_restore_options (=20); handleReset defers StartToClose/Heartbeat restore for a
-running attempt (sets the flag) and restores immediately otherwise; the reset landing transitions
-(TransitionResetAttemptFailedTo{Scheduled,Paused}) call applyDeferredOptionRestore() to apply it before the
-next attempt. ScС stays immediate (lifetime). Repro now passes; TestStartDelay + TestResetActivityExecution green.
+FIXED: the deferred-reset modifiers were consolidated into one proto message PendingReset
+{clear_heartbeats, keep_paused, restore_original_options} (field pending_reset; replaced the separate
+reset_heartbeats / reset_keep_paused / reset_restore_options bools). handleReset records pending_reset on
+the STARTED/PAUSE_REQUESTED path and defers the StartToClose/Heartbeat field restore; the reset landing
+transitions call applyPendingReset() to apply and clear it before the next attempt; terminal transitions
+clear it (PendingReset = nil). ScС stays immediate (lifetime). Repro passes; TestStartDelay,
+TestResetActivityExecution, TestPauseActivityExecution green.
 
 ### Cosmetic (LOW) — create-path ScС anchor uses TransitionScheduled's ctx.Now(), not ScheduleTime
 Flagged independently by 2 finders. Constructor sets ScheduleTime=ctx.Now(); TransitionScheduled arms ScС
