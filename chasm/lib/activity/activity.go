@@ -930,7 +930,7 @@ func (a *Activity) unpause(
 	if jitter := event.req.GetJitter().AsDuration(); jitter > 0 {
 		scheduleTime = scheduleTime.Add(time.Duration(rand.Int63n(int64(jitter)))) //nolint:gosec
 	}
-	scheduleTime = a.respectStartDelay(scheduleTime)
+	scheduleTime = a.clampToDispatchTime(scheduleTime)
 	if timeout := a.GetScheduleToStartTimeout().AsDuration(); timeout > 0 {
 		ctx.AddTask(
 			a,
@@ -1036,7 +1036,7 @@ func (a *Activity) handleReset(ctx chasm.MutableContext, req *activitypb.ResetAc
 				a.StartDelay)
 			// (dan) Is this correct? Why is reset respecting anything?
 			origScheduleTime := scheduleTime
-			scheduleTime = a.respectStartDelay(scheduleTime)
+			scheduleTime = a.clampToDispatchTime(scheduleTime)
 			ps.F("⚙️ [%s] Reset: new dispatch time changed by StartDelay:%s -> %s\n",
 				ctx.Now(a).Sub(a.ScheduleTime.AsTime()),
 				origScheduleTime.Sub(a.ScheduleTime.AsTime()),
@@ -1241,7 +1241,7 @@ func (a *Activity) reissueScheduledDispatch(ctx chasm.MutableContext, attempt *a
 	if retryTime := attemptScheduleTimeForRetry(attempt); retryTime != nil {
 		scheduleTime = retryTime.AsTime()
 	} else {
-		scheduleTime = a.respectStartDelay(ctx.Now(a))
+		scheduleTime = a.clampToDispatchTime(ctx.Now(a))
 	}
 	ctx.AddTask(
 		a,
@@ -1314,20 +1314,16 @@ func (a *Activity) reissueScheduleToClose(ctx chasm.MutableContext) {
 	}
 }
 
-// respectStartDelay lifts a candidate dispatch time up to scheduleTime + start_delay when the
-// activity has not yet been picked up by a worker, so pre-dispatch re-scheduling (unpause, Reset+
-// RestoreOriginalOptions, options update) honors start_delay. No-op once dispatched.
-// In other words: if it has never started, then push the input time up to the delayed dispatch
-// time, unless it's already past that.
-// (dan) This should be named something like advancetoDispatchTime
-func (a *Activity) respectStartDelay(scheduleTime time.Time) time.Time {
+// clampToDispatchTime receives a time t and returns the activity first dispatch time if it is ahead
+// of t and the activity has not started yet. Otherwise it returns t.
+func (a *Activity) clampToDispatchTime(t time.Time) time.Time {
 	if a.GetFirstAttemptStartedTime() != nil {
-		return scheduleTime
+		return t
 	}
-	if firstDispatch := a.firstDispatchTime(); firstDispatch.After(scheduleTime) {
-		return firstDispatch
+	if dispatchTime := a.firstDispatchTime(); dispatchTime.After(t) {
+		return dispatchTime
 	}
-	return scheduleTime
+	return t
 }
 
 // scheduleToCloseDeadline returns the absolute time at which the ScheduleToClose timeout expires,
