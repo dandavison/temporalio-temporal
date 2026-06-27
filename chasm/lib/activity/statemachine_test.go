@@ -93,6 +93,7 @@ func TestTransitionScheduled(t *testing.T) {
 				ActivityState: &activitypb.ActivityState{
 					ActivityType:           &commonpb.ActivityType{Name: "test-activity-type"},
 					RetryPolicy:            defaultRetryPolicy,
+					ScheduleTime:           timestamppb.New(defaultTime),
 					ScheduleToCloseTimeout: durationpb.New(tc.scheduleToCloseTimeout),
 					ScheduleToStartTimeout: durationpb.New(tc.scheduleToStartTimeout),
 					StartToCloseTimeout:    durationpb.New(defaultStartToCloseTimeout),

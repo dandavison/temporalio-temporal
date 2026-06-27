@@ -624,8 +624,7 @@ func (a *Activity) Terminate(
 	})
 }
 
-// (dan) why is this not named Handle*?
-func (a *Activity) UpdateActivityExecutionOptions(
+func (a *Activity) HandleUpdateOptions(
 	ctx chasm.MutableContext,
 	req *activitypb.UpdateActivityExecutionOptionsRequest,
 ) (*activitypb.UpdateActivityExecutionOptionsResponse, error) {
@@ -1234,8 +1233,6 @@ func (a *Activity) firstDispatchTime() time.Time {
 // honor any pending start_delay.
 func (a *Activity) reissueDispatchAndScheduleToStart(ctx chasm.MutableContext, attempt *activitypb.ActivityAttemptState) {
 	var dispatchTime time.Time
-
-	// (dan) this logic looks hacky at first glance. Can it be cleaner?
 	if retryTime := attemptDispatchTimeForRetry(attempt); retryTime != nil {
 		dispatchTime = retryTime.AsTime()
 	} else {

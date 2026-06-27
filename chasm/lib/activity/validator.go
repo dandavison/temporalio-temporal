@@ -30,15 +30,13 @@ func ValidateAndNormalizeStandaloneActivity(
 	namespaceID namespace.ID,
 	options *activitypb.ActivityOptions,
 	priority *commonpb.Priority,
-	// (dan) AIUI this will only be used by the WF Activity case, so shouldn't be here. It's the
-	// enveloping WF run timeout.
-	runTimeout *durationpb.Duration,
 ) error {
 	// Standalone activities always use user defined task queues, so we can enforce user defined task queue validation
 	if err := tqid.NormalizeAndValidateUserDefined(options.TaskQueue, "", "", maxIDLengthLimit); err != nil {
 		return err
 	}
 
+	// Standalone activities have no enveloping run timeout.
 	return validateAndNormalizeActivityAttributes(
 		activityID,
 		activityType,
@@ -47,7 +45,7 @@ func ValidateAndNormalizeStandaloneActivity(
 		namespaceID,
 		options,
 		priority,
-		runTimeout)
+		durationpb.New(0))
 }
 
 // ValidateAndNormalizeEmbeddedActivity validates and normalizes the attributes for an embedded activity.
@@ -152,7 +150,6 @@ func validateActivityRetryPolicy(
 func validateAndNormalizeTimeouts(
 	activityID string,
 	activityType string,
-	// (dan) I don't see anything using this
 	runTimeout *durationpb.Duration,
 	options *activitypb.ActivityOptions,
 ) error {

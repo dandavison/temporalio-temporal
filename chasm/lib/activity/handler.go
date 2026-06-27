@@ -515,7 +515,7 @@ func (h *handler) UpdateActivityExecutionOptions(ctx context.Context, req *activ
 	response, _, err := chasm.UpdateComponent(
 		ctx,
 		ref,
-		(*Activity).UpdateActivityExecutionOptions,
+		(*Activity).HandleUpdateOptions,
 		req,
 	)
 	if err != nil {
