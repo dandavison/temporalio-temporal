@@ -16,13 +16,13 @@ Already fixed (do not re-report): reset stale-ScС re-emit, activity.go:979-986.
 | operation        | SCHED-in-delay | SCHED-backoff | STARTED | PAUSED        | PAUSE_REQ | RESET_REQ | CANCEL_REQ |
 |------------------|----------------|---------------|---------|---------------|-----------|-----------|------------|
 | reset            | OK(B3 fixed)   | OK            | OK      | OK(B3 fixed)  | OK        | OK        | OK(reject) |
-| reset+restore    | OK(B1 fixed)   | OK(B1 fixed)  | **B4**  | OK(B1 fixed)  | **B4**    | OK(B1 fixed)| OK(reject)|
+| reset+restore    | OK(B1 fixed)   | OK(B1 fixed)  | OK(B4 fixed)| OK(B1 fixed) | OK(B4 fixed)| OK(B1 fixed)| OK(reject)|
 | pause            | OK             | OK            | OK      | D1            | D1        | n/a       | OK(reject) |
 | unpause          | OK             | OK            | n/a     | OK            | OK        | n/a       | OK(reject) |
 | update-options   | OK             | OK            | OK      | OK            | OK        | OK        | OK(fixed)  |
 | cancel/precedence| OK             | OK            | OK      | OK            | OK        | OK        | OK         |
 
-B1, B2, B3 FIXED. B4 open. D1 = open design question (pause × ScС).
+B1, B2, B3, B4 FIXED. D1 = open design question (pause × ScС).
 (B3 only when start_delay still pending + pre-pickup. B4 only when a prior update changed StartToClose/heartbeat then reset+restore on a running attempt.)
 
 (reset = plain, no option change: clean everywhere — lifetime ScС anchor unchanged, so no re-arm needed.
@@ -111,10 +111,12 @@ restore intent through RESET_REQUESTED (like ResetKeepPaused) and apply it when 
 attempt. (The alternative — re-arm the running attempt's timers to the restored values now, like
 UpdateOptions does — was rejected: it disturbs the in-flight attempt, contradicting the RESET_REQUESTED model.)
 
-Repro: TestStartDelay/ResetRestoreOriginal_OnStarted_DefersPerAttemptOptionRestore — CONFIRMED failing on
-current code (Describe reports the restored 60s mid-attempt; should stay 30s until the reset lands). Note:
-the timeout firing time can't distinguish buggy vs fixed (the timer fires at the updated value either way),
-so the repro asserts on the reported field, not on a timeout. Fix not yet written.
+Repro: TestStartDelay/ResetRestoreOriginal_OnStarted_DefersPerAttemptOptionRestore (note: asserts on the
+reported field, not a timeout — the timer fires at the updated value either way).
+FIXED: new proto field reset_restore_options (=20); handleReset defers StartToClose/Heartbeat restore for a
+running attempt (sets the flag) and restores immediately otherwise; the reset landing transitions
+(TransitionResetAttemptFailedTo{Scheduled,Paused}) call applyDeferredOptionRestore() to apply it before the
+next attempt. ScС stays immediate (lifetime). Repro now passes; TestStartDelay + TestResetActivityExecution green.
 
 ### Cosmetic (LOW) — create-path ScС anchor uses TransitionScheduled's ctx.Now(), not ScheduleTime
 Flagged independently by 2 finders. Constructor sets ScheduleTime=ctx.Now(); TransitionScheduled arms ScС
