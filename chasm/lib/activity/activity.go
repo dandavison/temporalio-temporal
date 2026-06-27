@@ -1017,17 +1017,14 @@ func (a *Activity) handleReset(ctx chasm.MutableContext, req *activitypb.ResetAc
 		a.RetryPolicy = common.CloneProto(ogOptions.GetRetryPolicy())
 		a.Priority = common.CloneProto(ogOptions.GetPriority())
 
-		// StartToClose and Heartbeat are per-attempt timeouts. If a worker is currently running an
-		// attempt, restoring them now would move the in-flight attempt's deadlines; instead defer the
-		// restore to the reset landing (TransitionResetAttemptFailedTo{Scheduled,Paused}) so it takes
-		// effect on the next attempt and the in-flight attempt is left undisturbed. With no running
+		// StartToClose and Heartbeat are per-attempt timeouts. When a worker is running an attempt
+		// (STARTED / PAUSE_REQUESTED — the deferred-reset path), restoring them now would move the
+		// in-flight attempt's deadlines; instead defer the restore to the reset landing via
+		// pending_reset.restore_original_options (set below in the STARTED/PAUSE_REQUESTED case), so it
+		// takes effect on the next attempt and the in-flight attempt is left undisturbed. With no running
 		// attempt there are no live per-attempt timers, so restore immediately.
-		switch a.Status {
-		case activitypb.ACTIVITY_EXECUTION_STATUS_STARTED,
-			activitypb.ACTIVITY_EXECUTION_STATUS_PAUSE_REQUESTED,
-			activitypb.ACTIVITY_EXECUTION_STATUS_RESET_REQUESTED:
-			a.ResetRestoreOptions = true
-		default:
+		if a.Status != activitypb.ACTIVITY_EXECUTION_STATUS_STARTED &&
+			a.Status != activitypb.ACTIVITY_EXECUTION_STATUS_PAUSE_REQUESTED {
 			a.StartToCloseTimeout = common.CloneProto(ogOptions.GetStartToCloseTimeout())
 			a.HeartbeatTimeout = common.CloneProto(ogOptions.GetHeartbeatTimeout())
 		}
@@ -1058,15 +1055,15 @@ func (a *Activity) handleReset(ctx chasm.MutableContext, req *activitypb.ResetAc
 				return nil, err
 			}
 		}
-		// Worker is still executing under its existing task token. Transition to RESET_REQUESTED
-		// so heartbeat/completion calls continue to authenticate; when the worker yields the
-		// activity will land back in SCHEDULED at attempt 1.
-		if frontendReq.GetResetHeartbeat() {
-			a.ResetHeartbeats = true
+		// Worker is still executing under its existing task token. Transition to RESET_REQUESTED so
+		// heartbeat/completion calls continue to authenticate; the reset's modifiers are recorded in
+		// pending_reset and applied when the worker yields and the activity lands at attempt 1.
+		// keepPaused only takes effect on a paused (PAUSE_REQUESTED) activity, landing it in PAUSED.
+		a.PendingReset = &activitypb.PendingReset{
+			ClearHeartbeats:        frontendReq.GetResetHeartbeat(),
+			KeepPaused:             keepPaused && a.Status == activitypb.ACTIVITY_EXECUTION_STATUS_PAUSE_REQUESTED,
+			RestoreOriginalOptions: frontendReq.GetRestoreOriginalOptions(),
 		}
-		// keepPaused on a paused (PAUSE_REQUESTED) activity preserves the pause: when the worker
-		// yields the activity lands back in PAUSED rather than SCHEDULED.
-		a.ResetKeepPaused = keepPaused && a.Status == activitypb.ACTIVITY_EXECUTION_STATUS_PAUSE_REQUESTED
 		if err := TransitionResetRequested.Apply(a, ctx, nil); err != nil {
 			return nil, err
 		}
@@ -1164,8 +1161,8 @@ func (a *Activity) recordFailedAttempt(
 // tryReschedule attempts to reschedule the activity for retry. Returns true if rescheduled, false
 // if retry is not possible. If a reset request has been received then the retry transitions
 // through TransitionResetAttemptFailedToScheduled which applies the deferred reset (attempt count
-// goes back to 1), unless the reset was issued with keepPaused (ResetKeepPaused), in which case it
-// transitions through TransitionResetAttemptFailedToPaused and the activity stays paused.
+// goes back to 1), unless the reset was issued with keepPaused (pending_reset.keep_paused), in which
+// case it transitions through TransitionResetAttemptFailedToPaused and the activity stays paused.
 func (a *Activity) tryReschedule(
 	ctx chasm.MutableContext,
 	overridingRetryInterval time.Duration,
@@ -1180,9 +1177,9 @@ func (a *Activity) tryReschedule(
 		return true, TransitionAttemptFailedWhilePauseRequested.Apply(a, ctx, event)
 	}
 	if a.GetStatus() == activitypb.ACTIVITY_EXECUTION_STATUS_RESET_REQUESTED {
-		// keepPaused=true on a paused activity (ResetKeepPaused) requires the yield to land in
+		// keepPaused=true on a paused activity (pending_reset.keep_paused) requires the yield to land in
 		// PAUSED rather than SCHEDULED so the activity stays paused until unpaused.
-		if a.ResetKeepPaused {
+		if a.GetPendingReset().GetKeepPaused() {
 			return true, TransitionResetAttemptFailedToPaused.Apply(a, ctx, event)
 		}
 		return true, TransitionResetAttemptFailedToScheduled.Apply(a, ctx, event)
@@ -1316,18 +1313,25 @@ func (a *Activity) reissueScheduleToClose(ctx chasm.MutableContext) {
 	}
 }
 
-// applyDeferredOptionRestore applies a per-attempt option restore (StartToClose / Heartbeat) that a
-// reset deferred because a worker was running an attempt at reset time (see handleReset). Called from
-// the reset landing transitions so the restored values take effect on the next attempt — whose
-// StartToClose / Heartbeat timers are emitted at the following TransitionStarted from these fields.
-func (a *Activity) applyDeferredOptionRestore() {
-	if !a.ResetRestoreOptions {
+// applyPendingReset applies the modifiers of a reset that was deferred because a worker was running an
+// attempt (see handleReset), then clears them. Called from the reset landing transitions so the
+// modifiers take effect on the next attempt. restore_original_options restores the per-attempt option
+// timeouts, whose StartToClose / Heartbeat timers are emitted at the following TransitionStarted from
+// these fields. keep_paused is consumed earlier, by tryReschedule, to choose the landing transition.
+func (a *Activity) applyPendingReset(ctx chasm.MutableContext) {
+	pr := a.GetPendingReset()
+	if pr == nil {
 		return
 	}
-	a.ResetRestoreOptions = false
-	ogOptions := a.GetOriginalOptions()
-	a.StartToCloseTimeout = common.CloneProto(ogOptions.GetStartToCloseTimeout())
-	a.HeartbeatTimeout = common.CloneProto(ogOptions.GetHeartbeatTimeout())
+	if pr.GetClearHeartbeats() {
+		a.clearHeartbeat(ctx)
+	}
+	if pr.GetRestoreOriginalOptions() {
+		ogOptions := a.GetOriginalOptions()
+		a.StartToCloseTimeout = common.CloneProto(ogOptions.GetStartToCloseTimeout())
+		a.HeartbeatTimeout = common.CloneProto(ogOptions.GetHeartbeatTimeout())
+	}
+	a.PendingReset = nil
 }
 
 // scheduleToCloseDeadline returns the absolute time at which the ScheduleToClose timeout expires,
@@ -1390,7 +1394,7 @@ func (a *Activity) RecordHeartbeat(
 	}
 	return &historyservice.RecordActivityTaskHeartbeatResponse{
 		CancelRequested: a.Status == activitypb.ACTIVITY_EXECUTION_STATUS_CANCEL_REQUESTED,
-		ActivityPaused:  a.Status == activitypb.ACTIVITY_EXECUTION_STATUS_PAUSE_REQUESTED || (a.Status == activitypb.ACTIVITY_EXECUTION_STATUS_RESET_REQUESTED && a.ResetKeepPaused),
+		ActivityPaused:  a.Status == activitypb.ACTIVITY_EXECUTION_STATUS_PAUSE_REQUESTED || (a.Status == activitypb.ACTIVITY_EXECUTION_STATUS_RESET_REQUESTED && a.GetPendingReset().GetKeepPaused()),
 		ActivityReset:   a.Status == activitypb.ACTIVITY_EXECUTION_STATUS_RESET_REQUESTED,
 	}, nil
 }

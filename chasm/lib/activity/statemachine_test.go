@@ -722,9 +722,9 @@ func TestTransitionCanceled(t *testing.T) {
 	protorequire.ProtoEqual(t, expectedFailure, outcome.GetFailed().GetFailure())
 }
 
-// TestTerminalTransitionsClearResetFlags verifies that ResetHeartbeats is cleared by every
-// terminal transition and that terminals are reachable from RESET_REQUESTED so a reset-in-flight
-// activity does not get stuck.
+// TestTerminalTransitionsClearResetFlags verifies that pending_reset is cleared by every terminal
+// transition and that terminals are reachable from RESET_REQUESTED so a reset-in-flight activity
+// does not get stuck.
 func TestTerminalTransitionsClearResetFlags(t *testing.T) {
 	makeActivity := func(ctx *chasm.MockMutableContext, status activitypb.ActivityExecutionStatus) *Activity {
 		return &Activity{
@@ -736,7 +736,7 @@ func TestTerminalTransitionsClearResetFlags(t *testing.T) {
 				StartToCloseTimeout:    durationpb.New(defaultStartToCloseTimeout),
 				Status:                 status,
 				TaskQueue:              &taskqueuepb.TaskQueue{Name: "test-task-queue"},
-				ResetHeartbeats:        true,
+				PendingReset:           &activitypb.PendingReset{ClearHeartbeats: true},
 			},
 			LastAttempt:   chasm.NewDataField(ctx, &activitypb.ActivityAttemptState{Count: 2}),
 			LastHeartbeat: chasm.NewDataField(ctx, &activitypb.ActivityHeartbeatState{}),
@@ -773,7 +773,7 @@ func TestTerminalTransitionsClearResetFlags(t *testing.T) {
 			metricsHandler: mh,
 		})
 		require.NoError(t, err)
-		require.False(t, act.ResetHeartbeats, "ResetHeartbeats should be cleared by TransitionCompleted")
+		require.Nil(t, act.PendingReset, "PendingReset should be cleared byTransitionCompleted")
 	})
 
 	t.Run("TransitionFailed", func(t *testing.T) {
@@ -809,7 +809,7 @@ func TestTerminalTransitionsClearResetFlags(t *testing.T) {
 			metricsHandler: mh,
 		})
 		require.NoError(t, err)
-		require.False(t, act.ResetHeartbeats, "ResetHeartbeats should be cleared by TransitionFailed")
+		require.Nil(t, act.PendingReset, "PendingReset should be cleared byTransitionFailed")
 	})
 
 	t.Run("TransitionTerminated", func(t *testing.T) {
@@ -828,7 +828,7 @@ func TestTerminalTransitionsClearResetFlags(t *testing.T) {
 			fromStatus:     activitypb.ACTIVITY_EXECUTION_STATUS_STARTED,
 		})
 		require.NoError(t, err)
-		require.False(t, act.ResetHeartbeats, "ResetHeartbeats should be cleared by TransitionTerminated")
+		require.Nil(t, act.PendingReset, "PendingReset should be cleared byTransitionTerminated")
 	})
 
 	t.Run("TransitionCanceled", func(t *testing.T) {
@@ -852,7 +852,7 @@ func TestTerminalTransitionsClearResetFlags(t *testing.T) {
 			fromStatus: activitypb.ACTIVITY_EXECUTION_STATUS_CANCEL_REQUESTED,
 		})
 		require.NoError(t, err)
-		require.False(t, act.ResetHeartbeats, "ResetHeartbeats should be cleared by TransitionCanceled")
+		require.Nil(t, act.PendingReset, "PendingReset should be cleared byTransitionCanceled")
 	})
 
 	t.Run("TransitionTimedOut", func(t *testing.T) {
@@ -881,7 +881,7 @@ func TestTerminalTransitionsClearResetFlags(t *testing.T) {
 			fromStatus:     activitypb.ACTIVITY_EXECUTION_STATUS_STARTED,
 		})
 		require.NoError(t, err)
-		require.False(t, act.ResetHeartbeats, "ResetHeartbeats should be cleared by TransitionTimedOut")
+		require.Nil(t, act.PendingReset, "PendingReset should be cleared byTransitionTimedOut")
 	})
 }
 

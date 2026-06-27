@@ -297,8 +297,8 @@ func TestRecordHeartbeatPauseResetCancelFlags(t *testing.T) {
 			wantPaused: true,
 		},
 		{
-			// A reset issued with keepPaused on a paused activity sets ResetKeepPaused; the worker
-			// must be told it is both paused and being reset.
+			// A reset issued with keepPaused on a paused activity sets pending_reset.keep_paused; the
+			// worker must be told it is both paused and being reset.
 			name:            "reset with keep-paused propagates both paused and reset",
 			status:          activitypb.ACTIVITY_EXECUTION_STATUS_RESET_REQUESTED,
 			resetKeepPaused: true,
@@ -331,7 +331,7 @@ func TestRecordHeartbeatPauseResetCancelFlags(t *testing.T) {
 				ActivityState: &activitypb.ActivityState{
 					Status:           tc.status,
 					HeartbeatTimeout: durationpb.New(0),
-					ResetKeepPaused:  tc.resetKeepPaused,
+					PendingReset:     &activitypb.PendingReset{KeepPaused: tc.resetKeepPaused},
 				},
 				LastAttempt: chasm.NewDataField(ctx, &activitypb.ActivityAttemptState{Count: attempt}),
 			}
