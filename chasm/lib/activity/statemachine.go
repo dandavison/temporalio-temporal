@@ -42,13 +42,19 @@ var TransitionScheduled = chasm.NewTransition(
 	activitypb.ACTIVITY_EXECUTION_STATUS_SCHEDULED,
 	func(a *Activity, ctx chasm.MutableContext, _ any) error {
 		attempt := a.LastAttempt.Get(ctx)
+
+		// (dan) it looks like we should use a.ScheduleTime here
 		currentTime := ctx.Now(a)
 		attempt.Count++
 		attempt.Stamp++
 
 		// Start delay defers the dispatch and extends ScheduleToClose and ScheduleToStart timeouts. StartToClose and
 		// Heartbeat timeouts are unaffected as they only start when a worker picks up the task.
+
+		// (dan) lets not create this variable and instead check startDelayEnd > a.ScheduleTime below
 		startDelay := a.GetStartDelay().AsDuration()
+
+		// (dan) it looks like we should use a.firstDispatchTime() for this
 		startDelayEnd := currentTime.Add(startDelay)
 
 		if timeout := a.GetScheduleToStartTimeout().AsDuration(); timeout > 0 {
@@ -63,6 +69,7 @@ var TransitionScheduled = chasm.NewTransition(
 		}
 
 		if timeout := a.GetScheduleToCloseTimeout().AsDuration(); timeout > 0 {
+			// (dan) can we use a.scheduleToCloseDeadline() here?
 			a.ScheduleToCloseStamp++
 			ctx.AddTask(
 				a,
@@ -106,7 +113,7 @@ var TransitionRescheduled = chasm.NewTransition(
 		}
 
 		attempt := a.LastAttempt.Get(ctx)
-		retryScheduledTime := attemptScheduleTimeForRetry(attempt).AsTime()
+		retryScheduledTime := attemptDispatchTimeForRetry(attempt).AsTime()
 
 		if timeout := a.GetScheduleToStartTimeout().AsDuration(); timeout > 0 {
 			ctx.AddTask(
@@ -489,9 +496,9 @@ var TransitionAttemptFailedWhilePauseRequested = chasm.NewTransition(
 )
 
 type resetEvent struct {
-	req          *workflowservice.ResetActivityExecutionRequest
-	scheduleTime time.Time
-	handler      metrics.Handler
+	req       *workflowservice.ResetActivityExecutionRequest
+	resetTime time.Time
+	handler   metrics.Handler
 }
 
 // TransitionReset resets a SCHEDULED or PAUSED activity back to attempt 1. The stamp is bumped to
@@ -579,7 +586,7 @@ var TransitionResetAttemptFailedToScheduled = chasm.NewTransition(
 			return err
 		}
 
-		retryScheduledTime := attemptScheduleTimeForRetry(attempt).AsTime()
+		retryScheduledTime := attemptDispatchTimeForRetry(attempt).AsTime()
 		if timeout := a.GetScheduleToStartTimeout().AsDuration(); timeout > 0 {
 			ctx.AddTask(
 				a,

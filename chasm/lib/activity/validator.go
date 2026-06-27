@@ -30,6 +30,8 @@ func ValidateAndNormalizeStandaloneActivity(
 	namespaceID namespace.ID,
 	options *activitypb.ActivityOptions,
 	priority *commonpb.Priority,
+	// (dan) AIUI this will only be used by the WF Activity case, so shouldn't be here. It's the
+	// enveloping WF run timeout.
 	runTimeout *durationpb.Duration,
 ) error {
 	// Standalone activities always use user defined task queues, so we can enforce user defined task queue validation
@@ -150,6 +152,7 @@ func validateActivityRetryPolicy(
 func validateAndNormalizeTimeouts(
 	activityID string,
 	activityType string,
+	// (dan) I don't see anything using this
 	runTimeout *durationpb.Duration,
 	options *activitypb.ActivityOptions,
 ) error {
