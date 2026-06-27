@@ -972,6 +972,20 @@ func (a *Activity) clearHeartbeat(ctx chasm.MutableContext) {
 	}
 }
 
+// applyResetRequestedOptions applies the options carried with a deferred reset (see handleReset) and
+// clears them. Called from the reset landing transitions so the options take effect on the next
+// attempt. keep_paused is consumed earlier, by tryReschedule, to choose the landing transition.
+func (a *Activity) applyResetRequestedOptions(ctx chasm.MutableContext) {
+	rro := a.GetResetRequestedOptions()
+	if rro == nil {
+		return
+	}
+	if rro.GetClearHeartbeats() {
+		a.clearHeartbeat(ctx)
+	}
+	a.ResetRequestedOptions = nil
+}
+
 func (a *Activity) reset(ctx chasm.MutableContext, event resetEvent) {
 	attempt := a.LastAttempt.Get(ctx)
 	attempt.Count = 1
@@ -1048,15 +1062,14 @@ func (a *Activity) handleReset(ctx chasm.MutableContext, req *activitypb.ResetAc
 				return nil, err
 			}
 		}
-		// Worker is still executing under its existing task token. Transition to RESET_REQUESTED
-		// so heartbeat/completion calls continue to authenticate; when the worker yields the
-		// activity will land back in SCHEDULED at attempt 1.
-		if frontendReq.GetResetHeartbeat() {
-			a.ResetHeartbeats = true
+		// Worker is still executing under its existing task token. Transition to RESET_REQUESTED so
+		// heartbeat/completion calls continue to authenticate; the reset's options are recorded in
+		// reset_requested_options and applied when the worker yields and the activity lands at attempt 1.
+		// keepPaused only takes effect on a paused (PAUSE_REQUESTED) activity, landing it in PAUSED.
+		a.ResetRequestedOptions = &activitypb.ResetRequestedOptions{
+			ClearHeartbeats: frontendReq.GetResetHeartbeat(),
+			KeepPaused:      keepPaused && a.Status == activitypb.ACTIVITY_EXECUTION_STATUS_PAUSE_REQUESTED,
 		}
-		// keepPaused on a paused (PAUSE_REQUESTED) activity preserves the pause: when the worker
-		// yields the activity lands back in PAUSED rather than SCHEDULED.
-		a.ResetKeepPaused = keepPaused && a.Status == activitypb.ACTIVITY_EXECUTION_STATUS_PAUSE_REQUESTED
 		if err := TransitionResetRequested.Apply(a, ctx, nil); err != nil {
 			return nil, err
 		}
@@ -1154,8 +1167,8 @@ func (a *Activity) recordFailedAttempt(
 // tryReschedule attempts to reschedule the activity for retry. Returns true if rescheduled, false
 // if retry is not possible. If a reset request has been received then the retry transitions
 // through TransitionResetAttemptFailedToScheduled which applies the deferred reset (attempt count
-// goes back to 1), unless the reset was issued with keepPaused (ResetKeepPaused), in which case it
-// transitions through TransitionResetAttemptFailedToPaused and the activity stays paused.
+// goes back to 1), unless the reset was issued with keepPaused (reset_requested_options.keep_paused),
+// in which case it transitions through TransitionResetAttemptFailedToPaused and the activity stays paused.
 func (a *Activity) tryReschedule(
 	ctx chasm.MutableContext,
 	overridingRetryInterval time.Duration,
@@ -1170,9 +1183,9 @@ func (a *Activity) tryReschedule(
 		return true, TransitionAttemptFailedWhilePauseRequested.Apply(a, ctx, event)
 	}
 	if a.GetStatus() == activitypb.ACTIVITY_EXECUTION_STATUS_RESET_REQUESTED {
-		// keepPaused=true on a paused activity (ResetKeepPaused) requires the yield to land in
-		// PAUSED rather than SCHEDULED so the activity stays paused until unpaused.
-		if a.ResetKeepPaused {
+		// keepPaused=true on a paused activity (reset_requested_options.keep_paused) requires the yield to
+		// land in PAUSED rather than SCHEDULED so the activity stays paused until unpaused.
+		if a.GetResetRequestedOptions().GetKeepPaused() {
 			return true, TransitionResetAttemptFailedToPaused.Apply(a, ctx, event)
 		}
 		return true, TransitionResetAttemptFailedToScheduled.Apply(a, ctx, event)
@@ -1352,7 +1365,7 @@ func (a *Activity) RecordHeartbeat(
 	}
 	return &historyservice.RecordActivityTaskHeartbeatResponse{
 		CancelRequested: a.Status == activitypb.ACTIVITY_EXECUTION_STATUS_CANCEL_REQUESTED,
-		ActivityPaused:  a.Status == activitypb.ACTIVITY_EXECUTION_STATUS_PAUSE_REQUESTED || (a.Status == activitypb.ACTIVITY_EXECUTION_STATUS_RESET_REQUESTED && a.ResetKeepPaused),
+		ActivityPaused:  a.Status == activitypb.ACTIVITY_EXECUTION_STATUS_PAUSE_REQUESTED || (a.Status == activitypb.ACTIVITY_EXECUTION_STATUS_RESET_REQUESTED && a.GetResetRequestedOptions().GetKeepPaused()),
 		ActivityReset:   a.Status == activitypb.ACTIVITY_EXECUTION_STATUS_RESET_REQUESTED,
 	}, nil
 }

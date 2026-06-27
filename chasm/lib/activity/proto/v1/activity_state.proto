@@ -128,21 +128,27 @@ message ActivityState {
   // metadata only.
   ActivityPauseState last_pause_state = 16;
 
-  // Set when reset was requested while the activity was STARTED and the operator asked for
-  // heartbeat details to be cleared on the next retry. Consumed when the worker yields and the
-  // activity transitions out of RESET_REQUESTED.
-  bool reset_heartbeats = 17;
-
-  // Set when a reset is requested with keep_paused=true on a paused (PAUSE_REQUESTED) activity, so
-  // that when the worker yields the activity lands back in PAUSED rather than SCHEDULED. Consumed
-  // when the activity transitions out of RESET_REQUESTED.
-  bool reset_keep_paused = 18;
-
   // Time at which a worker first picked up the activity (the first attempt's started time). Set
   // once on the first SCHEDULED->STARTED transition and never updated thereafter, so it survives
   // retries and resets. Used as the discriminator for whether start_delay still applies on
   // pre-dispatch rescheduling paths.
-  google.protobuf.Timestamp first_attempt_started_time = 19;
+  google.protobuf.Timestamp first_attempt_started_time = 17;
+
+  // The options supplied with a reset that could not be applied immediately because a worker was
+  // running an attempt at reset time (the reset is deferred via RESET_REQUESTED). Set when the
+  // activity enters RESET_REQUESTED and applied (then cleared) when the worker yields, so the options
+  // take effect on the next attempt. Nil when no reset is in flight.
+  ResetRequestedOptions reset_requested_options = 18;
+}
+
+// ResetRequestedOptions holds the options supplied with a reset request that are carried until the
+// reset is applied. A reset of a running attempt is deferred (RESET_REQUESTED); these options are
+// applied and cleared when the worker yields.
+message ResetRequestedOptions {
+  // Clear heartbeat details on the next attempt (reset request's reset_heartbeat).
+  bool clear_heartbeats = 1;
+  // Land back in PAUSED rather than SCHEDULED when the worker yields (reset request's keep_paused).
+  bool keep_paused = 2;
 }
 
 message ActivityCancelState {
