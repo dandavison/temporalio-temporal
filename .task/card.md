@@ -8,8 +8,8 @@ saa-operator-spec.md
 saa-start-delay-review.md
 ```
 ```
-Dan        3 minutes       Audit
-Dan        3 minutes       Update tests
-Dan        2 hours         update audit doc
+Dan        20 hours        Audit
+Dan        20 hours        Update tests
+Dan        22 hours        update audit doc
 ```
 <!-- wormhole:generated:end -->
