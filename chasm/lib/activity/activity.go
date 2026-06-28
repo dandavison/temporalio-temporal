@@ -932,7 +932,7 @@ func (a *Activity) unpause(
 	if jitter := event.req.GetJitter().AsDuration(); jitter > 0 {
 		unpauseTime = unpauseTime.Add(time.Duration(rand.Int63n(int64(jitter)))) //nolint:gosec
 	}
-	dispatchTime := a.atLeastFirstDispatchTime(unpauseTime)
+	dispatchTime := a.dispatchTimeRespectingStartDelay(unpauseTime)
 	if timeout := a.GetScheduleToStartTimeout().AsDuration(); timeout > 0 {
 		ctx.AddTask(
 			a,
@@ -973,7 +973,7 @@ func (a *Activity) reset(ctx chasm.MutableContext, event resetEvent) {
 	if event.req.GetResetHeartbeat() {
 		a.clearHeartbeat(ctx)
 	}
-	dispatchTime := a.atLeastFirstDispatchTime(event.resetTime)
+	dispatchTime := a.dispatchTimeRespectingStartDelay(event.resetTime)
 	if timeout := a.GetScheduleToStartTimeout().AsDuration(); timeout > 0 {
 		ctx.AddTask(
 			a,
@@ -1238,7 +1238,7 @@ func (a *Activity) reissueDispatchAndScheduleToStart(ctx chasm.MutableContext, a
 	if retryDispatchTime := dispatchTimeForRetry(attempt); retryDispatchTime != nil {
 		dispatchTime = retryDispatchTime.AsTime()
 	} else {
-		dispatchTime = a.atLeastFirstDispatchTime(ctx.Now(a))
+		dispatchTime = a.dispatchTimeRespectingStartDelay(ctx.Now(a))
 	}
 	ctx.AddTask(
 		a,
@@ -1289,8 +1289,11 @@ func (a *Activity) reissueRunningAttemptTimers(ctx chasm.MutableContext, attempt
 	}
 }
 
-// atLeastFirstDispatchTime returns max(t, firstDispatchTime).
-func (a *Activity) atLeastFirstDispatchTime(t time.Time) time.Time {
+// dispatchTimeRespectingStartDelay advances a candidate dispatch time t to the first dispatch time
+// (ScheduleTime + start_delay) while the activity has not yet been picked up by a worker, so that
+// pre-dispatch re-scheduling (unpause, reset, options update) honors any remaining start_delay.
+// Returns t unchanged if the first attempt has already started.
+func (a *Activity) dispatchTimeRespectingStartDelay(t time.Time) time.Time {
 	if a.GetFirstAttemptStartedTime() != nil {
 		return t
 	}
