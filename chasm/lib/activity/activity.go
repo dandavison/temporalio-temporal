@@ -1499,6 +1499,8 @@ func (a *Activity) buildActivityExecutionInfo(ctx chasm.Context) *apiactivitypb.
 		LastWorkerIdentity:      attempt.GetLastWorkerIdentity(),
 		SdkName:                 attempt.GetSdkName(),
 		SdkVersion:              attempt.GetSdkVersion(),
+		// TODO (dan): why are we setting something named 'schedule time' to the result of a
+		// function named 'dispatch time'?
 		NextAttemptScheduleTime: dispatchTimeForRetry(attempt),
 		Priority:                a.GetPriority(),
 		RetryPolicy:             a.GetRetryPolicy(),
