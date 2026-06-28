@@ -548,7 +548,7 @@ func (a *Activity) HandleFailed(
 		!appFailure.GetNonRetryable() &&
 		!slices.Contains(a.GetRetryPolicy().GetNonRetryableErrorTypes(), appFailure.GetType())
 
-	if isRetryable {
+	if false && isRetryable {
 		rescheduled, err := a.tryReschedule(ctx, appFailure.GetNextRetryDelay().AsDuration(), failure)
 		if err != nil {
 			return nil, err
@@ -559,7 +559,7 @@ func (a *Activity) HandleFailed(
 			return &historyservice.RespondActivityTaskFailedResponse{}, nil
 		}
 	}
-
+	return nil, nil
 	if err := TransitionFailed.Apply(a, ctx, failedEvent{
 		req:            event.Request,
 		metricsHandler: metricsHandler,
