@@ -937,7 +937,7 @@ func (a *Activity) unpause(
 	if jitter := event.req.GetJitter().AsDuration(); jitter > 0 {
 		unpauseTime = unpauseTime.Add(time.Duration(rand.Int63n(int64(jitter)))) //nolint:gosec
 	}
-	dispatchTime := a.honoredDispatchTime(attempt, unpauseTime)
+	dispatchTime := a.dispatchTimeForAttempt(attempt, unpauseTime)
 	if timeout := a.GetScheduleToStartTimeout().AsDuration(); timeout > 0 {
 		ctx.AddTask(
 			a,
@@ -977,7 +977,7 @@ func (a *Activity) reset(ctx chasm.MutableContext, event resetEvent) {
 	if event.req.GetResetHeartbeat() {
 		a.clearHeartbeat(ctx)
 	}
-	dispatchTime := a.honoredDispatchTime(attempt, event.resetTime)
+	dispatchTime := a.dispatchTimeForAttempt(attempt, event.resetTime)
 	if timeout := a.GetScheduleToStartTimeout().AsDuration(); timeout > 0 {
 		ctx.AddTask(
 			a,
@@ -1303,10 +1303,10 @@ func (a *Activity) dispatchTimeRespectingStartDelay(t time.Time) time.Time {
 	return t
 }
 
-// honoredDispatchTime returns the time at which a re-dispatch (unpause / reset) should occur. It
+// dispatchTimeForAttempt returns the time at which a re-dispatch (unpause / reset) should occur. It
 // honors a pending start_delay (for the first attempt) and a pending retry backoff (for retries).
 // base is the earliest acceptable time (now, possibly offset by jitter).
-func (a *Activity) honoredDispatchTime(attempt *activitypb.ActivityAttemptState, base time.Time) time.Time {
+func (a *Activity) dispatchTimeForAttempt(attempt *activitypb.ActivityAttemptState, base time.Time) time.Time {
 	dispatchTime := a.dispatchTimeRespectingStartDelay(base)
 	if retryTime := dispatchTimeForRetry(attempt); retryTime != nil && retryTime.AsTime().After(dispatchTime) {
 		return retryTime.AsTime()
