@@ -58,6 +58,8 @@ import (
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
+import "github.com/dandavison/hyperlinked/go/ps"
+
 const (
 	// WorkflowTypeTag is a required workflow tag for standalone activities to ensure consistent
 	// metric labeling between workflows and activities.
@@ -1127,6 +1129,7 @@ func (a *Activity) recordScheduleToStartOrCloseTimeoutFailure(ctx chasm.MutableC
 // applyFailedAttempt mutates activity state when a worker yields with retries remaining.
 func (a *Activity) applyFailedAttempt(ctx chasm.MutableContext, event rescheduleEvent) error {
 	attempt := a.LastAttempt.Get(ctx)
+	ps.Ln(fmt.Sprintf("bumping attempt count from %d to %d", attempt.Count, attempt.Count+1))
 	attempt.Count++
 	attempt.Stamp++
 	return a.recordFailedAttempt(ctx, event.retryInterval, event.failure, ctx.Now(a), false)
@@ -1319,6 +1322,7 @@ func (a *Activity) applyDeferredOptionRestore(ctx chasm.MutableContext) {
 	}
 	a.ResetRestoreOptions = false
 	a.restoreOriginalOptions(ctx)
+	ps.F("restored options\n")
 }
 
 // restoreOriginalOptions resets the activity's options to the values it was originally scheduled
