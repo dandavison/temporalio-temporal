@@ -998,8 +998,8 @@ func (a *Activity) reset(ctx chasm.MutableContext, event resetEvent) {
 //
 // For STARTED activities: transitions to RESET_REQUESTED. The worker is notified via
 // ActivityReset=true on its next heartbeat response and continues to use its existing task token.
-// When the worker yields (failure or timeout with retries remaining), the activity transitions
-// back to SCHEDULED at attempt 1 via TransitionResetAttemptFailedToScheduled.
+// If the attempt fails, the activity transitions back to SCHEDULED at attempt 1 via
+// TransitionResetAttemptFailedToScheduled.
 //
 // RestoreOriginalOptions follows the same split: applied immediately for a non-running activity,
 // and deferred for a running one, so the in-flight attempt is not disturbed — every restored option
