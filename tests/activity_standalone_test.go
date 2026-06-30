@@ -12510,7 +12510,9 @@ func (s *standaloneActivityTestSuite) TestResetActivityExecution() {
 				ActivityId: activityID,
 				RunId:      startResp.RunId,
 			})
-			require.NoError(t, err)
+			if err != nil {
+				return false // a poll that loses the race to teardown must not fail the test
+			}
 			return resp.GetInfo().GetStatus() == enumspb.ACTIVITY_EXECUTION_STATUS_TIMED_OUT
 		}, 4*time.Second, 200*time.Millisecond,
 			"in-flight attempt must keep its current 8s ScheduleToClose; RestoreOriginalOptions must defer the restore of the 2s original to the reset landing")
