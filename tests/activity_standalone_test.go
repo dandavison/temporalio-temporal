@@ -11384,7 +11384,7 @@ func (s *standaloneActivityTestSuite) TestResetActivityExecution() {
 		return startResp, pollResp, taskQueue
 	}
 
-	failRetryable := func(ctx context.Context, t *testing.T, taskToken []byte, nextRetryDelay time.Duration) {
+	failRetryably := func(ctx context.Context, t *testing.T, taskToken []byte, nextRetryDelay time.Duration) {
 		t.Helper()
 		_, err := env.FrontendClient().RespondActivityTaskFailed(ctx, &workflowservice.RespondActivityTaskFailedRequest{
 			Namespace: env.Namespace().String(),
@@ -11464,7 +11464,7 @@ func (s *standaloneActivityTestSuite) TestResetActivityExecution() {
 		startResp, pollResp1, taskQueue := startAndPollActivity(ctx, t, activityID, retryPolicy)
 
 		// Fail attempt 1 with a short retry
-		failRetryable(ctx, t, pollResp1.TaskToken, time.Second)
+		failRetryably(ctx, t, pollResp1.TaskToken, time.Second)
 
 		// Poll attempt 2
 		pollResp2, err := env.FrontendClient().PollActivityTaskQueue(ctx, &workflowservice.PollActivityTaskQueueRequest{
@@ -11476,7 +11476,7 @@ func (s *standaloneActivityTestSuite) TestResetActivityExecution() {
 		require.EqualValues(t, 2, pollResp2.Attempt)
 
 		// Fail attempt 2 with a long backoff so the activity is SCHEDULED waiting
-		failRetryable(ctx, t, pollResp2.TaskToken, 60*time.Second)
+		failRetryably(ctx, t, pollResp2.TaskToken, 60*time.Second)
 
 		// Verify activity is SCHEDULED (backing off at attempt 3)
 		await.Require(ctx, t, func(c *await.T) {
@@ -11541,7 +11541,7 @@ func (s *standaloneActivityTestSuite) TestResetActivityExecution() {
 		require.Equal(t, enumspb.PENDING_ACTIVITY_STATE_STARTED, desc.GetInfo().GetRunState())
 
 		// Fail the running attempt — triggers deferred reset in TransitionRescheduled
-		failRetryable(ctx, t, pollResp1.TaskToken, 0)
+		failRetryably(ctx, t, pollResp1.TaskToken, 0)
 
 		// Poll the retry — should be attempt 1
 		pollResp2, err := env.FrontendClient().PollActivityTaskQueue(ctx, &workflowservice.PollActivityTaskQueueRequest{
@@ -11627,7 +11627,7 @@ func (s *standaloneActivityTestSuite) TestResetActivityExecution() {
 		startResp, pollResp1, taskQueue := startAndPollActivity(ctx, t, activityID, retryPolicy)
 
 		// Fail attempt 1 — now backing off for 1 minute
-		failRetryable(ctx, t, pollResp1.TaskToken, 0)
+		failRetryably(ctx, t, pollResp1.TaskToken, 0)
 
 		// Verify in SCHEDULED state
 		await.Require(ctx, t, func(c *await.T) {
@@ -11693,7 +11693,7 @@ func (s *standaloneActivityTestSuite) TestResetActivityExecution() {
 		require.NotNil(t, desc.GetInfo().GetHeartbeatDetails())
 
 		// Fail the attempt with long backoff
-		failRetryable(ctx, t, pollResp1.TaskToken, 60*time.Second)
+		failRetryably(ctx, t, pollResp1.TaskToken, 60*time.Second)
 
 		// Wait for SCHEDULED state
 		await.Require(ctx, t, func(c *await.T) {
@@ -11781,7 +11781,7 @@ func (s *standaloneActivityTestSuite) TestResetActivityExecution() {
 		require.NotNil(t, desc.GetInfo().GetHeartbeatDetails(), "heartbeat should still be visible before the attempt fails")
 
 		// Fail the running attempt — triggers deferred reset+heartbeat clear in TransitionRescheduled
-		failRetryable(ctx, t, pollResp1.TaskToken, 0)
+		failRetryably(ctx, t, pollResp1.TaskToken, 0)
 
 		// Poll retry — attempt=1, heartbeat details cleared
 		pollResp2, err := env.FrontendClient().PollActivityTaskQueue(ctx, &workflowservice.PollActivityTaskQueueRequest{
@@ -11863,7 +11863,7 @@ func (s *standaloneActivityTestSuite) TestResetActivityExecution() {
 		startResp, pollResp1, taskQueue := startAndPollActivity(ctx, t, activityID, retryPolicy)
 
 		// Fail attempt 1 with a short override retry so it enters backoff
-		failRetryable(ctx, t, pollResp1.TaskToken, 0)
+		failRetryably(ctx, t, pollResp1.TaskToken, 0)
 
 		// Wait for SCHEDULED state (retry backoff)
 		await.Require(ctx, t, func(c *await.T) {
@@ -11968,7 +11968,7 @@ func (s *standaloneActivityTestSuite) TestResetActivityExecution() {
 		})
 
 		// Fail attempt 1 → SCHEDULED backoff.
-		failRetryable(ctx, t, pollResp1.TaskToken, 0)
+		failRetryably(ctx, t, pollResp1.TaskToken, 0)
 		waitForState(ctx, t, activityID, startResp.GetRunId(), enumspb.PENDING_ACTIVITY_STATE_SCHEDULED)
 
 		// Pause → PAUSED.
@@ -12028,7 +12028,7 @@ func (s *standaloneActivityTestSuite) TestResetActivityExecution() {
 		require.NoError(t, err)
 
 		// Fail the running attempt — triggers TransitionRescheduled with the deferred reset.
-		failRetryable(ctx, t, pollResp1.TaskToken, 0)
+		failRetryably(ctx, t, pollResp1.TaskToken, 0)
 
 		// Activity should dispatch (not be stuck paused) at attempt 1.
 		pollResp2, err := env.FrontendClient().PollActivityTaskQueue(ctx, &workflowservice.PollActivityTaskQueueRequest{
@@ -12075,7 +12075,7 @@ func (s *standaloneActivityTestSuite) TestResetActivityExecution() {
 		require.NoError(t, err)
 
 		// Fail the running attempt.
-		failRetryable(ctx, t, pollResp1.TaskToken, 0)
+		failRetryably(ctx, t, pollResp1.TaskToken, 0)
 
 		// Activity should be PAUSED at attempt 1 (deferred reset + preserved pause).
 		await.Require(ctx, t, func(c *await.T) {
@@ -12176,7 +12176,7 @@ func (s *standaloneActivityTestSuite) TestResetActivityExecution() {
 		// Fail attempt 1 with a short backoff so the activity is SCHEDULED backing off (this test
 		// covers option restoration, not backoff timing; the interval elapses before the reset so
 		// the honored re-dispatch is immediate).
-		failRetryable(ctx, t, pollResp1.TaskToken, time.Second)
+		failRetryably(ctx, t, pollResp1.TaskToken, time.Second)
 
 		await.Require(ctx, t, func(c *await.T) {
 			desc, err := env.FrontendClient().DescribeActivityExecution(c.Context(), &workflowservice.DescribeActivityExecutionRequest{
@@ -12524,7 +12524,7 @@ func (s *standaloneActivityTestSuite) TestResetActivityExecution() {
 
 		// Worker yields with retries remaining -> reset lands in SCHEDULED at attempt 1 and the deferred
 		// restore is applied, so the next attempt carries the original 60s/50s.
-		failRetryable(ctx, t, taskToken, 0)
+		failRetryably(ctx, t, taskToken, 0)
 
 		await.Require(ctx, t, func(c *await.T) {
 			desc, err := env.FrontendClient().DescribeActivityExecution(c.Context(), &workflowservice.DescribeActivityExecutionRequest{
@@ -12570,7 +12570,7 @@ func (s *standaloneActivityTestSuite) TestResetActivityExecution() {
 		require.NoError(t, err)
 
 		// Worker yields -> reset lands in PAUSED at attempt 1 and the deferred restore is applied.
-		failRetryable(ctx, t, taskToken, 0)
+		failRetryably(ctx, t, taskToken, 0)
 
 		await.Require(ctx, t, func(c *await.T) {
 			desc, err := env.FrontendClient().DescribeActivityExecution(c.Context(), &workflowservice.DescribeActivityExecutionRequest{
@@ -12825,7 +12825,7 @@ func (s *standaloneActivityTestSuite) TestResetActivityExecution() {
 		// Fail attempt 1 so the activity is SCHEDULED in retry backoff. Use a short retry interval
 		// (policy default 1s) that elapses before the reset, so the honored re-dispatch floor is in
 		// the past and the jitter governs the dispatch time.
-		failRetryable(ctx, t, pollResp1.TaskToken, 0)
+		failRetryably(ctx, t, pollResp1.TaskToken, 0)
 		waitForState(ctx, t, activityID, startResp.GetRunId(), enumspb.PENDING_ACTIVITY_STATE_SCHEDULED)
 
 		jitter := 3 * time.Second
