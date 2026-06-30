@@ -1162,32 +1162,31 @@ func (a *Activity) recordFailedAttempt(
 }
 
 // tryReschedule attempts to reschedule the activity for retry. Returns true if rescheduled, false
-// if retry is not possible. If a reset request has been received then the retry transitions
-// through TransitionResetAttemptFailedToScheduled which applies the deferred reset (attempt count
-// goes back to 1), unless the reset was issued with keepPaused (ResetKeepPaused), in which case it
-// transitions through TransitionResetAttemptFailedToPaused and the activity stays paused.
+// if retry is not possible. It handles the cases of pause and reset requests that were received
+// while the last attempt was in progress.
 func (a *Activity) tryReschedule(
 	ctx chasm.MutableContext,
 	overridingRetryInterval time.Duration,
 	failure *failurepb.Failure,
 ) (bool, error) {
 	shouldRetry, retryInterval := a.shouldRetry(ctx, overridingRetryInterval)
-	if !shouldRetry {
+	resetRequested := a.GetStatus() == activitypb.ACTIVITY_EXECUTION_STATUS_RESET_REQUESTED
+	// A pending reset request is always honored, regardless of the should retry result.
+	if !(shouldRetry || resetRequested) {
 		return false, nil
 	}
 	event := rescheduleEvent{retryInterval: retryInterval, failure: failure}
-	if a.GetStatus() == activitypb.ACTIVITY_EXECUTION_STATUS_PAUSE_REQUESTED {
+	switch a.GetStatus() {
+	case activitypb.ACTIVITY_EXECUTION_STATUS_PAUSE_REQUESTED:
 		return true, TransitionAttemptFailedWhilePauseRequested.Apply(a, ctx, event)
-	}
-	if a.GetStatus() == activitypb.ACTIVITY_EXECUTION_STATUS_RESET_REQUESTED {
-		// keepPaused=true on a paused activity (ResetKeepPaused) requires the yield to land in
-		// PAUSED rather than SCHEDULED so the activity stays paused until unpaused.
+	case activitypb.ACTIVITY_EXECUTION_STATUS_RESET_REQUESTED:
 		if a.ResetKeepPaused {
 			return true, TransitionResetAttemptFailedToPaused.Apply(a, ctx, event)
 		}
 		return true, TransitionResetAttemptFailedToScheduled.Apply(a, ctx, event)
+	default:
+		return true, TransitionRescheduled.Apply(a, ctx, event)
 	}
-	return true, TransitionRescheduled.Apply(a, ctx, event)
 }
 
 func (a *Activity) shouldRetry(ctx chasm.Context, overridingRetryInterval time.Duration) (bool, time.Duration) {
