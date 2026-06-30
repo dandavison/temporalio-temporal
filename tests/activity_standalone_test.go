@@ -7198,6 +7198,13 @@ func (s *standaloneActivityTestSuite) TestStartDelay() {
 				ActivityId: activityID,
 				RunId:      startResp.RunId,
 			})
+			// assertions.go:387:
+			// Error Trace: /Users/dan/worktrees/temporal/dan--saa-operator-api-6/temporal/tests/activity_standalone_test.go:7201
+			//     			/Users/dan/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.26.4.darwin-arm64/src/runtime/asm_arm64.s:1447
+			// Error:          Received unexpected error:
+			// context canceled
+			// Test:           TestStandaloneActivityTestSuite/TestStartDelay/ResetRestoreOriginal_OnStarted_DefersScheduleToCloseRestore
+			// panic: Fail in goroutine after TestStandaloneActivityTestSuite/TestStartDelay/ResetRestoreOriginal_OnStarted_DefersScheduleToCloseRestore has completed
 			require.NoError(t, err)
 			return resp.GetInfo().GetStatus() == enumspb.ACTIVITY_EXECUTION_STATUS_TIMED_OUT
 		}, 4*time.Second, 200*time.Millisecond,
