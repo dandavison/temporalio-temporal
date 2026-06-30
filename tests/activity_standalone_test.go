@@ -12310,9 +12310,11 @@ func (s *standaloneActivityTestSuite) TestResetActivityExecution() {
 	t.Run("RestoreOriginalOptions_WhileStarted_AttemptFailsRetryably", func(t *testing.T) {
 		cases := []struct {
 			name        string
-			retryPolicy *commonpb.RetryPolicy
+			maxAttempts int32
 		}{
-			{"RetriesRemainingAfterFirstFailure", &commonpb.RetryPolicy{InitialInterval: durationpb.New(1 * time.Second), BackoffCoefficient: 1.0, MaximumAttempts: 10}},
+			{"RetriesRemainingWhenApplyingPendingReset", 10},
+			// The pending reset must be honored even if the "should retry" decision would otherwise be "no".
+			{"RetriesExhaustedWhenApplyingPendingReset", 2},
 		}
 		for _, tc := range cases {
 			t.Run(tc.name, func(t *testing.T) {
@@ -12321,11 +12323,15 @@ func (s *standaloneActivityTestSuite) TestResetActivityExecution() {
 				activityID := testcore.RandomizeStr(t.Name())
 
 				// Start the first attempt, and then fail it so that we're on attempt 2
-				startResp, pollResp, taskQueue := startAndPollActivity(ctx, t, activityID, tc.retryPolicy)
+				startResp, pollResp, taskQueue := startAndPollActivity(ctx, t, activityID, &commonpb.RetryPolicy{
+					InitialInterval:    durationpb.New(1 * time.Second),
+					BackoffCoefficient: 1.0,
+					MaximumAttempts:    tc.maxAttempts,
+				})
 				failAttemptRetryably(ctx, t, pollResp.TaskToken, 0)
 				desc := describeActivity(ctx, t, activityID, startResp.GetRunId())
-				require.Equal(t, enumspb.PENDING_ACTIVITY_STATE_SCHEDULED, desc.GetInfo().GetRunState())
-				require.EqualValues(t, 2, desc.GetInfo().GetAttempt())
+				require.Equal(t, enumspb.PENDING_ACTIVITY_STATE_SCHEDULED, desc.GetInfo().GetRunState(), "expected in SCHEDULED")
+				require.EqualValues(t, 2, desc.GetInfo().GetAttempt(), "expected attempt 2")
 				originalTimeouts := []time.Duration{
 					desc.GetInfo().GetStartToCloseTimeout().AsDuration(),
 					desc.GetInfo().GetHeartbeatTimeout().AsDuration(),
@@ -12352,8 +12358,8 @@ func (s *standaloneActivityTestSuite) TestResetActivityExecution() {
 
 				// The reset should have been applied with the restore
 				desc = describeActivity(ctx, t, activityID, startResp.GetRunId())
-				require.Equal(t, enumspb.PENDING_ACTIVITY_STATE_SCHEDULED, desc.GetInfo().GetRunState())
-				require.EqualValues(t, 1, desc.GetInfo().GetAttempt())
+				require.Equal(t, enumspb.PENDING_ACTIVITY_STATE_SCHEDULED, desc.GetInfo().GetRunState(), "expected in SCHEDULED")
+				require.EqualValues(t, 1, desc.GetInfo().GetAttempt(), "expected attempt 1")
 				require.Equal(t, originalTimeouts[0], desc.GetInfo().GetStartToCloseTimeout().AsDuration(),
 					"reset should have restored options")
 				require.Equal(t, originalTimeouts[1], desc.GetInfo().GetHeartbeatTimeout().AsDuration(),
