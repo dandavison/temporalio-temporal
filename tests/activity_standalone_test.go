@@ -11403,6 +11403,24 @@ func (s *standaloneActivityTestSuite) TestResetActivityExecution() {
 		require.NoError(t, err)
 	}
 
+	failNonRetryably := func(ctx context.Context, t *testing.T, taskToken []byte) {
+		t.Helper()
+		_, err := env.FrontendClient().RespondActivityTaskFailed(ctx, &workflowservice.RespondActivityTaskFailedRequest{
+			Namespace: env.Namespace().String(),
+			TaskToken: taskToken,
+			Failure: &failurepb.Failure{
+				Message: "non-retryable failure",
+				FailureInfo: &failurepb.Failure_ApplicationFailureInfo{
+					ApplicationFailureInfo: &failurepb.ApplicationFailureInfo{
+						NonRetryable: true,
+					},
+				},
+			},
+			Identity: defaultIdentity,
+		})
+		require.NoError(t, err)
+	}
+
 	resetActivity := func(ctx context.Context, t *testing.T, activityID, runID string, resetHeartbeat bool) {
 		t.Helper()
 		_, err := env.FrontendClient().ResetActivityExecution(ctx, &workflowservice.ResetActivityExecutionRequest{
@@ -12243,6 +12261,44 @@ func (s *standaloneActivityTestSuite) TestResetActivityExecution() {
 			Identity:  defaultIdentity,
 		})
 		require.NoError(t, err)
+	})
+
+	t.Run("RestoreOriginalOptions_FailNonRetryably", func(t *testing.T) {
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cancel()
+		activityID := testcore.RandomizeStr(t.Name())
+		originalTimeouts := []time.Duration{60 * time.Second, 50 * time.Second}
+		updatedTimeouts := []time.Duration{30 * time.Second, 20 * time.Second}
+
+		// Start the first attempt and then update the timeouts
+		startResp, taskToken := startAttemptWithTimeouts(ctx, t, activityID, originalTimeouts[0], originalTimeouts[1])
+		updateTimeouts(ctx, t, activityID, startResp.GetRunId(), updatedTimeouts[0], updatedTimeouts[1])
+
+		// Reset(RestoreOriginals) -> RESET_REQUESTED
+		_, err := env.FrontendClient().ResetActivityExecution(ctx, &workflowservice.ResetActivityExecutionRequest{
+			Namespace:              env.Namespace().String(),
+			ActivityId:             activityID,
+			RunId:                  startResp.GetRunId(),
+			RestoreOriginalOptions: true,
+		})
+		require.NoError(t, err)
+
+		// Fail attempt non-retryably -> Activity terminal failure
+		failNonRetryably(ctx, t, taskToken)
+
+		// The activity should have failed and the restore changes should never have been applied
+		desc, err := env.FrontendClient().DescribeActivityExecution(ctx, &workflowservice.DescribeActivityExecutionRequest{
+			Namespace:  env.Namespace().String(),
+			ActivityId: activityID,
+			RunId:      startResp.GetRunId(),
+		})
+		require.NoError(t, err)
+		require.Equal(t, enumspb.ACTIVITY_EXECUTION_STATUS_FAILED, desc.GetInfo().GetStatus())
+		require.EqualValues(t, 1, desc.GetInfo().GetAttempt())
+		require.Equal(t, updatedTimeouts[0], desc.GetInfo().GetStartToCloseTimeout().AsDuration(),
+			"terminal failure with reset requested should not have restored options")
+		require.Equal(t, updatedTimeouts[1], desc.GetInfo().GetHeartbeatTimeout().AsDuration(),
+			"terminal failure with reset requested should not have restored options")
 	})
 
 	s.Run("RestoreOriginalOptions_OnStarted_DefersScheduleToCloseRestore", func(s *standaloneActivityTestSuite) {
