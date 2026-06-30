@@ -11409,6 +11409,24 @@ func (s *standaloneActivityTestSuite) TestResetActivityExecution() {
 		require.NoError(t, err)
 	}
 
+	// failNonRetryable := func(ctx context.Context, t *testing.T, taskToken []byte, nextRetryDelay time.Duration) {
+	// 	t.Helper()
+	// 	_, err := env.FrontendClient().RespondActivityTaskFailed(ctx, &workflowservice.RespondActivityTaskFailedRequest{
+	// 		Namespace: env.Namespace().String(),
+	// 		TaskToken: taskToken,
+	// 		Failure: &failurepb.Failure{
+	// 			Message: "non-retryable failure",
+	// 			FailureInfo: &failurepb.Failure_ApplicationFailureInfo{
+	// 				ApplicationFailureInfo: &failurepb.ApplicationFailureInfo{
+	// 					NonRetryable: true,
+	// 				},
+	// 			},
+	// 		},
+	// 		Identity: defaultIdentity,
+	// 	})
+	// 	require.NoError(t, err)
+	// }
+
 	resetActivity := func(ctx context.Context, t *testing.T, activityID, runID string, resetHeartbeat bool) {
 		t.Helper()
 		_, err := env.FrontendClient().ResetActivityExecution(ctx, &workflowservice.ResetActivityExecutionRequest{
