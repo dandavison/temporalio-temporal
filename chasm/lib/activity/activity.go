@@ -667,19 +667,7 @@ func (a *Activity) UpdateActivityExecutionOptions(
 	}
 
 	if frontendReq.GetRestoreOriginal() {
-		ogOptions := a.GetOriginalOptions()
-		a.TaskQueue = common.CloneProto(ogOptions.GetTaskQueue())
-		a.ScheduleToCloseTimeout = common.CloneProto(ogOptions.GetScheduleToCloseTimeout())
-		a.ScheduleToStartTimeout = common.CloneProto(ogOptions.GetScheduleToStartTimeout())
-		a.StartToCloseTimeout = common.CloneProto(ogOptions.GetStartToCloseTimeout())
-		a.HeartbeatTimeout = common.CloneProto(ogOptions.GetHeartbeatTimeout())
-		a.RetryPolicy = common.CloneProto(ogOptions.GetRetryPolicy())
-		a.Priority = common.CloneProto(ogOptions.GetPriority())
-		// start_delay only governs the first dispatch. Once the first attempt has started, restoring
-		// the original value would shift ScheduleToClose without affecting dispatch timing.
-		if a.GetFirstAttemptStartedTime() == nil {
-			a.StartDelay = common.CloneProto(ogOptions.GetStartDelay())
-		}
+		a.restoreOriginalOptionFields()
 	} else {
 		if err := a.mergeActivityOptions(frontendReq); err != nil {
 			return nil, err
@@ -1322,9 +1310,17 @@ func (a *Activity) applyDeferredOptionRestore(ctx chasm.MutableContext) {
 }
 
 // restoreOriginalOptions resets the activity's options to the values it was originally scheduled
-// with and reissues the ScheduleToClose timer at the resulting deadline. start_delay is restored
-// only if the activity has never started.
+// with and reissues the ScheduleToClose timer at the resulting deadline.
 func (a *Activity) restoreOriginalOptions(ctx chasm.MutableContext) {
+	a.restoreOriginalOptionFields()
+	a.reissueScheduleToClose(ctx)
+}
+
+// restoreOriginalOptionFields copies the originally-scheduled option values back onto the activity.
+// start_delay only governs the first dispatch, so it is restored only while the activity has never
+// started; once an attempt has started, restoring it would shift ScheduleToClose without affecting
+// dispatch timing. Callers are responsible for reissuing the ScheduleToClose timer afterward.
+func (a *Activity) restoreOriginalOptionFields() {
 	og := a.GetOriginalOptions()
 	a.TaskQueue = common.CloneProto(og.GetTaskQueue())
 	a.ScheduleToCloseTimeout = common.CloneProto(og.GetScheduleToCloseTimeout())
@@ -1336,7 +1332,6 @@ func (a *Activity) restoreOriginalOptions(ctx chasm.MutableContext) {
 	if a.GetFirstAttemptStartedTime() == nil {
 		a.StartDelay = common.CloneProto(og.GetStartDelay())
 	}
-	a.reissueScheduleToClose(ctx)
 }
 
 // scheduleToCloseDeadline returns the absolute time at which the ScheduleToClose timeout expires,
