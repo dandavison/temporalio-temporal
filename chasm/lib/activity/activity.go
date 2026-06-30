@@ -1129,6 +1129,7 @@ func (a *Activity) recordScheduleToStartOrCloseTimeoutFailure(ctx chasm.MutableC
 // applyFailedAttempt mutates activity state when a worker yields with retries remaining.
 func (a *Activity) applyFailedAttempt(ctx chasm.MutableContext, event rescheduleEvent) error {
 	attempt := a.LastAttempt.Get(ctx)
+	ps.Ln(fmt.Sprintf("bumping attempt count from %d to %d", attempt.Count, attempt.Count+1))
 	attempt.Count++
 	attempt.Stamp++
 	return a.recordFailedAttempt(ctx, event.retryInterval, event.failure, ctx.Now(a), false)
