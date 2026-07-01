@@ -43,15 +43,21 @@ from temporalio.client import (
     Client,
     Schedule,
     ScheduleActionStartWorkflow,
+    ScheduleAlreadyRunningError,
+    ScheduleBackfill,
+    ScheduleCalendarSpec,
     ScheduleHandle,
     ScheduleIntervalSpec,
     ScheduleOverlapPolicy,
     SchedulePolicy,
+    ScheduleRange,
     ScheduleSpec,
     ScheduleState,
     ScheduleUpdate,
     ScheduleUpdateInput,
+    WorkflowExecutionStatus,
 )
+from temporalio.common import RetryPolicy
 from temporalio.service import RPCError, RPCStatusCode
 
 SCRIPT_DIR = Path(__file__).resolve().parent
@@ -109,11 +115,18 @@ class SchedClient:
         self.ops.append(s)
 
     def action(
-        self, wf_id: str, *, workflow: str = "noop", arg: Any = None
+        self,
+        wf_id: str,
+        *,
+        workflow: str = "noop",
+        arg: Any = None,
+        max_attempts: int = 0,
     ) -> ScheduleActionStartWorkflow:
         kw: dict[str, Any] = {"id": wf_id, "task_queue": TASK_QUEUE}
         if arg is not None:
             kw["arg"] = arg
+        if max_attempts:
+            kw["retry_policy"] = RetryPolicy(maximum_attempts=max_attempts)
         return ScheduleActionStartWorkflow(workflow, **kw)
 
     async def create(
@@ -123,28 +136,64 @@ class SchedClient:
         every: float = 1.0,
         workflow: str = "noop",
         arg: Any = None,
+        max_attempts: int = 0,
         paused: bool = False,
         overlap: ScheduleOverlapPolicy = ScheduleOverlapPolicy.SKIP,
+        pause_on_failure: bool = False,
+        remaining_actions: int = 0,
+        start_at: Optional[dt.datetime] = None,
+        end_at: Optional[dt.datetime] = None,
+        spec: Optional[ScheduleSpec] = None,
         trigger_immediately: bool = False,
     ) -> ScheduleHandle:
         self._log(
-            f"create {sched_id} every={every} wf={workflow} paused={paused} overlap={overlap.name}"
+            f"create {sched_id} every={every} wf={workflow} paused={paused} "
+            f"overlap={overlap.name} pause_on_failure={pause_on_failure} "
+            f"remaining={remaining_actions}"
         )
+        if spec is None:
+            spec = ScheduleSpec(
+                intervals=[ScheduleIntervalSpec(every=dt.timedelta(seconds=every))]
+            )
+        if start_at is not None:
+            spec.start_at = start_at
+        if end_at is not None:
+            spec.end_at = end_at
         return await self.client.create_schedule(
             sched_id,
             Schedule(
-                action=self.action(f"{sched_id}-wf", workflow=workflow, arg=arg),
-                spec=ScheduleSpec(
-                    intervals=[ScheduleIntervalSpec(every=dt.timedelta(seconds=every))]
+                action=self.action(
+                    f"{sched_id}-wf",
+                    workflow=workflow,
+                    arg=arg,
+                    max_attempts=max_attempts,
                 ),
-                policy=SchedulePolicy(overlap=overlap),
-                state=ScheduleState(paused=paused),
+                spec=spec,
+                policy=SchedulePolicy(
+                    overlap=overlap, pause_on_failure=pause_on_failure
+                ),
+                state=ScheduleState(
+                    paused=paused,
+                    limited_actions=remaining_actions > 0,
+                    remaining_actions=remaining_actions,
+                ),
             ),
             trigger_immediately=trigger_immediately,
         )
 
     async def num_actions(self, handle: ScheduleHandle) -> int:
         return (await handle.describe()).info.num_actions
+
+    async def num_running(self, handle: ScheduleHandle) -> int:
+        return len((await handle.describe()).info.running_actions)
+
+    async def wf_status(self, wf_id: str, run_id: str) -> WorkflowExecutionStatus:
+        return (
+            await self.client.get_workflow_handle(wf_id, run_id=run_id).describe()
+        ).status
+
+    async def recent(self, handle: ScheduleHandle):
+        return (await handle.describe()).info.recent_actions
 
     async def cleanup(self, handle: ScheduleHandle) -> None:
         try:
@@ -187,6 +236,7 @@ def sid(prefix: str) -> str:
 # Worker (subcommand): runs the scheduled workflows
 # ==========================================================================
 from temporalio import workflow  # noqa: E402
+from temporalio.exceptions import ApplicationError  # noqa: E402
 
 
 @workflow.defn(name="noop")
@@ -204,6 +254,13 @@ class Sleeper:
         return "slept"
 
 
+@workflow.defn(name="boom")
+class Boom:
+    @workflow.run
+    async def run(self) -> str:
+        raise ApplicationError("intentional scheduled-action failure")
+
+
 def run_worker() -> None:
     from temporalio.worker import UnsandboxedWorkflowRunner, Worker
 
@@ -212,7 +269,7 @@ def run_worker() -> None:
         async with Worker(
             client,
             task_queue=TASK_QUEUE,
-            workflows=[Noop, Sleeper],
+            workflows=[Noop, Sleeper, Boom],
             workflow_runner=UnsandboxedWorkflowRunner(),
         ):
             stop = asyncio.Event()
@@ -384,6 +441,397 @@ async def t_overlap_skip(c: SchedClient) -> None:
 
 async def _skipped_at_least(c: SchedClient, h: ScheduleHandle, n: int) -> bool:
     return (await h.describe()).info.num_actions_skipped_overlap >= n
+
+
+async def _running_at_least(c: SchedClient, h: ScheduleHandle, n: int) -> bool:
+    return await c.num_running(h) >= n
+
+
+async def _wf_status_is(
+    c: SchedClient, wf_id: str, run_id: str, status: WorkflowExecutionStatus
+) -> bool:
+    return await c.wf_status(wf_id, run_id) == status
+
+
+# ---- overlap policies ----------------------------------------------------
+@test("overlap.allow_all_runs_concurrently")
+async def t_overlap_allow_all(c: SchedClient) -> None:
+    """overlap=ALLOW_ALL lets slower-than-interval actions run concurrently."""
+    h = await c.create(
+        sid("allowall"),
+        every=1.0,
+        workflow="sleeper",
+        arg=6.0,
+        overlap=ScheduleOverlapPolicy.ALLOW_ALL,
+    )
+    try:
+        expect(
+            await poll_until(lambda: _running_at_least(c, h, 2), timeout=15),
+            "expected >= 2 concurrently running actions under ALLOW_ALL",
+        )
+    finally:
+        await c.cleanup(h)
+
+
+@test("overlap.buffer_one_serializes")
+async def t_overlap_buffer_one(c: SchedClient) -> None:
+    """overlap=BUFFER_ONE never runs two actions at once; buffered actions run serially, so the
+    action count still advances past the first while running stays capped at 1."""
+    h = await c.create(
+        sid("bufferone"),
+        every=1.0,
+        workflow="sleeper",
+        arg=3.0,
+        overlap=ScheduleOverlapPolicy.BUFFER_ONE,
+    )
+    try:
+        max_running = 0
+        for _ in range(20):
+            await asyncio.sleep(0.5)
+            max_running = max(max_running, await c.num_running(h))
+        expect(
+            max_running <= 1,
+            f"BUFFER_ONE must not run concurrently (saw {max_running})",
+        )
+        expect(
+            await c.num_actions(h) >= 2, "buffered actions should still run serially"
+        )
+    finally:
+        await c.cleanup(h)
+
+
+@test("overlap.cancel_other_cancels_running")
+async def t_overlap_cancel_other(c: SchedClient) -> None:
+    """overlap=CANCEL_OTHER cancels the in-flight action before starting the next."""
+    h = await c.create(
+        sid("cancelother"),
+        every=2.0,
+        workflow="sleeper",
+        arg=60.0,
+        overlap=ScheduleOverlapPolicy.CANCEL_OTHER,
+    )
+    try:
+        expect(
+            await poll_until(lambda: _running_at_least(c, h, 1), timeout=15),
+            "no first run",
+        )
+        first = (await h.describe()).info.running_actions[0]
+        expect(
+            await poll_until(lambda: _at_least_actions(c, h, 2), timeout=15),
+            "second action never started",
+        )
+        expect(
+            await poll_until(
+                lambda: _wf_status_is(
+                    c,
+                    first.workflow_id,
+                    first.first_execution_run_id,
+                    WorkflowExecutionStatus.CANCELED,
+                ),
+                timeout=15,
+            ),
+            "first run should be CANCELED when the next action starts",
+        )
+    finally:
+        await c.cleanup(h)
+
+
+@test("overlap.terminate_other_terminates_running")
+async def t_overlap_terminate_other(c: SchedClient) -> None:
+    """overlap=TERMINATE_OTHER terminates the in-flight action before starting the next."""
+    h = await c.create(
+        sid("termother"),
+        every=2.0,
+        workflow="sleeper",
+        arg=60.0,
+        overlap=ScheduleOverlapPolicy.TERMINATE_OTHER,
+    )
+    try:
+        expect(
+            await poll_until(lambda: _running_at_least(c, h, 1), timeout=15),
+            "no first run",
+        )
+        first = (await h.describe()).info.running_actions[0]
+        expect(
+            await poll_until(lambda: _at_least_actions(c, h, 2), timeout=15),
+            "second action never started",
+        )
+        expect(
+            await poll_until(
+                lambda: _wf_status_is(
+                    c,
+                    first.workflow_id,
+                    first.first_execution_run_id,
+                    WorkflowExecutionStatus.TERMINATED,
+                ),
+                timeout=15,
+            ),
+            "first run should be TERMINATED when the next action starts",
+        )
+    finally:
+        await c.cleanup(h)
+
+
+# ---- limited actions / bounds --------------------------------------------
+@test("limited.stops_after_remaining")
+async def t_limited(c: SchedClient) -> None:
+    """A limited schedule takes exactly remaining_actions actions and then stops."""
+    h = await c.create(sid("limited"), every=1.0, remaining_actions=2)
+    try:
+        expect(
+            await poll_until(lambda: _at_least_actions(c, h, 2), timeout=15),
+            "expected the 2 permitted actions",
+        )
+        await asyncio.sleep(4)
+        expect_eq(
+            await c.num_actions(h),
+            2,
+            "limited schedule must not exceed remaining_actions",
+        )
+    finally:
+        await c.cleanup(h)
+
+
+@test("spec.start_at_defers_actions")
+async def t_start_at(c: SchedClient) -> None:
+    """No actions are taken before spec.start_at; actions begin only afterwards."""
+    now = _utcnow()
+    h = await c.create(
+        sid("startat"), every=1.0, start_at=now + dt.timedelta(seconds=6)
+    )
+    try:
+        await asyncio.sleep(3)
+        expect_eq(await c.num_actions(h), 0, "no actions should occur before start_at")
+        expect(
+            await poll_until(lambda: _at_least_actions(c, h, 1), timeout=15),
+            "actions should start after start_at",
+        )
+    finally:
+        await c.cleanup(h)
+
+
+@test("spec.end_at_stops_actions")
+async def t_end_at(c: SchedClient) -> None:
+    """Actions stop once spec.end_at has passed."""
+    now = _utcnow()
+    h = await c.create(sid("endat"), every=1.0, end_at=now + dt.timedelta(seconds=4))
+    try:
+        expect(
+            await poll_until(lambda: _at_least_actions(c, h, 1), timeout=10),
+            "expected some actions before end_at",
+        )
+        await asyncio.sleep(5)
+        n = await c.num_actions(h)
+        await asyncio.sleep(4)
+        expect_eq(await c.num_actions(h), n, "no actions should occur after end_at")
+    finally:
+        await c.cleanup(h)
+
+
+# ---- pause on failure ----------------------------------------------------
+@test("pause_on_failure.pauses_schedule")
+async def t_pause_on_failure(c: SchedClient) -> None:
+    """With pause_on_failure, a failing scheduled workflow pauses the schedule (with a note)."""
+    h = await c.create(
+        sid("pof"), every=1.0, workflow="boom", max_attempts=1, pause_on_failure=True
+    )
+    try:
+        expect(
+            await poll_until(lambda: _is_paused(c, h), timeout=25),
+            "schedule should pause after a failing action",
+        )
+        desc = await h.describe()
+        expect(desc.schedule.state.paused, "state.paused should be true")
+        expect(bool(desc.schedule.state.note), "a pause note should be set")
+    finally:
+        await c.cleanup(h)
+
+
+async def _is_paused(c: SchedClient, h: ScheduleHandle) -> bool:
+    return (await h.describe()).schedule.state.paused
+
+
+# ---- backfill ------------------------------------------------------------
+@test("backfill.runs_past_window")
+async def t_backfill(c: SchedClient) -> None:
+    """Backfilling a past time window enqueues the actions that would have run in it."""
+    now = _utcnow()
+    h = await c.create(
+        sid("backfill"),
+        every=1.0,
+        paused=True,
+        overlap=ScheduleOverlapPolicy.BUFFER_ALL,
+    )
+    try:
+        await h.backfill(
+            ScheduleBackfill(
+                start_at=now - dt.timedelta(seconds=6),
+                end_at=now - dt.timedelta(seconds=1),
+                overlap=ScheduleOverlapPolicy.BUFFER_ALL,
+            )
+        )
+        expect(
+            await poll_until(lambda: _at_least_actions(c, h, 3), timeout=20),
+            "backfill should produce multiple past actions",
+        )
+    finally:
+        await c.cleanup(h)
+
+
+# ---- describe / listing / action identity --------------------------------
+@test("describe.recent_actions_reference_real_runs")
+async def t_recent_actions(c: SchedClient) -> None:
+    """recent_actions entries reference started workflow runs that actually exist, and carry a
+    workflow id derived from (but distinct from) the configured base id."""
+    base = sid("recent")
+    h = await c.create(base, every=1.0)
+    try:
+        expect(
+            await poll_until(lambda: _at_least_actions(c, h, 1), timeout=15),
+            "no action",
+        )
+        r = (await c.recent(h))[0]
+        expect(
+            r.action.workflow_id.startswith(f"{base}-wf"),
+            "workflow id should derive from base",
+        )
+        expect(
+            r.action.workflow_id != f"{base}-wf",
+            "scheduler should append the nominal time to keep ids unique",
+        )
+        status = await c.wf_status(
+            r.action.workflow_id, r.action.first_execution_run_id
+        )
+        expect(
+            status
+            in (WorkflowExecutionStatus.RUNNING, WorkflowExecutionStatus.COMPLETED),
+            f"referenced run should exist (status={status})",
+        )
+    finally:
+        await c.cleanup(h)
+
+
+@test("list.includes_created_schedule")
+async def t_list(c: SchedClient) -> None:
+    """A created schedule appears in ListSchedules."""
+    s = sid("listed")
+    h = await c.create(s, every=3600, paused=True)
+    try:
+        found = await poll_until(lambda: _in_list(c, s), timeout=20)
+        expect(found, f"{s} should appear in ListSchedules (eventually consistent)")
+    finally:
+        await c.cleanup(h)
+
+
+async def _in_list(c: SchedClient, sched_id: str) -> bool:
+    async for d in await c.client.list_schedules():
+        if d.id == sched_id:
+            return True
+    return False
+
+
+# ---- update re-arms the generator ----------------------------------------
+@test("update.spec_change_takes_effect")
+async def t_update_cadence(c: SchedClient) -> None:
+    """Updating the spec to a live cadence causes an effectively-idle schedule to start firing."""
+    h = await c.create(sid("cadence"), every=3600)
+    try:
+        await asyncio.sleep(2)
+        n0 = await c.num_actions(h)
+
+        async def mutate(inp: ScheduleUpdateInput) -> ScheduleUpdate:
+            sched = inp.description.schedule
+            sched.spec = ScheduleSpec(
+                intervals=[ScheduleIntervalSpec(every=dt.timedelta(seconds=1))]
+            )
+            return ScheduleUpdate(schedule=sched)
+
+        await h.update(mutate)
+        expect(
+            await poll_until(lambda: _at_least_actions(c, h, n0 + 1), timeout=15),
+            "spec update to a 1s cadence should produce new actions",
+        )
+    finally:
+        await c.cleanup(h)
+
+
+@test("trigger.overlap_override_allows_concurrency")
+async def t_trigger_override(c: SchedClient) -> None:
+    """A manual trigger's overlap override forces concurrency even on a default-SKIP schedule.
+
+    The triggers are spaced >1s apart on purpose: manual-trigger workflow IDs embed the nominal
+    time truncated to the second (common/schedules/id.go GenerateWorkflowID), so two triggers in
+    the same second collide on workflow ID and coalesce to one run — see BUGS.md 'trigger
+    coalescing'."""
+    h = await c.create(
+        sid("trigoverride"), every=3600, paused=True, workflow="sleeper", arg=30.0
+    )
+    try:
+        await h.trigger(overlap=ScheduleOverlapPolicy.ALLOW_ALL)
+        await asyncio.sleep(1.5)
+        await h.trigger(overlap=ScheduleOverlapPolicy.ALLOW_ALL)
+        expect(
+            await poll_until(lambda: _running_at_least(c, h, 2), timeout=15),
+            "two spaced ALLOW_ALL triggers should run concurrently",
+        )
+    finally:
+        await c.cleanup(h)
+
+
+@test("spec.calendar_every_second")
+async def t_calendar(c: SchedClient) -> None:
+    """A calendar spec matching every second fires and round-trips as a structured calendar."""
+    every_sec = ScheduleCalendarSpec(
+        second=[ScheduleRange(0, 59)],
+        minute=[ScheduleRange(0, 59)],
+        hour=[ScheduleRange(0, 23)],
+    )
+    h = await c.create(sid("calendar"), spec=ScheduleSpec(calendars=[every_sec]))
+    try:
+        expect(
+            await poll_until(lambda: _at_least_actions(c, h, 2), timeout=20),
+            "calendar spec matching every second should fire repeatedly",
+        )
+        expect(
+            len((await h.describe()).schedule.spec.calendars) >= 1,
+            "calendar should round-trip",
+        )
+    finally:
+        await c.cleanup(h)
+
+
+@test("lifecycle.recreate_after_delete")
+async def t_recreate(c: SchedClient) -> None:
+    """A schedule ID can be reused once the prior schedule is deleted."""
+    s = sid("recreate")
+    h = await c.create(s, every=3600, paused=True)
+    await h.delete()
+    h2 = await c.create(s, every=3600, paused=True)
+    try:
+        expect(
+            bool((await h2.describe()).id), "recreated schedule should be describable"
+        )
+    finally:
+        await c.cleanup(h2)
+
+
+@test("lifecycle.duplicate_create_rejected")
+async def t_duplicate(c: SchedClient) -> None:
+    """Creating a schedule whose ID is already running is rejected."""
+    s = sid("dup")
+    h = await c.create(s, every=3600, paused=True)
+    try:
+        try:
+            await c.create(s, every=3600, paused=True)
+            raise TestFailure("duplicate create should have been rejected")
+        except ScheduleAlreadyRunningError:
+            pass
+    finally:
+        await c.cleanup(h)
+
+
+def _utcnow() -> dt.datetime:
+    return dt.datetime.now(dt.timezone.utc)
 
 
 # ==========================================================================
