@@ -92,6 +92,30 @@ def is_not_found(e: BaseException) -> bool:
     return isinstance(e, RPCError) and e.status == RPCStatusCode.NOT_FOUND
 
 
+# An exception from a racing op is "dirty" (a real defect) if it's a server-internal fault rather
+# than a legitimate precondition/argument/not-found/already-exists rejection.
+CLEAN_CODES = {
+    RPCStatusCode.FAILED_PRECONDITION,
+    RPCStatusCode.INVALID_ARGUMENT,
+    RPCStatusCode.NOT_FOUND,
+    RPCStatusCode.ALREADY_EXISTS,
+    RPCStatusCode.DEADLINE_EXCEEDED,
+    RPCStatusCode.CANCELLED,
+}
+
+
+def is_dirty_error(e: BaseException) -> bool:
+    if isinstance(e, RPCError):
+        return e.status not in CLEAN_CODES
+    return True  # any non-RPCError (panic surfaced as Unknown, client bug, etc.)
+
+
+def assert_clean(results: list[Any], what: str) -> None:
+    dirty = [r for r in results if isinstance(r, BaseException) and is_dirty_error(r)]
+    if dirty:
+        raise TestFailure(f"{what}: {len(dirty)} dirty error(s); first: {dirty[0]!r}")
+
+
 async def poll_until(
     fn: Callable[[], Awaitable[bool]], timeout: float = 20.0, interval: float = 0.3
 ) -> bool:
@@ -971,6 +995,193 @@ async def t_pof_disabled(c: SchedClient) -> None:
         expect(
             not (await h.describe()).schedule.state.paused,
             "schedule must not auto-pause",
+        )
+    finally:
+        await c.cleanup(h)
+
+
+# ---- chaos: concurrent knobs used together -------------------------------
+@test("chaos.rpc_storm_keeps_schedule_consistent")
+async def t_rpc_storm(c: SchedClient) -> None:
+    """Hammer one live schedule with concurrent pause/unpause/trigger/update/backfill/describe. No
+    op should return a server-internal (dirty) error, and afterwards the schedule must still be
+    describable and resume taking actions once unpaused."""
+    now = _utcnow()
+    h = await c.create(sid("storm"), every=1.0, overlap=ScheduleOverlapPolicy.ALLOW_ALL)
+
+    async def note_update() -> None:
+        async def m(inp: ScheduleUpdateInput) -> ScheduleUpdate:
+            s = inp.description.schedule
+            s.state.note = "storm"
+            return ScheduleUpdate(schedule=s)
+
+        await h.update(m)
+
+    def a_backfill():
+        return h.backfill(
+            ScheduleBackfill(
+                start_at=now - dt.timedelta(seconds=5),
+                end_at=now - dt.timedelta(seconds=1),
+                overlap=ScheduleOverlapPolicy.BUFFER_ALL,
+            )
+        )
+
+    try:
+        ops: list[Awaitable[Any]] = []
+        for _ in range(6):
+            ops += [
+                h.pause(),
+                h.unpause(),
+                h.trigger(overlap=ScheduleOverlapPolicy.ALLOW_ALL),
+                h.describe(),
+                note_update(),
+                a_backfill(),
+            ]
+        results = await asyncio.gather(*ops, return_exceptions=True)
+        assert_clean(results, "rpc storm")
+        await h.unpause()
+        n1 = await c.num_actions(h)
+        expect(
+            await poll_until(lambda: _at_least_actions(c, h, n1 + 1), timeout=15),
+            "schedule should still take actions after the storm",
+        )
+    finally:
+        await c.cleanup(h)
+
+
+@test("chaos.concurrent_backfills_dedup_no_errors")
+async def t_concurrent_backfills(c: SchedClient) -> None:
+    """Several concurrent backfills of the same past window produce no dirty errors and dedup by
+    nominal time (one run per second-boundary), leaving the schedule describable."""
+    now = _utcnow()
+    h = await c.create(
+        sid("cbf"), every=1.0, paused=True, overlap=ScheduleOverlapPolicy.BUFFER_ALL
+    )
+    try:
+        bf = [
+            h.backfill(
+                ScheduleBackfill(
+                    start_at=now - dt.timedelta(seconds=10),
+                    end_at=now - dt.timedelta(seconds=1),
+                    overlap=ScheduleOverlapPolicy.BUFFER_ALL,
+                )
+            )
+            for _ in range(4)
+        ]
+        assert_clean(
+            await asyncio.gather(*bf, return_exceptions=True), "concurrent backfills"
+        )
+        expect(
+            await poll_until(lambda: _at_least_actions(c, h, 3), timeout=20),
+            "no backfill actions",
+        )
+        n = await c.num_actions(h)
+        expect(
+            n <= 12,
+            f"4x backfill of a ~10s window should dedup, not multiply (got {n})",
+        )
+    finally:
+        await c.cleanup(h)
+
+
+@test("combo.backfill_runs_while_paused")
+async def t_backfill_while_paused(c: SchedClient) -> None:
+    """An explicit backfill executes even while the schedule is paused, and does not clear the
+    pause: automatic actions stay suppressed but the requested past actions run."""
+    now = _utcnow()
+    h = await c.create(
+        sid("bfpaused"),
+        every=1.0,
+        paused=True,
+        overlap=ScheduleOverlapPolicy.BUFFER_ALL,
+    )
+    try:
+        await h.backfill(
+            ScheduleBackfill(
+                start_at=now - dt.timedelta(seconds=6),
+                end_at=now - dt.timedelta(seconds=1),
+                overlap=ScheduleOverlapPolicy.BUFFER_ALL,
+            )
+        )
+        expect(
+            await poll_until(lambda: _at_least_actions(c, h, 3), timeout=20),
+            "backfill should run even while paused",
+        )
+        expect(
+            (await h.describe()).schedule.state.paused, "schedule must remain paused"
+        )
+        # Wait for the backfill to finish draining, then confirm the count no longer grows —
+        # a paused schedule must take no *automatic* actions.
+        n = await _stabilized_count(c, h)
+        await asyncio.sleep(3)
+        expect_eq(
+            await c.num_actions(h), n, "no automatic actions should occur while paused"
+        )
+    finally:
+        await c.cleanup(h)
+
+
+async def _stabilized_count(
+    c: SchedClient, h: ScheduleHandle, timeout: float = 25
+) -> int:
+    """Return num_actions once it stops increasing across a 2s window (backfill fully drained)."""
+    loop = asyncio.get_event_loop()
+    deadline = loop.time() + timeout
+    prev = await c.num_actions(h)
+    while loop.time() < deadline:
+        await asyncio.sleep(2)
+        cur = await c.num_actions(h)
+        if cur == prev:
+            return cur
+        prev = cur
+    return prev
+
+
+@test("chaos.many_schedules_fire_independently")
+async def t_many_schedules(c: SchedClient) -> None:
+    """A dozen schedules created concurrently each fire on their own cadence without cross-talk."""
+    handles = await asyncio.gather(
+        *[c.create(sid("multi"), every=1.0) for _ in range(12)]
+    )
+    try:
+        await asyncio.sleep(6)
+        counts = await asyncio.gather(*[c.num_actions(h) for h in handles])
+        expect(
+            all(n >= 1 for n in counts), f"every schedule should fire (counts={counts})"
+        )
+    finally:
+        await asyncio.gather(*[c.cleanup(h) for h in handles])
+
+
+@test("combo.buffer_overrun_survives")
+async def t_buffer_overrun(c: SchedClient) -> None:
+    """A large backfill of actions slower than the interval (BUFFER_ALL) overruns the action buffer;
+    the schedule must survive it — remain describable and keep an action running — rather than wedge
+    or error."""
+    now = _utcnow()
+    h = await c.create(
+        sid("overrun"),
+        every=1.0,
+        workflow="sleeper",
+        arg=30.0,
+        paused=True,
+        overlap=ScheduleOverlapPolicy.BUFFER_ALL,
+    )
+    try:
+        await h.backfill(
+            ScheduleBackfill(
+                start_at=now - dt.timedelta(seconds=300),
+                end_at=now - dt.timedelta(seconds=1),
+                overlap=ScheduleOverlapPolicy.BUFFER_ALL,
+            )
+        )
+        expect(
+            await poll_until(lambda: _running_at_least(c, h, 1), timeout=20),
+            "overrun backfill should still start draining actions",
+        )
+        desc = await h.describe()  # must not error
+        expect(
+            desc.info is not None, "schedule should remain describable after overrun"
         )
     finally:
         await c.cleanup(h)

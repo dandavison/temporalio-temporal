@@ -14,7 +14,7 @@ that is kept current as claims are confirmed or invalidated.
   with a `go.mod` replace onto this worktree, run with
   `history.enableCHASMSchedulerCreation=true` and `history.chasmSchedulerCreationRolloutPercent=100`.
   Confirmed the schedules are V2/CHASM-backed (no `temporal-sys-scheduler-workflow` executions exist).
-- Full suite result on this build: **27/27 pass**. No CONFIRMED bugs in the current worktree code.
+- Full suite result on this build: **32/32 pass**. No CONFIRMED bugs in the current worktree code.
 - **V1 comparison:** performed by restarting the same server with
   `history.enableCHASMSchedulerCreation=false`, `history.chasmSchedulerCreationRolloutPercent=0`,
   `history.enableCHASMSchedulerRouting=false`. That does produce V1-backed schedules (confirmed: a
@@ -164,6 +164,28 @@ CHASM scheduler's state and catch-up behavior are durable across an ungraceful r
   `TemporalScheduledById = '<schedule id>'` (documented capability holds).
 - **pause_on_failure semantics:** on → a failing action pauses the schedule (with a note); off → the
   schedule keeps firing despite repeated failures.
+
+## Concurrency / simultaneous-knob combinations exercised (all pass on 1.32.0)
+
+These target the areas most likely to hide races in a state-machine implementation. All clean — no
+dirty (server-internal) errors, and the schedule stays consistent afterwards.
+
+- **RPC storm:** 36 concurrent `pause` / `unpause` / `trigger` / `update` / `backfill` / `describe`
+  against one live schedule → 0 dirty errors; schedule remains describable and resumes firing once
+  unpaused.
+- **Concurrent backfills:** 4 concurrent backfills of the same past window → 0 dirty errors, and they
+  dedup by nominal time (one run per second-boundary, ~9 for a 10s window) rather than multiplying.
+- **Backfill while paused:** an explicit backfill runs to completion on a paused schedule and leaves
+  the pause intact; once the backfill drains, no further (automatic) actions occur.
+- **Many schedules at once:** 12–15 schedules created concurrently each fire on their own cadence
+  with no cross-talk.
+- **Buffer overrun:** a 300–600s backfill of actions slower than the interval (BUFFER_ALL) overruns
+  the action buffer; the schedule survives — stays describable and keeps draining — rather than wedge.
+
+Combination results worth noting (behaviors, not bugs):
+- `start_at` also filters **backfill** actions — a backfill window entirely before `start_at`
+  produces zero actions.
+- Backfill executes regardless of the paused state (it is an explicit user request).
 
 ## Other areas exercised without finding defects (on 1.32.0)
 
