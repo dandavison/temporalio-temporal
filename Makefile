@@ -757,3 +757,20 @@ ensure-no-changes:
 	@printf $(COLOR) "========================================================================"
 	@git status --porcelain
 	@test -z "`git status --porcelain`" || (printf $(COLOR) "========================================================================"; printf $(RED) "Above files are not regenerated properly. Regenerate them and try again."; git diff HEAD ; exit 1)
+
+##### CHASM (V2) scheduler test harness (scheduler-test/) #####
+# Requires `uv` and a server already listening on localhost:7233. To exercise the V2 (CHASM)
+# implementation, start that server with CHASM scheduler creation enabled:
+#   temporal server start-dev \
+#     --dynamic-config-value history.enableCHASMSchedulerCreation=true \
+#     --dynamic-config-value history.chasmSchedulerCreationRolloutPercent=100
+#
+# SCHEDULER_TEST_ARGS defaults to --fresh (wipe prior results and run the whole suite). Override to
+# run a subset or resume (the suite skips tests already recorded PASS in its log):
+#   make scheduler-test-sdk SCHEDULER_TEST_ARGS="--only basic.interval_triggers"
+#   make scheduler-test-sdk SCHEDULER_TEST_ARGS="--rerun-failed"
+SCHEDULER_TEST_ARGS ?= --fresh
+
+.PHONY: scheduler-test-sdk
+scheduler-test-sdk:
+	@uv run scheduler-test/scheduler_sdk_test.py $(SCHEDULER_TEST_ARGS)
