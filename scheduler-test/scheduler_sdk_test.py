@@ -38,6 +38,7 @@ import traceback
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Awaitable, Callable, Optional
+from zoneinfo import ZoneInfo
 
 from temporalio.client import (
     Client,
@@ -826,6 +827,151 @@ async def t_duplicate(c: SchedClient) -> None:
             raise TestFailure("duplicate create should have been rejected")
         except ScheduleAlreadyRunningError:
             pass
+    finally:
+        await c.cleanup(h)
+
+
+# ---- ambitious combinations / product claims -----------------------------
+@test("spec.timezone_calendar_fires_at_local_time")
+async def t_timezone(c: SchedClient) -> None:
+    """A calendar spec with a time_zone_name resolves to the correct absolute (UTC) instants: a
+    daily 12:00 America/New_York schedule's next action times are 12:00 *New York* local, i.e. the
+    server applies the zone's UTC offset (and would track DST) rather than treating the wall clock
+    as UTC."""
+    every_noon_ny = ScheduleSpec(
+        calendars=[
+            ScheduleCalendarSpec(
+                hour=[ScheduleRange(12)],
+                minute=[ScheduleRange(0)],
+                second=[ScheduleRange(0)],
+            )
+        ],
+        time_zone_name="America/New_York",
+    )
+    h = await c.create(sid("tz"), paused=True, spec=every_noon_ny)
+    try:
+        nts = (await h.describe()).info.next_action_times
+        expect(len(nts) >= 1, "expected upcoming action times")
+        ny = ZoneInfo("America/New_York")
+        for nt in nts[:3]:
+            local = nt.astimezone(ny)
+            expect_eq(
+                (local.hour, local.minute),
+                (12, 0),
+                f"{nt.isoformat()} should be 12:00 NY",
+            )
+    finally:
+        await c.cleanup(h)
+
+
+@test("spec.jitter_perturbs_scheduled_times")
+async def t_jitter(c: SchedClient) -> None:
+    """With jitter set, action scheduled times are offset off their nominal interval boundary
+    (nominal times for a 2s interval land on even seconds at .000)."""
+    spec = ScheduleSpec(
+        intervals=[ScheduleIntervalSpec(every=dt.timedelta(seconds=2))],
+        jitter=dt.timedelta(seconds=1),
+    )
+    h = await c.create(
+        sid("jitter"), overlap=ScheduleOverlapPolicy.ALLOW_ALL, spec=spec
+    )
+    try:
+        expect(
+            await poll_until(lambda: _at_least_actions(c, h, 3), timeout=20),
+            "no actions",
+        )
+        recent = await c.recent(h)
+        perturbed = [
+            r
+            for r in recent
+            if r.scheduled_at.second % 2 != 0 or r.scheduled_at.microsecond != 0
+        ]
+        expect(
+            len(perturbed) >= 1,
+            "jitter should perturb some scheduled times off the boundary",
+        )
+    finally:
+        await c.cleanup(h)
+
+
+@test("combo.limited_actions_not_consumed_by_skip")
+async def t_limited_x_skip(c: SchedClient) -> None:
+    """An overlap-SKIP-skipped occurrence must not consume the limited_actions budget: a
+    remaining_actions=2 schedule whose action outlives its interval still takes exactly 2 *actual*
+    actions, with the intervening occurrences recorded as skips."""
+    h = await c.create(
+        sid("limskip"),
+        every=1.0,
+        workflow="sleeper",
+        arg=3.0,
+        overlap=ScheduleOverlapPolicy.SKIP,
+        remaining_actions=2,
+    )
+    try:
+        expect(
+            await poll_until(lambda: _at_least_actions(c, h, 2), timeout=15),
+            "expected 2 actions",
+        )
+        await asyncio.sleep(4)
+        desc = await h.describe()
+        expect_eq(
+            desc.info.num_actions,
+            2,
+            "skips must not consume the limited-actions budget",
+        )
+        expect(
+            desc.info.num_actions_skipped_overlap >= 1,
+            "expected some skipped occurrences during the run",
+        )
+    finally:
+        await c.cleanup(h)
+
+
+@test("searchattr.scheduled_workflow_queryable_by_schedule_id")
+async def t_search_attr(c: SchedClient) -> None:
+    """Workflows started by a schedule carry the TemporalScheduledById search attribute, so they can
+    be found via a visibility query for that schedule id (a documented product capability)."""
+    s = sid("saq")
+    h = await c.create(s, every=1.0)
+    try:
+        expect(
+            await poll_until(lambda: _at_least_actions(c, h, 1), timeout=15),
+            "no actions",
+        )
+        found = await poll_until(lambda: _sa_query_nonempty(c, s), timeout=15)
+        expect(found, f"expected workflows returned by TemporalScheduledById = '{s}'")
+    finally:
+        await c.cleanup(h)
+
+
+async def _sa_query_nonempty(c: SchedClient, schedule_id: str) -> bool:
+    async for _ in c.client.list_workflows(
+        query=f"TemporalScheduledById = '{schedule_id}'"
+    ):
+        return True
+    return False
+
+
+@test("pause_on_failure.disabled_keeps_running")
+async def t_pof_disabled(c: SchedClient) -> None:
+    """Without pause_on_failure, a repeatedly-failing action does not pause the schedule; it keeps
+    taking (failing) actions."""
+    h = await c.create(
+        sid("pofoff"),
+        every=1.0,
+        workflow="boom",
+        max_attempts=1,
+        pause_on_failure=False,
+    )
+    try:
+        expect(
+            await poll_until(lambda: _at_least_actions(c, h, 2), timeout=20),
+            "schedule should keep firing despite failures",
+        )
+        expect(
+            not (await h.describe()).schedule.state.paused,
+            "schedule must not auto-pause",
+        )
     finally:
         await c.cleanup(h)
 
