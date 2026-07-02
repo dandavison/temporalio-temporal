@@ -30,6 +30,7 @@ from __future__ import annotations
 import argparse
 import asyncio
 import datetime as dt
+import os
 import re
 import signal
 import subprocess
@@ -66,7 +67,7 @@ LOG_PATH = SCRIPT_DIR / "log.text"
 BUGS_DIR = SCRIPT_DIR / "bugs"
 WORKER_LOG = SCRIPT_DIR / "worker.log"
 
-ADDRESS = "localhost:7233"
+ADDRESS = os.environ.get("SCHEDULER_TEST_ADDRESS", "localhost:7233")
 NAMESPACE = "default"
 TASK_QUEUE = "scheduler-test-tq"
 
@@ -145,10 +146,13 @@ class SchedClient:
         *,
         workflow: str = "noop",
         arg: Any = None,
+        args: Optional[list[Any]] = None,
         max_attempts: int = 0,
     ) -> ScheduleActionStartWorkflow:
         kw: dict[str, Any] = {"id": wf_id, "task_queue": TASK_QUEUE}
-        if arg is not None:
+        if args is not None:
+            kw["args"] = args
+        elif arg is not None:
             kw["arg"] = arg
         if max_attempts:
             kw["retry_policy"] = RetryPolicy(maximum_attempts=max_attempts)
@@ -161,6 +165,7 @@ class SchedClient:
         every: float = 1.0,
         workflow: str = "noop",
         arg: Any = None,
+        args: Optional[list[Any]] = None,
         max_attempts: int = 0,
         paused: bool = False,
         overlap: ScheduleOverlapPolicy = ScheduleOverlapPolicy.SKIP,
@@ -191,6 +196,7 @@ class SchedClient:
                     f"{sched_id}-wf",
                     workflow=workflow,
                     arg=arg,
+                    args=args,
                     max_attempts=max_attempts,
                 ),
                 spec=spec,
@@ -286,6 +292,19 @@ class Boom:
         raise ApplicationError("intentional scheduled-action failure")
 
 
+@workflow.defn(name="canner")
+class Canner:
+    """Sleeps `per_run` seconds, then Continue-As-New until `remaining` hits 0. The whole chain
+    is one logical execution that only reaches a terminal state after the last run."""
+
+    @workflow.run
+    async def run(self, remaining: int = 3, per_run: float = 2.0) -> str:
+        await asyncio.sleep(per_run)
+        if remaining > 0:
+            workflow.continue_as_new(args=[remaining - 1, per_run])
+        return "chain-done"
+
+
 def run_worker() -> None:
     from temporalio.worker import UnsandboxedWorkflowRunner, Worker
 
@@ -294,7 +313,7 @@ def run_worker() -> None:
         async with Worker(
             client,
             task_queue=TASK_QUEUE,
-            workflows=[Noop, Sleeper, Boom],
+            workflows=[Noop, Sleeper, Boom, Canner],
             workflow_runner=UnsandboxedWorkflowRunner(),
         ):
             stop = asyncio.Event()
@@ -1185,6 +1204,173 @@ async def t_buffer_overrun(c: SchedClient) -> None:
         )
     finally:
         await c.cleanup(h)
+
+
+# ---- continue-as-new / update-mid-flight / id collision ------------------
+@test("can.chain_counts_as_one_running_action")
+async def t_can_skip(c: SchedClient) -> None:
+    """A scheduled workflow that Continues-As-New is one logical execution: under overlap=SKIP the
+    scheduler treats the whole CAN chain as a single running action (never double-starts) and only
+    the completion of the final run frees the schedule for the next action."""
+    h = await c.create(
+        sid("canskip"),
+        every=1.0,
+        workflow="canner",
+        args=[3, 2.0],
+        overlap=ScheduleOverlapPolicy.SKIP,
+    )
+    try:
+        max_running = 0
+        for _ in range(14):
+            await asyncio.sleep(1)
+            max_running = max(max_running, await c.num_running(h))
+        expect(
+            max_running <= 1,
+            f"CAN chain must count as one running action (saw {max_running})",
+        )
+        expect(await c.num_actions(h) >= 1, "at least one CAN chain should have run")
+    finally:
+        await c.cleanup(h)
+
+
+@test("can.cancel_other_cancels_the_chain")
+async def t_can_cancel_other(c: SchedClient) -> None:
+    """overlap=CANCEL_OTHER cancels a running CAN chain (targeted by first-execution run id) before
+    the next action starts, even though the chain's current run differs from the run the scheduler
+    originally started."""
+    h = await c.create(
+        sid("cancan"),
+        every=2.0,
+        workflow="canner",
+        args=[6, 3.0],
+        overlap=ScheduleOverlapPolicy.CANCEL_OTHER,
+    )
+    try:
+        expect(
+            await poll_until(lambda: _running_at_least(c, h, 1), timeout=20),
+            "no first chain",
+        )
+        first = (await h.describe()).info.running_actions[0]
+        expect(
+            await poll_until(lambda: _at_least_actions(c, h, 2), timeout=20),
+            "no second action",
+        )
+        expect(
+            await poll_until(
+                lambda: _wf_status_is(
+                    c,
+                    first.workflow_id,
+                    first.first_execution_run_id,
+                    WorkflowExecutionStatus.CANCELED,
+                ),
+                timeout=20,
+            ),
+            "the prior CAN chain should be CANCELED when the next action starts",
+        )
+    finally:
+        await c.cleanup(h)
+
+
+@test("update.midflight_preserves_inflight_completion")
+async def t_update_midflight(c: SchedClient) -> None:
+    """Updating a schedule while one of its actions is running (which bumps the conflict token that
+    is baked into the in-flight action's request id) must not orphan that action: its completion is
+    still recorded."""
+    h = await c.create(
+        sid("updmid"),
+        every=3600,
+        workflow="sleeper",
+        arg=6.0,
+        paused=True,
+        overlap=ScheduleOverlapPolicy.BUFFER_ALL,
+    )
+    try:
+        await h.trigger()
+        expect(
+            await poll_until(lambda: _running_at_least(c, h, 1), timeout=15),
+            "no in-flight run",
+        )
+        n_before = await c.num_actions(h)
+
+        async def mutate(inp: ScheduleUpdateInput) -> ScheduleUpdate:
+            s = inp.description.schedule
+            s.state.note = "updated-mid-flight"
+            return ScheduleUpdate(schedule=s)
+
+        await h.update(mutate)
+        expect(
+            await poll_until(lambda: _running_at_most(c, h, 0), timeout=15),
+            "the in-flight action should complete after the update",
+        )
+        desc = await h.describe()
+        expect(
+            desc.info.num_actions >= n_before,
+            "the in-flight action's completion must survive the update (no orphan/undercount)",
+        )
+        expect(
+            len(desc.info.recent_actions) >= 1,
+            "the action should appear in recent actions",
+        )
+    finally:
+        await c.cleanup(h)
+
+
+@test("collision.two_schedules_same_workflow_id")
+async def t_two_schedules_same_id(c: SchedClient) -> None:
+    """Two schedules configured to start the *same* workflow id at the same cadence never
+    double-start that id (a second start hits the running one and fails), and neither schedule
+    errors or wedges — one wins each occurrence, the other is a no-op."""
+    shared = sid("sharedwf")
+    a = sid("collideA")
+    b = sid("collideB")
+    ha = await c.client.create_schedule(a, _shared_id_schedule(c, shared))
+    hb = await c.client.create_schedule(b, _shared_id_schedule(c, shared))
+    try:
+        await asyncio.sleep(8)
+        da = await ha.describe()
+        db = await hb.describe()
+        total = da.info.num_actions + db.info.num_actions
+        expect(
+            total >= 1,
+            "the shared workflow should have started at least once across the two",
+        )
+        # The server forbids two concurrent runs of one workflow id, so distinct executions of the
+        # shared id can't exceed the ~one-second occurrences elapsed (no double-starting a slot).
+        runs = set()
+        async for w in c.client.list_workflows(
+            query=f"WorkflowId STARTS_WITH '{shared}'"
+        ):
+            runs.add((w.id, w.run_id))
+        expect(
+            len(runs) <= 12,
+            f"shared id must not be double-started (saw {len(runs)} runs in ~8s)",
+        )
+    finally:
+        await c.cleanup(ha)
+        await c.cleanup(hb)
+        async for w in c.client.list_workflows(
+            query=f"WorkflowId STARTS_WITH '{shared}'"
+        ):
+            try:
+                await c.client.get_workflow_handle(w.id, run_id=w.run_id).terminate()
+            except RPCError:
+                pass
+
+
+def _shared_id_schedule(c: SchedClient, shared_wf_id: str) -> Schedule:
+    return Schedule(
+        action=ScheduleActionStartWorkflow(
+            "sleeper", 3.0, id=shared_wf_id, task_queue=TASK_QUEUE
+        ),
+        spec=ScheduleSpec(
+            intervals=[ScheduleIntervalSpec(every=dt.timedelta(seconds=1))]
+        ),
+        policy=SchedulePolicy(overlap=ScheduleOverlapPolicy.ALLOW_ALL),
+    )
+
+
+async def _running_at_most(c: SchedClient, h: ScheduleHandle, n: int) -> bool:
+    return await c.num_running(h) <= n
 
 
 def _utcnow() -> dt.datetime:

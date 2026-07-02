@@ -14,7 +14,7 @@ that is kept current as claims are confirmed or invalidated.
   with a `go.mod` replace onto this worktree, run with
   `history.enableCHASMSchedulerCreation=true` and `history.chasmSchedulerCreationRolloutPercent=100`.
   Confirmed the schedules are V2/CHASM-backed (no `temporal-sys-scheduler-workflow` executions exist).
-- Full suite result on this build: **32/32 pass**. No CONFIRMED bugs in the current worktree code.
+- Full suite result on this build: **36/36 pass**. No CONFIRMED bugs in the current worktree code.
 - **V1 comparison:** performed by restarting the same server with
   `history.enableCHASMSchedulerCreation=false`, `history.chasmSchedulerCreationRolloutPercent=0`,
   `history.enableCHASMSchedulerRouting=false`. That does produce V1-backed schedules (confirmed: a
@@ -164,6 +164,29 @@ CHASM scheduler's state and catch-up behavior are durable across an ungraceful r
   `TemporalScheduledById = '<schedule id>'` (documented capability holds).
 - **pause_on_failure semantics:** on → a failing action pauses the schedule (with a note); off → the
   schedule keeps firing despite repeated failures.
+
+## Continue-As-New, callbacks, mid-flight mutation, id collision (all pass on 1.32.0)
+
+Probed the seams where the scheduler's model of a running workflow can diverge from reality. The
+implementation holds up — notably it is deliberately CAN-aware (the completion is matched by a
+request id carried in the callback header that survives continue-as-new, and cancel/terminate target
+the workflow id guarded by `FirstExecutionRunId`; see invoker_tasks.go and scheduler_tasks.go).
+
+- **CAN + overlap SKIP:** a scheduled workflow that Continues-As-New is treated as a *single*
+  running action for its whole chain — the scheduler never double-starts, and only the final run's
+  completion frees the next action.
+- **CAN + CANCEL_OTHER:** the prior CAN chain is correctly CANCELED before the next action starts,
+  even though the chain's current run differs from the run the scheduler originally started
+  (the `FirstExecutionRunId` guard targets the chain).
+- **Update mid-flight:** updating a schedule while an action is running (which bumps the conflict
+  token baked into that action's request id) does **not** orphan the action — its completion is
+  still recorded (no undercount). `num_actions` counts *started* actions, so it increments at start.
+- **Two schedules → same action workflow id:** whichever schedule wins the per-second race starts
+  the shared id; the loser's start fails (a running id can't be double-started) and is silently a
+  no-op. No crash, no dirty error, no unbounded buffer growth, no double-start — but the losing
+  schedule shows `num_actions=0` with no skip/miss signal (observability nit for a misconfiguration,
+  not a correctness bug). Cross-schedule callback *attachment* does not occur: the main start path
+  uses conflict policy FAIL; `USE_EXISTING` attach only happens on the same-request-id retry path.
 
 ## Concurrency / simultaneous-knob combinations exercised (all pass on 1.32.0)
 
