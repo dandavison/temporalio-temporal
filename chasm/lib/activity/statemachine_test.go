@@ -937,8 +937,6 @@ func TestTransitionResetFromPaused(t *testing.T) {
 			require.NoError(t, err)
 			require.Equal(t, activitypb.ACTIVITY_EXECUTION_STATUS_SCHEDULED, act.Status)
 			require.Equal(t, int32(1), attemptState.Count)
-			// The pending retry interval is preserved (reset honors any remaining backoff); with no
-			// CompleteTime there is no pending backoff to honor, so the dispatch is immediate.
 			require.Equal(t, durationpb.New(30*time.Second), attemptState.GetCurrentRetryInterval())
 			require.Len(t, ctx.Tasks, tc.expectedTaskCount)
 
@@ -992,4 +990,53 @@ func TestTransitionResetHonorsBackoff(t *testing.T) {
 	require.NotNil(t, dispatch, "expected an ActivityDispatchTask")
 	require.Equal(t, completeTime.Add(30*time.Second), dispatch.Attributes.ScheduledTime,
 		"reset must honor the remaining backoff (dispatch at CompleteTime+interval)")
+}
+
+// TestTransitionUnpausedHonorsBackoff verifies that TransitionUnpaused honors a pending retry
+// backoff: the re-dispatch is scheduled at CompleteTime+CurrentRetryInterval (not immediately at
+// unpause time), the same way TransitionReset does. The interval is preserved, not cleared.
+func TestTransitionUnpausedHonorsBackoff(t *testing.T) {
+	ctx := &chasm.MockMutableContext{}
+	ctx.HandleNow = func(chasm.Component) time.Time { return defaultTime }
+	completeTime := defaultTime.Add(-5 * time.Second) // failed 5s ago
+	attemptState := &activitypb.ActivityAttemptState{
+		Count:                2,
+		CompleteTime:         timestamppb.New(completeTime),
+		CurrentRetryInterval: durationpb.New(30 * time.Second),
+	}
+
+	act := &Activity{
+		ActivityState: &activitypb.ActivityState{
+			ActivityType:           &commonpb.ActivityType{Name: "test-activity-type"},
+			RetryPolicy:            defaultRetryPolicy,
+			ScheduleToCloseTimeout: durationpb.New(defaultScheduleToCloseTimeout),
+			ScheduleToStartTimeout: durationpb.New(defaultScheduleToStartTimeout),
+			StartToCloseTimeout:    durationpb.New(defaultStartToCloseTimeout),
+			Status:                 activitypb.ACTIVITY_EXECUTION_STATUS_PAUSED,
+			TaskQueue:              &taskqueuepb.TaskQueue{Name: "test-task-queue"},
+		},
+		LastAttempt: chasm.NewDataField(ctx, attemptState),
+		Outcome:     chasm.NewDataField(ctx, &activitypb.ActivityOutcome{}),
+	}
+
+	err := TransitionUnpaused.Apply(act, ctx, unpauseEvent{
+		req:            &workflowservice.UnpauseActivityExecutionRequest{},
+		metricsHandler: metrics.NoopMetricsHandler,
+	})
+	require.NoError(t, err)
+	require.Equal(t, activitypb.ACTIVITY_EXECUTION_STATUS_SCHEDULED, act.Status)
+	require.Equal(t, int32(2), attemptState.Count, "unpause without ResetAttempts must not reset Count")
+	require.Equal(t, durationpb.New(30*time.Second), attemptState.GetCurrentRetryInterval(),
+		"unpause must preserve the pending retry interval so the backoff is honored")
+
+	// The dispatch task must be scheduled at CompleteTime+CurrentRetryInterval, not at unpause time.
+	var dispatch *chasm.MockTask
+	for i := range ctx.Tasks {
+		if _, ok := ctx.Tasks[i].Payload.(*activitypb.ActivityDispatchTask); ok {
+			dispatch = &ctx.Tasks[i]
+		}
+	}
+	require.NotNil(t, dispatch, "expected an ActivityDispatchTask")
+	require.Equal(t, completeTime.Add(30*time.Second), dispatch.Attributes.ScheduledTime,
+		"unpause must honor the remaining backoff (dispatch at CompleteTime+interval)")
 }
