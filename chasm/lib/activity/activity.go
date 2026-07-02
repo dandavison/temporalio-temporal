@@ -693,13 +693,13 @@ func (a *Activity) UpdateActivityExecutionOptions(
 	// in the PAUSED case unpause honors the pending retry's dispatch time, so the recomputed
 	// interval must already be in place. STARTED / *_REQUESTED activities recompute the interval
 	// fresh when the running attempt yields, so no update is needed here.
-	switch a.GetStatus() {
-	case activitypb.ACTIVITY_EXECUTION_STATUS_SCHEDULED,
-		activitypb.ACTIVITY_EXECUTION_STATUS_PAUSED:
-		if attempt.GetCurrentRetryInterval() != nil {
-			newInterval := backoff.CalculateExponentialRetryInterval(a.RetryPolicy, attempt.GetCount()-1)
-			attempt.CurrentRetryInterval = durationpb.New(newInterval)
-		}
+	status := a.GetStatus()
+	if (status == activitypb.ACTIVITY_EXECUTION_STATUS_SCHEDULED ||
+		status == activitypb.ACTIVITY_EXECUTION_STATUS_PAUSED) &&
+		attempt.GetCurrentRetryInterval() != nil {
+
+		newInterval := backoff.CalculateExponentialRetryInterval(a.RetryPolicy, attempt.GetCount()-1)
+		attempt.CurrentRetryInterval = durationpb.New(newInterval)
 	}
 
 	// Recreate the ScheduleToClose task at the (possibly updated) deadline.
