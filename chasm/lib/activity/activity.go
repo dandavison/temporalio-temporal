@@ -692,7 +692,7 @@ func (a *Activity) UpdateActivityExecutionOptions(
 	// shortened interval takes effect on re-dispatch. Applies whenever a retry is pending and no
 	// attempt is running (SCHEDULED in backoff, or PAUSED in backoff): unpause/reset honor this
 	// interval, so an update while paused must be reflected here.
-	if a.GetStatus() == activitypb.ACTIVITY_EXECUTION_STATUS_SCHEDULED || a.GetStatus() == activitypb.ACTIVITY_EXECUTION_STATUS_PAUSED {
+	if a.GetStatus() == activitypb.ACTIVITY_EXECUTION_STATUS_SCHEDULED {
 		if attempt.GetCurrentRetryInterval() != nil {
 			newInterval := backoff.CalculateExponentialRetryInterval(a.RetryPolicy, attempt.GetCount()-1)
 			attempt.CurrentRetryInterval = durationpb.New(newInterval)
