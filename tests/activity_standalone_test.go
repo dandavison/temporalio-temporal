@@ -11630,6 +11630,52 @@ func (s *standaloneActivityTestSuite) TestResetActivityExecution() {
 		require.NoError(t, err)
 	})
 
+	// Repro for the deferred-reset retry-backoff bug. Resetting a STARTED activity that is on
+	// attempt > 1 must re-dispatch the fresh attempt 1 promptly: reset honors start_delay (here 0,
+	// so immediate) but must NOT honor the retry backoff of the attempt that was in flight. The
+	// deferred-reset path (RESET_REQUESTED -> SCHEDULED) currently records the aborted attempt with
+	// a retry interval sized from the pre-reset attempt count and dispatches at
+	// complete_time + interval, delaying attempt 1 by a full (large) backoff. The bounded poll below
+	// therefore times out until the deferred reset clears the retry backoff.
+	t.Run("WhileRunningOnLaterAttemptDropsRetryBackoff", func(t *testing.T) {
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cancel()
+
+		activityID := testcore.RandomizeStr(t.Name())
+		// coeff=10 makes the attempt-2 backoff (10s) far larger than the attempt-1 backoff (1s), so a
+		// retry-backoff-delayed dispatch is clearly distinguishable from a prompt one.
+		retryPolicy := &commonpb.RetryPolicy{
+			InitialInterval:    durationpb.New(time.Second),
+			BackoffCoefficient: 10.0,
+		}
+		startResp, pollResp1, taskQueue := startAndPollActivity(ctx, t, activityID, retryPolicy)
+		require.EqualValues(t, 1, pollResp1.Attempt)
+
+		// Fail attempt 1 -> ~1s backoff, then attempt 2 is dispatched and picked up by a worker.
+		failAttemptRetryably(ctx, t, pollResp1.TaskToken, 0)
+		pollResp2 := pollActivity(ctx, t, taskQueue)
+		require.EqualValues(t, 2, pollResp2.Attempt)
+
+		// Reset while attempt 2 is STARTED (deferred), then fail attempt 2 to trigger the reset.
+		resetActivity(ctx, t, activityID, startResp.GetRunId(), false)
+		failAttemptRetryably(ctx, t, pollResp2.TaskToken, 0)
+
+		// The reset attempt (attempt 1) must dispatch promptly. If the deferred reset applied attempt
+		// 2's 10s retry backoff, this 5s bounded poll times out with DeadlineExceeded.
+		pollCtx, pollCancel := context.WithTimeout(ctx, 5*time.Second)
+		defer pollCancel()
+		pollResp3, err := env.FrontendClient().PollActivityTaskQueue(pollCtx, &workflowservice.PollActivityTaskQueueRequest{
+			Namespace: env.Namespace().String(),
+			TaskQueue: &taskqueuepb.TaskQueue{Name: taskQueue, Kind: enumspb.TASK_QUEUE_KIND_NORMAL},
+			Identity:  defaultIdentity,
+		})
+		require.NoError(t, err, "reset attempt should dispatch promptly, not after the in-flight attempt's retry backoff")
+		require.NotEmpty(t, pollResp3.GetTaskToken(), "reset attempt should dispatch promptly, not after the in-flight attempt's retry backoff")
+		require.EqualValues(t, 1, pollResp3.Attempt, "attempt should be reset to 1")
+
+		completeAttempt(ctx, t, pollResp3.TaskToken)
+	})
+
 	t.Run("WhileCancelRequestedReturnsFailedPrecondition", func(t *testing.T) {
 		// Reset on a CANCEL_REQUESTED activity is rejected: cancel takes precedence and the
 		// state machine has no meaningful transition for "reset while cancel is pending".
