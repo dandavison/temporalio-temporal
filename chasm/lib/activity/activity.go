@@ -929,9 +929,8 @@ func (a *Activity) unpause(
 ) {
 	attempt := a.LastAttempt.Get(ctx)
 	// Capture the pending retry's dispatch time (complete_time + current_retry_interval) before we
-	// mutate the attempt, so that unpausing an activity that is waiting out a retry backoff does not
-	// dispatch it any earlier than the retry would have fired on its own. This mirrors how unpause
-	// honors a pending start_delay via dispatchTimeRespectingStartDelay below.
+	// clear the retry state below, so that unpausing an activity that is waiting out a retry backoff
+	// does not dispatch it any earlier than the retry would have fired on its own.
 	retryDispatchTime := dispatchTimeForRetry(attempt)
 	if event.req.GetResetAttempts() {
 		// Resetting the attempt count discards the retry state entirely, so there is no backoff to
@@ -944,16 +943,8 @@ func (a *Activity) unpause(
 	}
 	attempt.Stamp++
 	attempt.CurrentRetryInterval = nil
-	unpauseTime := ctx.Now(a)
-	if jitter := event.req.GetJitter().AsDuration(); jitter > 0 {
-		unpauseTime = unpauseTime.Add(time.Duration(rand.Int63n(int64(jitter)))) //nolint:gosec
-	}
-	dispatchTime := a.dispatchTimeRespectingStartDelay(unpauseTime)
-	// Honor any remaining retry backoff: never dispatch before the pending retry's scheduled time.
-	// If the backoff has already elapsed, dispatchTime (unpause time) wins and dispatch is immediate.
-	if retryDispatchTime != nil && retryDispatchTime.AsTime().After(dispatchTime) {
-		dispatchTime = retryDispatchTime.AsTime()
-	}
+
+	dispatchTime := a.unpauseDispatchTime(ctx, event.req.GetJitter().AsDuration(), retryDispatchTime)
 	if timeout := a.GetScheduleToStartTimeout().AsDuration(); timeout > 0 {
 		ctx.AddTask(
 			a,
@@ -964,6 +955,25 @@ func (a *Activity) unpause(
 		a,
 		chasm.TaskAttributes{ScheduledTime: dispatchTime},
 		&activitypb.ActivityDispatchTask{Stamp: attempt.GetStamp()})
+}
+
+// unpauseDispatchTime computes when an unpaused attempt should be dispatched: the unpause time
+// (optionally spread out by jitter), lifted to honor any pending start_delay, and never earlier
+// than a pending retry backoff's scheduled dispatch (retryDispatchTime, nil if there is none).
+func (a *Activity) unpauseDispatchTime(
+	ctx chasm.MutableContext,
+	jitter time.Duration,
+	retryDispatchTime *timestamppb.Timestamp,
+) time.Time {
+	unpauseTime := ctx.Now(a)
+	if jitter > 0 {
+		unpauseTime = unpauseTime.Add(time.Duration(rand.Int63n(int64(jitter)))) //nolint:gosec
+	}
+	dispatchTime := a.dispatchTimeRespectingStartDelay(unpauseTime)
+	if retryDispatchTime != nil && retryDispatchTime.AsTime().After(dispatchTime) {
+		return retryDispatchTime.AsTime()
+	}
+	return dispatchTime
 }
 
 func (a *Activity) recordPauseState(
