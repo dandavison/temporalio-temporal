@@ -552,6 +552,7 @@ var TransitionResetAttemptFailedToPaused = chasm.NewTransition(
 		if err := a.recordFailedAttempt(ctx, event.retryInterval, event.failure, ctx.Now(a), false); err != nil {
 			return err
 		}
+		// Reset discards the retry backoff
 		attempt.CurrentRetryInterval = nil
 		return nil
 	},
@@ -585,7 +586,7 @@ var TransitionResetAttemptFailedToScheduled = chasm.NewTransition(
 		if err := a.recordFailedAttempt(ctx, event.retryInterval, event.failure, currentTime, false); err != nil {
 			return err
 		}
-		// Reset discards the retry backoff (mirrors reset()); dispatch honors start_delay only.
+		// Reset discards the retry backoff
 		attempt.CurrentRetryInterval = nil
 
 		dispatchTime := a.dispatchTimeRespectingStartDelay(currentTime)
