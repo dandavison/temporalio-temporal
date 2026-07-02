@@ -532,7 +532,8 @@ var TransitionResetRequested = chasm.NewTransition(
 // when the worker yields in RESET_REQUESTED with ResetKeepPaused set (i.e. reset was issued with
 // keepPaused=true while the activity was in PAUSE_REQUESTED). The failed attempt is recorded, the
 // attempt count is reset to 1, and no dispatch task is emitted — the activity stays paused until
-// an explicit unpause.
+// an explicit unpause. Like the other reset paths the retry backoff is discarded (CurrentRetryInterval
+// is cleared) so a later unpause dispatches attempt 1 without honoring a stale retry interval.
 var TransitionResetAttemptFailedToPaused = chasm.NewTransition(
 	[]activitypb.ActivityExecutionStatus{
 		activitypb.ACTIVITY_EXECUTION_STATUS_RESET_REQUESTED,
@@ -548,7 +549,11 @@ var TransitionResetAttemptFailedToPaused = chasm.NewTransition(
 		}
 		attempt.Count = 1
 		attempt.Stamp++
-		return a.recordFailedAttempt(ctx, event.retryInterval, event.failure, ctx.Now(a), false)
+		if err := a.recordFailedAttempt(ctx, event.retryInterval, event.failure, ctx.Now(a), false); err != nil {
+			return err
+		}
+		attempt.CurrentRetryInterval = nil
+		return nil
 	},
 )
 
