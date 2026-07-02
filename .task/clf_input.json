@@ -1,0 +1,2720 @@
+[
+{
+"id": "0065f00000Dnj6wAAB",
+"acct": "Stripe",
+"opp": "Stripe-Transfer Application-12/2022",
+"old": "Business Transactions",
+"prior": "Payment Processing & Settlement",
+"rat": "Opp details describe a money-movement/transfer product.",
+"ev": "details \"Money Movement/transfer app\""
+},
+{
+"id": "0065f00000AvRHQAA3",
+"acct": "Coinbase",
+"opp": "Coinbase - Migrate self hosted clusters",
+"old": "Business Transactions",
+"prior": "Payment Processing & Settlement",
+"rat": "MIGRATION deal (consolidate 80+ Temporal namespaces to Cloud) \u2014 not one product workload. Best-guess from det...",
+"ev": "details \"Payments\"; doc \"Migration of 80+ Temporal Instances\"; Gong: \"fund mo..."
+},
+{
+"id": "0065f000005i3L8AAI",
+"acct": "Snap",
+"opp": "Snap - Stories",
+"old": "(blank)",
+"prior": "Other",
+"rat": "Snapchat Story upload/assembly job: orchestrates a content-enrichment DAG that fans out to Bolt (media transcode) and CUP (content-understanding/ML), then assem",
+"ev": "Doc \"Snap Stories \u2013 Temporal Design Review\": content-enrichment DAG via Bolt ..."
+},
+{
+"id": "006UY00000WNaGTYA1",
+"acct": "OpenAI",
+"opp": "OpenAI - Throttler",
+"old": "Other",
+"prior": "Control Plane Operations",
+"rat": "Opp's own field calls it a per-user 'throttling control-plane' that shapes/limits how other workloads run (provisions/manages per-user task-queue behavior). It ",
+"ev": "Use_Case_Details: 'per-user throttling control-plane... limit/shape workload on a user-by-user basis without... a dedicated task queue + worker fleet per user. "
+},
+{
+"id": "006UY00000MIylqYAD",
+"acct": "Replit",
+"opp": "Replit - Replit Agent Workload",
+"old": "AI/ML Orchestration",
+"prior": "AI - Agents",
+"rat": "Doc describes Replit's agentic coding loop: the LLM plans and dynamically spawns tools/sub-agents across multi-step w...",
+"ev": "Doc \"Replit Use Case Doc\": \"LLM proposes small workflow of tools/sub agents t..."
+},
+{
+"id": "006UY00000JlCagYAF",
+"acct": "Anthropic",
+"opp": "Anthropic - Compass (Deep Research)",
+"old": "AI/ML Orchestration",
+"prior": "AI - Agents",
+"rat": "Deep Research is an agentic workflow where an LLM plans and iterates searches across multiple steps.",
+"ev": "Name \"Compass (Deep Research)\" + details \"Deep research\""
+},
+{
+"id": "0065f00000IUwGHAA1",
+"acct": "Rippling",
+"opp": "Rippling - ETA Modernization - Migration",
+"old": "Business Transactions",
+"prior": "Other",
+"rat": "Opp + doc describe a generic, domain-agnostic async-task/workflow engine (ETA) backing ALL of Rippling's async tasks ...",
+"ev": "details \"backend ETA for all of Rippling's asynchronous tasks\"; doc \"central ..."
+},
+{
+"id": "006UY00000WTN5FYAX",
+"acct": "OpenAI",
+"opp": "OpenAI - Integrity",
+"old": "Workflows",
+"prior": "AI - Processing Pipelines",
+"rat": "Doc: every image submitted to ChatGPT runs through a fixed sequence of safety/content scans (moderation/classificatio...",
+"ev": "Drive doc \"Temporal Use Case - OpenAI\": \"safety scans... for every image give..."
+},
+{
+"id": "006UY000008rHpKYAU",
+"acct": "Snyk",
+"opp": "Snyk - Vulnerability Scanning Workload",
+"old": "Business processes",
+"prior": "Infrastructure Automation & CI/CD",
+"rat": "Nightly vulnerability scanning of client code (Snyk Code) \u2014 operating security software.",
+"ev": "Doc \"Snyk Temporal Use Case Discovery Guide\": \"find vulnerabilities in client..."
+},
+{
+"id": "006UY000008t3BxYAI",
+"acct": "Scale AI",
+"opp": "Scale AI - Task Orchestration Engine",
+"old": "Infrastructure applications",
+"prior": "Other",
+"rat": "Generic org-wide task-orchestration engine (1.4B actions/mo), the foundational substrate for all of Scale AI's worklo...",
+"ev": "Doc \"Scale AI_Task Pipelines\": \"backbone of its task pipeline... 1.4 billion ..."
+},
+{
+"id": "006UY000008UmPCYA0",
+"acct": "Airbnb",
+"opp": "Airbnb - MarTech - Voyager Event-Triggered Notifications (Abandon Cart)",
+"old": "SMS & Emails",
+"prior": "Communications & Marketing Platform",
+"rat": "Dynamic, event-triggered marketing campaigns delivering notifications via email/SMS/push.",
+"ev": "details \"dynamic, user-centric marketing campaigns. Up to 6 months of notific..."
+},
+{
+"id": "006UY00000WRbqfYAD",
+"acct": "OpenAI",
+"opp": "OpenAI - Pulse",
+"old": "Workflows",
+"prior": "AI - Agents",
+"rat": "ChatGPT Pulse autonomously decides each day's research from a user's chats/memory/connected apps and runs multi-step ...",
+"ev": "details URL openai.com/index/introducing-chatgpt-pulse; OpenAI: \"agentic over..."
+},
+{
+"id": "006UY00000C6ZfKYAV",
+"acct": "Abridge",
+"opp": "Abrigde - Entity Domain",
+"old": "Business processes",
+"prior": "AI - Processing Pipelines",
+"rat": "Fixed pipeline running clinical audio through AI models: transcript, medical-word highlighting, note generation. Cano...",
+"ev": "details \"automate clinical notes... Transcript, medical word highlighting, th..."
+},
+{
+"id": "006UY00000MJ2O1YAL",
+"acct": "HeyGen Inc",
+"opp": "HeyGen - Video Gen Workload",
+"old": "AI/ML Orchestration",
+"prior": "AI - Processing Pipelines",
+"rat": "Video generation running data through AI models; the core revenue-driving workload.",
+"ev": "details \"Video Gen runs on Temporal, core business revenue driver\""
+},
+{
+"id": "006UY000008sAXLYA2",
+"acct": "LayerZero Labs",
+"opp": "Layer Zero Labs - Initial Workload",
+"old": "Business processes",
+"prior": "Data Pipelines & ETL",
+"rat": "\"Messages use case\" = reliable cross-chain message delivery between blockchains; moving data between systems. Matches...",
+"ev": "details \"Messages use case\"; LayerZero = omnichain messaging protocol"
+},
+{
+"id": "006UY00000NHT1yYAH",
+"acct": "LayerZero Labs",
+"opp": "LayerZero Labs - Cross-chain messaging & transaction orchestration",
+"old": "Workflows",
+"prior": "Data Pipelines & ETL",
+"rat": "Reliable cross-chain message delivery + transaction coordination across 150+ chains (Relayer/Scan); asset-bridging (S...",
+"ev": "details \"Cross-chain messaging and transaction orchestration... Relayer (mess..."
+},
+{
+"id": "0065f000009ymhxAAA",
+"acct": "Qualtrics",
+"opp": "Qualtrics: xFlow use case",
+"old": "Workflows",
+"prior": "Other",
+"rat": "xFlow = a generic workflow-automation product built on Temporal; \"ad tech\" is the customer's industry, not a ...",
+"ev": "details \"Qualtrics xFlow is an ad tech workflow automation product built on t..."
+},
+{
+"id": "006UY00000CP4G1YAL",
+"acct": "Vendasta",
+"opp": "Vendasta- AI Chatbot-Workload",
+"old": "AI/ML Orchestration",
+"prior": "AI - Processing Pipelines",
+"rat": "AI chatbot inside a Zapier-like if-this-then-that automation flow running conversations/voice through AI models; the ...",
+"ev": "Drive doc \"Vendasta - LLM - Summary\": \"zapier-like if-this-then-that workflow..."
+},
+{
+"id": "006UY00000V7qHlYAJ",
+"acct": "Substack",
+"opp": "Substack - Video Workflows",
+"old": "Workflows",
+"prior": "Other",
+"rat": "Deterministic media post-processing (extract audio, generate/render clips); transcription is a minor step, not the pr...",
+"ev": "details \"post-processing... generating clips, extracting audio, creating tran..."
+},
+{
+"id": "006UY00000CPORdYAP",
+"acct": "Airwallex Limited",
+"opp": "Airwallex - Combined (Workload)",
+"old": "Workflows",
+"prior": "Other",
+"rat": "Multi-workload \"Combined\" opp; fields give no signal; docs + Gong show several distinct workloads plus a heavy Tempor...",
+"ev": "details \"workflow\"; Gong \"Airwallex - Migration of Temporal Workflows\" (2023-..."
+},
+{
+"id": "006UY00000ZsomtYAB",
+"acct": "Vega Security",
+"opp": "Vega Security - Federated Search Workflow",
+"old": "Other",
+"prior": "Other",
+"rat": "Generic service-orchestration building block: accepts a query, enqueues, polls, streams results back; nearly every other workflow triggers it. Web confirms Vega",
+"ev": "Use_Case_Details: 'Accepts a query, enqueues it to a backend processing system, polls for results, streams pages back... every other workflow triggers this one."
+},
+{
+"id": "006UY00000ExCOTYA3",
+"acct": "Slash Financial",
+"opp": "Slash Financial - Debit Card Processing (Long Running Workflows)",
+"old": "Business Transactions",
+"prior": "Payment Processing & Settlement",
+"rat": "Each card swipe triggers a workflow that processes the payment/repayment and records the transaction \u2014 money moves co...",
+"ev": "details \"when someone uses a credit card, Temporal... processing the payment ..."
+},
+{
+"id": "006UY00000NEs6ZYAT",
+"acct": "FireHydrant",
+"opp": "FireHydrant - runbooks engine and signals product",
+"old": "Workflows",
+"prior": "Infrastructure Automation & CI/CD",
+"rat": "Operating FireHydrant's incident-response automation engine (runbooks, timers, rule evaluations) \u2014 operating software...",
+"ev": "details \"automation for incident response... Runbooks = automation engine\"; d..."
+},
+{
+"id": "006UY00000IyfcDYAR",
+"acct": "MasOrange",
+"opp": "MasOrange - Cadence Platform Migration",
+"old": "Business processes",
+"prior": "Other",
+"rat": "Cadence-to-Temporal platform-consolidation/migration spanning 15+ unrelated domains (customer care, activation, payme...",
+"ev": "details \"15 business use cases around customer care, line activation, payment..."
+},
+{
+"id": "006UY00000Ddn6DYAR",
+"acct": "Yubi (Credavenue Private Limited)",
+"opp": "Yubi (Spocto)- Campaigns-workload",
+"old": "Operational Process",
+"prior": "Communications & Marketing Platform",
+"rat": "Spocto debt-collection \"campaigns\" \u2014 customer-driven, business-hours-timed outreach campaigns; Spocto being debt coll...",
+"ev": "details \"Spocto campaigns; customer initiates a payout event\"; doc \"Customer ..."
+},
+{
+"id": "006UY00000EWM3XYAX",
+"acct": "OpenAI",
+"opp": "OpenAI - Automations",
+"old": "Business processes",
+"prior": "AI - Agents",
+"rat": "ChatGPT Tasks/Automations = an LLM executes a user's prompt/action on a schedule (acts on the user's behalf); thin op...",
+"ev": "details \"Scheduled tasks\"; name \"OpenAI - Automations\""
+},
+{
+"id": "0065f00000PX1rbAAD",
+"acct": "Aura",
+"opp": "Aura - full workload",
+"old": "Business processes",
+"prior": "Other",
+"rat": "Dynamic repricing tool for Amazon sellers; the primary outcome is setting prices, not managing physical inventory (In...",
+"ev": "details \"Repricing Tool for Amazon sellers\""
+},
+{
+"id": "006UY000009KCkbYAG",
+"acct": "Retool Inc.",
+"opp": "Retool- OSS Migration- Workload",
+"old": "Business processes",
+"prior": "Control Plane Operations",
+"rat": "Retool runs a multi-tenant Workflows product that self-service provisions a Temporal namespace per downstream custome...",
+"ev": "Doc \"Retool- Meeting Notes\": \"Workflows Product... 1 NS per customer environm..."
+},
+{
+"id": "0065f00000Ir5DeAAJ",
+"acct": "Remitly",
+"opp": "Remitly - RTE",
+"old": "Business Transactions",
+"prior": "Payment Processing & Settlement",
+"rat": "RTE = Remittance Transaction Engineering; each financial transaction is a 20-activity Temporal workflow ensuring mone...",
+"ev": "Doc \"Remitly RTE - Use Case Discovery Guide\": \"each transaction is a Temporal..."
+},
+{
+"id": "006UY000008TC4QYAW",
+"acct": "Xapien",
+"opp": "Xapien - Due Diligence Check",
+"old": "Business processes",
+"prior": "AI - Processing Pipelines",
+"rat": "Doc + opp: a fixed multi-stage pipeline that runs collected documents through NLP/GenAI processing, context extractio...",
+"ev": "Doc \"Xapien Use Case\": \"process thousands of documents... NLP, GenAI processi..."
+},
+{
+"id": "006UY00000WTCoBYAX",
+"acct": "OpenAI",
+"opp": "OpenAI - Document Scanning",
+"old": "Business processes",
+"prior": "AI - Processing Pipelines",
+"rat": "Opp fields (\"document scanning\"/\"document processing\") = running documents through models (OCR/extraction/classificat...",
+"ev": "Name \"OpenAI - Document Scanning\" + details \"document processing\""
+},
+{
+"id": "0065f00000NHCFlAAP",
+"acct": "Airbnb",
+"opp": "Airbnb - MarTech - Voyager List-Triggered Notifications",
+"old": "SMS & Emails",
+"prior": "Communications & Marketing Platform",
+"rat": "Scheduling engine for batch external comms (SMS/email/push), 40M/day; opp name = MarTech.",
+"ev": "details \"Scheduling engine for batch external communications ... SMS, email, ..."
+},
+{
+"id": "006UY00000WBn7pYAD",
+"acct": "Adobe",
+"opp": "Adobe - AEM Digital Asset Management Use Case",
+"old": "Other",
+"prior": "Other",
+"rat": "Media encoding/up-conversion pipeline for AEM digital assets via serverless functions. Not AI model inference (transcoding, not ML), so AI - Processing Pipeline",
+"ev": "Use_Case_Details: 'Digital Assets Media pipeline (Media Encoding) for AEM... up converting media content... orchestration of serverless functions on OpenWhisk.'"
+},
+{
+"id": "006UY00000JbVhpYAF",
+"acct": "Twilio",
+"opp": "Twilio Messaging Workload",
+"old": "SMS & Emails",
+"prior": "Communications & Marketing Platform",
+"rat": "Doc: a multi-channel sending API orchestrating outbound delivery (SMS/RCS/WhatsApp/email) with channel selection, fal...",
+"ev": "Doc \"Twilio - Messaging Use Case Template\": \"multi-channel sending API... fal..."
+},
+{
+"id": "006UY00000P8B7yYAF",
+"acct": "Perplexity",
+"opp": "Perplexity - Comet Browser Loop Use Case",
+"old": "AI/ML Orchestration",
+"prior": "AI - Agents",
+"rat": "Comet Browser takes control of the browser and acts in a loop \u2014 an LLM deciding the next browser action across steps.",
+"ev": "details \"Comet Browser... take control of the browser and do this in a loop\""
+},
+{
+"id": "0065f00000ISJAGAA5",
+"acct": "Snap",
+"opp": "Snap - Spotlight & Saved Stories",
+"old": "Business processes",
+"prior": "Other",
+"rat": "Spotlight doc: 'ad publishing' - advertisers publish content to Snap, stored/analyzed for ad e\u2026",
+"ev": "Doc \"Snap - Spotlight\": Use Case \"Business process - ad publishing\""
+},
+{
+"id": "006UY00000C6FblYAF",
+"acct": "Maven AGI",
+"opp": "Maven AGI - Asyc Data Processing",
+"old": "Business processes",
+"prior": "Data Pipelines & ETL",
+"rat": "Named workload = async data processing (scraping, indexing, batch); moving/transforming data between systems. AI-insi...",
+"ev": "details \"orchestrate asynchronous data processing... data scraping, indexing,..."
+},
+{
+"id": "006UY00000QwsU6YAJ",
+"acct": "Magical",
+"opp": "Magical - Agents Use Case",
+"old": "AI/ML Orchestration",
+"prior": "AI - Agents",
+"rat": "An \"agentic product\" where LLM-driven agents automate multi-step customer tasks (managing patient lists, filling forms).",
+"ev": "details \"'agentic product' that uses these agents to automate customer tasks...."
+},
+{
+"id": "006UY00000HCtv0YAD",
+"acct": "Deutsche Telekom",
+"opp": "Deutsche Telekom - Carbonara Orchestration Mass Market",
+"old": "Business processes",
+"prior": "Other",
+"rat": "Doc: Carbonara = unified billing/invoicing orchestration (normalize invoices from acquired companies, format/validate...",
+"ev": "Doc \"DeutscheTelekom_Carbonara\": \"unified billing system to handle invoices....."
+},
+{
+"id": "006UY00000PhpVYYAZ",
+"acct": "Booking.com",
+"opp": "Booking.com - Self Service - Arrival Time",
+"old": "Business processes",
+"prior": "Order Management & Fulfillment",
+"rat": "Customers add/manage options on an existing trip/booking (e.g., arrival time) \u2014 amending the order/booking. \"Self ser...",
+"ev": "details \"Self Service features... to add/manage options related to an existin..."
+},
+{
+"id": "006UY000002o78QYAQ",
+"acct": "Intuit",
+"opp": "Intuit - Payments",
+"old": "Business processes",
+"prior": "Payment Processing & Settlement",
+"rat": "Doc: next-gen payments platform consolidating payment processing across Intuit (500M txns/day, \"dropped payments\"). P...",
+"ev": "Doc \"Intuit_Payments\": \"Next gen payments platform... 500M transactions per d..."
+},
+{
+"id": "006UY00000CMYNXYA5",
+"acct": "Stripe",
+"opp": "Stripe - Account Status Notification",
+"old": "SMS & Emails",
+"prior": "Communications & Marketing Platform",
+"rat": "Orchestrating outbound customer notifications about account status; old value \"SMS & Emails\" aligns; Comms is the onl...",
+"ev": "details \"Notification for Stripe's customers regarding their account status\""
+},
+{
+"id": "006UY00000NmiO6YAJ",
+"acct": "Cloudinary",
+"opp": "Cloudinary - media processing workflow",
+"old": "Workflows",
+"prior": "Other",
+"rat": "Named workload = media transcoding/variant generation (1 video \u2192 10 variants); no AI inference, not system-to-system ...",
+"ev": "details \"media processing workflow that takes a single video and generates 10..."
+},
+{
+"id": "0065f00000JcmzOAAR",
+"acct": "Indeed",
+"opp": "Indeed - InterOp (ACDC/Marketplace)",
+"old": "Business processes",
+"prior": "Data Pipelines & ETL",
+"rat": "Doc + opp: reliable ingestion/continual updating (incl. dedupe) of candidate data from Indeed into 3rd-party ATS (Wor...",
+"ev": "Doc \"Indeed ACDC_UseCase\": \"reliably ingests... candidate information... into..."
+},
+{
+"id": "006UY000004NSR7YAO",
+"acct": "Stripe",
+"opp": "Stripe - issuing-xp",
+"old": "(blank)",
+"prior": "Financial Services & Lending",
+"rat": "Opp fields empty; only signal is the name \"issuing\" = Stripe Issuing (card-issuing program, a regulated financial pro...",
+"ev": "no usable evidence (name token \"issuing\" only; empty fields; no doc; no Gong ..."
+},
+{
+"id": "0065f00000AwGcLAAV",
+"acct": "Square",
+"opp": "Square - CashApp Statements",
+"old": "Distributed Transactions",
+"prior": "Payment Processing & Settlement",
+"rat": "3 sub-workloads \u2014 Payment Scheduler + In-Store Checkouts (money movement) dominate; Monthly Statements is a minor dat...",
+"ev": "details \"Payment Scheduler / Monthly Statements / In-Store Checkouts\""
+},
+{
+"id": "0065f00000IUmdqAAD",
+"acct": "Twilio",
+"opp": "Twilio Flex",
+"old": "Business processes",
+"prior": "Customer Service & Support",
+"rat": "Doc separates Flex (contact center) from Twilio Engage (marketing); Flex orchestrates call routing, agent onl...",
+"ev": "Doc \"Twilio - Flex 2.0 Use Case\": Flex(contact center) vs Twilio Engage(marke..."
+},
+{
+"id": "006UY000000maR0YAI",
+"acct": "Vannevar Labs",
+"opp": "Vannevar Labs-OSS Migration- workload",
+"old": "Business processes",
+"prior": "Other",
+"rat": "OSS-to-Cloud migration of existing commercial workloads with no single product workflow named; doc confirms \"Migratio...",
+"ev": "details \"Migrating commercial business from Self hosted...\"; doc header \"USIN..."
+},
+{
+"id": "006UY00000EgwE1YAJ",
+"acct": "Roblox",
+"opp": "Roblox - Marketplace Refund",
+"old": "Business processes",
+"prior": "Payment Processing & Settlement",
+"rat": "Payment refund workflow for marketplace transactions \u2014 money movement (refunds).",
+"ev": "details \"Economy team - payment refund workflow for marketplace transactions\""
+},
+{
+"id": "006UY00000F7iWmYAJ",
+"acct": "Dubclub",
+"opp": "Dubclub - Push Notifications",
+"old": "SMS & Emails",
+"prior": "Communications & Marketing Platform",
+"rat": "Outbound push-notification delivery to users; old value \"SMS & Emails\" aligns. Thin but consistent (no doc).",
+"ev": "details \"Push notifications to users\""
+},
+{
+"id": "006UY00000YoDWLYA3",
+"acct": "Common Room",
+"opp": "Common Room - Customer Facing Workflow Automation",
+"old": "Other",
+"prior": "Other",
+"rat": "Generic configurable workflow-automation engine: customers build their own no-code automations (each runs as a Temporal workflow). Examples span Slack notify, C",
+"ev": "Use_Case_Details: 'customers build visual, no-code workflow automations triggered by community events. Each... runs as a Temporal workflow' (notify rep / alert "
+},
+{
+"id": "006UY00000ZKnRqYAL",
+"acct": "Oneleet",
+"opp": "Oneleet - Compliance Workflow Orchestration",
+"old": "Other",
+"prior": "Other",
+"rat": "Workload = compliance/GRC workflow orchestration (recurring SOC 2/ISO 27001 evidence collection, reminders, completion tracking). Web confirms Oneleet is a comp",
+"ev": "Use_Case_Details (AE-inferred): 'Compliance workflow orchestration \u2014 automating steps for SOC 2 / ISO 27001 certification ... recurring evidence collection, rem"
+},
+{
+"id": "006UY00000A9ZlZYAV",
+"acct": "Ford Motor Company",
+"opp": "Ford - Vehicle Onboarding",
+"old": "Lifecycle Management",
+"prior": "Infrastructure Automation & CI/CD",
+"rat": "Doc: engaged org is \"Vehicle Onboarding CI/CD\"; orchestrates provisioning/standing-up of in-car software services per...",
+"ev": "Doc \"Ford - Vehicle Onboarding\": org \"Vehicle Onboarding CI/CD\"; \"onboarding ..."
+},
+{
+"id": "006UY00000DRAAJYA5",
+"acct": "Sinch",
+"opp": "Sinch - Agentic AI SMS processing",
+"old": "AI/ML Orchestration",
+"prior": "AI - Agents",
+"rat": "Autonomously answers inbound FAQ/sales SMS in the human-agent inbox (\"answer an increasing proportion autonomously\");...",
+"ev": "details \"answer an increasing proportion of questions autonomously\"; name \"Ag..."
+},
+{
+"id": "0065f00000ITnRBAA1",
+"acct": "Motion",
+"opp": "Motion - Update Function",
+"old": "Business processes",
+"prior": "Other",
+"rat": "Gong-confirmed: \"Update Function\" = per-user calendar-optimization/scheduling workflow (+ calendar event sync...",
+"ev": "Gong call 7264801626406725495: \"calendar event sync workflow and an update fu..."
+},
+{
+"id": "006UY00000bBdDfYAK",
+"acct": "Artisan",
+"opp": "Artisan - AI Sales Outreach",
+"old": "Other",
+"prior": "Communications & Marketing Platform",
+"rat": "Opp's own details: rebuilding their scheduling engine to orchestrate outbound sales outreach \u2014 dynamic multi-step sequence scheduling with day intervals, mailbo",
+"ev": "Use_Case_Details: 'dynamic multi-step outreach sequence scheduling with day intervals, mailbox capacity checks, and assigning outreach across multiple senders a"
+},
+{
+"id": "0065f00000KSJGZAA5",
+"acct": "Array",
+"opp": "Array \u2013 Expansion, Webhooks",
+"old": "Business processes",
+"prior": "Data Pipelines & ETL",
+"rat": "Webhooks/event-delivery workload \u2014 reliable webhook event delivery between systems. (Linked doc not found; both opp f...",
+"ev": "details \"Webhooks prod namespace is live\"; name \"Array \u2013 Expansion, Webhooks\""
+},
+{
+"id": "006UY000008DHknYAG",
+"acct": "Cloudinary",
+"opp": "Cloudinary - Media Infra Orchestration",
+"old": "Business processes",
+"prior": "Other",
+"rat": "Doc + opp: Temporal orchestrating media processing (transcoding/resizing images & videos into variants); no AI infere...",
+"ev": "Doc \"Cloudinary Notes\": \"orchestrate long-running, asynchronous media process..."
+},
+{
+"id": "006UY000008lyiUYAQ",
+"acct": "Sinch",
+"opp": "Sinch - Chatlayer Bot",
+"old": "Business processes",
+"prior": "AI - Processing Pipelines",
+"rat": "Doc: each user message triggers a Temporal \"conversation workflow\" running the message through NLP\u2192intent\u2192response; a...",
+"ev": "Doc \"Sinch ChatLayer Use Case Discovery\": \"Each message triggers a workflow\";..."
+},
+{
+"id": "006UY000001Cr85YAC",
+"acct": "Stripe",
+"opp": "Stripe - Java Migration",
+"old": "Unknown",
+"prior": "Other",
+"rat": "Explicitly an OSS-to-Cloud migration of Temporal's own Java namespaces; no single product workflow named. Migration o...",
+"ev": "details \"Migrating the remaining smaller Java namespaces to Temporal Cloud\""
+},
+{
+"id": "0065f00000IUwGMAA1",
+"acct": "Rippling",
+"opp": "Rippling - Filing Factory 3/23",
+"old": "Business processes",
+"prior": "Financial Services & Lending",
+"rat": "Doc: payroll tax computation, tax payment scheduling, and filings \u2014 a regulated financial product workflow be...",
+"ev": "Doc (Filing Factory): \"payroll tax computation, tax payment scheduling, payro..."
+},
+{
+"id": "006UY00000Ce9FNYAZ",
+"acct": "AppDirect",
+"opp": "AppDirect - Workload - Commissions",
+"old": "Business processes",
+"prior": "Payment Processing & Settlement",
+"rat": "Doc: recurring advisor commission payouts flowing through a multi-step approval process \u2014 money moving to advisors (p...",
+"ev": "Doc \"AppDirect Meeting Notes\": \"Recurring advisor commission payments... dire..."
+},
+{
+"id": "006UY000002G7m0YAC",
+"acct": "Snap",
+"opp": "Snap - Snaptasks Scheduled Task Execution",
+"old": "Business processes",
+"prior": "Control Plane Operations",
+"rat": "Doc: cron-based scheduled-task execution \"offered as a generic platform for internal consumption\" / \"foundational dat...",
+"ev": "Doc \"Snap - 2024 Renewal Positioning\": \"Snaptasks (cron based)... Offered as ..."
+},
+{
+"id": "006UY00000NJDfRYAX",
+"acct": "Redo",
+"opp": "Redo - Marketing",
+"old": "Workflows",
+"prior": "Communications & Marketing Platform",
+"rat": "Opp details describe orchestrating outbound marketing emails/texts, with persona-based personalized messages sent based on client engagement \u2014 a textbook outbou",
+"ev": "details: 'Workflow for sending marketing emails and texts ... personalized messages are sent depending on their client's engagement'"
+},
+{
+"id": "006UY000008rFyoYAE",
+"acct": "JPMorgan Technology Services",
+"opp": "JTS Banking-as-a-Service Workload",
+"old": "Business processes",
+"prior": "Financial Services & Lending",
+"rat": "Banking-as-a-Service workload whose named core workflows are loan origination and credit card origination (regulated lending/credit product flows) plus per-prod",
+"ev": "details: 'Onboarding new customers per product (UI status), loan origination, credit card origination'. Linked Doc '1JYRFB41...' titled 'Chase Inte..."
+},
+{
+"id": "0065f00000DqSHsAAN",
+"acct": "noon",
+"opp": "Noon- Assorted APIs",
+"old": "Business processes",
+"prior": "Other",
+"rat": "Deliberately generic (\"various APIs supporting ecommerce\"), no single primary outcome named. The only Drive d...",
+"ev": "details \"Various APIs supporting Noon Ecommerce\"; Drive \"API Payment use case..."
+},
+{
+"id": "006UY000004drmvYAA",
+"acct": "Hapara",
+"opp": "Hapara - Student Sign Up",
+"old": "Business processes",
+"prior": "Customer Onboarding & Identity Verification",
+"rat": "Opp is the student sign-up/join-class flow: on signup Temporal provisions the student's Google Drive folders/artifacts and manages that lifecycle (separate from",
+"ev": "Gong call 8795679081535987217: 'when we get a bunch of like students and classrooms, we actually need to create a bunch of artifacts in Google... u..."
+},
+{
+"id": "006UY000002G63XYAS",
+"acct": "Snap",
+"opp": "Snap - Music Content ID (OSS Migration)",
+"old": "Business processes",
+"prior": "AI - Processing Pipelines",
+"rat": "OSS-migration deal. Name 'Music Content ID' implies a fixed pipeline running music/media through analysis/models to identify content. Details are only a namespa",
+"ev": "Name: 'Snap - Music Content ID (OSS Migration)'; details 'ct-music-content-id-prod.2da40' (namespace only); Doc 1Y-rkigb... permission-denied."
+},
+{
+"id": "006UY00000ZM89FYAT",
+"acct": "Proof",
+"opp": "Proof - Document Processing / PDF Generation",
+"old": "Other",
+"prior": "Other",
+"rat": "Gong (customer's words) confirms the anchored workload = high-volume document processing & PDF generation for their legal process-serving marketplace. Not AI-dr",
+"ev": "Gong call 1867540403612167652 (lead at Proof): 'we do document processing pretty heavy... We create a lot of pdf's so I think we're going to use it there'; AI e"
+},
+{
+"id": "006UY00000DROmjYAH",
+"acct": "noon",
+"opp": "Noon - Catalog content",
+"old": "Business processes",
+"prior": "Data Pipelines & ETL",
+"rat": "Bulk-updating ~1M product catalog attributes/day via flaky APIs with Temporal for resilience = moving/transforming catalog data between systems, not a physical ",
+"ev": "details: 'Update product catalog details (colour, model etc). Approx 1m products change every day. APIs to carry out the updates are flaky, Tempora..."
+},
+{
+"id": "006UY00000EK6fVYAT",
+"acct": "Loop",
+"opp": "Loop - AI Systems Use Case",
+"old": "AI/ML Orchestration",
+"prior": "AI - Processing Pipelines",
+"rat": "Loop's Temporal workload coordinates 'AI systems' that extract ~4 data points from each logistics document by running them through their in-house specialized AI",
+"ev": "Gong call 6389785498122155002: 'We actually extract a lot of data from documents. Imagine each document... we probably extract about four data poin..."
+},
+{
+"id": "006UY00000FwN22YAF",
+"acct": "Tella.tv",
+"opp": "Tella - Video Export",
+"old": "Business processes",
+"prior": "AI - Processing Pipelines",
+"rat": "Tella runs a fixed media-processing pipeline on Temporal: video export = split video into parts, fan out render jobs on Lambda, stitch back into one file; plus ",
+"ev": "Gong call 9221430827863985803: 'we shipped a new exporter... splitting it into very small parts... then it will stitch everything together... we ac..."
+},
+{
+"id": "006UY00000NZz1mYAD",
+"acct": "ChainPatrol Inc.",
+"opp": "ChainPatrol asset scanning pipeline",
+"old": "Workflows",
+"prior": "AI - Processing Pipelines",
+"rat": "Fixed scanning pipeline: consumes feeds, enriches via APIs, applies detection rules, outputs threat verdicts (phishing/impersonation classification). Doc labels",
+"ev": "details: 'enriches them using internal and third-party APIs, applies detection rules, and outputs verdicts on whether the assets are threats (phish..."
+},
+{
+"id": "0065f00000OR2VIAA1",
+"acct": "Snap",
+"opp": "Snap - Autopilot Integration Testing (OSS Migration)",
+"old": "Business processes",
+"prior": "Infrastructure Automation & CI/CD",
+"rat": "Doc names this workload: an E2E platform to run integration tests across 8-9 microservices via child workflows. Primary outcome is operating software/test infra",
+"ev": "Doc 'Snap - 2024 Renewal Positioning': 'Autopilot - integration testing - 8 or 9 microservices... E2E platform to run a set of integration tests. C..."
+},
+{
+"id": "0065f00000IVsqwAAD",
+"acct": "ConductorOne, Inc",
+"opp": "ConductorOne - Provisioning + Tasks/Ticket - workload",
+"old": "Business processes",
+"prior": "Control Plane Operations",
+"rat": "Multi-workload (3 buckets); dominant = identity-access provisioning across third-party SaaS via APIs/policy \u2014...",
+"ev": "Doc: \"secures workforce identity ... central access controls and automation\";..."
+},
+{
+"id": "006UY00000SSVokYAH",
+"acct": "SoFi",
+"opp": "SoFi - Expand - Rico",
+"old": "Business processes",
+"prior": "Other",
+"rat": "Opp 'Expand - Rico' has Details='TBD', no doc, and CreatedDate 2025-11 (after most Gong coverage). No usable per-opp signal to identify the workload; legacy 'Bu",
+"ev": "details 'TBD'; Doc null; no usable evidence"
+},
+{
+"id": "006UY000009nvmMYAQ",
+"acct": "Circle",
+"opp": "Circle - Minting/Burning Migration",
+"old": "Business processes",
+"prior": "Payment Processing & Settlement",
+"rat": "Workload is minting/burning USDC = issuing/redeeming a stablecoin against fiat reserves, i.e. money/value moving and settling correctly. Gong confirms 'workflow",
+"ev": "details 'Workload Migration: Minting and Burning USDC Coin'; Gong call 3724116328857950180: rep 'I think this is the minting and burning use case',..."
+},
+{
+"id": "0065f000009yeSaAAI",
+"acct": "ANZ",
+"opp": "ANZ- Account Origination & Statements",
+"old": "Business Transactions",
+"prior": "Customer Onboarding & Identity Verification",
+"rat": "Multi-workload (Origination + Statements); dominant half = KYC/CTF new-customer origination. DATA QUALITY: op...",
+"ev": "Drive \"ANZ Meeting Log\": \"Origination workflow - KYC\"; \"inbound onboarding pr..."
+},
+{
+"id": "0065f000005gz5qAAA",
+"acct": "Box",
+"opp": "Box - File Systems - LFO",
+"old": "MicroServices Orchestration",
+"prior": "Data Pipelines & ETL",
+"rat": "Box core-product file sync at scale (Large Folder Operations). Primary outcome is moving/syncing file data across storage/systems, not a product workflow. Legac",
+"ev": "details: 'File sync for core product/ Large Folder Operations'"
+},
+{
+"id": "0065f00000LjciIAAR",
+"acct": "Netflix",
+"opp": "Netflix - Managed Delivery",
+"old": "Infrastructure applications",
+"prior": "Infrastructure Automation & CI/CD",
+"rat": "Netflix Managed Delivery is a continuous-delivery layer on top of Spinnaker: delivery config describes how code is provisioned per environment, with promotion/v",
+"ev": "Doc \"Netflix Managed Delivery - Use Case\": \"delivery config describes how you want the code to be provisioned for each environment... abstraction o..."
+},
+{
+"id": "0065f00000Nj4HDAAZ",
+"acct": "Airbnb",
+"opp": "Airbnb - MarTech - Voyager User-Triggered Notifications (Elvis/Icons & Signups)",
+"old": "SMS & Emails",
+"prior": "Communications & Marketing Platform",
+"rat": "Event-driven MarTech notifications sending marketing emails + push to Airbnb users when listings go live; legacy value 'SMS & Emails' and 'MarTech' in name all ",
+"ev": "details: 'Event-driven marketing notifications. Sends emails and push notifications to Airbnb users when popular listings go live.'; legacy Use_cas..."
+},
+{
+"id": "006UY000001IRqnYAG",
+"acct": "Goldsky (Endless Sky Inc.)",
+"opp": "Endless Sky- distributed snapshotting- expansion",
+"old": "Business processes",
+"prior": "Data Pipelines & ETL",
+"rat": "Opp details ('distributed snapshotting') were thin, so anchored to the use-case doc: Goldsky runs real-time blockchain indexing/data infrastructure on Temporal ",
+"ev": "Doc \"GoldSky Meeting Notes\": \"Goldsky builds real-time blockchain indexing and data infrastructure... data pipelines, subgraph indexing, and real-t..."
+},
+{
+"id": "006UY000004ttftYAA",
+"acct": "SoFi",
+"opp": "SoFi - Invest Team - Market Data",
+"old": "Business processes",
+"prior": "Data Pipelines & ETL",
+"rat": "Opp 'Invest Team - Market Data' has null Details; only a spreadsheet linked (not fetchable as a doc). Name implies ingesting/distributing market data feeds for ",
+"ev": "Name 'SoFi - Invest Team - Market Data'; Details null; Doc is a spreadsheet (not classifiable content)"
+},
+{
+"id": "006UY00000DHz2oYAD",
+"acct": "Rutter",
+"opp": "Rutter - Report Generation Use Case",
+"old": "Business processes",
+"prior": "Data Pipelines & ETL",
+"rat": "Opp details 'GET use case to retrieve data and generate a report'; Gong confirms a read-path endpoint that retrieves data and produces a report, moved to an asy",
+"ev": "Gong call 4743610520957358370: 'one of our endpoints... for reading data... for producing a report of sorts, and that report takes slightly longer ..."
+},
+{
+"id": "006UY000005KWnOYAW",
+"acct": "Snap",
+"opp": "Snap - Grouping - Short Running 20-61 APS (OSS Migration)",
+"old": "Business processes",
+"prior": "Other",
+"rat": "OSS-migration capacity-grouping line item. Details ('Short Running, Medium Volume 20-61 APS') describe throughput sizing only, no use-case workflow. No litmus c",
+"ev": "details 'Short Running, Medium Volume 20-61 APS'; Name 'Grouping - Short Running 20-61 APS (OSS Migration)'; Doc null."
+},
+{
+"id": "006UY000007ZWHBYA4",
+"acct": "AngelList (AL Advisor Management, Inc)",
+"opp": "AngelList-Relay- Workload",
+"old": "Business processes",
+"prior": "AI - Processing Pipelines",
+"rat": "Relay is an AI-powered portfolio analyzer: forwarded investment docs/emails are run through AI models for term extraction (24+ terms), parsing (99% accuracy) an",
+"ev": "Doc \"AngelList JM Temporal Commercial Use Case Document\": 'AI-powered term extraction: Forward investment documents... Relay automatically extracts..."
+},
+{
+"id": "006UY000000oi5vYAA",
+"acct": "Stripe",
+"opp": "Stripe - Revenue Engine",
+"old": "Business Transactions",
+"prior": "Payment Processing & Settlement",
+"rat": "No Details or doc; only the name 'Revenue Engine' + legacy 'Business Transactions'. For Stripe (a payments company) a revenue engine most plausibly handles bill",
+"ev": "Opp Name 'Stripe - Revenue Engine'; Use_case__c 'Business Transactions'; Details null, Doc null; Gong (jeffschoner@stripe.com) returned only undate..."
+},
+{
+"id": "006UY00000HIKGFYA5",
+"acct": "Cisco",
+"opp": "Cisco - Armorblox - AI Defense",
+"old": "AI/ML Orchestration",
+"prior": "AI - Processing Pipelines",
+"rat": "Armorblox is Cisco's AI email/threat-security product: it runs inbound messages through AI/NLU models to detect and classify threats (phishing/BEC/fraud) - a fi",
+"ev": "Opp Name 'Cisco - Armorblox - AI Defense' (Armorblox = AI-driven email threat detection/classification); legacy Use_case__c 'AI/ML Orchestration'. ..."
+},
+{
+"id": "006UY000002HJZpYAO",
+"acct": "Nvidia",
+"opp": "Brev - Migration",
+"old": "Infrastructure applications",
+"prior": "Infrastructure Automation & CI/CD",
+"rat": "Pure OSS->Temporal Cloud migration deal (\"currently self hosting, will be moving workloads onto Temporal Cloud\"); legacy value was 'Infrastructure applications'",
+"ev": "details 'They are currently self hosting, but will be moving their workloads onto Temporal Cloud'; Gong call 8303984250850917228: 'we use Temporal ..."
+},
+{
+"id": "006UY00000L3NVTYA3",
+"acct": "Block",
+"opp": "KGoose - Tiles & Co-Pilot",
+"old": "AI/ML Orchestration",
+"prior": "AI - Agents",
+"rat": "Block's Goose is an open-source AI agent that autonomously plans and executes multi-step software engineering tasks (builds projects, writes/executes code, debu",
+"ev": "details: 'Goose is an open-source, local-first AI agent... It can build entire projects from scratch, write and execute code, debug failures, orche..."
+},
+{
+"id": "0065f00000Nj7Y4AAJ",
+"acct": "Will Bank",
+"opp": "Will Bank \u2013 Pix Transactions",
+"old": "Business Transactions",
+"prior": "Payment Processing & Settlement",
+"rat": "Will Bank workload processes Pix transactions (Brazil's instant payment rail). Primary outcome is money moving correctly between accounts. Opp name, details, an",
+"ev": "details \"Process Pix Transactions\" + name \"Will Bank \u2013 Pix Transactions\"; Pix = instant payment system"
+},
+{
+"id": "006UY000001mfZlYAI",
+"acct": "Motion",
+"opp": "Motion - expansion (iCalendar Support)",
+"old": "Business processes",
+"prior": "Data Pipelines & ETL",
+"rat": "Opp is a Calendar Event Sync Workflow that polls and syncs iCalendar data between calendar systems; primary outcome is moving/syncing calendar data, not an LLM ",
+"ev": "details 'Calendar Event Sync Workflow ... added iCalendar Support'; Doc \"Motion_UseCase\": 'Syncing Calendars. They added iCalendar Support. They wi..."
+},
+{
+"id": "006UY00000L3dvBYAR",
+"acct": "Upstart",
+"opp": "Upstart - Core Pricing PL",
+"old": "Loan Origination",
+"prior": "Financial Services & Lending",
+"rat": "Upstart is a lending platform; opp details explicitly state 'Loan origination - pricing workflow' and legacy type was 'Loan Origination'. Loan pricing/originati",
+"ev": "details 'Loan origination - pricing workflow'; legacy Use_case__c 'Loan Origination'; Account Upstart (consumer lending)"
+},
+{
+"id": "006UY00000PlzG9YAJ",
+"acct": "SoFi",
+"opp": "SoFi - Communications Platform Service (CPS)",
+"old": "SMS & Emails",
+"prior": "Communications & Marketing Platform",
+"rat": "Opp Details 'Communications Platform for all SoFi Services' + name 'Communications Platform Service (CPS)' + legacy 'SMS & Emails' all converge on orchestrating",
+"ev": "details 'Communications Platform for all SoFi Services'; legacy Use_case__c 'SMS & Emails'"
+},
+{
+"id": "006UY00000Xlna9YAB",
+"acct": "gfx labs",
+"opp": "gfx labs -  OkuTrade",
+"old": "Other",
+"prior": "Other",
+"rat": "Doc + opp fields agree: workload = OkuTrade's quote-aggregation engine \u2014 each quote is a workflow fanning out to ~15 DeFi venues, aggregating responses, long-po",
+"ev": "Doc 1jZkfRQI...: 'orchestrate quote requests across ~15 backend venues; each quote is a workflow that fans out... aggregates responses'; 'No fee on the platform"
+},
+{
+"id": "006UY00000LmAibYAF",
+"acct": "Qualtrics",
+"opp": "OXM Pipeline Workload",
+"old": "AI/ML Orchestration",
+"prior": "AI - Processing Pipelines",
+"rat": "OXM (Omnichannel Experience Manager) pipeline ingests voice transcripts from call centers and customer-service emails and runs them through processing/enrichmen",
+"ev": "Gong call 4213309725721189947: 'This oxm pipeline relies on voice transcripts, on call centers or email back and forth with customer service repres..."
+},
+{
+"id": "0065f00000PWyprAAD",
+"acct": "SailPoint",
+"opp": "Sailpoint - IdentityNow Workflows",
+"old": "Business Transactions",
+"prior": "Other",
+"rat": "SailPoint's IdentityNow 'Workflows' is a generic, customer-configurable workflow-orchestration engine (their own product) that clients use for many things (empl",
+"ev": "details: 'They provide an orchestration engine to facilitate client workflows, backed by Temporal'; Gong call 8692547265658794591: 'some of our cus..."
+},
+{
+"id": "006UY00000FODjUYAX",
+"acct": "Recargapay",
+"opp": "Recargapay - Lending Operation",
+"old": "Loan Origination",
+"prior": "Financial Services & Lending",
+"rat": "Lending product workflow: customers apply for short-term cash loans (loan origination/underwriting). Legacy value 'Loan Origination' and details both point at a",
+"ev": "details: \"Recargapay's lending process, where customers can apply for short-term cash loans.\"; legacy Use_case__c='Loan Origination'"
+},
+{
+"id": "006UY00000G3dOcYAJ",
+"acct": "Woven by Toyota, Inc",
+"opp": "woven workload",
+"old": "Business processes",
+"prior": "Control Plane Operations",
+"rat": "Woven by Toyota built an internal developer platform that provisions/de-provisions thousands of devs and guest companies (Panasonic/Denso) just-in-time into 8-1",
+"ev": "Gong call 3257343229574672396: 'we're trying to consolidate that into a single platform ... we can just simply provision them into different tools ..."
+},
+{
+"id": "0065f00000PX1pfAAD",
+"acct": "Netflix",
+"opp": "Netflix - DP Flink",
+"old": "Infrastructure applications",
+"prior": "Data Pipelines & ETL",
+"rat": "Details \"Managing Flink Jobs\" \u2014 Apache Flink is a stream data-processing engine, so orchestrating Flink jobs primarily moves/transforms streaming data. Competin",
+"ev": "details: \"Managing Flink Jobs (see replay talk)\"; opp Name \"Netflix - DP Flink\" (DP = data platform/pipeline)."
+},
+{
+"id": "006UY00000NcIl4YAF",
+"acct": "Alaska Airlines",
+"opp": "Alaska Airlines - Bookings",
+"old": "Business Transactions",
+"prior": "Order Management & Fulfillment",
+"rat": "Opp details state all Alaska Air bookings run through Temporal. Gong confirms a flight booking flow: flight search hands off to a booking engine that takes cart",
+"ev": "details 'All bookings for Alaska Air are running through Temporal'; Gong call 4528012429543760627: 'we are rebuilding our booking flow ... booking ..."
+},
+{
+"id": "006UY000005f6UnYAI",
+"acct": "Included Health",
+"opp": "Included Health - Care Flow Tracker",
+"old": "Entity Lifecycle Management",
+"prior": "Other",
+"rat": "Generic business-process orchestration: a 'pizza tracker' for the patient care journey (appointment->xray->MRI->hospital->uber ride). Standard workflow orchestr",
+"ev": "details: 'a collection of linked tasks that find their end in the delivery of a service for the client. Can be short to very long running workflows..."
+},
+{
+"id": "006UY000007fkZ8YAI",
+"acct": "Lumen Technologies, Inc.",
+"opp": "Lumen - Network & Platform Automation - Blue Steel",
+"old": "Infrastructure applications",
+"prior": "Infrastructure Automation & CI/CD",
+"rat": "Lumen's 'network and platform automation team' uses Temporal to automate change execution (server config changes) and event-driven remediation of servers/networ",
+"ev": "Gong call 342082707306286248: 'our team called the... network and platform automation team' doing 'automating change execution... changes on server..."
+},
+{
+"id": "0065f00000PWpZSAA1",
+"acct": "Square",
+"opp": "CashApp Plasma",
+"old": "Infrastructure applications",
+"prior": "Other",
+"rat": "Plasma is the state-machine framework behind all CashApp processing; the in-scope module adds extendible alerting for idle/abandoned workflows. It's a generic i",
+"ev": "details: 'Plasma is the State machine that is behind all CashApp processing... a new module that leverages Temporal for allowing people to be alert..."
+},
+{
+"id": "0065f00000JdJFhAAN",
+"acct": "Logixboard Inc",
+"opp": "Logixboard \u2013 Expansion",
+"old": "Business processes",
+"prior": "Other",
+"rat": "Generic platform-replacement deal: 'replacement of systems that previously leveraged Kinesis Lambdas and Camunda' (BPM orchestrator + stream processing). No spe",
+"ev": "details 'Full ramp of replacement of systems that previously leveraged Kinesis Lambdas and Camunda'; Gong call 3018042191132296011 (CS check-in): '..."
+},
+{
+"id": "006UY00000D31L3YAJ",
+"acct": "Instacart",
+"opp": "Instacart - Caper",
+"old": "Human-In-The-Loop Approval Workflows",
+"prior": "AI - Processing Pipelines",
+"rat": "Caper is Instacart's AI computer-vision smart cart; workload reviews items detected in the cart with human intervention. This is data (cart items/images) run th",
+"ev": "details 'Caper cart human in the loop cart review'; Doc \"Instacart Caper Use Case\": 'Caper smart cart - need to review items in cart with human int..."
+},
+{
+"id": "006UY00000F42CIYAZ",
+"acct": "Vantage",
+"opp": "Vantage - Sidekiq Replacement",
+"old": "Business processes",
+"prior": "Data Pipelines & ETL",
+"rat": "Opp name 'Sidekiq Replacement' + details 'Sidekiq replacement' are generic, but the use-case doc (correct account, 11/12 section matching CreatedDate) shows the",
+"ev": "Doc \"Vantage - Use case sheet\": 'Migrating background job processing (especially complex, long-running ETL workflows) from Sidekiq to Temporal'; 'T..."
+},
+{
+"id": "006UY00000CMY2XYAX",
+"acct": "SoFi",
+"opp": "SoFi - money-risk-fraud",
+"old": "Identity Verification / \"Know Your Customer\"",
+"prior": "Other",
+"rat": "Opp 'money-risk-fraud', Details 'Fraud detection for money movement'. Primary outcome is fraud/risk detection, not money moving correctly (Payment) nor new-cust",
+"ev": "details 'Fraud detection for money movement'; legacy 'Identity Verification / KYC' but workload is fraud detection, not onboarding"
+},
+{
+"id": "0065f00000KSioWAAT",
+"acct": "HashiCorp",
+"opp": "HashiCorp - Expand - Self Hosted Migration",
+"old": "Infrastructure applications",
+"prior": "Infrastructure Automation & CI/CD",
+"rat": "Details: managing/spinning up nomad clusters and the HashiStack that HCP/TFC run on = provisioning/operating infra. Tie-break vs Control Plane (it provisions th",
+"ev": "details: 'manage nomad clusters in support of Terraform Cloud. It spins up the HashiStack that HCP and TFC run on'; legacy Use_case__c='Infrastruct..."
+},
+{
+"id": "006UY000004NOvQYAW",
+"acct": "Stripe",
+"opp": "Stripe - bin-sponsor-eligibility",
+"old": "Business processes",
+"prior": "Financial Services & Lending",
+"rat": "No Details/doc. Name 'bin-sponsor-eligibility' = BIN-sponsor (bank issuer-sponsorship) eligibility, a regulated card-program approval/eligibility workflow beyon",
+"ev": "Opp Name 'Stripe - bin-sponsor-eligibility'; Use_case__c 'Business processes'; Details null, Doc null; no datable Gong calls near CreatedDate 2024-02."
+},
+{
+"id": "006UY00000AcvxBYAR",
+"acct": "Neon",
+"opp": "Neon - Payday Loan",
+"old": "Loan Origination",
+"prior": "Financial Services & Lending",
+"rat": "Payroll advance / payday loans \u2014 a regulated lending product workflow.",
+"ev": "details \"Payroll advance loans\""
+},
+{
+"id": "0065f00000KSbe8AAD",
+"acct": "Stripe",
+"opp": "Stripe - Automation",
+"old": "Business processes",
+"prior": "Other",
+"rat": "Linked doc 'Automation Use Case' describes a migration/consolidation deal: Platform Team moving self-hosted Temporal production workflows to Temporal Cloud to o",
+"ev": "Doc 'Automation Use Case': 'move self hosted production workflow / use case to Temporal Cloud to free up resources and offload operational workload..."
+},
+{
+"id": "0065f00000NHozdAAD",
+"acct": "AppFolio, Inc",
+"opp": "Appfolio- BPMN Engine (realm)- Expansion",
+"old": "Business processes",
+"prior": "Other",
+"rat": "AppFolio Realm team's workload is a generic customer-configurable BPMN/workflow execution engine (an in-house DSL where AppFolio's 18k property-mgmt customers d",
+"ev": "details: 'Realm Team- led by Sebastian- Replacing clunky BPMN engine ... supporting their 18k customers.' Doc \"Appfolio Meeting Notes\": 'Use Case: ..."
+},
+{
+"id": "006UY000002q8LJYAY",
+"acct": "HackerRank",
+"opp": "HackerRank - Integrations",
+"old": "Business processes",
+"prior": "Data Pipelines & ETL",
+"rat": "Opp details anchor on integrating/syncing with external applicant tracking systems (ATS) via async workflows \u2014 moving data between HackerRank and external syste",
+"ev": "details 'centralize and manage integrations and asynchronous workflows with applicant tracking systems (ATS)'; Doc \"HackerRank_PaltformTeam\": broad..."
+},
+{
+"id": "006UY000008lF5RYAU",
+"acct": "Kotak Mahindra Bank Pvt Ltd",
+"opp": "Kotak - Transaction Approval System  (workload)",
+"old": "Business processes",
+"prior": "Payment Processing & Settlement",
+"rat": "Opp name 'Transaction Approval System' = TAS, the bank's branch-counter cash deposit/withdrawal transaction system (Tier-1, first project live per the doc). Pri",
+"ev": "Doc \"Kotak Use Case Summary\": 'Branch transformation (Transaction Authorization System [TAS]) (1st project to be live)'. Gong call 7124706873529728..."
+},
+{
+"id": "006UY00000EsXmvYAF",
+"acct": "Kotak Mahindra Bank Pvt Ltd",
+"opp": "Kotak customer journeys/onboarding",
+"old": "Loan Origination",
+"prior": "Financial Services & Lending",
+"rat": "Legacy tag 'Loan Origination' + Gong describe a consumer loan / retail-asset lending workflow (business loans, E-sign). Opp name says 'customer journeys/onboard",
+"ev": "Gong call 5388663306833028492: 'consumer loan processing related use case workflow, that we have to implement anyway.' Gong call 712470687352972898..."
+},
+{
+"id": "006UY00000GtyggYAB",
+"acct": "HDFC Ltd.",
+"opp": "HDFC API modernisation",
+"old": "Workflows",
+"prior": "Other",
+"rat": "Opp is 'HDFC API modernisation', details just 'API mgt'. No clean primary outcome maps to a litmus. Account doc is payments/CIF-centric and does not enrich an A",
+"ev": "details 'API mgt'; Gong calls 1439991440589768807 / 1842852420832791241 only use 'API' as a code term (codec, event sourcing, Nexus) - no API-manag..."
+},
+{
+"id": "006UY00000Z5Um6YAF",
+"acct": "Blocks",
+"opp": "Blocks - Blocks - Workflow orchestration engine",
+"old": "Other",
+"prior": "Other",
+"rat": "Generic, configurable workflow-orchestration engine: Temporal is the 'core orchestration engine' running user-defined DSL logic, schedulers, and time-based trig",
+"ev": "Details: 'core orchestration engine for their platform, dynamic DSL-based workflows that execute user-defined logic, power schedulers, time-based triggers'. Oth"
+},
+{
+"id": "0065f00000Lkm7uAAB",
+"acct": "Chase ICB",
+"opp": "Chase ICB Customer Onboarding/Credit Origination/Account Transfers",
+"old": "Business processes",
+"prior": "Financial Services & Lending",
+"rat": "Chase ICB 'borrow' multi-workload opp (onboarding + credit origination + account transfers). Gong shows the dominant, highest-volume Temporal use is consumer cr",
+"ev": "Gong call 1245/431: 'we use Temporal for as part of the origination process ... When we are originating lines of credit. We are also starting to lo..."
+},
+{
+"id": "006UY00000M0hgDYAR",
+"acct": "SoFi",
+"opp": "SoFi - Expand - Growth Platform - Campaign Growth & Automation",
+"old": "Lifecycle Management",
+"prior": "Communications & Marketing Platform",
+"rat": "Rich Details: self-service 'Journey Platform' modeled on Airbnb journey orchestration; marketing teams build referral/campaign journeys (enrollment, evaluation,",
+"ev": "details 'self-service Journey Platform modeled after Airbnb's journey orchestration ... Referral campaigns ... reward payouts to promoters and pros..."
+},
+{
+"id": "006UY00000XPebzYAD",
+"acct": "Postman Inc",
+"opp": "Postman Inc - Version Control",
+"old": "Workflows",
+"prior": "Infrastructure Automation & CI/CD",
+"rat": "VCS for Postman collections using Temporal for async merges/diffs and auto-syncing forked collections. Primary outcome is operating software version-control too",
+"ev": "details: 'Version Control System (VCS) for Postman collections... asynchronous merges and diffs... auto-syncing forked collections, which triggers ..."
+},
+{
+"id": "006UY00000KLbnSYAT",
+"acct": "Lindy.ai",
+"opp": "Lindy AI - Email Automation",
+"old": "AI/ML Orchestration",
+"prior": "AI - Agents",
+"rat": "Lindy is an AI workflow-automation platform (\"Zapier but with AI\"). The email-automation opp = an inbound-email trigger spins up a Temporal workflow that runs t",
+"ev": "Gong call 4772363581655655398 (near CreatedDate 2025-04-16): 'lindy... it's basically a workflow automation platform... like a zapier, but with AI...."
+},
+{
+"id": "006UY000005EfoQYAS",
+"acct": "Glovo",
+"opp": "Glovo - Logistics Aggregated Features",
+"old": "Operational Process",
+"prior": "Data Pipelines & ETL",
+"rat": "Orchestration aggregates/transforms feature data across services; ML models are downstream consumers (not inf...",
+"ev": "details \"orchestration ... to aggregate features used in various Logistics ML..."
+},
+{
+"id": "006UY00000QIE7BYAX",
+"acct": "Personio",
+"opp": "Personio - HR Custom workflows",
+"old": "Business processes",
+"prior": "Other",
+"rat": "Personio's 'Workflows and Integration' team builds a generic customer-defined HR workflow product (e.g. send a birthday card on an employee's birthday) inside t",
+"ev": "Gong call 531637554747780762: 'another team whose name is Workflows and Integration ... build a kind of a workflow product for new customers. Thing..."
+},
+{
+"id": "006UY00000L0QstYAF",
+"acct": "Intuit",
+"opp": "Content Safety",
+"old": "Workflows",
+"prior": "AI - Processing Pipelines",
+"rat": "Content-safety / image & content scanning is a fixed pipeline running media through AI models for moderation/classification. Legacy 'Workflows' value was generi",
+"ev": "Name 'Content Safety' + details 'Image and content scanning' = media/content classification pipeline through AI models. Gong: only one ABORTED call..."
+},
+{
+"id": "006UY00000XllenYAB",
+"acct": "Forward Financing",
+"opp": "Forward Financing - Cross-service workflows orchestration",
+"old": "Other",
+"prior": "Other",
+"rat": "Company is a lender, but the WORKLOAD is generic cross-service orchestration / monolith-to-microservices modernization (polyglot Rails/Go/Python, Sidekiq replac",
+"ev": "Details: 'orchestrate long-running, cross-service workflows across multiple applications (Rails, Go, Python)... net-new, long-running and complex workloads.' Do"
+},
+{
+"id": "006UY00000awGinYAE",
+"acct": "Auger",
+"opp": "Auger - Internal Operational & Infrastructure (Shinchan Namespace)",
+"old": "Other",
+"prior": "Other",
+"rat": "Genuine multi-workload internal-ops namespace: onboarding + infra provisioning (Terraform/CDKTF) + auto-logging with delivery guarantees, plus migration of home",
+"ev": "Details: 'Internal operational pipelines including customer onboarding workflows, infrastructure provisioning workflows (Terraform/CDKTF), and an auto-logging f"
+},
+{
+"id": "0065f00000JbeYLAAZ",
+"acct": "HDFC Ltd.",
+"opp": "HDFC Banking - eParty Service Platform (workload)",
+"old": "Business Transactions",
+"prior": "Data Pipelines & ETL",
+"rat": "Opp name anchors to 'eParty'. Multi-workload HDFC doc's eParty/Enterprise CIF section describes building a customer golden record and propagating writes from wr",
+"ev": "Doc 'HDFC Temporal Use Case Discovery Guide': 'Enterprise CIF programme - golden record for customer. Using Temporal to propagate write store to re..."
+},
+{
+"id": "006UY000004cyyXYAQ",
+"acct": "Anchor Labs, Inc.",
+"opp": "Anchorage Digitial-Self hosted Migration-Workload",
+"old": "Business processes",
+"prior": "Other",
+"rat": "Self-hosted Temporal -> Cloud migration deal spanning the whole platform (hundreds of workflow types, generic 'microservice orchestration backing core platform'",
+"ev": "details 'Microservice orchestration / critical business functions'; Doc \"Anchor Labs\": Use Case = 'Migration of self-hosted workload', 'Microservic..."
+},
+{
+"id": "006UY00000SNYddYAH",
+"acct": "Checkr",
+"opp": "Checkr - Progressive Reports",
+"old": "Workflows",
+"prior": "Customer Onboarding & Identity Verification",
+"rat": "Checkr is a background-check/employment-screening platform; 'Progressive Reports' is its feature that streams partial screening results as checks complete. Back",
+"ev": "details 'Progressive reports' + Name 'Checkr - Progressive Reports' (Checkr = background-check vendor; progressive report = staged delivery of scre..."
+},
+{
+"id": "0065f00000OR2V8AAL",
+"acct": "Snap",
+"opp": "Snap - Atlas - Soft User Delete (OSS Migration)",
+"old": "Business processes",
+"prior": "Data Pipelines & ETL",
+"rat": "Opp details 'soft delete of snap user or content data' matches doc's named 'Soft (user) delete pipeline' for regulatory compliance. Primary outcome is moving/pu",
+"ev": "details 'soft delete of snap user or content data'; Doc: 'Soft (user) delete pipeline (largest by far). 4k qps. User deletion. User services team (..."
+},
+{
+"id": "006UY000008reFdYAI",
+"acct": "JOKR Services",
+"opp": "Jokr \u2013 Order Management",
+"old": "Business processes",
+"prior": "Order Management & Fulfillment",
+"rat": "Both opp Name (\"Jokr - Order Management\") and Details (\"Order managment\") directly and consistently name order management as the workload. Legacy value \"Busines",
+"ev": "details \"Order managment\"; name \"Jokr \u2013 Order Management\""
+},
+{
+"id": "006UY00000NF9qZYAT",
+"acct": "Intuit",
+"opp": "Intuit - Monetization and Subscriptions",
+"old": "Business processes",
+"prior": "Payment Processing & Settlement",
+"rat": "Subscription and billing workflows (QuickBooks/TurboTax) center on recurring charging/billing = money moving correctly. Best fit is Payment Processing & Settlem",
+"ev": "details 'Subscription and billing workflows for Intuit - Quickbooks, Turbotax are initial targets.' Subscription billing = recurring charge/capture..."
+},
+{
+"id": "006UY000004FjfJYAS",
+"acct": "Square",
+"opp": "CashApp: OS Activity",
+"old": "Business processes",
+"prior": "Data Pipelines & ETL",
+"rat": "Loanstar batch-processes the day's transactions and writes them to the Activity service to be displayed on the customer's Activity feed. Primary outcome is movi",
+"ev": "details: 'Cash's loan service (loanstar) processes a batches of transactions for the day and writes to the activity service to be displayed on the ..."
+},
+{
+"id": "006UY0000087pvdYAA",
+"acct": "SoFi",
+"opp": "Sofi - Affiliate Team",
+"old": "Business processes",
+"prior": "Communications & Marketing Platform",
+"rat": "Opp 'Affiliate Team' has null Details, no doc, CreatedDate 2024-05; legacy 'Business processes' generic. Affiliate-marketing program work most plausibly = campa",
+"ev": "Name 'Sofi - Affiliate Team'; Details null; Doc null; no usable evidence"
+},
+{
+"id": "006UY000000iwEnYAI",
+"acct": "Yum Brands",
+"opp": "Yum Brands - Curie Orders (US Pizza Hut)",
+"old": "Business Transactions",
+"prior": "Order Management & Fulfillment",
+"rat": "Opp name 'Curie Orders (US Pizza Hut)' and Details 'OMS' (Order Management System) both point directly at order processing/fulfillment. No competing type.",
+"ev": "details 'OMS'; name 'Yum Brands - Curie Orders (US Pizza Hut)'"
+},
+{
+"id": "0065f00000JcSNQAA3",
+"acct": "Yum Brands",
+"opp": "Yum Brands - Alpha Orders (US TacoBell, KFC)",
+"old": "Business Transactions",
+"prior": "Order Management & Fulfillment",
+"rat": "Name 'Alpha Orders' and lead detail 'Orders use case - expand to Taco Bell and Pizza Hut'; Payments/Menu are secondary scope under the orders program. Gong conf",
+"ev": "details 'Orders use case - expand to Taco Bell and Pizza Hut'; Gong call 4362403964962931228: 'order management systems... every order is a workflo..."
+},
+{
+"id": "006UY00000Oq8EzYAJ",
+"acct": "Samsara",
+"opp": "Samsara - Fleet Security",
+"old": "Operational Process",
+"prior": "Other",
+"rat": "Opp's own details 'Security, monitoring and alerting' describe a generic operational monitoring/alerting function, not a deploy/provision (Infra) or ticket-rout",
+"ev": "details 'Security, monitoring and alerting'; legacy Use_case__c='Operational Process'; account doc 'Use Case - Opportunity Summary - Samsara' cover..."
+},
+{
+"id": "006UY000003TaPlYAK",
+"acct": "Macquarie Group",
+"opp": "Macquarie Group - Loan Origination (workload)",
+"old": "Business Transactions",
+"prior": "Financial Services & Lending",
+"rat": "Both the opp Name ('Loan Origination') and Use_Case_Details__c ('Loan origination') unambiguously describe a lending/loan-origination workflow \u2014 a regulated fin",
+"ev": "details 'Loan origination' + Name 'Macquarie Group - Loan Origination (workload)'"
+},
+{
+"id": "006UY000006LkpBYAS",
+"acct": "ZoomInfo",
+"opp": "Zoominfo - Copilot Opp",
+"old": "AI/ML Orchestration",
+"prior": "AI - Processing Pipelines",
+"rat": "Doc: CoPilot = LLM-generated account briefs combining ZoomInfo + CRM data on a monthly sync \u2014 a generation/in...",
+"ev": "Doc \"Zoominfo CoPilot\": \"AI-generated (LLM) account briefs combining Zoominfo..."
+},
+{
+"id": "006UY000000nDU0YAM",
+"acct": "ANZ New Zealand Bank Limited",
+"opp": "ANZ NZ - Term deposit origination (workload)",
+"old": "Business processes",
+"prior": "Financial Services & Lending",
+"rat": "Opp Name and details center on term deposit origination at a bank, driven by a regulatory requirement to offload the mainframe and orchestrate the core-banking ",
+"ev": "Name: 'Term deposit origination (workload)'; details: 'regulatory requirement to being migrating off the mainframe ... Workflow processing and Tran..."
+},
+{
+"id": "006UY000005J2BLYA0",
+"acct": "Snap",
+"opp": "Snap - Platform Falcon (OSS Migration)",
+"old": "Business processes",
+"prior": "Infrastructure Automation & CI/CD",
+"rat": "OSS-migration deal. Details: workflows that analyze performance device runs and produce analysis decisions = part of dev/test/perf-engineering tooling. Best fit",
+"ev": "details 'Workflows that analyze performance device runs and produce analysis decisions.'; Name 'Platform Falcon (OSS Migration)'; Doc null."
+},
+{
+"id": "006UY000005KiwTYAS",
+"acct": "Snap",
+"opp": "Snap - Grouping - Short Running <20 APS (OSS Migration)",
+"old": "Business processes",
+"prior": "Other",
+"rat": "OSS-migration capacity-grouping line item. Details ('Short running, low volume, <20 APS') are throughput sizing only, no use-case workflow. No litmus cleanly fi",
+"ev": "details 'Short running, low volume, <20 APS'; Name 'Grouping - Short Running <20 APS (OSS Migration)'; Doc null."
+},
+{
+"id": "006UY00000B0pH8YAJ",
+"acct": "Samsara",
+"opp": "Samsara - Connected Workflows/Forms",
+"old": "Business processes",
+"prior": "Other",
+"rat": "Opp name + details (Samsara Connected Forms product URL) + the account doc all point to 'Connected Forms - Workflows that are configurable and customer facing' ",
+"ev": "Doc 'Use Case - Opportunity Summary - Samsara': 'Connected Forms - Workflows that are configurable and customer facing'; details = samsara.com/prod..."
+},
+{
+"id": "006UY00000CQSTBYA5",
+"acct": "Zillow Group",
+"opp": "Zillow - Expand - Leads Platform",
+"old": "Business processes",
+"prior": "Other",
+"rat": "Leads Platform orchestrates lead processing: leads ingested from web portals, quality-checked, routed with business logic, and tracked for 100% lead-status guar",
+"ev": "details 'new service to provide better visibility into leads'; Doc 'Zillow - ... Connections Platform - Leads': 'Leads Pipeline - All leads ... qua..."
+},
+{
+"id": "006UY00000G3YiJYAV",
+"acct": "Razorpay",
+"opp": "Razorpay workload",
+"old": "Payment Gateway",
+"prior": "Payment Processing & Settlement",
+"rat": "Razorpay is a payments company; both legacy Use_case__c and Details say 'payment gateway'. The Payment Processing litmus explicitly includes payment gateway int",
+"ev": "details: 'payment gateway'; legacy Use_case__c: 'Payment Gateway'; account = Razorpay (payments)"
+},
+{
+"id": "006UY00000Oa5xqYAB",
+"acct": "Indeed",
+"opp": "Indeed - Employer Job Platform (EJP)",
+"old": "Workflows",
+"prior": "Other",
+"rat": "Details 'Employer automation when candidates apply' describes generic event-driven workflow automation on the employer job platform \u2014 not data movement, payment",
+"ev": "details 'Employer automation when candidates apply'; legacy Use_case__c 'Workflows'; no Doc; Gong COMPLETED calls for gkarp@indeed.com are 2023-24 ..."
+},
+{
+"id": "006UY00000bQIATYA4",
+"acct": "Anthropic",
+"opp": "Anthropic - Antique: Internal Source Code Management",
+"old": "Other",
+"prior": "Infrastructure Automation & CI/CD",
+"rat": "Internal software/source-code lifecycle: merging code, choosing builds, event triggers, maintaining merge state. Primary outcome is operating/shipping software ",
+"ev": "Name: 'Antique: Internal Source Code Management'. Details: 'Internal software lifecycle management. Merging code, choosing builds and listens for event triggers"
+},
+{
+"id": "006UY00000XXfMLYA1",
+"acct": "Postman Inc",
+"opp": "Postman Inc - Collaboration Team",
+"old": "Other",
+"prior": "Other",
+"rat": "Generic shared namespace explicitly covering 'multiple use cases' (async task scheduling, long-running tasks, retries) for the Postman workspaces team. No singl",
+"ev": "Use_Case_Details: 'multiple use cases in this namespace...scheduling async tasks, or long running tasks, or tasks for which we need retries'. Gong: only CANCELL"
+},
+{
+"id": "006UY00000YRteLYAT",
+"acct": "Monk",
+"opp": "Monk - Real-Time Syncs",
+"old": "Other",
+"prior": "Data Pipelines & ETL",
+"rat": "Opp Name + details ('Real-Time Syncs (e.g., Stripe Webhooks)', '~250K/day') anchor to doc Workload 'Real-Time Syncs': event-driven syncs moving data between Mon",
+"ev": "Doc Workload 'Real-Time Syncs': 'Event-driven syncs between Monk's platform and customer ERPs (QuickBooks, NetSuite, Salesforce...)'; AE Use Case Type = 'Data P"
+},
+{
+"id": "006UY00000NbQ6LYAV",
+"acct": "Keebler Health",
+"opp": "Keebler Health document processing workflow",
+"old": "Workflows",
+"prior": "AI - Processing Pipelines",
+"rat": "Fixed healthcare document-processing pipeline: pull docs, run OCR (AWS Textract), extract entities (patients/doctors/encounters), apply AI models to derive diag",
+"ev": "details: 'orchestrate complex document processing workflows ... Running OCR (e.g."
+},
+{
+"id": "006UY00000WGrxBYAT",
+"acct": "Block",
+"opp": "Square - Block - Secret Tunnel",
+"old": "Identity Verification / \"Know Your Customer\"",
+"prior": "Customer Onboarding & Identity Verification",
+"rat": "Thin placeholder details ('NS mapping - will reach out to team') give no real workload signal; name 'Secret Tunnel' suggests infra/networking, conflicting with ",
+"ev": "details: 'NS mapping - will reach out to team' (placeholder, no signal); legacy Use_case__c='Identity Verification / \"Know Your Customer\"'; Gong: n..."
+},
+{
+"id": "006UY00000DLKAkYAP",
+"acct": "Unbabel",
+"opp": "Unbabel- Translation Service-workload",
+"old": "AI/ML Orchestration",
+"prior": "AI - Processing Pipelines",
+"rat": "Core product = translations powered by AI + human editors, run as defined pipelines with ~5-6 steps per workflow. The deal replaces their in-house workflow exec",
+"ev": "details 'main product serves translations powered by both AI and human editors ... solely replacing their executor'; Doc \"Unbabel Use Case & Meetin..."
+},
+{
+"id": "006UY000005f0h7YAA",
+"acct": "Xero",
+"opp": "Xero - Document Processing Modernisation",
+"old": "Business processes",
+"prior": "Other",
+"rat": "Accounting-software document processing (invoices, end-of-year bank/bill reconciliation) with human-in-the-loop approvals and long-running processes. No AI/LLM ",
+"ev": "Doc \"Use Case - Xero Document Processing\": details \"document processing e.g. invoice, end of year reconciliation between bank statement and bills, ..."
+},
+{
+"id": "006UY000008m1WfYAI",
+"acct": "Vodafone Group PLC",
+"opp": "Vodafone CPE Workload",
+"old": "Business processes",
+"prior": "Infrastructure Automation & CI/CD",
+"rat": "Opp Name 'CPE Workload' + Details anchor on provisioning Consumer Premise Equipment; doc confirms primary workload = orchestrating CPE box bootstrapping/provisi",
+"ev": "Doc \"Vodafone Networks/Home Use Case Discovery Guide\": 'Orchestrating CPE (Consumer Premise Equipment) customer boxes boot-strapping processes, lon..."
+},
+{
+"id": "006UY000009HvEPYA0",
+"acct": "Zillow Group",
+"opp": "Zillow - Land - Connections Platform - Findpro",
+"old": "Business Transactions",
+"prior": "Other",
+"rat": "FindPro is a marketplace platform matching home buyers/sellers with real-estate professionals via a connection algorithm; SMS to agents is one bidding step, not",
+"ev": "details 'Connections platform streamlines process of finding/connecting trusted real estate-related professionals with buyers. Algorithm to make co..."
+},
+{
+"id": "006UY00000KL72zYAD",
+"acct": "Apollo Global Management",
+"opp": "ISG - Tidal Modernization",
+"old": "Business processes",
+"prior": "Other",
+"rat": "Generic job-scheduler/workflow-engine modernization. 'Tidal' = enterprise job scheduler; opp = replacing a homegrown/Tidal workflow tool on Temporal. Gong shows",
+"ev": "details 'Tidal is a homegrown workflow tool'; Gong call 2829664254611029: 'how we currently have in our job scheduler is a job is supposed to be tr..."
+},
+{
+"id": "006UY00000BreXFYAZ",
+"acct": "Superside (Konsus Inc)",
+"opp": "Superside - ML",
+"old": "AI/ML Orchestration",
+"prior": "AI - Processing Pipelines",
+"rat": "Fixed pipeline running images/videos through AI models to extract info, then cluster/classify ad style and tone of voice. Media/doc processing + inference + cla",
+"ev": "details: 'Extract information from images and videos, then cluster the data to analyze aspects such as the style of an ad account or its tone of vo..."
+},
+{
+"id": "006UY00000WF8vhYAD",
+"acct": "Roblox",
+"opp": "Roblox - User Privacy",
+"old": "Identity Verification / \"Know Your Customer\"",
+"prior": "Other",
+"rat": "Privacy-request (DSAR/GDPR) tracking: fan out requests to internal integrators and wait for async responses. This is a coordination/orchestration workflow over ",
+"ev": "details: 'Track privacy requests, fan out those privacy requests to a bunch of different integrators internally and then wait for a response. Some ..."
+},
+{
+"id": "006UY00000AA7YmYAL",
+"acct": "Wavelo",
+"opp": "Wavelo - WPS",
+"old": "Business processes",
+"prior": "Data Pipelines & ETL",
+"rat": "Generic internal 'Workflow Engine (WPS)' spanning two distinct workloads: Billing/Account Management AND File Processing/ETL. Multi-workload engine can't be pin",
+"ev": "details 'Workflow Engine Internally called WPS: Billing / Account Management; File Processing / ETL'; Gong calls 724207796556000450 & 2141255378714..."
+},
+{
+"id": "006UY00000FIMsfYAH",
+"acct": "Verisure",
+"opp": "Verisure - M2M - ProtectMe",
+"old": "Business processes",
+"prior": "Other",
+"rat": "ProtectMe = home-security alarm orchestration: capture multiple alarm signals in a time window + run scheduled customer-initiated alarm status tests (arm/disarm",
+"ev": "Gong call 7535250017696028708 (near CreatedDate 2024-11): 'your first use case is a protect me use case... two workflows... one capture multiple si..."
+},
+{
+"id": "006UY00000DdMFhYAN",
+"acct": "CAIXA",
+"opp": "CAIXA - Biometric Authentication",
+"old": "Identity Verification / \"Know Your Customer\"",
+"prior": "Customer Onboarding & Identity Verification",
+"rat": "Details 'Biometric Authentication into mobile banking application' is identity verification; legacy value was 'Identity Verification / KYC'. Within the 15 types",
+"ev": "details: 'Biometric Authentication into mobile banking application'; legacy Use_case__c = 'Identity Verification / \"Know Your Customer\"'"
+},
+{
+"id": "006UY000007bqJsYAI",
+"acct": "Snyk",
+"opp": "Snyk Scans",
+"old": "Business processes",
+"prior": "Infrastructure Automation & CI/CD",
+"rat": "Opp orchestrates code/security scanners (docker containers, NPM projects) as part of the software build/ship pipeline. Scanning code artifacts is a CI/CD operat",
+"ev": "details: 'Orchestrate code scanners e.g. docker containers, NPM projects'"
+},
+{
+"id": "006UY00000KmvoUYAR",
+"acct": "Shopify",
+"opp": "Shopify - Marketing Orchestration",
+"old": "Lifecycle Management",
+"prior": "Communications & Marketing Platform",
+"rat": "Opp Name 'Marketing Orchestration' points squarely at orchestrating outbound marketing, but Details is empty ('see next step notes') and Gong has no calls near ",
+"ev": "Opp Name: 'Shopify - Marketing Orchestration'; Details='see next step notes' (no signal); Gong find_by_email for Shopify contacts returned no calls..."
+},
+{
+"id": "006UY000005KYidYAG",
+"acct": "Snap",
+"opp": "Snap - API Platform, Account Processor (OSS Migration)",
+"old": "Business processes",
+"prior": "Other",
+"rat": "OSS-migration deal with empty details ('-'). Name 'API Platform, Account Processor' is too generic to satisfy any single litmus; the shared doc does not name th",
+"ev": "details '-'; Name 'Snap - API Platform, Account Processor (OSS Migration)'; shared Doc '2024 Renewal Positioning' does not list this workload."
+},
+{
+"id": "006UY00000DXfEcYAL",
+"acct": "FIS",
+"opp": "FIS - Card Verification",
+"old": "SMS & Emails",
+"prior": "Communications & Marketing Platform",
+"rat": "Fraud-team workflow: on case creation it validates phone, runs Twilio lookups (mobile/spoof), checks TCPA-compliant time, then sends email + schedules/sends SMS",
+"ev": "Doc \"FIS Use Case - Card Verification\": 'NO - send email, schedule text for TCPA compliant time / YES - send email, send text. Await responses'; Tw..."
+},
+{
+"id": "006UY00000Qql78YAB",
+"acct": "Anysphere",
+"opp": "Anysphere - Ai Agent Orchestration",
+"old": "AI/ML Orchestration",
+"prior": "AI - Agents",
+"rat": "Details describe durable agent loops that run for extended periods with checkpointing and run multiple agents in parallel for slow/expensive inference. Core wor",
+"ev": "details: 'Building durable agent loops that can run for extended periods (10 minutes to an hour) and incorporate checkpointing... running multiple ..."
+},
+{
+"id": "006UY00000HD7zZYAT",
+"acct": "Personio",
+"opp": "Personio - Payroll Processing",
+"old": "Business processes",
+"prior": "Financial Services & Lending",
+"rat": "Native German payroll product: Payroll Run, Generate Payslip, Approve Payroll Run workflows that finalize pay, generate documents, and communicate with regulato",
+"ev": "Doc 'Personio - Temporal Use Case - Opportunity Summary - 20250116 - MR': 'Native payroll solution for Germany ... payroll cycle lasts for one mont..."
+},
+{
+"id": "0065f00000NHmbYAAT",
+"acct": "Fynd",
+"opp": "Fynd Ecommerce - Platform Customisations DSL (workload)",
+"old": "Business processes",
+"prior": "Other",
+"rat": "A DSL / drag-n-drop workflow builder Fynd packages with its ecommerce platform so sellers customise arbitrary workflows without code; the abandoned-cart email i",
+"ev": "details: 'DSL built on Temporal to allow Fynd ecommerce platform clients to easily customise workflows'; Doc \"Fynd Temporal Use Case Discovery Guid..."
+},
+{
+"id": "006UY000001cTd9YAE",
+"acct": "SageSure",
+"opp": "Sagesure - Workloads",
+"old": "Business processes",
+"prior": "Other",
+"rat": "Multi-workload/platform deal: a single opp spanning claims email (Comms), quoting search hydration into OpenSearch (Data Pipelines), and monthly payment credit ",
+"ev": "details \"- Email sending / Quoting search hydration / Payments: monthly credit charges\"; Doc \"Sagesure USE CASE\": \"used across ~55 services primari..."
+},
+{
+"id": "006UY000007LHEmYAO",
+"acct": "Square",
+"opp": "Square: Loyalty & Giftcard Orchestration",
+"old": "Business Transactions",
+"prior": "Data Pipelines & ETL",
+"rat": "Doc confirms the workload replicates/synchronizes loyalty accounts, points, programs and gift cards across multiple Square merchants in a franchise org (keeps m",
+"ev": "Doc 'Loyalty & GiftCards Orchestration': 'Replicate loyalty accounts/points/programs between multiple Square merchants'; 'BatchInclude workflow - f..."
+},
+{
+"id": "0065f00000KSJHrAAP",
+"acct": "Turo Inc.",
+"opp": "Turo \u2013 Reservations - Expansion",
+"old": "Business processes",
+"prior": "Other",
+"rat": "Legacy generic 'Business processes' with details 'Expansion of migration efforts' \u2014 a migration/expansion deal with no workload-specific signal; no doc linked; ",
+"ev": "details 'Expansion of migration efforts'; legacy Use_case__c 'Business processes'; Doc null; Gong: no calls near CreatedDate 2023-05-08 (earliest e..."
+},
+{
+"id": "006UY000009qsyQYAQ",
+"acct": "Pluto TV",
+"opp": "Pluto TV - Media Processing",
+"old": "Business processes",
+"prior": "Other",
+"rat": "Video transcoding engine replacing Dolby Hybrik (and Camunda) for Pluto TV Video Engineering. It is a fixed media-processing pipeline but NON-AI (no models/infe",
+"ev": "details 'Media processing - replacement of Dolby Hybrik'; Doc \"PlutoTV_Video Engineering\": 'Video Transcoding - have been leveraging Dolby Hybrik f..."
+},
+{
+"id": "006UY000004MCrWYAW",
+"acct": "Elevate",
+"opp": "Elevate - expansion - full workload",
+"old": "Business Transactions",
+"prior": "Financial Services & Lending",
+"rat": "Elevate's product is a consumer-directed benefits platform (HSA/FSA/HRA, commuter). Temporal orchestrates the regulated financial-account workflows: participant",
+"ev": "Doc \"Elevate Use Case Notes\": \"consumer-directed benefits (HSAs, FSAs, HRAs, commuter benefits)\"; \"enrolling a new participant (creating a user rec..."
+},
+{
+"id": "006UY00000KJlcRYAT",
+"acct": "Shopify",
+"opp": "Shopify - Vantage Discovery Workload",
+"old": "Business processes",
+"prior": "Data Pipelines & ETL",
+"rat": "Details describe ingesting data from JSON files and transforming it into product-listing descriptions on vendor websites to keep them up to date - a data move/t",
+"ev": "details: 'takes information from JSON files and converts it into information on listings on vendors websites to keep descriptions up to date'."
+},
+{
+"id": "0065f00000JcUX7AAN",
+"acct": "Box",
+"opp": "Box - File Systems - Relay",
+"old": "Business processes",
+"prior": "Other",
+"rat": "Powers Box Relay, Box's own no-code workflow/collaboration automation product (box.com/collaboration/relay-workflow). A generic product workflow engine that doe",
+"ev": "details: 'the underlying coordination is Box's own workflow functionality https://www.box.com/collaboration/relay-workflow'; Gong call 163044074202..."
+},
+{
+"id": "006UY00000FguYEYAZ",
+"acct": "Essent",
+"opp": "Essent - Tibco replacement",
+"old": "Business processes",
+"prior": "Other",
+"rat": "TIBCO BPM replacement spanning 400+ heterogeneous workflows (smart-meter ingestion, complaints handling, customer onboarding). Platform-consolidation/migration ",
+"ev": "Doc \"Essent Use Case Template\": 'Currently using Tibco BPM to orchestrate their business processes. 400+ workflows... Use cases vary from smart met..."
+},
+{
+"id": "0065f00000JcmXSAAZ",
+"acct": "Yum Brands",
+"opp": "Yum Brands - Alpha Payments (US TacoBell, KFC)",
+"old": "Business Transactions",
+"prior": "Payment Processing & Settlement",
+"rat": "Opp name says 'Payments'; details null but linked doc 'Yum Payments: KFC,TacoBell,Habit' describes capture/refund/void workflows for mobile orders (260K capture",
+"ev": "Doc title 'Yum Payments : KFC,Taco Bell,Habit'; 'Capture Workflow', 'Refund Workflow', 'Void Workflow'; 'it is a transactional payment application'."
+},
+{
+"id": "006UY000001tPWgYAM",
+"acct": "Alaska Airlines",
+"opp": "Alaska Re-bookings use case",
+"old": "Business processes",
+"prior": "Order Management & Fulfillment",
+"rat": "eComm Bookings team building end-to-end airline bookings/re-bookings (order validation \u2192 full booking). A booking is a reservation/order being completed correct",
+"ev": "Details 'end-to-end bookings (including re-bookings)'; doc 'Alaska Airlines Use Case Bookings', eComm Bookings team, 'expand initial workflow to end-to-end book"
+},
+{
+"id": "006UY000000XKchYAG",
+"acct": "Square",
+"opp": "CashApp: Know Your Customer (KYC) Refresh App",
+"old": "Identity Verification / \"Know Your Customer\"",
+"prior": "Customer Onboarding & Identity Verification",
+"rat": "CashApp KYC Refresh app re-verifies/updates KYC contact details for customers and sends KYC reminders - core identity verification workflow. Litmus directly mat",
+"ev": "Details: 'Know Your Customer (KYC) Refresh app updates the KYC Contact details... send KYC reminders'."
+},
+{
+"id": "0065f00000PWuh4AAD",
+"acct": "Twilio",
+"opp": "Twilio Intelligence",
+"old": "Business processes",
+"prior": "AI - Processing Pipelines",
+"rat": "Twilio Intelligence orchestrates call transcription AI - a fixed pipeline running call data through AI/transcription models, plus deletion/account-deletion clea",
+"ev": "Details: 'Twilio Intelligence product provide call transcription AI. Temporal orchestrate the flows for Transcriptions of Calls, Deletion of Calls...'."
+},
+{
+"id": "006UY000007JRJtYAO",
+"acct": "Xero",
+"opp": "Xero - Expense Claims Use case",
+"old": "Lifecycle Management",
+"prior": "Data Pipelines & ETL",
+"rat": "Doc: a 2-way data sync between Xero Expenses and Xero Accounting (change events on a queue) \u2014 \"expense claims...",
+"ev": "Doc \"Application of Temporal in Xero Expenses\": \"2-way sync between these two..."
+},
+{
+"id": "006UY0000027721YAA",
+"acct": "Cargo",
+"opp": "Cargo- customer onboarding- workload",
+"old": "Business processes",
+"prior": "Customer Onboarding & Identity Verification",
+"rat": "Opp name + details both center on 'customer onboarding use case' (20M actions/month, growth tied to onboarding). Onboarding is explicit, but details lack KYC/ve",
+"ev": "Name 'customer onboarding workload'; details 'Growth tied to customer onboarding use case', '20Mil actions per month'."
+},
+{
+"id": "006UY00000TwZskYAF",
+"acct": "Datalogic",
+"opp": "Datalogic - IOT workflows",
+"old": "Infrastructure applications",
+"prior": "Infrastructure Automation & CI/CD",
+"rat": "Device fleet management: collecting logs/status, pushing updates and triggering actions across thousands of deployed Datalogic devices. Primary outcome is opera",
+"ev": "Use_Case_Details__c: 'devices fleet management: collecting logs, status, pushing updates, triggering actions in datalogic devices deployed in their customer pre"
+},
+{
+"id": "006UY00000BZM0vYAH",
+"acct": "Wolters Kluwer",
+"opp": "Wolters Kluwer - Tax Return Data Import (Scan)",
+"old": "Business processes",
+"prior": "Data Pipelines & ETL",
+"rat": "Importing customer data (Name, SSN, Address) into tax returns at ~3M customers/day ('Scan' app), replacing an old queuing system. Primary outcome is ingesting/m",
+"ev": "Doc 'WK Use Case - Tax Return Data Import': 'Customer data information... import into tax returns. Roughly 3M customers/day (Scan application)'; current solutio"
+},
+{
+"id": "0065f00000IT9PcAAL",
+"acct": "Netflix",
+"opp": "Netflix - Cloud Gaming - H2'23",
+"old": "Infrastructure applications",
+"prior": "Infrastructure Automation & CI/CD",
+"rat": "Doc: appliance firmware upgrade workflow (Drain to upgrade to rollback) replacing Spinnaker pipelines.",
+"ev": "Doc \"Cloud Gaming Fleet Management\": firmware upgrade Drain to upgrade to rol..."
+},
+{
+"id": "0065f00000OzYjBAAV",
+"acct": "Outreach",
+"opp": "Outreach - Cloud Migration",
+"old": "Unknown",
+"prior": "Control Plane Operations",
+"rat": "MIGRATION deal (OSS to Cloud, cost-driven), BUT the doc names a real primary workload: a service-orchestratio...",
+"ev": "Doc: \"service orchestration system to handle provisioning scenarios related t..."
+},
+{
+"id": "0065f00000LkkwiAAB",
+"acct": "Remitly",
+"opp": "Remitly - SoV",
+"old": "Business processes",
+"prior": "Payment Processing & Settlement",
+"rat": "Details null; name 'SoV' is uninterpretable (likely Source/Statement of Value, not a workload). No doc section or Gong call near 2023-06 CreatedDate explains it",
+"ev": "Use_Case_Details__c=null; name='SoV'; no Gong transcript coverage near CreatedDate 2023-06-21; account's primary workload (sibling opp) is Money Movement/paymen"
+},
+{
+"id": "0065f00000OR05SAAT",
+"acct": "ZoomInfo",
+"opp": "Zoominfo B2B Marketing Opp",
+"old": "Business processes",
+"prior": "Communications & Marketing Platform",
+"rat": "Details said 'MarketingETL', but the doc resolves the workload to Marketing Audience Life Cycle Mgmt: recalculating marketing audiences daily, assigning them to",
+"ev": "Doc 'Zoominfo Marketing Audience Life Cycle Mgmt UC': 'Recalculate a customer's marketing audience... Audiences are assigned to campaigns... Run the campaign th"
+},
+{
+"id": "006UY000007M2WzYAK",
+"acct": "Disney Worldwide Services",
+"opp": "Disney WW Services - Expand - GIS Vulnerability Mgt",
+"old": "Infrastructure applications",
+"prior": "Infrastructure Automation & CI/CD",
+"rat": "Vulnerability management, replacing an end-of-life pre-packaged ServiceNow workflow. Vuln management/remediation is operating/securing software infra (deploy/ro",
+"ev": "Use_Case_Details__c: 'Vulnerability management. GIS has a pre-packaged ServiceNow workflow that's going end of life, so may need to replace with a new workflow'"
+},
+{
+"id": "006UY000007pIi2YAE",
+"acct": "Galileo Financial Technologies",
+"opp": "Galileo - Payment Hub - Fed Now (Instant Payments)",
+"old": "Business Transactions",
+"prior": "Payment Processing & Settlement",
+"rat": "FedNow is an instant-payments rail; details describe it as 'their version of Zelle for Fed customers' (real-time money movement). Primary outcome is money movin",
+"ev": "Use_Case_Details__c: 'Fed Now - There version of Zelle for Fed customers'; Name: 'Galileo - Payment Hub - Fed Now (Instant Payments)'."
+},
+{
+"id": "006UY000008VvGjYAK",
+"acct": "ADP",
+"opp": "ADP - Nudge Engine",
+"old": "AI/ML Orchestration",
+"prior": "AI - Processing Pipelines",
+"rat": "Nudge is the 'processing and delivery mechanism' for ADP Assist, blending HCM data with generative AI via fixed nudging flows (retrieve data -> call HCM writing",
+"ev": "Use case doc (Nudge): 'Nudge is the processing and delivery mechanism for ADP Assist, which blends...HCM dataset with generative AI'; Flow1 'Call HCM writing as"
+},
+{
+"id": "006UY000008ktL3YAI",
+"acct": "REA Group",
+"opp": "REA Group - Coming Soon Listings (workload)",
+"old": "Business Transactions",
+"prior": "Other",
+"rat": "Opp details empty ('Details'); doc describes processing real-estate Listings (ads) through a multi-step pipeline, modernizing old monoliths to event-driven arch",
+"ev": "Doc: 'Listings (ads) processing involves a number of steps...Visibility of Listing in a pipeline is quite important'; 'replacing some really old system (monolit"
+},
+{
+"id": "006UY00000BuKguYAF",
+"acct": "Hona, Inc.",
+"opp": "Hona-Migration-Workload",
+"old": "Business processes",
+"prior": "Other",
+"rat": "Migration/multi-workload deal: name 'Hona-Migration-Workload', doc 'data integration (OSS migration)' moving 141 self-hosted workflow types from self-hosted Tem",
+"ev": "Details: '141 various types of workflows: internal business processes and customer/product related'; doc: 'Use case: data integration (OSS migration)'; '141 uni"
+},
+{
+"id": "006UY00000COxHnYAL",
+"acct": "Lendingkart Technologies Private Limited",
+"opp": "Lendingkart (workload - loan origination)",
+"old": "Loan Origination",
+"prior": "Financial Services & Lending",
+"rat": "Lendingkart is a lending marketplace; opp name and details both state 'loan origination via marketplace.' Loan origination is the canonical regulated financial-",
+"ev": "Use_Case_Details__c: 'Loan origination via marketplace'; Name: 'Lendingkart (workload - loan origination)'; legacy type 'Loan Origination'."
+},
+{
+"id": "006UY00000D0XULYA3",
+"acct": "Kotak Mahindra Bank Pvt Ltd",
+"opp": "Kotak End of Day Reporting (2nd workload)",
+"old": "Workflows",
+"prior": "Other",
+"rat": "Opp details were just a doc link. Linked doc is account-level multi-workload (shared bank platform: TAS/Branch, eStamp, Identity Mgmt, Data Pipeline, End of day",
+"ev": "Doc 11YZd0jm... lists 'End of day reporting' as one workload among many on Kotak's shared Temporal platform; no detail on what the EOD process does. Opp name = "
+},
+{
+"id": "006UY00000EOXnZYAX",
+"acct": "Macquarie Group",
+"opp": "Macquarie Group - BFS Wealth Management (Workload)",
+"old": "Human-In-The-Loop Approval Workflows",
+"prior": "Other",
+"rat": "Details: part of 'Straight Through Processing' project to digitise 43 different workflows end-to-end, removing paper-form and manual process. Broad multi-proces",
+"ev": "Use_Case_Details__c: 'part of the Straight Through Processing Project... digitise 43 different workflows end-to-end, removing all paper form workflows and manua"
+},
+{
+"id": "006UY00000ERkl3YAD",
+"acct": "Uphold",
+"opp": "Uphold - Gamification Use Case",
+"old": "Workflows",
+"prior": "Other",
+"rat": "Name = 'Gamification Use Case'; details = 'Tasks & Rewards use case'. A gamification/tasks-and-rewards engine does not map to any of the 15 litmus tests (not pa",
+"ev": "Use_Case_Details__c: 'Tasks & Rewards use case'; opp name 'Uphold - Gamification Use Case'. No doc."
+},
+{
+"id": "006UY00000H7q1lYAB",
+"acct": "Gorgias",
+"opp": "Gorgias - AI Agents",
+"old": "AI/ML Orchestration",
+"prior": "AI - Agents",
+"rat": "Name 'AI Agents' and details 'Managing all AI agent activity via workflows' point directly at orchestrating LLM-driven agents (the agent decides next steps acro",
+"ev": "Use_Case_Details__c: 'Managing all AI agent activity via workflows'; opp name 'Gorgias - AI Agents'."
+},
+{
+"id": "006UY00000JQRMbYAP",
+"acct": "Bridgewater",
+"opp": "BW - Migration workload - Trading platform",
+"old": "Business Transactions",
+"prior": "Payment Processing & Settlement",
+"rat": "Name flags this as a 'Migration workload' (currently self-hosted trading platform) -> per the migration-deal rule, best-guess only + Low. Trading platform = ord",
+"ev": "Opp name 'BW - Migration workload - Trading platform'; details 'currently self hosted trading platform'. Migration/consolidation deal, thin per-workload signal."
+},
+{
+"id": "006UY00000MihixYAB",
+"acct": "Coupang",
+"opp": "Coupang - Expand - eCommerce Eng - AI Agent Runner Infrastructure",
+"old": "AI/ML Orchestration",
+"prior": "AI - Internal Agent Platforms",
+"rat": "Details + linked doc describe an Internal AI Agent Platform ('Agent Builder Platform / emux') - an agent runner infrastructure that internal SW engineers plug i",
+"ev": "Doc 1Vcof9t0...: 'Internal AI Agent Platform (Agent Builder Platform / emux) built on Temporal'; details 'SW Engineer who is building AI Agent use case can come"
+},
+{
+"id": "006UY00000WG9WLYA1",
+"acct": "Second Spectrum Inc",
+"opp": "Second Spectrum Inc - Genius Sports - Transcoding",
+"old": "Operational Process",
+"prior": "AI - Processing Pipelines",
+"rat": "Workload is 'Video transcoding' (opp name = Transcoding). Second Spectrum is a sports video/AI company; transcoding is a fixed media-processing pipeline feeding",
+"ev": "Use_Case_Details__c: 'Video transcoding'; opp name 'Genius Sports - Transcoding'. Gong call 8194419253031164587 was about namespace strategy, not the transcodin"
+},
+{
+"id": "006UY00000Z6L2PYAV",
+"acct": "The Motley Fool",
+"opp": "The Motley Fool - subscription and pricing workflow",
+"old": "Other",
+"prior": "Payment Processing & Settlement",
+"rat": "Opp is multi-step billing: subscription extensions, pricing changes, compensation logic across systems via Stripe, replacing cron jobs. Doc: 'eliminate payment ",
+"ev": "Details: 'orchestrating batch operations related to subscription extensions, pricing changes, and other multi-step billing processes...replacing cron-based jobs"
+},
+{
+"id": "006UY00000AGu26YAD",
+"acct": "Planet",
+"opp": "Planet Labs - Workload - Workflow Standardization",
+"old": "Other",
+"prior": "Other",
+"rat": "Thin/generic: 'EAP Use Cases' / 'Multiple use cases - standardized workflow orchestration'. No single dominant workload identified; multi-workload standardizati",
+"ev": "Use_Case_Details 'EAP Use Cases'; Other_Detail 'Multiple use cases - standardized workflow orchestration on Temporal'. Gong find_by_email returned no calls."
+},
+{
+"id": "006UY00000XVJjKYAX",
+"acct": "GeneDx",
+"opp": "GeneDx - Order Management",
+"old": "Other",
+"prior": "Order Management & Fulfillment",
+"rat": "Opp name + details anchor on genomic test order lifecycle: orders placed, upgraded (add patient), downgraded (remove), or cancelled via child 'Order Process Wor",
+"ev": "Use_Case_Details: order upgrade/downgrade/cancel via reconciliation; signals upgrade_order/downgrade_order from RLC workflow to child Order Process Workflows."
+},
+{
+"id": "006UY000007peVfYAI",
+"acct": "Rippling",
+"opp": "Rippling - Custom Objects",
+"old": "Business processes",
+"prior": "Data Pipelines & ETL",
+"rat": "Details state 'migrating from Mongo to Aurora Postgres for data collections' - the primary outcome is moving/transforming data between datastores, a textbook da",
+"ev": "Use_Case_Details__c: 'migrating from Mongo to Aurora Postgres for data collections'."
+},
+{
+"id": "006UY00000XS28jYAD",
+"acct": "Postman Inc",
+"opp": "Postman Inc - IAM",
+"old": "Identity Verification / \"Know Your Customer\"",
+"prior": "Other",
+"rat": "IAM via SCIM/SSO is INTERNAL employee/app identity and access management (security director putting apps behind SSO+SCIM), not customer KYC/onboarding and not i",
+"ev": "Use_Case_Details__c: 'IAM... primarily related to SCIM... new security director's initiative to put most apps behind SSO and SCIM for better management.' No Gon"
+},
+{
+"id": "006UY000008t27qYAA",
+"acct": "Yum Brands",
+"opp": "Yum Brands - Hopper Task (EU all brands)",
+"old": "Business Transactions",
+"prior": "Order Management & Fulfillment",
+"rat": "Details = 'OMS' (Order Management System); fast-food brand handling orders across EU brands. Primary outcome is orders getting placed/processed/fulfilled correc",
+"ev": "Use_Case_Details__c = 'OMS'; opp name 'Hopper Task (EU all brands)'."
+},
+{
+"id": "006UY000008lgTqYAI",
+"acct": "Sinch",
+"opp": "Sinch - Infinity",
+"old": "Business Transactions",
+"prior": "Communications & Marketing Platform",
+"rat": "Details: 'New product offering messaging capabilities (multichannel)'. Sinch is a CPaaS; the workload's primary outcome is orchestrating multichannel outbound c",
+"ev": "Use_Case_Details__c: 'New product offering messaging capabilities (multichannel)'."
+},
+{
+"id": "006UY0000072eocYAA",
+"acct": "Culture Amp",
+"opp": "Culture Amp - Develop(careerpath)",
+"old": "Business processes",
+"prior": "Other",
+"rat": "Career Paths feature: store/update/share role descriptions and competencies for HR leaders/employees. A generic HR talent-management product workflow with no cl",
+"ev": "Use_Case_Details__c: Career Paths - 'store, update, and share role descriptions and competencies across the entire organization... easy for HR leaders... and em"
+},
+{
+"id": "006UY0000045A6CYAU",
+"acct": "AppDirect",
+"opp": "AppDirect - Migration",
+"old": "Business processes",
+"prior": "Payment Processing & Settlement",
+"rat": "Migration deal (decision 7): 'Migration of their core product, a subscription management service, from self-hosted to Cloud' - spans the whole product, so kept ",
+"ev": "Use_Case_Details__c: 'Migration of their core product, a subscription management service, from self-hosted to Cloud.' Gong calls near CreatedDate emphasize bill"
+},
+{
+"id": "006UY00000K5TkFYAV",
+"acct": "Qualtrics",
+"opp": "Qualtrics - Synthetic Surveys - Workload",
+"old": "Identity Verification / \"Know Your Customer\"",
+"prior": "AI - Processing Pipelines",
+"rat": "Doc: orchestrate asynchronous generation of synthetic survey responses where 'synthetic responses come from an LLM rather than a vendor'. Fixed pipeline running",
+"ev": "Doc Use Case Details: 'Orchestrate the asynchronous generation of synthetic survey responses for a published survey given a panel configuration... synthetic res"
+},
+{
+"id": "006UY0000072Nz4YAE",
+"acct": "Natera Inc.",
+"opp": "Natera Post Lab Orchestrator",
+"old": "Business processes",
+"prior": "Data Pipelines & ETL",
+"rat": "Doc: 'Biomedic analysis pipelines, 400 samples each processed in a workflow to generate results... results processed in subanalysis; ARM coordinates processing ",
+"ev": "Opp details: 'PLO - Post Lab Orchestrator. Integration with labs, coordinating processing steps for analyzing results from sequencer runs'; doc: 'Biomedic analy"
+},
+{
+"id": "006UY00000Bwb7KYAR",
+"acct": "OpenSea",
+"opp": "OpenSea-Rewards",
+"old": "Business processes",
+"prior": "Other",
+"rat": "Opp details = compute user scores for leaderboards/algorithms. Linked doc covers a DIFFERENT workload (chain/block backfill into Kafka) and does not match this ",
+"ev": "Opp details: 'Workflows that compute the scores of users for various leaderboards and algorithms.' Doc is about 'Chain Backfill' (block backfill into Kafka) - w"
+},
+{
+"id": "0065f00000PX31AAAT",
+"acct": "SoFi",
+"opp": "SoFi - Underwriting - uw-remediator",
+"old": "Business processes",
+"prior": "Financial Services & Lending",
+"rat": "Doc: loan-application remediation in Underwriting - 'when a user submits an application (loan) for initial approval... determines which workflow to start, if de",
+"ev": "Doc: 'Remediation manager, when a user submits an application (loan) for initial approval... if declined e.g. due to bad credit history'; team = Underwriting."
+},
+{
+"id": "006UY000009qvzVYAQ",
+"acct": "DoorDash",
+"opp": "DoorDash - Labs CI Pipeline",
+"old": "Infrastructure applications",
+"prior": "Infrastructure Automation & CI/CD",
+"rat": "Opp name and details both state 'CI pipeline'. Primary outcome is shipping/operating software via continuous integration. Direct unambiguous match to the CI/CD ",
+"ev": "Opp name 'DoorDash - Labs CI Pipeline'; details: 'CI pipeline'."
+},
+{
+"id": "006UY00000WsLY5YAN",
+"acct": "Booking.com",
+"opp": "Booking.com - CentralTech - Commissions Avoidance",
+"old": "Business processes",
+"prior": "Other",
+"rat": "Doc: Supplier Fraud Integrity team detecting Commission Avoidance fraud via feedback loops on reservation cancellations. Primary outcome is fraud detection/hand",
+"ev": "Doc: 'Commission Avoidance (CA) is the act of partners trying to avoid paying commission... Supplier integrity team is tasked with detecting, responding, preven"
+},
+{
+"id": "0065f00000PWp1aAAD",
+"acct": "Vinted",
+"opp": "Vinted-Pay",
+"old": "Business Transactions",
+"prior": "Payment Processing & Settlement",
+"rat": "Opp is 'Vinted-Pay', a Payment Service by Vinted powered by Temporal (stealth project) being rolled out in ramp-up phases. The product IS a payment service - mo",
+"ev": "Use_Case_Details__c: 'Payment Service by Vinted that would be powered by Temporal (stealth project)... rolling out... in multiple ramp up phases'. Opp name 'Vin"
+},
+{
+"id": "006UY000008lpk1YAA",
+"acct": "Glovo",
+"opp": "Glovo - Courier",
+"old": "Business processes",
+"prior": "Customer Onboarding & Identity Verification",
+"rat": "Workload is the 'courier onboarding' use case (a distinct namespace per Gong). Primary outcome = onboard/activate new couriers onto the platform. Couriers are w",
+"ev": "Details: 'Courier Onboarding - modernization of a monolith app into a distributed application using microservices.' Gong lists 'courier onboarding' as a distinc"
+},
+{
+"id": "006UY00000CRTv3YAH",
+"acct": "Messari",
+"opp": "Messari - Notifications - Workload",
+"old": "SMS & Emails",
+"prior": "Communications & Marketing Platform",
+"rat": "Notifications workload: onboarding many users driving a substantial increase in volume of emails sent for specific notification types. Primary outcome is orches",
+"ev": "Details: 'onboarding a large number of users... will lead to a substantial increase in the volume of emails sent for specific types of notifications.' Opp name "
+},
+{
+"id": "006UY0000087Jz1YAE",
+"acct": "U.S. Bank",
+"opp": "US Bank - Expand - SMB Group - Payroll Integration",
+"old": "Business processes",
+"prior": "Data Pipelines & ETL",
+"rat": "Gusto runs the payroll; Temporal's role is explicitly the backend sync / internal data synching and the Gusto API integration to exchange SMB customer info. Pri",
+"ev": "Doc + details: 'Gusto will do the payroll itself. Temporal will be used on workflow for the backend sync and internal data synching. The integration with the Gu"
+},
+{
+"id": "0065f00000JcJFSAA3",
+"acct": "Torq",
+"opp": "Torq-Playbook Orchestrator Migration- Workload",
+"old": "Business processes",
+"prior": "Control Plane Operations",
+"rat": "Doc shows Temporal runs Torq's product \u2014 a no-code security-automation orchestration platform for customers (...",
+"ev": "Doc: \"orchestration platform for no-code workflows ... orchestration of secur..."
+},
+{
+"id": "006UY0000087es9YAA",
+"acct": "Palo Alto Networks",
+"opp": "PAN - Expand - CASB - Testing Framework/Health Probes",
+"old": "Infrastructure applications",
+"prior": "Infrastructure Automation & CI/CD",
+"rat": "Distributed testing framework / health probes for CASB products; Temporal orchestrates long-running test suites and health checks every 30 min across clusters (",
+"ev": "Doc: 'Testing framework to support distributed applications where orchestration is needed across multiple products'; 'health checks running every 30 minutes'; '"
+},
+{
+"id": "006UY0000039GDVYA2",
+"acct": "Rattle",
+"opp": "Rattle - Processing Messages & Periodic Jobs",
+"old": "Business processes",
+"prior": "Other",
+"rat": "Generic durable-workflow engine: customers define 'workflow' entities in Rattle that map 1:1 to Temporal workflows - cron-scheduled jobs (every 5/15 min, daily)",
+"ev": "Details: 'Process messages with a delay... Periodic jobs using cron schedules.' Gong: 'customer creates a entity called workflow within rattle... gets translate"
+},
+{
+"id": "006UY000004N8VeYAK",
+"acct": "Vendasta",
+"opp": "Vendasta- Cadence Migration- Workload",
+"old": "Business processes",
+"prior": "Other",
+"rat": "Cadence-to-Temporal migration of their general backend microservices platform (80% done, last 20% in 2024). Doc confirms Temporal powers many parts of their pla",
+"ev": "Details: 'moving all of their cadence workload to Temporal. 80% already migrated'. Doc: 'Complete Cadence Migration... Temporal is what powers their backend pla"
+},
+{
+"id": "006UY00000KAQYpYAP",
+"acct": "Amplitude",
+"opp": "Amplitude - Agents (Langley)",
+"old": "AI/ML Orchestration",
+"prior": "AI - Agents",
+"rat": "Langley = Amplitude's AI agent product; details say 'AI Agentic- greenfield' and opp name is 'Agents'. Doc: agent chat support, deep research, long-lived agent ",
+"ev": "Details: 'AI Agentic- greenfield'. Doc 'Agents / Langley': 'AI agent based chat convos support... long-lived agent state (lasting months or more)'."
+},
+{
+"id": "006UY00000LAeRVYA1",
+"acct": "Adobe",
+"opp": "Adobe - AEP - B2B Segmentation Workflow",
+"old": "Workflows",
+"prior": "Data Pipelines & ETL",
+"rat": "Takes customer B2B data, qualifies it against defined segmentation rules, then exports the data for the customer to use. Primary outcome is moving/transforming ",
+"ev": "Details: 'take the b2b data, qualifies it against the segmentation... then exports the data for the Adobe customer to use'."
+},
+{
+"id": "006UY00000LEQTBYA5",
+"acct": "ADP",
+"opp": "AI - Nudge Engine for ADP Assist",
+"old": "AI/ML Orchestration",
+"prior": "AI - Agents",
+"rat": "2025 expansion opp: details say embed an 'agentic component for ADP Assist that reached beyond I-9 use cases into payroll processing.' Explicitly agentic (LLM d",
+"ev": "Use_Case_Details__c: '...embed components of her team's nudge engine to support an agentic component for ADP Assist that reached beyond I-9 use cases into payro"
+},
+{
+"id": "006UY000000iBPaYAM",
+"acct": "Will Bank",
+"opp": "Will Bank \u2013 Boleto Platform (Emissions)",
+"old": "Business processes",
+"prior": "Payment Processing & Settlement",
+"rat": "Boleto emissions = issuing Brazilian boleto payment slips for customers' credit-card statements. Boleto is a payment instrument; primary outcome is money/paymen",
+"ev": "Details: 'rolling out boleto emissions for their customers' credit card statements'. Will Bank = Brazilian digital bank."
+},
+{
+"id": "006UY00000M0hgDYAR",
+"acct": "Bitdefender",
+"opp": "Bitdefender - Alert Processing",
+"old": "Business processes",
+"prior": "Other",
+"rat": "Security alert/event processing: thousands of alerts/day deduplicated down to one event, then create/update a SOC investigation case. Non-AI alert triage feedin",
+"ev": "Gong (call near CreatedDate): 'Thousands of events... for alerts... we handle some deduplication... creates or updates an investigation case that our soc team h"
+},
+{
+"id": "0065f00000LjXpRAAV",
+"acct": "Remitly",
+"opp": "Remitly - Money Movement",
+"old": "Business Transactions",
+"prior": "Payment Processing & Settlement",
+"rat": "Money Movement workload: sending money between accounts; doc confirms a Go service adapting pay-in/pay-out partner interfaces to move money durably. Primary out",
+"ev": "Use_Case_Details__c: 'Money Movement - Sending money between accounts'; doc 'Remitly Money Movement': 'Adapting pay in / pay out interfaces of different partner"
+},
+{
+"id": "006UY00000GHHKzYAP",
+"acct": "GovSpend",
+"opp": "GovSpend - Document parser",
+"old": "Business processes",
+"prior": "Data Pipelines & ETL",
+"rat": "Background job that ingests data from APIs/scrapers, parses document text, and loads to Google Cloud Storage to track government contracts. Doc explicitly calls",
+"ev": "Doc: 'Ingest data from APIs/website scrapers. Run background jobs for ingestion and ETL pipeline'. Details: 'parses document texts then uploads to google cloud "
+},
+{
+"id": "006UY00000FMsHGYA1",
+"acct": "Coupang",
+"opp": "Coupang - Expand - FT - AMS",
+"old": "Business processes",
+"prior": "Other",
+"rat": "Details = 'TBD'; no linked doc. The only Gong call (~early 2024, ~10 months before this opp's 2024-11-20 creation) is a general platform-readiness/observability",
+"ev": "Use_Case_Details__c 'TBD'; no doc; Gong call 4383633183851236446 (early 2024) only discusses general Temporal Cloud production-readiness/observability for FDS t"
+},
+{
+"id": "0065f00000OzUb7AAF",
+"acct": "oOh! Media",
+"opp": "oOh! Media- API Partner Workflows",
+"old": "Business processes",
+"prior": "Other",
+"rat": "Partner API workflows for an out-of-home advertiser: SQS->Temporal->SQS, 'Modify Campaign', uploading creative to ad partners as part of replatforming legacy in",
+"ev": "Doc: 'Use Case: Partner API... SQS -> Temporal -> SQS, Modify Campaign... API call: upload creative to their partner'. Details: 'single API for 1 partner... pri"
+},
+{
+"id": "006UY00000P8JblYAF",
+"acct": "Cisco",
+"opp": "Cisco (Armorblox) - AI Canvas",
+"old": "AI/ML Orchestration",
+"prior": "AI - Model Training",
+"rat": "Details: 'Behind the scene orchestrator for LLM learning processes.' Armorblox AI-team doc states they plan to use Temporal 'for training the models and keeping",
+"ev": "Use_Case_Details__c: 'Behind the scene orchestrator for LLM learning processes'; Armorblox use-case doc IDENTIFIED PAIN: 'planning to use Temporal ..."
+},
+{
+"id": "006UY00000VJue9YAD",
+"acct": "Indeed",
+"opp": "Indeed: 2026 Workflows",
+"old": "Lifecycle Management",
+"prior": "Other",
+"rat": "Pure placeholder opp: name '2026 Workflows' + details 'New use cases for Indeed FY27' name no specific workflow or outcome. No doc, no Gong call near CreatedDat",
+"ev": "Tier 1 fields: name 'Indeed: 2026 Workflows', details 'New use cases for Indeed FY27'. Gong (find_by_email mbovykin/rmorlok/rajas): no call transcr..."
+},
+{
+"id": "0065f00000PWufrAAD",
+"acct": "Twilio",
+"opp": "Twilio Integrity",
+"old": "Business Transactions",
+"prior": "Communications & Marketing Platform",
+"rat": "Details + doc: registers customer phone numbers via Trust Hub / FCC A2P 10DLC so carriers (AT&T, T-Mobile) don't mislabel legitimate calls as spam. Outbound voi",
+"ev": "Doc: 'Twilio Integrity registers the phone numbers...with the FCC so they avoid being flagged as Spam'; details: 'register them with the analytic e..."
+},
+{
+"id": "0065f00000PWrbhAAD",
+"acct": "Air.ai",
+"opp": "Air.ai - Expansion",
+"old": "Business processes",
+"prior": "AI - Agents",
+"rat": "Details: 'Inbound/Outbound call workflows for AI Agent.' Doc: Air.ai dials lists / takes inbound & outbound calls as a CX feature; each answered call spins up a",
+"ev": "Use_Case_Details__c: 'Inbound/Outbound call workflows for AI Agent'; doc: 'take inbound calls and make outbound calls as a CX feature...each turn =..."
+},
+{
+"id": "006UY000008IpyjYAC",
+"acct": "Bentley Systems",
+"opp": "Bentley Systems - PDF Generation",
+"old": "Business processes",
+"prior": "Other",
+"rat": "Doc-confirmed: scheduled/on-request background jobs that generate PDF renditions of engineering documents and distribute them to ProjectWise. No AI models, not ",
+"ev": "Doc 'Bentley Systems - PDF': 'PDF Generation - Generates PDFs in the background, sourced from project files. Distributes the results back to the pr..."
+},
+{
+"id": "0065f00000LlYuaAAF",
+"acct": "Netflix",
+"opp": "Netflix - Antigravity SQS Queue Processing Use Case",
+"old": "Infrastructure applications",
+"prior": "Data Pipelines & ETL",
+"rat": "Data Platform Infra team (Antigravity) processes CloudWatch/SQS events to react to AWS instance changes and copy Cassandra data on failure; thousands of events ",
+"ev": "Doc 'Netflix AntiGravity SQS Queue Processing': 'Processing events from cloudwatch... Cassandra is the stateful data store, they need to copy data ..."
+},
+{
+"id": "0065f00000OzYGiAAN",
+"acct": "Turo Inc.",
+"opp": "Turo - Toll Reimbursement",
+"old": "Business Transactions",
+"prior": "Payment Processing & Settlement",
+"rat": "Reimbursing hosts for tolls = moving money correctly to payees (disbursement/settlement). Primary outcome is money movement, satisfying the payment litmus direc",
+"ev": "Tier 1: Use_Case_Details__c 'Reimbursing hosts for tolls accrued while renting out their vehicles'."
+},
+{
+"id": "006UY000003OJKoYAO",
+"acct": "Wiser Solutions",
+"opp": "Wiser Solutions - Website Crawl Requests",
+"old": "Business processes",
+"prior": "Data Pipelines & ETL",
+"rat": "Setting up web crawl requests per customer config (screenshots, currency-specific crawls) = ingesting/collecting and transforming data from the web into their s",
+"ev": "Tier 1: Use_Case_Details__c 'Setting up the crawl requests based on customer configuration (some want screenshots during the crawl, others want cra..."
+},
+{
+"id": "006UY000007rsuJYAQ",
+"acct": "SoFi",
+"opp": "SoFi - Expand - RunDeck Migration",
+"old": "Infrastructure applications",
+"prior": "Infrastructure Automation & CI/CD",
+"rat": "RunDeck is a runbook/ops job-automation tool; team owns the RunDeck service and is migrating it from Python to Temporal for availability/state mgt/idempotency. ",
+"ev": "Details: 'Migrate rundeck to Temporal to get better availability, state mgt, idempotency. His team owns rundeck - responsible for the service. Rund..."
+},
+{
+"id": "006UY0000087ayFYAQ",
+"acct": "Netflix",
+"opp": "Netflix - Customer Identity Cloud (CIC) Companion",
+"old": "Business processes",
+"prior": "Data Pipelines & ETL",
+"rat": "Synchronizes IAM/identity data from CIC (Auth0) to Netflix services via event-based user updates (SNS->SQS), syncing from Pandora identity store; access revoke/",
+"ev": "Opp details: 'Synchronizing IAM from CIC to Netflix services'. Doc: 'event-based user updates', 'Synchronize from Pandora based on events', long-ru..."
+},
+{
+"id": "006UY000009Vm6RYAS",
+"acct": "GitLab",
+"opp": "GitLab - Automation",
+"old": "Business processes",
+"prior": "Other",
+"rat": "Doc: Temporal powers 'GitLab AutoFlow' so customers can build arbitrary automations in the product - a generic customer-facing automation/workflow engine, not a",
+"ev": "Tier 2 doc 'GitLab_Automation_20240515AS': 'deploy Temporal to support GitLab AutoFlow... a lot of requests from customers to do automations within..."
+},
+{
+"id": "006UY00000ByPtFYAV",
+"acct": "Neon",
+"opp": "Neon - Loan Invoicing & Record",
+"old": "Business processes",
+"prior": "Financial Services & Lending",
+"rat": "Brazilian payroll-loan product: declaring invoices/loans, debt declaration, overdue/credit-score calc, CRM+DB persistence - a regulated lending product workflow",
+"ev": "Tier 1 details: payroll loan reform, employer-guaranteed installments. Tier 2 doc 'Neon Use Case - Loan Invoicing & Record': 'Declaration of invoic..."
+},
+{
+"id": "006UY00000Cm8E5YAJ",
+"acct": "UniOrbit Technologies Pvt Ltd",
+"opp": "Uni - Customer Data Platform",
+"old": "Lifecycle Management",
+"prior": "Communications & Marketing Platform",
+"rat": "Details: in-house customer data platform that 'handles customer communication and engagement' \u2014 primary outcome is orchestrating customer comms/engagement, not ",
+"ev": "Use_Case_Details__c: 'In house customer data platform. Handles customer communication and engagement'; Name: 'Uni - Customer Data Platform'"
+},
+{
+"id": "006UY00000ERsp3YAD",
+"acct": "Future",
+"opp": "Future - print editorial workflows",
+"old": "Business processes",
+"prior": "Other",
+"rat": "Print editorial workflows replacing legacy print processing software. A publishing/editorial production workflow that doesn't map cleanly to any of the 14 produ",
+"ev": "Name: 'Future - print editorial workflows'; Use_Case_Details__c: 'Replace legacy print processing software'"
+},
+{
+"id": "006UY00000Hjup5YAB",
+"acct": "Highnote Platform, Inc.",
+"opp": "Highnote- Services- workload",
+"old": "Business processes",
+"prior": "Payment Processing & Settlement",
+"rat": "Highnote is a card-issuing/payments platform; details name 'eft, acquiring, transaction' as the mission-critical use cases. But the opp is 'many engineering ser",
+"ev": "Use_Case_Details__c: 'Many engineering services are being moved to Temporal Cloud. most mission-critical use cases (eft, acquiring, transaction)'"
+},
+{
+"id": "006UY00000KToVoYAL",
+"acct": "Zillow Group",
+"opp": "Zillow - Expand - Revenue Apps (Account Suspensions)",
+"old": "Business processes",
+"prior": "Other",
+"rat": "Workload is the account-suspension/collections process for ad customers who fall behind on payments after 90 days (find account, submit order in Zora). An inter",
+"ev": "Use_Case_Details__c: 'If they fall behind in payments after 90 days they suspend accounts. The suspension process is where they're using Temporal. ..."
+},
+{
+"id": "006UY00000P3ScVYAV",
+"acct": "Intermedia Cloud Communications",
+"opp": "Intermedia - Billing use case",
+"old": "Business Transactions",
+"prior": "Payment Processing & Settlement",
+"rat": "Core invoicing/billing workflow that runs each customer's billing cycle and automates invoice delivery to 100,000+ customers. Billing/invoice generation is a mo",
+"ev": "Name: 'Intermedia - Billing use case'; Use_Case_Details__c: 'core invoicing workflow. At each customers billing cycle this runs and automates the d..."
+},
+{
+"id": "006UY00000QqGMhYAN",
+"acct": "Thumbtack",
+"opp": "Thumbtack - Martech Platform",
+"old": "SMS & Emails",
+"prior": "Communications & Marketing Platform",
+"rat": "Migrating transactional and marketing communications from homegrown + Iterable systems to a new Temporal-based internal platform (martech). Primary outcome is o",
+"ev": "Name: 'Thumbtack - Martech Platform'; Use_Case_Details__c: 'migrating transactional and marketing communications from existing homegrown and Iterab..."
+},
+{
+"id": "006UY00000Qvh9KYAR",
+"acct": "ZipRecruiter",
+"opp": "ZipRecruiter - Integration Platform",
+"old": "Human-In-The-Loop Approval Workflows",
+"prior": "Data Pipelines & ETL",
+"rat": "Building an in-code integration platform to replace a no-code iPaaS, moving data to/from Salesforce, NetSuite and their HRIS. Primary outcome is moving/transfor",
+"ev": "Gong call 3078193669358775661: 'integrations to and from our HRIS... Salesforce, Netsuite'; 'our way of building integrations is moving to just mor..."
+},
+{
+"id": "006UY00000SUKdtYAH",
+"acct": "Brex",
+"opp": "Brex - Accounting Workload",
+"old": "Business processes",
+"prior": "Other",
+"rat": "Details are an explicit placeholder ('More details to come, but putting this in here as a placeholder') describing automating 'customer facing accounting proces",
+"ev": "Use_Case_Details__c: 'help automate customer facing accounting processes on the Brex platform... putting this in here as a placeholder'. Gong: no c..."
+},
+{
+"id": "006UY00000SyKYPYA3",
+"acct": "SoFi",
+"opp": "SoFi - Expand - Kafka Migration",
+"old": "Business processes",
+"prior": "Data Pipelines & ETL",
+"rat": "Kafka is data streaming/movement between systems; deal is migrating Kafka from self-hosted to MSK/Warpstream. Data-movement infra, but it's a still-conceptual m",
+"ev": "Details: 'Every team at SoFi using Kafka. They're doing a migration from kafka self hosted to MSK or Warpstream. They've conceptualized what they w..."
+},
+{
+"id": "006UY00000JMtCbYAL",
+"acct": "Harness",
+"opp": "Harness- Split migration (FME)",
+"old": "Business processes",
+"prior": "Other",
+"rat": "Doc (Split.io) describes a generic central orchestration/scheduler engine running a grab-bag of UI-triggered and schedule-based workflows ('solving a bunch of u",
+"ev": "Doc 1QHUb0...: 'Using Temporal for solving a bunch of use cases', 'Moving data around, UI triggered, Schedules based use cases', 'Only workflow age..."
+},
+{
+"id": "0065f00000IWEb5AAH",
+"acct": "Indeed",
+"opp": "Indeed - Apply Auxiliary Delivery 3/23",
+"old": "Business processes",
+"prior": "Other",
+"rat": "No usable evidence: details null, no doc in Drive, Gong coverage begins ~4 months after the 2023-03 close. Na...",
+"ev": "no usable evidence found (null details; no doc; no Gong calls near close)"
+},
+{
+"id": "006UY0000099CO9YAM",
+"acct": "Nordstrom",
+"opp": "Nordstrom - Kafka Topic Migration",
+"old": "Infrastructure applications",
+"prior": "Data Pipelines & ETL",
+"rat": "Workload is migrating on-prem Kafka topics to Confluent Cloud - moving streaming data/topics between systems. Primary outcome is data movement, not deploying/op",
+"ev": "Use_Case_Details__c: 'Migration of on prem Kafka topics to Confluent Cloud'. Linked Drive file too large to render (1.6MB); classified from Tier 1 ..."
+},
+{
+"id": "006UY000001HZwuYAG",
+"acct": "Kissht (OnEMI Technologies)",
+"opp": "Kissht-Partner & Customer Onboarding- Workload",
+"old": "Business processes",
+"prior": "Customer Onboarding & Identity Verification",
+"rat": "Opp name + details anchor on onboarding: 'user onboarding... credit checks. partner onboarding and offboarding'. Doc shows a broad lending platform (LOS/LMS/dis",
+"ev": "Details: 'user onboarding, loan transactions, credit checks. partner onboarding and offboarding'. Doc 1vIh8...: 'Partner onboarding & offboarding; ..."
+},
+{
+"id": "006UY000004fQE0YAM",
+"acct": "Pay.com",
+"opp": "Pay.com - Gateway Workflow",
+"old": "Payment Gateway",
+"prior": "Payment Processing & Settlement",
+"rat": "Payment gateway workload: per-parent-transaction workflow acting as a queue for sub-transactions of that parent (signal-with-start + update). Money-movement tra",
+"ev": "Old use case 'Payment Gateway'; name 'Gateway Workflow'; details: 'workflow level queue on a per parent transaction - each workflow is its own litt..."
+},
+{
+"id": "006UY00000Fx3UJYAZ",
+"acct": "Alto Pharmacy LLC",
+"opp": "Alto-Partner Workflows-Workload",
+"old": "Operational Process",
+"prior": "Other",
+"rat": "Greenfield service for partner integrations (referrals & prescription processing) for partner Synoda; a 5-step partner-onboarding/processing orchestration engin",
+"ev": "Doc 'Alto: Use Case & Meeting Notes': 'Building a new service for partners (referrals & prescription processing)... 5 big steps, ~50 actions... ben..."
+},
+{
+"id": "006UY00000Fh3JmYAJ",
+"acct": "PlayPlay",
+"opp": "PlayPlay - homegrown orchestrator",
+"old": "AI/ML Orchestration",
+"prior": "Other",
+"rat": "Fixed media-processing pipeline: user uploads media -> extract metadata -> generate thumbnail -> video previews. Replacing homegrown PHP orchestrator + SQS. Med",
+"ev": "Doc 'PlayPlay Use Case': 'Media identification - User upload a new media, Extract metadata, Generate a thumbnail, Video previews.' Current: 'Homegr..."
+},
+{
+"id": "006UY00000WHGnVYAX",
+"acct": "Block",
+"opp": "Square - square-risk-platform-foundations",
+"old": "Other",
+"prior": "Other",
+"rat": "Only signal is 'Risk platform' \u2014 a fraud/risk decisioning platform that does not map cleanly to any of the 15 litmus tests. No doc; no Gong calls available for ",
+"ev": "Use_Case_Details: 'Risk platform' only. Gong find_by_email for 3 Square/Block contacts returned no calls."
+},
+{
+"id": "006UY00000RldJJYAZ",
+"acct": "Hotmart",
+"opp": "Hotmart - User Registration",
+"old": "Identity Verification / \"Know Your Customer\"",
+"prior": "Customer Onboarding & Identity Verification",
+"rat": "User registration/onboarding process with KYC. Primary outcome is getting a new customer verified and onboarded - direct litmus match. Legacy 'Identity Verifica",
+"ev": "Opp name 'Hotmart - User Registration'; details 'User onboarding process. KYC'."
+},
+{
+"id": "006UY00000MJtx0YAD",
+"acct": "Progress",
+"opp": "Progress - Notification Management System",
+"old": "SMS & Emails",
+"prior": "Communications & Marketing Platform",
+"rat": "Notification management system where users sign up to receive alerts meeting their criteria - outbound comms orchestration (routing, timing, delivery of alerts)",
+"ev": "Opp name 'Notification Management System'; details 'Notification management system where users can sign up to receive alerts that meet criteria the..."
+},
+{
+"id": "0065f00000ISIy0AAH",
+"acct": "Cimpress",
+"opp": "Cimpress Online Order Taking Go-Live",
+"old": "Business Transactions",
+"prior": "Order Management & Fulfillment",
+"rat": "Order-taking workflows for 12 printing brands (Vistaprint, Exaprint). Primary outcome is an order gets placed/processed correctly across brands - direct litmus ",
+"ev": "Doc 'Cimpress Order Taking': 'Order taking workflows for printing brands (Vistaprint, Exaprint, 12 brands)'; Why Temporal: 'reliability and visibil..."
+},
+{
+"id": "0065f00000OzS5UAAV",
+"acct": "Stripe",
+"opp": "Stripe - CI-Status",
+"old": "Infrastructure applications",
+"prior": "Infrastructure Automation & CI/CD",
+"rat": "Managing a critical component of their CI pipeline - directly CI/CD infrastructure. Primary outcome is operating/shipping software via the CI pipeline. Legacy '",
+"ev": "Opp name 'Stripe - CI-Status'; details 'Managing a critical component of their CI pipeline'."
+},
+{
+"id": "006UY000005b9ZMYAY",
+"acct": "SoFi",
+"opp": "SoFi - Home Loans",
+"old": "Business processes",
+"prior": "Financial Services & Lending",
+"rat": "Opp details null; Gong (Jan-2024 SoFi migration call) has the Home Loans team describe their Temporal use: webhook-driven workflows, generating adverse-action n",
+"ev": "Gong call 4955417253109231022: Home Loans manager: 'whenever we receive a webhook... generating adverse action notices, some cron jobs for processi..."
+},
+{
+"id": "006UY00000LynOLYAZ",
+"acct": "Indeed",
+"opp": "Indeed - LLM Eval - AI",
+"old": "AI/ML Orchestration",
+"prior": "AI - Processing Pipelines",
+"rat": "Name 'LLM Eval - AI' + details 'ai-context-ingestion namespace' describe a fixed pipeline ingesting context and running data through LLMs for evaluation/inferen",
+"ev": "Tier 1: oppName 'Indeed - LLM Eval - AI'; Use_Case_Details__c 'ai-context-ingestion namespace'."
+},
+{
+"id": "006UY00000Nlby9YAB",
+"acct": "Adobe",
+"opp": "Adobe - Workfront Use Case",
+"old": "Lifecycle Management",
+"prior": "Control Plane Operations",
+"rat": "Migration deal (Workfront migrating Temporal OSS to tCloud) framed as 'first portion of their overall platform for User Provisioning.' OSS->Cloud migration + a ",
+"ev": "Use_Case_Details__c: 'migrating their Temporal OSS to tCloud - this is the first portion of their overall platform for User Provisioning'"
+},
+{
+"id": "006UY00000QHTcwYAH",
+"acct": "Wolters Kluwer",
+"opp": "Wolters Kluwer - Bolt Engagement",
+"old": "Lifecycle Management",
+"prior": "Control Plane Operations",
+"rat": "Tier 1 too thin ('Built on top of Scan framework'). Gong (calls May 2025, near Sep CreatedDate): platform team building self-service provisioning of Temporal na",
+"ev": "Gong call 5573425026758169657: 'we are going to provide ... administrative apis or operation apis through [which] product teams can self service th..."
+},
+{
+"id": "006UY00000EtTvoYAF",
+"acct": "Cisco",
+"opp": "Cisco - Expand - AI Bot Lifecycles (Jonty P)",
+"old": "AI/ML Orchestration",
+"prior": "AI - Internal Agent Platforms",
+"rat": "Details: internal teams 'freely create AI chat bots in Webex'; need to track ownership/lifecycle of bots, what they're doing, clean up/kill them. A governance/l",
+"ev": "Use_Case_Details__c: 'People at Cisco can freely create AI chat bots in Webex. Need a way to track ownership of bots, what they're doing, ability t..."
+},
+{
+"id": "006UY000009gzI3YAI",
+"acct": "Relativity Technologies Inc",
+"opp": "Relativity technologies - OCR",
+"old": "AI/ML Orchestration",
+"prior": "AI - Processing Pipelines",
+"rat": "OCR for legal documents = a fixed pipeline running documents through AI/ML models (OCR/extraction). Direct opp signal matches the AI - Processing Pipelines litm",
+"ev": "Name 'Relativity technologies - OCR'; Use_Case_Details__c: 'OCR for legal documents'"
+},
+{
+"id": "006UY00000CpIooYAF",
+"acct": "Bloom Credit",
+"opp": "Bloom Credit - Bloom Plus",
+"old": "Business Transactions",
+"prior": "Financial Services & Lending",
+"rat": "Bloom Plus = white-labeled credit-improvement product for banks to offer consumers; adds positive payment history (utility/phone/streaming) and furnishes it to ",
+"ev": "Opp details: 'financial tool banks can offer their consumers to improve their credit scores by allowing them to add positive payment history... to ..."
+},
+{
+"id": "006UY00000DfHVFYA3",
+"acct": "Akind Group",
+"opp": "Akind - migrate on-prem workloads",
+"old": "Business processes",
+"prior": "Other",
+"rat": "Migration/platform-consolidation deal spanning many workloads (Continuous Deployment, Data/BI ingestion pipelines, employee onboarding/offboarding, candidate em",
+"ev": "Doc 'Akind Temporal Use Case': use cases listed = Continuous Deployment, Data/BI platform ingestion pipelines, Onboarding (employee on/offboarding)..."
+},
+{
+"id": "0065f00000KRw2YAAT",
+"acct": "Rippling",
+"opp": "Rippling - Reports & Analytics",
+"old": "Business processes",
+"prior": "Other",
+"rat": "Generating audit/compliance reports for account admins = a reporting/analytics workflow that doesn't match any of the 14 specific litmus tests (not data movemen",
+"ev": "Name 'Rippling - Reports & Analytics'; Use_Case_Details__c: 'Audit reports for administrators of Rippling account owners for compliance requirements.'"
+},
+{
+"id": "006UY000008Qa6TYAS",
+"acct": "Cisco",
+"opp": "Cisco - Expand - AI Team (Armorblox) - Customer Onboarding",
+"old": "Operational Process",
+"prior": "AI - Processing Pipelines",
+"rat": "Details: 'Assistants for customer onboarding and journey workflows.' Armorblox doc: Temporal used for customer onboarding where 'a lot of data fetches happen an",
+"ev": "Use_Case_Details__c: 'Assistants for customer onboarding and journey workflows'; doc: 'using Temporal for customer onboarding, where a lot of data ..."
+},
+{
+"id": "006UY00000AHeD2YAL",
+"acct": "Cisco",
+"opp": "Cisco - Expand - Workforce Collaboration - Social Circles",
+"old": "Operational Process",
+"prior": "Other",
+"rat": "Details + Workforce Collaboration doc: hybrid-work internal product showing who's in the office, calendar/schedules, notifications ('here's who you'll see today",
+"ev": "Use_Case_Details__c: 'make hybrid working better...showing which people are planning to be in the office'; doc: 'Hybrid digital work solution...Cal..."
+},
+{
+"id": "006UY000003aF5FYAU",
+"acct": "SoFi",
+"opp": "SoFi - MarTech",
+"old": "Business processes",
+"prior": "Communications & Marketing Platform",
+"rat": "Opp details null; only signal is the name 'MarTech' (marketing technology), pointing at outbound comms/campaign orchestration. No Use_Case_Details, no doc, and ",
+"ev": "Opp Name 'SoFi - MarTech'; Use_Case_Details__c = null; no doc; no MarTech detail in Gong call 4955417253109231022."
+},
+{
+"id": "006UY000004JedmYAC",
+"acct": "Square",
+"opp": "CashApp: Disputes",
+"old": "Business processes",
+"prior": "Payment Processing & Settlement",
+"rat": "CashApp disputes team processes payment disputes/chargebacks (contested-money resolution = reconciliation of payments), replacing a custom event-driven state ma",
+"ev": "Use_Case_Details__c: 'CashApp disputes team handles payment disputes, Human in the loop processing, replacing an existing custom event driven state..."
+},
+{
+"id": "006UY0000058NRBYA2",
+"acct": "Capsule Corporation",
+"opp": "Capsule - AI Workflows",
+"old": "Infrastructure applications",
+"prior": "AI - Agents",
+"rat": "Opp = 'AI Workflows'; details = AI agent automating actions (translating prescription instructions, helping customers take actions). Doc confirms heavy agentic ",
+"ev": "Details: 'agent communications using AI to automate translating prescription instructions, helping customers take actions ... Real time sms.' Doc: ..."
+},
+{
+"id": "006UY000007fJFZYA2",
+"acct": "Zoop.one",
+"opp": "Zoop.One - Daily Client Syncs",
+"old": "Business processes",
+"prior": "Data Pipelines & ETL",
+"rat": "Opp = 'Daily Client Syncs'; details = client sync (HTTP request/response) calls, offloading failed responses to Temporal. Doc: 'ETL/batch is what they focus on'",
+"ev": "Name 'Daily Client Syncs'; Details: 'several sync requests everyday ... HTTPs sync call ... offload all failed responses to our temporal service.' ..."
+},
+{
+"id": "006UY000007LLwfYAG",
+"acct": "Square",
+"opp": "CashApp: Business Accounts - Workload",
+"old": "Business processes",
+"prior": "Communications & Marketing Platform",
+"rat": "Sends reminder notifications to CashApp Business Accounts = orchestrating outbound comms (timing/routing of reminders). Transactional reminders rather than mark",
+"ev": "Use_Case_Details__c: 'Sends reminder notifications to CashApp Business Accounts'"
+},
+{
+"id": "006UY000001s6uQYAQ",
+"acct": "Warner Bros. Discovery",
+"opp": "WBD - Expand - GCD - Infras. Auto",
+"old": "Business processes",
+"prior": "Infrastructure Automation & CI/CD",
+"rat": "Workflow drives provisioning and configuration of servers, applies config changes, OS updates, runs validations. Primary outcome = operating/provisioning infras",
+"ev": "Name 'WBD ... Infras. Auto'; Details: 'drives the provisioning and configuration of Servers ... applying configuration changes, OS updates and runn..."
+},
+{
+"id": "0065f00000LlRZSAA3",
+"acct": "Square",
+"opp": "CashApp Overdraft processing",
+"old": "Business processes",
+"prior": "Financial Services & Lending",
+"rat": "CashApp offers an Overdraft (credit) product; workflow alerts customers and recoups extended funds over a 45-day window via timers/polling/reminders. Primary ou",
+"ev": "Doc 'Block: Overdrafts': 'Overdraft feature in cashapp... Not charging fees so want to call back funds... 40 days before they pull back money. Remi..."
+},
+{
+"id": "006UY00000SShEnYAL",
+"acct": "SoFi",
+"opp": "SoFi - Expand - Lending Loss Management",
+"old": "Business processes",
+"prior": "Financial Services & Lending",
+"rat": "Details 'TBD' but the opp name 'Lending Loss Management' is a specific regulated lending workflow (loan loss / charge-off / collections / provisioning) at a len",
+"ev": "Opp Name 'SoFi - Expand - Lending Loss Management'; Use_Case_Details__c = 'TBD'."
+},
+{
+"id": "006UY00000Wwi9VYAR",
+"acct": "ViewLift, Inc. (Customer)",
+"opp": "ViewLift, Inc. (Customer) - Subscription Workflows",
+"old": "Other",
+"prior": "Payment Processing & Settlement",
+"rat": "Workload handles 'customer monetization and subscription purchases' tied to revenue. Primary outcome is the subscription purchase transaction (money moving). Be",
+"ev": "Use_Case_Details/Other_Detail: 'Handles customer monetization and subscription purchases; directly tied to how ViewLift's customers make revenue.'"
+},
+{
+"id": "0065f00000Gp5frAAB",
+"acct": "Cimpress",
+"opp": "Cimpress SAML - 12/2022",
+"old": "Business processes",
+"prior": "Communications & Marketing Platform",
+"rat": "Conflicting signals \u2014 name \"SAML\" (identity) vs details (cart event triggers \"send an email reminder\"); lone ...",
+"ev": "details \"events happen async to cart e.g. send an email reminder\""
+},
+{
+"id": "006UY00000ZHRu5YAH",
+"acct": "Rivian",
+"opp": "Rivian - Service Order Reminders",
+"old": "Other",
+"prior": "Communications & Marketing Platform",
+"rat": "Workload orchestrates outbound two-way SMS 48h before service appointments with timeout/timing handling so customers confirm/cancel. Outbound comms orchestratio",
+"ev": "Use_Case_Details: send two-way SMS 48h before each service appointment to confirm/cancel; timeout handling for missed confirmation."
+},
+{
+"id": "006UY00000XjhKLYAZ",
+"acct": "GoDaddy",
+"opp": "GoDaddy - Legal Tool Modernization",
+"old": "Other",
+"prior": "Other",
+"rat": "Subpoena-compliance workflow: gather + deliver customer data on law-enforcement/civil legal requests. A legal-ops product workflow, not data sync/ETL between sy",
+"ev": "Details: 'legal engineering team modernizing subpoena compliance workflow... gather and deliver customer data' when subpoenas issued. Other_Detail: 'business pr"
+},
+{
+"id": "006UY00000Xw6oQYAR",
+"acct": "Duolingo",
+"opp": "Duolingo - Experminents - A/B Testing",
+"old": "Other",
+"prior": "Other",
+"rat": "Powers product experiments/A-B testing to trial features and UX. Not outbound comms/campaigns, not ETL, not order/payment. An internal experimentation engine wi",
+"ev": "Details: 'Temporal powers the experiments... used to trial new features or other user experiences'. Other_Detail: 'customer experience focused workload'."
+},
+{
+"id": "006UY00000YX1RZYA1",
+"acct": "Dubclub",
+"opp": "Dubclub - Discord Bot",
+"old": "Other",
+"prior": "Other",
+"rat": "Discord bot doing server management for cappers: create channels/categories/roles, manage subscriber access/role assignment, handle Discord rate limiting. Serve",
+"ev": "Details: 'Discord bot... creating channels, categories, roles, managing subscriber access... handle Discord's dynamic rate limiting. Some steps in order, others"
+},
+{
+"id": "006UY00000X1x9YYAR",
+"acct": "OpenRouter",
+"opp": "OpenRouter - AI Model Benchmarking",
+"old": "Other",
+"prior": "AI - Processing Pipelines",
+"rat": "Long-running workflows wrap the OpenBench CLI to run benchmarks/evals against AI models and providers (inference for evaluation), no weight updates. Fixed pipel",
+"ev": "Details + doc: 'Long-running workflows to benchmark AI models... wrap OpenBench CLI... run benchmarks against models and providers... evals that can run for a l"
+},
+{
+"id": "0065f00000KQbYLAA1",
+"acct": "Netflix",
+"opp": "Netflix-AntiGravity",
+"old": "Infrastructure applications",
+"prior": "Control Plane Operations",
+"rat": "Doc: a control plane to provision/ops with self-service backend UI; provisions infra namespace-per-shard \u2014 th...",
+"ev": "Doc \"Netflix Antigravity\": \"Control plane used to provision, ops, backend UI ..."
+},
+{
+"id": "006UY00000YVUflYAH",
+"acct": "Tessl AI Ltd.",
+"opp": "Tessl AI Ltd. - AI Evaluation Pipeline",
+"old": "Other",
+"prior": "AI - Processing Pipelines",
+"rat": "Opp details explicitly describe a fixed pipeline: fetch code artifacts from S3/GitHub, fan out to multiple sandboxes for parallel AI inference-evaluation tasks,",
+"ev": "Use_Case_Details: 'AI inference evaluation pipeline... fan out to five sandboxes... collect them back, write to the database'; Other_Detail 'AI Sandboxing'."
+},
+{
+"id": "006UY00000XrZxVYAV",
+"acct": "Guardian Life Insurance Company of America",
+"opp": "Guardian Life Insurance Company of America - Engineering Portal",
+"old": "Other",
+"prior": "Other",
+"rat": "EngX 'engineering experience/excellence' portal for measurable dev outcomes; Other_Detail 'Developer automation'. Vague internal dev-productivity tooling \u2014 coul",
+"ev": "Name 'Engineering Portal'; Details 'engineering experience and engineering excellence (EngX) portal... tangible project with measurable outcomes'; Other_Detail "
+},
+{
+"id": "0065f00000KQbEKAA1",
+"acct": "Square",
+"opp": "CashApp_IDV_expansion",
+"old": "Identity Verification / \"Know Your Customer\"",
+"prior": "Customer Onboarding & Identity Verification",
+"rat": "Opp details state identity verification (IDV/KYC).",
+"ev": "details \"CashApp IDV - Identity verification\""
+},
+{
+"id": "0065f00000ITq0yAAD",
+"acct": "Dubber",
+"opp": "Dubber- AI Pipeline Project- Expansion",
+"old": "Business processes",
+"prior": "AI - Processing Pipelines",
+"rat": "AI-driven real-time transcription & insights \u2014 a fixed pipeline running data through AI models.",
+"ev": "details \"AI-driven, real-time transcription & insights\"; name \"AI Pipeline Pr..."
+},
+{
+"id": "0065f00000IVseSAAT",
+"acct": "Weave",
+"opp": "Weave-Onboarding + Provisioning",
+"old": "Business processes",
+"prior": "Infrastructure Automation & CI/CD",
+"rat": "MIGRATION deal \u2014 doc & Gong confirm OSS to Cloud migration of ~50 internal \"Onboarding/Provisioning\" workflow...",
+"ev": "Doc \"Weave_Onboarding\": \"Internal Team: Onboarding ... Use Case: Onboarding (..."
+},
+{
+"id": "006UY00000XPDhjYAH",
+"acct": "Ensemble Health Partners",
+"opp": "Ensemble Health Partners - Rules based engine",
+"old": "Other",
+"prior": "Other",
+"rat": "Generic rules-based-engine approval workflow. Doc confirms 'big complicated if-based' rules to close accounts/post adjustments \u2014 a configurable workflow/rules e",
+"ev": "Name 'Rules based engine'; Details 'Rules based engine approval workflow'; doc: 'Rules based Engine: Internal approvals'; 'Big complicated if based off the rule"
+},
+{
+"id": "006UY000000v8nFYAQ",
+"acct": "FlightControl",
+"opp": "FlightControl-Schedules",
+"old": "AI/ML Orchestration",
+"prior": "Infrastructure Automation & CI/CD",
+"rat": "AWS deployment platform; this workload schedules cron jobs that run ops on deployed apps. Old \"AI/ML Orchestr...",
+"ev": "Doc \"FlightControl - Meeting Notes\": \"Deployment / Provision Infrastructure. ..."
+},
+{
+"id": "006UY00000ZAtyLYAT",
+"acct": "Wotch Health",
+"opp": "Wotch Health - Care Plan Execution (US)",
+"old": "Other",
+"prior": "Other",
+"rat": "Healthcare care-plan execution: durable orchestration of paired cross-system actions (save record + send SMS / trigger phone-robot call) using AI plus rule-base",
+"ev": "Details: 'Care plan execution and durable action orchestration... uses AI and rule-based logic... paired actions... executed durably'; Other_Detail 'Healthcare "
+}
+]

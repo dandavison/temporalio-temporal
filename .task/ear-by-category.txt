@@ -1,0 +1,185 @@
+============================================================================================
+Other
+  total EAR: $6,920,385   (24.9% of all EAR, 85 workloads)
+  ----------------------------------------------------------------------------------------
+  $      1,800,000  Coinbase                     Coinbase - Migrate self hosted clusters
+  $      1,121,040  Rippling                     Rippling - ETA Modernization - Migration
+  $        540,000  Scale AI                     Scale AI - Task Orchestration Engine
+  $        320,004  Qualtrics                    Qualtrics: xFlow use case
+  $        300,000  Airwallex Limited            Airwallex - Combined (Workload)
+  $        300,000  Vega Security                Vega Security - Federated Search Workflow
+  $        241,680  MasOrange                    MasOrange - Cadence Platform Migration
+  $        222,000  Aura                         Aura - full workload
+  $        151,680  Snap                         Snap - Spotlight & Saved Stories
+  $        130,781  Deutsche Telekom             Deutsche Telekom - Carbonara Orchestration Mass Market
+
+============================================================================================
+Data Pipelines & ETL
+  total EAR: $4,278,407   (15.4% of all EAR, 46 workloads)
+  ----------------------------------------------------------------------------------------
+  $      1,500,000  Snap                         Snap - Stories
+  $        372,000  LayerZero Labs               Layer Zero Labs - Initial Workload
+  $        355,200  LayerZero Labs               LayerZero Labs - Cross-chain messaging & transaction orchestration
+  $        300,000  Substack                     Substack - Video Workflows
+  $        180,000  Adobe                        Adobe - AEM Digital Asset Management Use Case
+  $        150,000  Maven AGI                    Maven AGI - Asyc Data Processing
+  $        120,000  Cloudinary                   Cloudinary - media processing workflow
+  $        118,260  Indeed                       Indeed - InterOp (ACDC/Marketplace)
+  $         90,000  Array                        Array – Expansion, Webhooks
+  $         90,000  Cloudinary                   Cloudinary - Media Infra Orchestration
+
+============================================================================================
+AI — Agents
+  total EAR: $3,690,136   (13.3% of all EAR, 15 workloads)
+  ----------------------------------------------------------------------------------------
+  $      1,291,608  Replit                       Replit - Replit Agent Workload
+  $      1,200,000  Anthropic                    Anthropic - Compass (Deep Research)
+  $        420,000  OpenAI                       OpenAI - Pulse
+  $        240,000  OpenAI                       OpenAI - Automations
+  $        160,000  Perplexity                   Perplexity - Comet Browser Loop Use Case
+  $        144,000  Magical                      Magical - Agents Use Case
+  $         92,484  Sinch                        Sinch - Agentic AI SMS processing
+  $         52,800  Block                        KGoose - Tiles & Co-Pilot
+  $         33,240  Lindy.ai                     Lindy AI - Email Automation
+  $         18,900  Anysphere                    Anysphere - Ai Agent Orchestration
+
+============================================================================================
+Payment Processing & Settlement
+  total EAR: $3,383,687   (12.2% of all EAR, 26 workloads)
+  ----------------------------------------------------------------------------------------
+  $      2,149,000  Stripe                       Stripe-Transfer Application-12/2022
+  $        255,540  Slash Financial              Slash Financial - Debit Card Processing (Long Running Workflows)
+  $        216,000  Remitly                      Remitly - RTE
+  $        120,000  Intuit                       Intuit - Payments
+  $        104,226  Square                       Square - CashApp Statements
+  $         97,200  Roblox                       Roblox - Marketplace Refund
+  $         82,008  AppDirect                    AppDirect - Workload - Commissions
+  $         61,500  Circle                       Circle - Minting/Burning Migration
+  $         54,000  Stripe                       Stripe - Revenue Engine
+  $         51,600  Will Bank                    Will Bank – Pix Transactions
+
+============================================================================================
+AI — Processing Pipelines
+  total EAR: $3,064,467   (11.0% of all EAR, 28 workloads)
+  ----------------------------------------------------------------------------------------
+  $        840,000  OpenAI                       OpenAI - Integrity
+  $        409,992  Abridge                      Abrigde - Entity Domain
+  $        395,916  HeyGen Inc                   HeyGen - Video Gen Workload
+  $        312,000  Vendasta                     Vendasta- AI Chatbot-Workload
+  $        216,000  Xapien                       Xapien - Due Diligence Check
+  $        204,000  OpenAI                       OpenAI - Document Scanning
+  $         86,784  Sinch                        Sinch - Chatlayer Bot
+  $         74,475  Snap                         Snap - Music Content ID (OSS Migration)
+  $         72,000  Loop                         Loop - AI Systems Use Case
+  $         72,000  ChainPatrol Inc.             ChainPatrol asset scanning pipeline
+
+============================================================================================
+Control Plane Operations
+  total EAR: $1,877,962   (6.8% of all EAR, 9 workloads)
+  ----------------------------------------------------------------------------------------
+  $      1,440,000  OpenAI                       OpenAI - Throttler
+  $        216,000  Retool Inc.                  Retool- OSS Migration- Workload
+  $         81,982  Snap                         Snap - Snaptasks Scheduled Task Execution
+  $         69,600  ConductorOne, Inc            ConductorOne - Provisioning + Tasks/Ticket - workload
+  $         48,000  Woven by Toyota, Inc         woven workload
+  $         12,000  Outreach                     Outreach - Cloud Migration
+  $          4,800  Adobe                        Adobe - Workfront Use Case
+  $          4,800  Wolters Kluwer               Wolters Kluwer - Bolt Engagement
+  $            780  Netflix                      Netflix-AntiGravity
+
+============================================================================================
+Communications & Marketing
+  total EAR: $1,806,066   (6.5% of all EAR, 25 workloads)
+  ----------------------------------------------------------------------------------------
+  $        522,720  Airbnb                       Airbnb - MarTech - Voyager Event-Triggered Notifications (Abandon Cart)
+  $        240,000  Yubi (Credavenue Private Limited) Yubi (Spocto)- Campaigns-workload
+  $        204,000  Airbnb                       Airbnb - MarTech - Voyager List-Triggered Notifications
+  $        173,532  Twilio                       Twilio Messaging Workload
+  $        120,000  Stripe                       Stripe - Account Status Notification
+  $         96,000  Dubclub                      Dubclub - Push Notifications
+  $         90,096  Artisan                      Artisan - AI Sales Outreach
+  $         81,384  Redo                         Redo - Marketing
+  $         60,000  Airbnb                       Airbnb - MarTech - Voyager User-Triggered Notifications (Elvis/Icons & Signups)
+  $         50,400  SoFi                         SoFi - Communications Platform Service (CPS)
+
+============================================================================================
+Infrastructure Automation & CI/CD
+  total EAR: $1,415,137   (5.1% of all EAR, 23 workloads)
+  ----------------------------------------------------------------------------------------
+  $        619,512  Snyk                         Snyk - Vulnerability Scanning Workload
+  $        243,129  FireHydrant                  FireHydrant - runbooks engine and signals product
+  $         93,576  Ford Motor Company           Ford - Vehicle Onboarding
+  $         70,000  Snap                         Snap - Autopilot Integration Testing (OSS Migration)
+  $         60,000  Netflix                      Netflix - Managed Delivery
+  $         52,848  Nvidia                       Brev - Migration
+  $         44,400  Lumen Technologies, Inc.     Lumen - Network & Platform Automation - Blue Steel
+  $         39,000  HashiCorp                    HashiCorp - Expand - Self Hosted Migration
+  $         33,600  Postman Inc                  Postman Inc - Version Control
+  $         24,000  Snap                         Snap - Platform Falcon (OSS Migration)
+
+============================================================================================
+Financial Services & Lending
+  total EAR: $645,649   (2.3% of all EAR, 20 workloads)
+  ----------------------------------------------------------------------------------------
+  $        107,766  Stripe                       Stripe - issuing-xp
+  $         82,800  Rippling                     Rippling - Filing Factory 3/23
+  $         80,004  JPMorgan Technology Services JTS Banking-as-a-Service Workload
+  $         50,400  Upstart                      Upstart - Core Pricing PL
+  $         48,000  Recargapay                   Recargapay - Lending Operation
+  $         39,000  Stripe                       Stripe - bin-sponsor-eligibility
+  $         38,772  Neon                         Neon - Payday Loan
+  $         36,000  Kotak Mahindra Bank Pvt Ltd  Kotak customer journeys/onboarding
+  $         35,154  Chase ICB                    Chase ICB Customer Onboarding/Credit Origination/Account Transfers
+  $         25,000  Macquarie Group              Macquarie Group - Loan Origination (workload)
+
+============================================================================================
+Order Management & Fulfillment
+  total EAR: $303,479   (1.1% of all EAR, 10 workloads)
+  ----------------------------------------------------------------------------------------
+  $        120,960  Booking.com                  Booking.com - Self Service - Arrival Time
+  $         45,600  Alaska Airlines              Alaska Airlines - Bookings
+  $         28,872  JOKR Services                Jokr – Order Management
+  $         27,000  Yum Brands                   Yum Brands - Curie Orders (US Pizza Hut)
+  $         26,640  Yum Brands                   Yum Brands - Alpha Orders (US TacoBell, KFC)
+  $         14,423  Alaska Airlines              Alaska Re-bookings use case
+  $         12,000  Bridgewater                  BW - Migration workload - Trading platform
+  $         12,000  GeneDx                       GeneDx - Order Management
+  $         11,184  Yum Brands                   Yum Brands - Hopper Task (EU all brands)
+  $          4,800  Cimpress                     Cimpress Online Order Taking Go-Live
+
+============================================================================================
+Customer Onboarding & Identity
+  total EAR: $236,452   (0.9% of all EAR, 11 workloads)
+  ----------------------------------------------------------------------------------------
+  $         75,000  Hapara                       Hapara - Student Sign Up
+  $         60,000  ANZ                          ANZ- Account Origination & Statements
+  $         30,000  Checkr                       Checkr - Progressive Reports
+  $         20,772  CAIXA                        CAIXA - Biometric Authentication
+  $         14,400  Square                       CashApp: Know Your Customer (KYC) Refresh App
+  $         13,200  Cargo                        Cargo- customer onboarding- workload
+  $          8,351  Glovo                        Glovo - Courier
+  $          5,400  Kissht (OnEMI Technologies)  Kissht-Partner & Customer Onboarding- Workload
+  $          5,064  Hotmart                      Hotmart - User Registration
+  $          4,253  Cisco                        Cisco - Expand - AI Team (Armorblox) - Customer Onboarding
+
+============================================================================================
+Customer Service & Support
+  total EAR: $103,900   (0.4% of all EAR, 1 workloads)
+  ----------------------------------------------------------------------------------------
+  $        103,900  Twilio                       Twilio Flex
+
+============================================================================================
+AI — Agent Platforms
+  total EAR: $16,680   (0.1% of all EAR, 2 workloads)
+  ----------------------------------------------------------------------------------------
+  $         12,000  Coupang                      Coupang - Expand - eCommerce Eng - AI Agent Runner Infrastructure
+  $          4,680  Cisco                        Cisco - Expand - AI Bot Lifecycles (Jonty P)
+
+============================================================================================
+AI — Model Training
+  total EAR: $6,600   (0.0% of all EAR, 1 workloads)
+  ----------------------------------------------------------------------------------------
+  $          6,600  Cisco                        Cisco (Armorblox) - AI Canvas
+
+============================================================================================
+GRAND TOTAL EAR: $27,749,007 across 302 workloads, 14 categories
