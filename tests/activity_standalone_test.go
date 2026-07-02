@@ -9854,13 +9854,17 @@ func (s *standaloneActivityTestSuite) TestPauseActivityExecution() {
 		require.EqualValues(t, 2, poll2Resp.Attempt)
 	})
 
-	// PauseWhileRetryNoWait: pause an activity during a long retry backoff (30s), then immediately
-	// unpause. The activity should be dispatched quickly — well before the 30s retry interval elapses.
-	t.Run("PauseWhileRetryNoWait", func(t *testing.T) {
+	// PauseWhileRetryHonorsBackoff: pausing an activity mid retry-backoff and immediately unpausing
+	// must not shortcut the remaining backoff. Unpause honors the pending retry's dispatch time
+	// (complete_time + retry_interval), just as it honors a pending start_delay, so the activity
+	// stays SCHEDULED until the original backoff would have elapsed rather than dispatching at once.
+	t.Run("PauseWhileRetryHonorsBackoff", func(t *testing.T) {
 		ctx := testcore.NewContext()
 		activityID := testcore.RandomizeStr(t.Name())
 		taskQueue := testcore.RandomizeStr(t.Name())
 
+		// 30s is far larger than the require.Never window below: if unpause discarded the remaining
+		// backoff, the activity would leave SCHEDULED almost immediately and fail the assertion.
 		_, err := env.FrontendClient().StartActivityExecution(ctx, &workflowservice.StartActivityExecutionRequest{
 			Namespace:           env.Namespace().String(),
 			ActivityId:          activityID,
@@ -9900,7 +9904,7 @@ func (s *standaloneActivityTestSuite) TestPauseActivityExecution() {
 		})
 		require.NoError(t, err)
 
-		// Wait for activity to be rescheduled at attempt=2.
+		// Wait for activity to be rescheduled at attempt=2 (in retry backoff).
 		await.Require(ctx, t, func(c *await.T) {
 			dr, dErr := env.FrontendClient().DescribeActivityExecution(c.Context(), &workflowservice.DescribeActivityExecutionRequest{
 				Namespace:  env.Namespace().String(),
@@ -9910,7 +9914,7 @@ func (s *standaloneActivityTestSuite) TestPauseActivityExecution() {
 			require.EqualValues(c, 2, dr.GetInfo().GetAttempt())
 		}, 10*time.Second, 200*time.Millisecond)
 
-		// Pause, then immediately unpause – this should skip the remaining 30s backoff.
+		// Pause, then immediately unpause.
 		_, err = env.FrontendClient().PauseActivityExecution(ctx, &workflowservice.PauseActivityExecutionRequest{
 			Namespace:  env.Namespace().String(),
 			ActivityId: activityID,
@@ -9925,15 +9929,17 @@ func (s *standaloneActivityTestSuite) TestPauseActivityExecution() {
 		})
 		require.NoError(t, err)
 
-		// Activity should be dispatched quickly (well within the 30s retry backoff window).
-		poll2Resp, err := env.FrontendClient().PollActivityTaskQueue(ctx, &workflowservice.PollActivityTaskQueueRequest{
-			Namespace: env.Namespace().String(),
-			TaskQueue: &taskqueuepb.TaskQueue{Name: taskQueue, Kind: enumspb.TASK_QUEUE_KIND_NORMAL},
-			Identity:  env.Tv().WorkerIdentity(),
-		})
-		require.NoError(t, err)
-		require.Equal(t, activityID, poll2Resp.GetActivityId())
-		require.EqualValues(t, 2, poll2Resp.Attempt)
+		// Honor backoff: the activity must stay SCHEDULED well past the unpause, since the pending
+		// retry's 30s dispatch time is preserved rather than reset to "now". A short window suffices
+		// to distinguish honoring the backoff from an immediate re-dispatch.
+		require.Never(t, func() bool {
+			dr, dErr := env.FrontendClient().DescribeActivityExecution(ctx, &workflowservice.DescribeActivityExecutionRequest{
+				Namespace:  env.Namespace().String(),
+				ActivityId: activityID,
+			})
+			return dErr != nil || dr.GetInfo().GetRunState() != enumspb.PENDING_ACTIVITY_STATE_SCHEDULED
+		}, 5*time.Second, 100*time.Millisecond,
+			"unpause must honor the remaining retry backoff; activity should remain SCHEDULED")
 	})
 
 	// PauseWhileCancelRequested: pausing a CANCEL_REQUESTED activity must be rejected with

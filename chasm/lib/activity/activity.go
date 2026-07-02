@@ -689,10 +689,18 @@ func (a *Activity) UpdateActivityExecutionOptions(
 	attempt := a.LastAttempt.Get(ctx)
 
 	// Recalculate the current retry interval based on the (possibly updated) retry policy.
-	// This ensures a shortened retry interval takes effect immediately on re-dispatch.
-	if a.GetStatus() == activitypb.ACTIVITY_EXECUTION_STATUS_SCHEDULED && attempt.GetCurrentRetryInterval() != nil {
-		newInterval := backoff.CalculateExponentialRetryInterval(a.RetryPolicy, attempt.GetCount()-1)
-		attempt.CurrentRetryInterval = durationpb.New(newInterval)
+	// This ensures a shortened retry interval takes effect immediately on re-dispatch. It applies
+	// to both SCHEDULED (waiting out a retry backoff) and PAUSED (paused during a retry backoff):
+	// in the PAUSED case unpause honors the pending retry's dispatch time, so the recomputed
+	// interval must already be in place. STARTED / *_REQUESTED activities recompute the interval
+	// fresh when the running attempt yields, so no update is needed here.
+	switch a.GetStatus() {
+	case activitypb.ACTIVITY_EXECUTION_STATUS_SCHEDULED,
+		activitypb.ACTIVITY_EXECUTION_STATUS_PAUSED:
+		if attempt.GetCurrentRetryInterval() != nil {
+			newInterval := backoff.CalculateExponentialRetryInterval(a.RetryPolicy, attempt.GetCount()-1)
+			attempt.CurrentRetryInterval = durationpb.New(newInterval)
+		}
 	}
 
 	// Recreate the ScheduleToClose task at the (possibly updated) deadline.
@@ -920,8 +928,16 @@ func (a *Activity) unpause(
 	event unpauseEvent,
 ) {
 	attempt := a.LastAttempt.Get(ctx)
+	// Capture the pending retry's dispatch time (complete_time + current_retry_interval) before we
+	// mutate the attempt, so that unpausing an activity that is waiting out a retry backoff does not
+	// dispatch it any earlier than the retry would have fired on its own. This mirrors how unpause
+	// honors a pending start_delay via dispatchTimeRespectingStartDelay below.
+	retryDispatchTime := dispatchTimeForRetry(attempt)
 	if event.req.GetResetAttempts() {
+		// Resetting the attempt count discards the retry state entirely, so there is no backoff to
+		// honor: the activity is re-dispatched as a fresh attempt 1.
 		attempt.Count = 1
+		retryDispatchTime = nil
 	}
 	if event.req.GetResetHeartbeat() {
 		a.LastHeartbeat = chasm.NewDataField(ctx, &activitypb.ActivityHeartbeatState{})
@@ -933,6 +949,11 @@ func (a *Activity) unpause(
 		unpauseTime = unpauseTime.Add(time.Duration(rand.Int63n(int64(jitter)))) //nolint:gosec
 	}
 	dispatchTime := a.dispatchTimeRespectingStartDelay(unpauseTime)
+	// Honor any remaining retry backoff: never dispatch before the pending retry's scheduled time.
+	// If the backoff has already elapsed, dispatchTime (unpause time) wins and dispatch is immediate.
+	if retryDispatchTime != nil && retryDispatchTime.AsTime().After(dispatchTime) {
+		dispatchTime = retryDispatchTime.AsTime()
+	}
 	if timeout := a.GetScheduleToStartTimeout().AsDuration(); timeout > 0 {
 		ctx.AddTask(
 			a,
@@ -991,10 +1012,11 @@ func (a *Activity) reset(ctx chasm.MutableContext, event resetEvent) {
 
 // handleReset handles the activity execution reset.
 //
-// For SCHEDULED and PAUSED activities (no worker running): re-dispatches at attempt 1, honoring
-// any pending start_delay or retry backoff. A PAUSED activity is unpaused first — unless
-// keepPaused is set, in which case the counter is reset to 1 but the activity stays PAUSED until
-// a later unpause.
+// For SCHEDULED and PAUSED activities (no worker running): re-dispatches at attempt 1. Any pending
+// retry backoff is discarded (reset clears CurrentRetryInterval), but a pending start_delay is
+// honored so the re-dispatched attempt 1 does not fire before its original requested start time. A
+// PAUSED activity is unpaused first — unless keepPaused is set, in which case the counter is reset
+// to 1 but the activity stays PAUSED until a later unpause.
 //
 // For STARTED activities: transitions to RESET_REQUESTED. The worker is notified via
 // ActivityReset=true on its next heartbeat response and continues to use its existing task token.
