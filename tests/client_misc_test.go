@@ -444,7 +444,7 @@ func (s *ClientMiscTestSuite) TestStickyAutoReset() {
 	s.NotNil(resp)
 	for _, p := range resp.Pollers {
 		s.NotNil(p.LastAccessTime)
-		s.Greater(time.Now().Sub(p.LastAccessTime.AsTime()), time.Second*10)
+		s.Greater(time.Since(p.LastAccessTime.AsTime()), time.Second*10)
 	}
 
 	startTime := time.Now()
@@ -471,7 +471,7 @@ func (s *ClientMiscTestSuite) TestStickyAutoReset() {
 	})
 
 	// should be able to get the task without having to wait until sticky timeout (5s)
-	pollLatency := time.Now().Sub(startTime)
+	pollLatency := time.Since(startTime)
 	s.Less(pollLatency, time.Second*4)
 
 	s.NoError(err)
@@ -580,7 +580,7 @@ func (s *ClientMiscTestSuite) TestWorkflowCanBeCompletedDespiteAdmittedUpdate() 
 	// s.NoError(err)
 	// s.Equal("my-update-result", updateResult)
 
-	s.HistoryRequire.EqualHistoryEvents(`
+	s.EqualHistoryEvents(`
 	1 WorkflowExecutionStarted
 	2 WorkflowTaskScheduled
 	3 WorkflowTaskStarted
@@ -949,7 +949,7 @@ func (s *ClientMiscTestSuite) TestBufferedSignalCausesUnhandledCommandAndSchedul
 	s.NoError(err) // if new workflow task is not correctly dispatched, it would cause timeout error here
 	s.Equal("signal-value", receivedSig)
 
-	s.HistoryRequire.EqualHistoryEvents(`
+	s.EqualHistoryEvents(`
 	1 WorkflowExecutionStarted
 	2 WorkflowTaskScheduled
 	3 WorkflowTaskStarted

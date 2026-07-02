@@ -150,10 +150,8 @@ func MergeAndApply(
 		return mergedOpts, false, nil
 	}
 
-	unsetOverride := false
-	if mergedOpts.GetVersioningOverride() == nil {
-		unsetOverride = true
-	}
+	unsetOverride := mergedOpts.GetVersioningOverride() == nil
+
 	_, err = ms.AddWorkflowExecutionOptionsUpdatedEvent(mergedOpts.GetVersioningOverride(), unsetOverride, "", nil, nil, identity, mergedOpts.GetPriority(), mergedOpts.GetTimeSkippingConfig(), nil)
 	if err != nil {
 		return nil, hasChanges, err

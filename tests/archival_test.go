@@ -140,7 +140,7 @@ func (s *ArchivalSuite) SetupSuite() {
 		},
 	)
 
-	s.FunctionalTestBase.SetupSuiteWithCluster(
+	s.SetupSuiteWithCluster(
 		testcore.WithDynamicConfigOverrides(dynamicConfigOverrides),
 		testcore.WithArchivalEnabled(),
 		testcore.WithCustomHistoryArchiverFactory(customHistoryArchiverFactory),
@@ -177,7 +177,7 @@ func (s *ArchivalSuite) SetupSuite() {
 func (s *ArchivalSuite) TearDownSuite() {
 	s.Require().NoError(s.MarkNamespaceAsDeleted(s.archivalNamespace))
 	s.Require().NoError(s.MarkNamespaceAsDeleted(s.customArchiverNamespace))
-	s.FunctionalTestBase.TearDownCluster()
+	s.TearDownCluster()
 }
 
 func (s *ArchivalSuite) TestArchival_TimerQueueProcessor() {
