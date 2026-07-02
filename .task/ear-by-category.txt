@@ -2,184 +2,614 @@
 Other
   total EAR: $6,920,385   (24.9% of all EAR, 85 workloads)
   ----------------------------------------------------------------------------------------
-  $      1,800,000  Coinbase                     Coinbase - Migrate self hosted clusters
-  $      1,121,040  Rippling                     Rippling - ETA Modernization - Migration
-  $        540,000  Scale AI                     Scale AI - Task Orchestration Engine
-  $        320,004  Qualtrics                    Qualtrics: xFlow use case
-  $        300,000  Airwallex Limited            Airwallex - Combined (Workload)
-  $        300,000  Vega Security                Vega Security - Federated Search Workflow
-  $        241,680  MasOrange                    MasOrange - Cadence Platform Migration
-  $        222,000  Aura                         Aura - full workload
-  $        151,680  Snap                         Snap - Spotlight & Saved Stories
-  $        130,781  Deutsche Telekom             Deutsche Telekom - Carbonara Orchestration Mass Market
+  $      1,800,000  Coinbase                     Coinbase - Migrate self hosted clusters — MIGRATION deal (consolidate 80+ Temporal
+                                                 namespaces to Cloud) — not one product workload. Best-guess from det... — Evidence:
+                                                 details "Payments"; doc "Migration of 80+ Temporal Instances"; Gong: "fund mo... — Pass 2:
+                                                 Crypto exchange. Deal is migrating 80+ Temporal namespaces to Cloud (decision-7
+                                                 migration), sp…
+  $      1,121,040  Rippling                     Rippling - ETA Modernization - Migration — Opp + doc describe a generic, domain-agnostic
+                                                 async-task/workflow engine (ETA) backing ALL of Rippling's async tasks ... — Evidence:
+                                                 details "backend ETA for all of Rippling's asynchronous tasks"; doc "central ... — Pass 2:
+                                                 Rippling = HR/IT SaaS. ETA = generic async-task engine backing ALL async tasks across
+                                                 heteroge…
+  $        540,000  Scale AI                     Scale AI - Task Orchestration Engine — Generic org-wide task-orchestration engine (1.4B
+                                                 actions/mo), the foundational substrate for all of Scale AI's worklo... — Evidence: Doc
+                                                 "Scale AI_Task Pipelines": "backbone of its task pipeline... 1.4 billion ... — Pass 2:
+                                                 Scale AI = AI data-infra/annotation co. Workload = org-wide generic task-orchestration
+                                                 engine …
+  $        320,004  Qualtrics                    Qualtrics: xFlow use case — xFlow = a generic workflow-automation product built on
+                                                 Temporal; "ad tech" is the customer's industry, not a ... — Evidence: details "Qualtrics
+                                                 xFlow is an ad tech workflow automation product built on t... — Pass 2: Experience-mgmt
+                                                 (XM) platform; xFlow = a generic ad-tech workflow-automation product built on …
+  $        300,000  Airwallex Limited            Airwallex - Combined (Workload) — Multi-workload "Combined" opp; fields give no signal;
+                                                 docs + Gong show several distinct workloads plus a heavy Tempor... — Evidence: details
+                                                 "workflow"; Gong "Airwallex - Migration of Temporal Workflows" (2023-... — Pass 2:
+                                                 Airwallex=fintech. 'Combined' multi-workload opp, fields say only 'workflow'; docs
+                                                 blocked/Gon…
+  $        300,000  Vega Security                Vega Security - Federated Search Workflow — Generic service-orchestration building block:
+                                                 accepts a query, enqueues, polls, streams results back; nearly every other workflow
+                                                 triggers it. Web confirms Vega is a federated security-analytics/search platform. It's the
+                                                 product's core query-orchestration primitive, not data sync/ETL nor LLM-driven planning.
+                                                 Genuine catch-all. — Evidence: Use_Case_Details: 'Accepts a query, enqueues it to a
+                                                 backend processing system, polls for results, streams pages back... every other workflow
+                                                 triggers this one.' Web: Vega = federated security analytics/search.
+  $        241,680  MasOrange                    MasOrange - Cadence Platform Migration — Cadence-to-Temporal platform-
+                                                 consolidation/migration spanning 15+ unrelated domains (customer care, activation,
+                                                 payme... — Evidence: details "15 business use cases around customer care, line activation,
+                                                 payment... — Pass 2: Spanish telco; explicit Cadence->Temporal platform migration spanning
+                                                 15+ domains (care, activ…
+  $        222,000  Aura                         Aura - full workload — Dynamic repricing tool for Amazon sellers; the primary outcome is
+                                                 setting prices, not managing physical inventory (In... — Evidence: details "Repricing Tool
+                                                 for Amazon sellers" — Pass 2: Aura = online safety/identity-protection consumer app, but
+                                                 this opp's own field is clear: a dy…
+  $        151,680  Snap                         Snap - Spotlight & Saved Stories — Spotlight doc: 'ad publishing' - advertisers publish
+                                                 content to Snap, stored/analyzed for ad e… — Evidence: Doc "Snap - Spotlight": Use Case
+                                                 "Business process - ad publishing"
+  $        130,781  Deutsche Telekom             Deutsche Telekom - Carbonara Orchestration Mass Market — Doc: Carbonara = unified
+                                                 billing/invoicing orchestration (normalize invoices from acquired companies,
+                                                 format/validate... — Evidence: Doc "DeutscheTelekom_Carbonara": "unified billing system to
+                                                 handle invoices.....
 
 ============================================================================================
 Data Pipelines & ETL
   total EAR: $4,278,407   (15.4% of all EAR, 46 workloads)
   ----------------------------------------------------------------------------------------
-  $      1,500,000  Snap                         Snap - Stories
-  $        372,000  LayerZero Labs               Layer Zero Labs - Initial Workload
-  $        355,200  LayerZero Labs               LayerZero Labs - Cross-chain messaging & transaction orchestration
-  $        300,000  Substack                     Substack - Video Workflows
-  $        180,000  Adobe                        Adobe - AEM Digital Asset Management Use Case
-  $        150,000  Maven AGI                    Maven AGI - Asyc Data Processing
-  $        120,000  Cloudinary                   Cloudinary - media processing workflow
-  $        118,260  Indeed                       Indeed - InterOp (ACDC/Marketplace)
-  $         90,000  Array                        Array – Expansion, Webhooks
-  $         90,000  Cloudinary                   Cloudinary - Media Infra Orchestration
+  $      1,500,000  Snap                         Snap - Stories — Snapchat Story upload/assembly job: orchestrates a content-enrichment DAG
+                                                 that fans out to Bolt (media transcode) and CUP (content-understanding/ML), then assembles
+                                                 the result into STMS to publish the Story. Delivers an end-user product experience, not
+                                                 pure data movement — Evidence: Doc "Snap Stories – Temporal Design Review": content-
+                                                 enrichment DAG via Bolt ... — Pass 2: Snap=social/media. Stories design doc = content-
+                                                 enrichment DAG: media transcode (Bolt) + conte…
+  $        372,000  LayerZero Labs               Layer Zero Labs - Initial Workload — "Messages use case" = reliable cross-chain message
+                                                 delivery between blockchains; moving data between systems. Matches... — Evidence: details
+                                                 "Messages use case"; LayerZero = omnichain messaging protocol
+  $        355,200  LayerZero Labs               LayerZero Labs - Cross-chain messaging & transaction orchestration — Reliable cross-chain
+                                                 message delivery + transaction coordination across 150+ chains (Relayer/Scan); asset-
+                                                 bridging (S... — Evidence: details "Cross-chain messaging and transaction orchestration...
+                                                 Relayer (mess... — Pass 2: LayerZero = cross-chain crypto infra (6 namespaces). Core =
+                                                 reliable cross-chain message deliv…
+  $        300,000  Substack                     Substack - Video Workflows — Deterministic media post-processing (extract audio,
+                                                 generate/render clips); transcription is a minor step, not the pr... — Evidence: details
+                                                 "post-processing... generating clips, extracting audio, creating tran...
+  $        180,000  Adobe                        Adobe - AEM Digital Asset Management Use Case — Media encoding/up-conversion pipeline for
+                                                 AEM digital assets via serverless functions. Not AI model inference (transcoding, not ML),
+                                                 so AI - Processing Pipelines is a stretch; not system-to-system data sync, so not Data
+                                                 Pipelines & ETL. Product media-transformation workflow with no clean litmus match. —
+                                                 Evidence: Use_Case_Details: 'Digital Assets Media pipeline (Media Encoding) for AEM... up
+                                                 converting media content... orchestration of serverless functions on OpenWhisk.'
+                                                 Other_Detail: 'Media Encoding'.
+  $        150,000  Maven AGI                    Maven AGI - Asyc Data Processing — Named workload = async data processing (scraping,
+                                                 indexing, batch); moving/transforming data between systems. AI-insi... — Evidence: details
+                                                 "orchestrate asynchronous data processing... data scraping, indexing,...
+  $        120,000  Cloudinary                   Cloudinary - media processing workflow — Named workload = media transcoding/variant
+                                                 generation (1 video → 10 variants); no AI inference, not system-to-system ... — Evidence:
+                                                 details "media processing workflow that takes a single video and generates 10... — Pass 2:
+                                                 Cloudinary = media-management platform. Doc confirms named workload = multi-tenant media
+                                                 trans…
+  $        118,260  Indeed                       Indeed - InterOp (ACDC/Marketplace) — Doc + opp: reliable ingestion/continual updating
+                                                 (incl. dedupe) of candidate data from Indeed into 3rd-party ATS (Wor... — Evidence: Doc
+                                                 "Indeed ACDC_UseCase": "reliably ingests... candidate information... into...
+  $         90,000  Array                        Array – Expansion, Webhooks — Webhooks/event-delivery workload — reliable webhook event
+                                                 delivery between systems. (Linked doc not found; both opp f... — Evidence: details
+                                                 "Webhooks prod namespace is live"; name "Array – Expansion, Webhooks"
+  $         90,000  Cloudinary                   Cloudinary - Media Infra Orchestration — Doc + opp: Temporal orchestrating media
+                                                 processing (transcoding/resizing images & videos into variants); no AI infere... —
+                                                 Evidence: Doc "Cloudinary Notes": "orchestrate long-running, asynchronous media process...
 
 ============================================================================================
 AI — Agents
   total EAR: $3,690,136   (13.3% of all EAR, 15 workloads)
   ----------------------------------------------------------------------------------------
-  $      1,291,608  Replit                       Replit - Replit Agent Workload
-  $      1,200,000  Anthropic                    Anthropic - Compass (Deep Research)
-  $        420,000  OpenAI                       OpenAI - Pulse
-  $        240,000  OpenAI                       OpenAI - Automations
-  $        160,000  Perplexity                   Perplexity - Comet Browser Loop Use Case
-  $        144,000  Magical                      Magical - Agents Use Case
-  $         92,484  Sinch                        Sinch - Agentic AI SMS processing
-  $         52,800  Block                        KGoose - Tiles & Co-Pilot
-  $         33,240  Lindy.ai                     Lindy AI - Email Automation
-  $         18,900  Anysphere                    Anysphere - Ai Agent Orchestration
+  $      1,291,608  Replit                       Replit - Replit Agent Workload — Doc describes Replit's agentic coding loop: the LLM plans
+                                                 and dynamically spawns tools/sub-agents across multi-step w... — Evidence: Doc "Replit Use
+                                                 Case Doc": "LLM proposes small workflow of tools/sub agents t...
+  $      1,200,000  Anthropic                    Anthropic - Compass (Deep Research) — Deep Research is an agentic workflow where an LLM
+                                                 plans and iterates searches across multiple steps. — Evidence: Name "Compass (Deep
+                                                 Research)" + details "Deep research"
+  $        420,000  OpenAI                       OpenAI - Pulse — ChatGPT Pulse autonomously decides each day's research from a user's
+                                                 chats/memory/connected apps and runs multi-step ... — Evidence: details URL
+                                                 openai.com/index/introducing-chatgpt-pulse; OpenAI: "agentic over...
+  $        240,000  OpenAI                       OpenAI - Automations — ChatGPT Tasks/Automations = an LLM executes a user's prompt/action
+                                                 on a schedule (acts on the user's behalf); thin op... — Evidence: details "Scheduled
+                                                 tasks"; name "OpenAI - Automations" — Pass 2: OpenAI ChatGPT Tasks/Automations = LLM runs
+                                                 user actions on a schedule. AI-Agents vs generic-s…
+  $        160,000  Perplexity                   Perplexity - Comet Browser Loop Use Case — Comet Browser takes control of the browser and
+                                                 acts in a loop — an LLM deciding the next browser action across steps. — Evidence: details
+                                                 "Comet Browser... take control of the browser and do this in a loop"
+  $        144,000  Magical                      Magical - Agents Use Case — An "agentic product" where LLM-driven agents automate multi-
+                                                 step customer tasks (managing patient lists, filling forms). — Evidence: details "'agentic
+                                                 product' that uses these agents to automate customer tasks....
+  $         92,484  Sinch                        Sinch - Agentic AI SMS processing — Autonomously answers inbound FAQ/sales SMS in the
+                                                 human-agent inbox ("answer an increasing proportion autonomously");... — Evidence: details
+                                                 "answer an increasing proportion of questions autonomously"; name "Ag...
+  $         52,800  Block                        KGoose - Tiles & Co-Pilot — Block's Goose is an open-source AI agent that autonomously
+                                                 plans and executes multi-step software engineering tasks (builds projects, writes/executes
+                                                 code, debugs, orchestrates workflows, calls external APIs... — Evidence: details: 'Goose
+                                                 is an open-source, local-first AI agent... It can build entire projects from scratch,
+                                                 write and execute code, debug failures, orche...
+  $         33,240  Lindy.ai                     Lindy AI - Email Automation — Lindy is an AI workflow-automation platform ("Zapier but
+                                                 with AI"). The email-automation opp = an inbound-email trigger spins up a Temporal
+                                                 workflow that runs the AI agent to decide/execute tasks per email. ... — Evidence: Gong
+                                                 call 4772363581655655398 (near CreatedDate 2025-04-16): 'lindy... it's basically a
+                                                 workflow automation platform... like a zapier, but with AI....
+  $         18,900  Anysphere                    Anysphere - Ai Agent Orchestration — Details describe durable agent loops that run for
+                                                 extended periods with checkpointing and run multiple agents in parallel for slow/expensive
+                                                 inference. Core workload is LLM-driven agents acting across multi-... — Evidence: details:
+                                                 'Building durable agent loops that can run for extended periods (10 minutes to an hour)
+                                                 and incorporate checkpointing... running multiple ... — Pass 2: Anysphere=Cursor AI coding
+                                                 co. Rich opp details: durable LLM agent loops w/ checkpointing, many agents in parallel.
+                                                 Clean AI…
 
 ============================================================================================
 Payment Processing & Settlement
   total EAR: $3,383,687   (12.2% of all EAR, 26 workloads)
   ----------------------------------------------------------------------------------------
-  $      2,149,000  Stripe                       Stripe-Transfer Application-12/2022
-  $        255,540  Slash Financial              Slash Financial - Debit Card Processing (Long Running Workflows)
-  $        216,000  Remitly                      Remitly - RTE
-  $        120,000  Intuit                       Intuit - Payments
-  $        104,226  Square                       Square - CashApp Statements
-  $         97,200  Roblox                       Roblox - Marketplace Refund
-  $         82,008  AppDirect                    AppDirect - Workload - Commissions
-  $         61,500  Circle                       Circle - Minting/Burning Migration
-  $         54,000  Stripe                       Stripe - Revenue Engine
-  $         51,600  Will Bank                    Will Bank – Pix Transactions
+  $      2,149,000  Stripe                       Stripe-Transfer Application-12/2022 — Opp details describe a money-movement/transfer
+                                                 product. — Evidence: details "Money Movement/transfer app"
+  $        255,540  Slash Financial              Slash Financial - Debit Card Processing (Long Running Workflows) — Each card swipe
+                                                 triggers a workflow that processes the payment/repayment and records the transaction —
+                                                 money moves co... — Evidence: details "when someone uses a credit card, Temporal...
+                                                 processing the payment ...
+  $        216,000  Remitly                      Remitly - RTE — RTE = Remittance Transaction Engineering; each financial transaction is a
+                                                 20-activity Temporal workflow ensuring mone... — Evidence: Doc "Remitly RTE - Use Case
+                                                 Discovery Guide": "each transaction is a Temporal...
+  $        120,000  Intuit                       Intuit - Payments — Doc: next-gen payments platform consolidating payment processing
+                                                 across Intuit (500M txns/day, "dropped payments"). P... — Evidence: Doc "Intuit_Payments":
+                                                 "Next gen payments platform... 500M transactions per d...
+  $        104,226  Square                       Square - CashApp Statements — 3 sub-workloads — Payment Scheduler + In-Store Checkouts
+                                                 (money movement) dominate; Monthly Statements is a minor dat... — Evidence: details
+                                                 "Payment Scheduler / Monthly Statements / In-Store Checkouts" — Pass 2: CashApp fintech.
+                                                 Bundles 3 workloads (Payment Scheduler, Statements, In-Store Checkouts); paym…
+  $         97,200  Roblox                       Roblox - Marketplace Refund — Payment refund workflow for marketplace transactions — money
+                                                 movement (refunds). — Evidence: details "Economy team - payment refund workflow for
+                                                 marketplace transactions"
+  $         82,008  AppDirect                    AppDirect - Workload - Commissions — Doc: recurring advisor commission payouts flowing
+                                                 through a multi-step approval process — money moving to advisors (p... — Evidence: Doc
+                                                 "AppDirect Meeting Notes": "Recurring advisor commission payments... dire...
+  $         61,500  Circle                       Circle - Minting/Burning Migration — Workload is minting/burning USDC = issuing/redeeming
+                                                 a stablecoin against fiat reserves, i.e. money/value moving and settling correctly. Gong
+                                                 confirms 'workflow is the money flow', 1-3 business-day transacti... — Evidence: details
+                                                 'Workload Migration: Minting and Burning USDC Coin'; Gong call 3724116328857950180: rep 'I
+                                                 think this is the minting and burning use case',... — Pass 2: Circle issues USDC
+                                                 stablecoin. Workload = minting/burning USDC (issue/redeem vs fiat reserves) = money
+                                                 moving/settling. Gong…
+  $         54,000  Stripe                       Stripe - Revenue Engine — No Details or doc; only the name 'Revenue Engine' + legacy
+                                                 'Business Transactions'. For Stripe (a payments company) a revenue engine most plausibly
+                                                 handles billing/money movement, but could be revenue-recogn... — Evidence: Opp Name
+                                                 'Stripe - Revenue Engine'; Use_case__c 'Business Transactions'; Details null, Doc null;
+                                                 Gong (jeffschoner@stripe.com) returned only undate... — Pass 2: Null Details/doc; name-
+                                                 only 'Revenue Engine'. Could be billing/money movement or revenue-recognition; no opp-
+                                                 specific eviden…
+  $         51,600  Will Bank                    Will Bank – Pix Transactions — Will Bank workload processes Pix transactions (Brazil's
+                                                 instant payment rail). Primary outcome is money moving correctly between accounts. Opp
+                                                 name, details, and legacy 'Business Transactions' bucket all ali... — Evidence: details
+                                                 "Process Pix Transactions" + name "Will Bank – Pix Transactions"; Pix = instant payment
+                                                 system
 
 ============================================================================================
 AI — Processing Pipelines
   total EAR: $3,064,467   (11.0% of all EAR, 28 workloads)
   ----------------------------------------------------------------------------------------
-  $        840,000  OpenAI                       OpenAI - Integrity
-  $        409,992  Abridge                      Abrigde - Entity Domain
-  $        395,916  HeyGen Inc                   HeyGen - Video Gen Workload
-  $        312,000  Vendasta                     Vendasta- AI Chatbot-Workload
-  $        216,000  Xapien                       Xapien - Due Diligence Check
-  $        204,000  OpenAI                       OpenAI - Document Scanning
-  $         86,784  Sinch                        Sinch - Chatlayer Bot
-  $         74,475  Snap                         Snap - Music Content ID (OSS Migration)
-  $         72,000  Loop                         Loop - AI Systems Use Case
-  $         72,000  ChainPatrol Inc.             ChainPatrol asset scanning pipeline
+  $        840,000  OpenAI                       OpenAI - Integrity — Doc: every image submitted to ChatGPT runs through a fixed sequence
+                                                 of safety/content scans (moderation/classificatio... — Evidence: Drive doc "Temporal Use
+                                                 Case - OpenAI": "safety scans... for every image give...
+  $        409,992  Abridge                      Abrigde - Entity Domain — Fixed pipeline running clinical audio through AI models:
+                                                 transcript, medical-word highlighting, note generation. Cano... — Evidence: details
+                                                 "automate clinical notes... Transcript, medical word highlighting, th...
+  $        395,916  HeyGen Inc                   HeyGen - Video Gen Workload — Video generation running data through AI models; the core
+                                                 revenue-driving workload. — Evidence: details "Video Gen runs on Temporal, core business
+                                                 revenue driver"
+  $        312,000  Vendasta                     Vendasta- AI Chatbot-Workload — AI chatbot inside a Zapier-like if-this-then-that
+                                                 automation flow running conversations/voice through AI models; the ... — Evidence: Drive
+                                                 doc "Vendasta - LLM - Summary": "zapier-like if-this-then-that workflow... — Pass 2:
+                                                 Digital-agency SaaS. New AI chatbot product; Drive doc: zapier-like if-this-then-that with
+                                                 AI …
+  $        216,000  Xapien                       Xapien - Due Diligence Check — Doc + opp: a fixed multi-stage pipeline that runs collected
+                                                 documents through NLP/GenAI processing, context extractio... — Evidence: Doc "Xapien Use
+                                                 Case": "process thousands of documents... NLP, GenAI processi...
+  $        204,000  OpenAI                       OpenAI - Document Scanning — Opp fields ("document scanning"/"document processing") =
+                                                 running documents through models (OCR/extraction/classificat... — Evidence: Name "OpenAI -
+                                                 Document Scanning" + details "document processing" — Pass 2: OpenAI; 'document
+                                                 scanning/processing' = running docs through models (OCR/extract/classify) = …
+  $         86,784  Sinch                        Sinch - Chatlayer Bot — Doc: each user message triggers a Temporal "conversation workflow"
+                                                 running the message through NLP→intent→response; a... — Evidence: Doc "Sinch ChatLayer Use
+                                                 Case Discovery": "Each message triggers a workflow";... — Pass 2: Sinch=cust-
+                                                 engagement/CPaaS; ChatLayer chatbot. Doc: each msg triggers a conversation workflow…
+  $         74,475  Snap                         Snap - Music Content ID (OSS Migration) — OSS-migration deal. Name 'Music Content ID'
+                                                 implies a fixed pipeline running music/media through analysis/models to identify content.
+                                                 Details are only a namespace string; linked doc was permission-denied. Th... — Evidence:
+                                                 Name: 'Snap - Music Content ID (OSS Migration)'; details 'ct-music-content-id-prod.2da40'
+                                                 (namespace only); Doc 1Y-rkigb... permission-denied. — Pass 2: Snap=media co. Name 'Music
+                                                 Content ID' = audio/media content-matching ML pipeline (industry-standard). Doc still
+                                                 permission-…
+  $         72,000  Loop                         Loop - AI Systems Use Case — Loop's Temporal workload coordinates 'AI systems' that
+                                                 extract ~4 data points from each logistics document by running them through their in-house
+                                                 specialized AI models (inference/classification at scale: hun... — Evidence: Gong call
+                                                 6389785498122155002: 'We actually extract a lot of data from documents. Imagine each
+                                                 document... we probably extract about four data poin...
+  $         72,000  ChainPatrol Inc.             ChainPatrol asset scanning pipeline — Fixed scanning pipeline: consumes feeds, enriches
+                                                 via APIs, applies detection rules, outputs threat verdicts (phishing/impersonation
+                                                 classification). Doc labels it an 'AI-powered security platform' / 'core d... — Evidence:
+                                                 details: 'enriches them using internal and third-party APIs, applies detection rules, and
+                                                 outputs verdicts on whether the assets are threats (phish... — Pass 2: Web3 brand-
+                                                 protection co. Doc confirms fixed pipeline: consume feeds -> enrich -> detection rules ->
+                                                 threat verdicts (phishi…
 
 ============================================================================================
 Control Plane Operations
   total EAR: $1,877,962   (6.8% of all EAR, 9 workloads)
   ----------------------------------------------------------------------------------------
-  $      1,440,000  OpenAI                       OpenAI - Throttler
-  $        216,000  Retool Inc.                  Retool- OSS Migration- Workload
-  $         81,982  Snap                         Snap - Snaptasks Scheduled Task Execution
-  $         69,600  ConductorOne, Inc            ConductorOne - Provisioning + Tasks/Ticket - workload
-  $         48,000  Woven by Toyota, Inc         woven workload
-  $         12,000  Outreach                     Outreach - Cloud Migration
-  $          4,800  Adobe                        Adobe - Workfront Use Case
-  $          4,800  Wolters Kluwer               Wolters Kluwer - Bolt Engagement
-  $            780  Netflix                      Netflix-AntiGravity
+  $      1,440,000  OpenAI                       OpenAI - Throttler — Opp's own field calls it a per-user 'throttling control-plane' that
+                                                 shapes/limits how other workloads run (provisions/manages per-user task-queue behavior).
+                                                 It governs the retrieval pipeline rather than being it, so not AI - Processing Pipelines.
+                                                 Generic control mechanism over tenants. — Evidence: Use_Case_Details: 'per-user throttling
+                                                 control-plane... limit/shape workload on a user-by-user basis without... a dedicated task
+                                                 queue + worker fleet per user. The mechanism is generic.'
+  $        216,000  Retool Inc.                  Retool- OSS Migration- Workload — Retool runs a multi-tenant Workflows product that self-
+                                                 service provisions a Temporal namespace per downstream custome... — Evidence: Doc "Retool-
+                                                 Meeting Notes": "Workflows Product... 1 NS per customer environm... — Pass 2: Retool =
+                                                 low-code internal-tools platform; its Workflows product provisions 1 NS/customer (con…
+  $         81,982  Snap                         Snap - Snaptasks Scheduled Task Execution — Doc: cron-based scheduled-task execution
+                                                 "offered as a generic platform for internal consumption" / "foundational dat... —
+                                                 Evidence: Doc "Snap - 2024 Renewal Positioning": "Snaptasks (cron based)... Offered as ...
+                                                 — Pass 2: Renewal doc: Snaptasks=cron scheduled-task exec 'offered as generic platform for
+                                                 internal cons…
+  $         69,600  ConductorOne, Inc            ConductorOne - Provisioning + Tasks/Ticket - workload — Multi-workload (3 buckets);
+                                                 dominant = identity-access provisioning across third-party SaaS via APIs/policy —... —
+                                                 Evidence: Doc: "secures workforce identity ... central access controls and automation";...
+                                                 — Pass 2: AI-native identity security platform; centralizes access controls/automation via
+                                                 connectors+po…
+  $         48,000  Woven by Toyota, Inc         woven workload — Woven by Toyota built an internal developer platform that provisions/de-
+                                                 provisions thousands of devs and guest companies (Panasonic/Denso) just-in-time into 8-10
+                                                 dev tools (GitHub, Artifactory, etc.) with IP... — Evidence: Gong call
+                                                 3257343229574672396: 'we're trying to consolidate that into a single platform ... we can
+                                                 just simply provision them into different tools ... — Pass 2: Toyota software arm.
+                                                 Internal dev platform that provisions/deprovisions devs+guest cos just-in-time into 8-10
+                                                 tools w/ entit…
+  $         12,000  Outreach                     Outreach - Cloud Migration — MIGRATION deal (OSS to Cloud, cost-driven), BUT the doc names
+                                                 a real primary workload: a service-orchestratio... — Evidence: Doc: "service orchestration
+                                                 system to handle provisioning scenarios related t... — Pass 2: Sales-engagement SaaS;
+                                                 explicit OSS-to-Cloud migration deal (DB-spend driven). Migration-deal …
+  $          4,800  Adobe                        Adobe - Workfront Use Case — Migration deal (Workfront migrating Temporal OSS to tCloud)
+                                                 framed as 'first portion of their overall platform for User Provisioning.' OSS->Cloud
+                                                 migration + a provisioning platform = best-guess Control Plane Ope... — Evidence:
+                                                 Use_Case_Details__c: 'migrating their Temporal OSS to tCloud - this is the first portion
+                                                 of their overall platform for User Provisioning' — Pass 2: Workfront OSS->tCloud
+                                                 migration, 'first portion' of a user-provisioning platform. Migration + thin detail; stays
+                                                 Low (why st…
+  $          4,800  Wolters Kluwer               Wolters Kluwer - Bolt Engagement — Tier 1 too thin ('Built on top of Scan framework').
+                                                 Gong (calls May 2025, near Sep CreatedDate): platform team building self-service
+                                                 provisioning of Temporal namespaces for internal product teams via admin/operat... —
+                                                 Evidence: Gong call 5573425026758169657: 'we are going to provide ... administrative apis
+                                                 or operation apis through [which] product teams can self service th... — Pass 2: WK
+                                                 platform team building self-service provisioning of Temporal namespaces for internal
+                                                 product teams via admin/op APIs ('Sc…
+  $            780  Netflix                      Netflix-AntiGravity — Doc: a control plane to provision/ops with self-service backend UI;
+                                                 provisions infra namespace-per-shard — th... — Evidence: Doc "Netflix Antigravity":
+                                                 "Control plane used to provision, ops, backend UI ...
 
 ============================================================================================
 Communications & Marketing
   total EAR: $1,806,066   (6.5% of all EAR, 25 workloads)
   ----------------------------------------------------------------------------------------
-  $        522,720  Airbnb                       Airbnb - MarTech - Voyager Event-Triggered Notifications (Abandon Cart)
-  $        240,000  Yubi (Credavenue Private Limited) Yubi (Spocto)- Campaigns-workload
-  $        204,000  Airbnb                       Airbnb - MarTech - Voyager List-Triggered Notifications
-  $        173,532  Twilio                       Twilio Messaging Workload
-  $        120,000  Stripe                       Stripe - Account Status Notification
-  $         96,000  Dubclub                      Dubclub - Push Notifications
-  $         90,096  Artisan                      Artisan - AI Sales Outreach
-  $         81,384  Redo                         Redo - Marketing
-  $         60,000  Airbnb                       Airbnb - MarTech - Voyager User-Triggered Notifications (Elvis/Icons & Signups)
-  $         50,400  SoFi                         SoFi - Communications Platform Service (CPS)
+  $        522,720  Airbnb                       Airbnb - MarTech - Voyager Event-Triggered Notifications (Abandon Cart) — Dynamic, event-
+                                                 triggered marketing campaigns delivering notifications via email/SMS/push. — Evidence:
+                                                 details "dynamic, user-centric marketing campaigns. Up to 6 months of notific...
+  $        240,000  Yubi (Credavenue Private Lim Yubi (Spocto)- Campaigns-workload — Spocto debt-collection "campaigns" — customer-driven,
+                                                 business-hours-timed outreach campaigns; Spocto being debt coll... — Evidence: details
+                                                 "Spocto campaigns; customer initiates a payout event"; doc "Customer ... — Pass 2:
+                                                 Yubi=debt-lifecycle fintech; Spocto=debt collection. 'Campaigns' (timed, business-hours
+                                                 outrea…
+  $        204,000  Airbnb                       Airbnb - MarTech - Voyager List-Triggered Notifications — Scheduling engine for batch
+                                                 external comms (SMS/email/push), 40M/day; opp name = MarTech. — Evidence: details
+                                                 "Scheduling engine for batch external communications ... SMS, email, ...
+  $        173,532  Twilio                       Twilio Messaging Workload — Doc: a multi-channel sending API orchestrating outbound
+                                                 delivery (SMS/RCS/WhatsApp/email) with channel selection, fal... — Evidence: Doc "Twilio -
+                                                 Messaging Use Case Template": "multi-channel sending API... fal...
+  $        120,000  Stripe                       Stripe - Account Status Notification — Orchestrating outbound customer notifications about
+                                                 account status; old value "SMS & Emails" aligns; Comms is the onl... — Evidence: details
+                                                 "Notification for Stripe's customers regarding their account status"
+  $         96,000  Dubclub                      Dubclub - Push Notifications — Outbound push-notification delivery to users; old value
+                                                 "SMS & Emails" aligns. Thin but consistent (no doc). — Evidence: details "Push
+                                                 notifications to users" — Pass 2: Sports-betting community platform. Opp = outbound push
+                                                 notifications to users -> Comms & Marke…
+  $         90,096  Artisan                      Artisan - AI Sales Outreach — Opp's own details: rebuilding their scheduling engine to
+                                                 orchestrate outbound sales outreach — dynamic multi-step sequence scheduling with day
+                                                 intervals, mailbox capacity checks, assigning outreach across multiple senders/mailboxes.
+                                                 Primary outcome = orchestrating outbound comms/campaigns with routing and timing. AI lead
+                                                 enrichment is a step within, not the outcome. — Evidence: Use_Case_Details: 'dynamic
+                                                 multi-step outreach sequence scheduling with day intervals, mailbox capacity checks, and
+                                                 assigning outreach across multiple senders and mailboxes'; AI qualification/enrichment
+                                                 feeds sequence steps.
+  $         81,384  Redo                         Redo - Marketing — Opp details describe orchestrating outbound marketing emails/texts,
+                                                 with persona-based personalized messages sent based on client engagement — a textbook
+                                                 outbound comms/campaign orchestration workload. Legac... — Evidence: details: 'Workflow
+                                                 for sending marketing emails and texts ... personalized messages are sent depending on
+                                                 their client's engagement'
+  $         60,000  Airbnb                       Airbnb - MarTech - Voyager User-Triggered Notifications (Elvis/Icons & Signups) — Event-
+                                                 driven MarTech notifications sending marketing emails + push to Airbnb users when listings
+                                                 go live; legacy value 'SMS & Emails' and 'MarTech' in name all converge on outbound comms
+                                                 orchestration. No co... — Evidence: details: 'Event-driven marketing notifications. Sends
+                                                 emails and push notifications to Airbnb users when popular listings go live.'; legacy
+                                                 Use_cas...
+  $         50,400  SoFi                         SoFi - Communications Platform Service (CPS) — Opp Details 'Communications Platform for
+                                                 all SoFi Services' + name 'Communications Platform Service (CPS)' + legacy 'SMS & Emails'
+                                                 all converge on orchestrating outbound comms across services. Linked doc was... —
+                                                 Evidence: details 'Communications Platform for all SoFi Services'; legacy Use_case__c 'SMS
+                                                 & Emails'
 
 ============================================================================================
 Infrastructure Automation & CI/CD
   total EAR: $1,415,137   (5.1% of all EAR, 23 workloads)
   ----------------------------------------------------------------------------------------
-  $        619,512  Snyk                         Snyk - Vulnerability Scanning Workload
-  $        243,129  FireHydrant                  FireHydrant - runbooks engine and signals product
-  $         93,576  Ford Motor Company           Ford - Vehicle Onboarding
-  $         70,000  Snap                         Snap - Autopilot Integration Testing (OSS Migration)
-  $         60,000  Netflix                      Netflix - Managed Delivery
-  $         52,848  Nvidia                       Brev - Migration
-  $         44,400  Lumen Technologies, Inc.     Lumen - Network & Platform Automation - Blue Steel
-  $         39,000  HashiCorp                    HashiCorp - Expand - Self Hosted Migration
-  $         33,600  Postman Inc                  Postman Inc - Version Control
-  $         24,000  Snap                         Snap - Platform Falcon (OSS Migration)
+  $        619,512  Snyk                         Snyk - Vulnerability Scanning Workload — Nightly vulnerability scanning of client code
+                                                 (Snyk Code) — operating security software. — Evidence: Doc "Snyk Temporal Use Case
+                                                 Discovery Guide": "find vulnerabilities in client...
+  $        243,129  FireHydrant                  FireHydrant - runbooks engine and signals product — Operating FireHydrant's incident-
+                                                 response automation engine (runbooks, timers, rule evaluations) — operating software... —
+                                                 Evidence: details "automation for incident response... Runbooks = automation engine"; d...
+  $         93,576  Ford Motor Company           Ford - Vehicle Onboarding — Doc: engaged org is "Vehicle Onboarding CI/CD"; orchestrates
+                                                 provisioning/standing-up of in-car software services per... — Evidence: Doc "Ford -
+                                                 Vehicle Onboarding": org "Vehicle Onboarding CI/CD"; "onboarding ...
+  $         70,000  Snap                         Snap - Autopilot Integration Testing (OSS Migration) — Doc names this workload: an E2E
+                                                 platform to run integration tests across 8-9 microservices via child workflows. Primary
+                                                 outcome is operating software/test infra. OSS-migration deal so kept Medium. — Evidence:
+                                                 Doc 'Snap - 2024 Renewal Positioning': 'Autopilot - integration testing - 8 or 9
+                                                 microservices... E2E platform to run a set of integration tests. C... — Pass 2: Renewal
+                                                 doc names this workload: Autopilot = E2E integration-testing platform across 8-9
+                                                 microservices via child workflows. …
+  $         60,000  Netflix                      Netflix - Managed Delivery — Netflix Managed Delivery is a continuous-delivery layer on
+                                                 top of Spinnaker: delivery config describes how code is provisioned per environment, with
+                                                 promotion/verification workflows and detecting whether a c... — Evidence: Doc "Netflix
+                                                 Managed Delivery - Use Case": "delivery config describes how you want the code to be
+                                                 provisioned for each environment... abstraction o...
+  $         52,848  Nvidia                       Brev - Migration — Pure OSS->Temporal Cloud migration deal ("currently self hosting, will
+                                                 be moving workloads onto Temporal Cloud"); legacy value was 'Infrastructure applications'.
+                                                 Gong confirms generic 'background jobs and wo... — Evidence: details 'They are currently
+                                                 self hosting, but will be moving their workloads onto Temporal Cloud'; Gong call
+                                                 8303984250850917228: 'we use Temporal ... — Pass 2: Nvidia/Brev GPU-dev platform; pure
+                                                 OSS->Temporal Cloud migration, Gong = generic 'background jobs and workflows', no product…
+  $         44,400  Lumen Technologies, Inc.     Lumen - Network & Platform Automation - Blue Steel — Lumen's 'network and platform
+                                                 automation team' uses Temporal to automate change execution (server config changes) and
+                                                 event-driven remediation of servers/network devices. Operating/changing infra = Infra
+                                                 Aut... — Evidence: Gong call 342082707306286248: 'our team called the... network and
+                                                 platform automation team' doing 'automating change execution... changes on server...
+  $         39,000  HashiCorp                    HashiCorp - Expand - Self Hosted Migration — Details: managing/spinning up nomad clusters
+                                                 and the HashiStack that HCP/TFC run on = provisioning/operating infra. Tie-break vs
+                                                 Control Plane (it provisions the stack other products run on) keeps it Medium;... —
+                                                 Evidence: details: 'manage nomad clusters in support of Terraform Cloud. It spins up the
+                                                 HashiStack that HCP and TFC run on'; legacy Use_case__c='Infrastruct... — Pass 2:
+                                                 HashiCorp=multi-cloud infra automation. Details: manage/spin up nomad clusters +
+                                                 HashiStack that HCP/TFC run on. Infra-provi…
+  $         33,600  Postman Inc                  Postman Inc - Version Control — VCS for Postman collections using Temporal for async
+                                                 merges/diffs and auto-syncing forked collections. Primary outcome is operating software
+                                                 version-control tooling (merge/version operations), not data sync.... — Evidence: details:
+                                                 'Version Control System (VCS) for Postman collections... asynchronous merges and diffs...
+                                                 auto-syncing forked collections, which triggers ... — Pass 2: API-platform co; opp = VCS
+                                                 for Postman collections (async merges/diffs, auto-sync forked collections). Operating
+                                                 software ve…
+  $         24,000  Snap                         Snap - Platform Falcon (OSS Migration) — OSS-migration deal. Details: workflows that
+                                                 analyze performance device runs and produce analysis decisions = part of dev/test/perf-
+                                                 engineering tooling. Best fits operating software/test infra; thin, not in d... —
+                                                 Evidence: details 'Workflows that analyze performance device runs and produce analysis
+                                                 decisions.'; Name 'Platform Falcon (OSS Migration)'; Doc null. — Pass 2: Details:
+                                                 'workflows that analyze performance device runs and produce analysis decisions' =
+                                                 perf/test-engineering tooling (op…
 
 ============================================================================================
 Financial Services & Lending
   total EAR: $645,649   (2.3% of all EAR, 20 workloads)
   ----------------------------------------------------------------------------------------
-  $        107,766  Stripe                       Stripe - issuing-xp
-  $         82,800  Rippling                     Rippling - Filing Factory 3/23
-  $         80,004  JPMorgan Technology Services JTS Banking-as-a-Service Workload
-  $         50,400  Upstart                      Upstart - Core Pricing PL
-  $         48,000  Recargapay                   Recargapay - Lending Operation
-  $         39,000  Stripe                       Stripe - bin-sponsor-eligibility
-  $         38,772  Neon                         Neon - Payday Loan
-  $         36,000  Kotak Mahindra Bank Pvt Ltd  Kotak customer journeys/onboarding
-  $         35,154  Chase ICB                    Chase ICB Customer Onboarding/Credit Origination/Account Transfers
-  $         25,000  Macquarie Group              Macquarie Group - Loan Origination (workload)
+  $        107,766  Stripe                       Stripe - issuing-xp — Opp fields empty; only signal is the name "issuing" = Stripe Issuing
+                                                 (card-issuing program, a regulated financial pro... — Evidence: no usable evidence (name
+                                                 token "issuing" only; empty fields; no doc; no Gong ... — Pass 2: Empty opp fields; name
+                                                 'issuing' = Stripe Issuing (card-issuing). Web confirms product but typ…
+  $         82,800  Rippling                     Rippling - Filing Factory 3/23 — Doc: payroll tax computation, tax payment scheduling, and
+                                                 filings — a regulated financial product workflow be... — Evidence: Doc (Filing Factory):
+                                                 "payroll tax computation, tax payment scheduling, payro... — Pass 2: Re-fetched doc: opp-
+                                                 specific payroll tax computation, tax payment scheduling, filings data syn…
+  $         80,004  JPMorgan Technology Services JTS Banking-as-a-Service Workload — Banking-as-a-Service workload whose named core
+                                                 workflows are loan origination and credit card origination (regulated lending/credit
+                                                 product flows) plus per-product onboarding. Origination dominates over the ... — Evidence:
+                                                 details: 'Onboarding new customers per product (UI status), loan origination, credit card
+                                                 origination'. Linked Doc '1JYRFB41...' titled 'Chase Inte... — Pass 2: JPMorgan BaaS. Opp
+                                                 details name loan + credit-card origination (lending) AND per-product onboarding;
+                                                 origination dominates b…
+  $         50,400  Upstart                      Upstart - Core Pricing PL — Upstart is a lending platform; opp details explicitly state
+                                                 'Loan origination - pricing workflow' and legacy type was 'Loan Origination'. Loan
+                                                 pricing/origination is a regulated financial product workflow be... — Evidence: details
+                                                 'Loan origination - pricing workflow'; legacy Use_case__c 'Loan Origination'; Account
+                                                 Upstart (consumer lending)
+  $         48,000  Recargapay                   Recargapay - Lending Operation — Lending product workflow: customers apply for short-term
+                                                 cash loans (loan origination/underwriting). Legacy value 'Loan Origination' and details
+                                                 both point at a regulated financial product workflow beyond pa... — Evidence: details:
+                                                 "Recargapay's lending process, where customers can apply for short-term cash loans.";
+                                                 legacy Use_case__c='Loan Origination'
+  $         39,000  Stripe                       Stripe - bin-sponsor-eligibility — No Details/doc. Name 'bin-sponsor-eligibility' = BIN-
+                                                 sponsor (bank issuer-sponsorship) eligibility, a regulated card-program
+                                                 approval/eligibility workflow beyond raw payment processing. Plausible competing: ... —
+                                                 Evidence: Opp Name 'Stripe - bin-sponsor-eligibility'; Use_case__c 'Business processes';
+                                                 Details null, Doc null; no datable Gong calls near CreatedDate 2024-02. — Pass 2: Null
+                                                 fields; name = BIN-sponsor eligibility (card-program issuer-sponsorship). Web confirms
+                                                 domain but type ambiguous (KYB o…
+  $         38,772  Neon                         Neon - Payday Loan — Payroll advance / payday loans — a regulated lending product
+                                                 workflow. — Evidence: details "Payroll advance loans"
+  $         36,000  Kotak Mahindra Bank Pvt Ltd  Kotak customer journeys/onboarding — Legacy tag 'Loan Origination' + Gong describe a
+                                                 consumer loan / retail-asset lending workflow (business loans, E-sign). Opp name says
+                                                 'customer journeys/onboarding' but no KYC/identity signal exists in any s... — Evidence:
+                                                 Gong call 5388663306833028492: 'consumer loan processing related use case workflow, that
+                                                 we have to implement anyway.' Gong call 712470687352972898... — Pass 2: Kotak = Indian
+                                                 bank. Conflicting signals: name=onboarding, details=service-request automation,
+                                                 Gong=consumer/business loan p…
+  $         35,154  Chase ICB                    Chase ICB Customer Onboarding/Credit Origination/Account Transfers — Chase ICB 'borrow'
+                                                 multi-workload opp (onboarding + credit origination + account transfers). Gong shows the
+                                                 dominant, highest-volume Temporal use is consumer credit-card origination / originating
+                                                 lines of cr... — Evidence: Gong call 1245/431: 'we use Temporal for as part of the
+                                                 origination process ... When we are originating lines of credit. We are also starting to
+                                                 lo... — Pass 2: JPM consumer-bank multi-workload (onboarding+credit
+                                                 origination+transfers). Gong: dominant use = consumer credit/line-of-cre…
+  $         25,000  Macquarie Group              Macquarie Group - Loan Origination (workload) — Both the opp Name ('Loan Origination') and
+                                                 Use_Case_Details__c ('Loan origination') unambiguously describe a lending/loan-origination
+                                                 workflow — a regulated financial product workflow beyond payments. Legacy... — Evidence:
+                                                 details 'Loan origination' + Name 'Macquarie Group - Loan Origination (workload)'
 
 ============================================================================================
 Order Management & Fulfillment
   total EAR: $303,479   (1.1% of all EAR, 10 workloads)
   ----------------------------------------------------------------------------------------
-  $        120,960  Booking.com                  Booking.com - Self Service - Arrival Time
-  $         45,600  Alaska Airlines              Alaska Airlines - Bookings
-  $         28,872  JOKR Services                Jokr – Order Management
-  $         27,000  Yum Brands                   Yum Brands - Curie Orders (US Pizza Hut)
-  $         26,640  Yum Brands                   Yum Brands - Alpha Orders (US TacoBell, KFC)
-  $         14,423  Alaska Airlines              Alaska Re-bookings use case
-  $         12,000  Bridgewater                  BW - Migration workload - Trading platform
-  $         12,000  GeneDx                       GeneDx - Order Management
-  $         11,184  Yum Brands                   Yum Brands - Hopper Task (EU all brands)
-  $          4,800  Cimpress                     Cimpress Online Order Taking Go-Live
+  $        120,960  Booking.com                  Booking.com - Self Service - Arrival Time — Customers add/manage options on an existing
+                                                 trip/booking (e.g., arrival time) — amending the order/booking. "Self ser... — Evidence:
+                                                 details "Self Service features... to add/manage options related to an existin... — Pass 2:
+                                                 Travel booking platform. Opp = self-service to add/manage options on an existing
+                                                 trip/booking …
+  $         45,600  Alaska Airlines              Alaska Airlines - Bookings — Opp details state all Alaska Air bookings run through
+                                                 Temporal. Gong confirms a flight booking flow: flight search hands off to a booking engine
+                                                 that takes cart state (itinerary, passengers, pricing) and tur... — Evidence: details 'All
+                                                 bookings for Alaska Air are running through Temporal'; Gong call 4528012429543760627: 'we
+                                                 are rebuilding our booking flow ... booking ...
+  $         28,872  JOKR Services                Jokr – Order Management — Both opp Name ("Jokr - Order Management") and Details ("Order
+                                                 managment") directly and consistently name order management as the workload. Legacy value
+                                                 "Business processes" is generic and superseded. No comp... — Evidence: details "Order
+                                                 managment"; name "Jokr – Order Management"
+  $         27,000  Yum Brands                   Yum Brands - Curie Orders (US Pizza Hut) — Opp name 'Curie Orders (US Pizza Hut)' and
+                                                 Details 'OMS' (Order Management System) both point directly at order
+                                                 processing/fulfillment. No competing type. — Evidence: details 'OMS'; name 'Yum Brands -
+                                                 Curie Orders (US Pizza Hut)'
+  $         26,640  Yum Brands                   Yum Brands - Alpha Orders (US TacoBell, KFC) — Name 'Alpha Orders' and lead detail 'Orders
+                                                 use case - expand to Taco Bell and Pizza Hut'; Payments/Menu are secondary scope under the
+                                                 orders program. Gong confirms order workflows are the core build (every ... — Evidence:
+                                                 details 'Orders use case - expand to Taco Bell and Pizza Hut'; Gong call
+                                                 4362403964962931228: 'order management systems... every order is a workflo...
+  $         14,423  Alaska Airlines              Alaska Re-bookings use case — eComm Bookings team building end-to-end airline bookings/re-
+                                                 bookings (order validation → full booking). A booking is a reservation/order being
+                                                 completed correctly; doc confirms 'end-to-end bookings'. — Evidence: Details 'end-to-end
+                                                 bookings (including re-bookings)'; doc 'Alaska Airlines Use Case Bookings', eComm Bookings
+                                                 team, 'expand initial workflow to end-to-end bookin...
+  $         12,000  Bridgewater                  BW - Migration workload - Trading platform — Name flags this as a 'Migration workload'
+                                                 (currently self-hosted trading platform) -> per the migration-deal rule, best-guess only +
+                                                 Low. Trading platform = orderly money/securities movement, nearest litmus is Payment
+                                                 Processin... — Evidence: Opp name 'BW - Migration workload - Trading platform'; details
+                                                 'currently self hosted trading platform'. Migration/consolidation deal, thin per-workload
+                                                 signal. — Pass 2: Bridgewater = investment mgmt. Stuck: explicit 'Migration workload' of
+                                                 self-hosted trading platform; migration-deal rule + thin p…
+  $         12,000  GeneDx                       GeneDx - Order Management — Opp name + details anchor on genomic test order lifecycle:
+                                                 orders placed, upgraded (add patient), downgraded (remove), or cancelled via child 'Order
+                                                 Process Workflows' with reconciliation. Outcome = an order completes correctly. Legacy
+                                                 'Entity Lifecycle Management' label is not a live type. — Evidence: Use_Case_Details:
+                                                 order upgrade/downgrade/cancel via reconciliation; signals upgrade_order/downgrade_order
+                                                 from RLC workflow to child Order Process Workflows.
+  $         11,184  Yum Brands                   Yum Brands - Hopper Task (EU all brands) — Details = 'OMS' (Order Management System);
+                                                 fast-food brand handling orders across EU brands. Primary outcome is orders getting
+                                                 placed/processed/fulfilled correctly. — Evidence: Use_Case_Details__c = 'OMS'; opp name
+                                                 'Hopper Task (EU all brands)'.
+  $          4,800  Cimpress                     Cimpress Online Order Taking Go-Live — Order-taking workflows for 12 printing brands
+                                                 (Vistaprint, Exaprint). Primary outcome is an order gets placed/processed correctly across
+                                                 brands - direct litmus match. Doc confirms 'brittle order taking process'. — Evidence: Doc
+                                                 'Cimpress Order Taking': 'Order taking workflows for printing brands (Vistaprint,
+                                                 Exaprint, 12 brands)'; Why Temporal: 'reliability and visibil...
 
 ============================================================================================
 Customer Onboarding & Identity
   total EAR: $236,452   (0.9% of all EAR, 11 workloads)
   ----------------------------------------------------------------------------------------
-  $         75,000  Hapara                       Hapara - Student Sign Up
-  $         60,000  ANZ                          ANZ- Account Origination & Statements
-  $         30,000  Checkr                       Checkr - Progressive Reports
-  $         20,772  CAIXA                        CAIXA - Biometric Authentication
-  $         14,400  Square                       CashApp: Know Your Customer (KYC) Refresh App
-  $         13,200  Cargo                        Cargo- customer onboarding- workload
-  $          8,351  Glovo                        Glovo - Courier
-  $          5,400  Kissht (OnEMI Technologies)  Kissht-Partner & Customer Onboarding- Workload
-  $          5,064  Hotmart                      Hotmart - User Registration
-  $          4,253  Cisco                        Cisco - Expand - AI Team (Armorblox) - Customer Onboarding
+  $         75,000  Hapara                       Hapara - Student Sign Up — Opp is the student sign-up/join-class flow: on signup Temporal
+                                                 provisions the student's Google Drive folders/artifacts and manages that lifecycle
+                                                 (separate from their roster-ingestion ETL workload). Best rea... — Evidence: Gong call
+                                                 8795679081535987217: 'when we get a bunch of like students and classrooms, we actually
+                                                 need to create a bunch of artifacts in Google... u... — Pass 2: Hapara=edtech classroom
+                                                 mgmt. Gong: on student sign-up/join-class Temporal provisions Drive folders/artifacts =
+                                                 user activat…
+  $         60,000  ANZ                          ANZ- Account Origination & Statements — Multi-workload (Origination + Statements);
+                                                 dominant half = KYC/CTF new-customer origination. DATA QUALITY: op... — Evidence: Drive
+                                                 "ANZ Meeting Log": "Origination workflow - KYC"; "inbound onboarding pr... — Pass 2:
+                                                 ANZ=bank. Two-workload opp (Origination+Statements); KYC origination dominant per Drive
+                                                 doc bu…
+  $         30,000  Checkr                       Checkr - Progressive Reports — Checkr is a background-check/employment-screening platform;
+                                                 'Progressive Reports' is its feature that streams partial screening results as checks
+                                                 complete. Background screening = verifying a person before on... — Evidence: details
+                                                 'Progressive reports' + Name 'Checkr - Progressive Reports' (Checkr = background-check
+                                                 vendor; progressive report = staged delivery of scre... — Pass 2: Checkr = background-
+                                                 check/employment-screening platform; Progressive Reports streams partial screening
+                                                 results. Company cont…
+  $         20,772  CAIXA                        CAIXA - Biometric Authentication — Details 'Biometric Authentication into mobile banking
+                                                 application' is identity verification; legacy value was 'Identity Verification / KYC'.
+                                                 Within the 15 types, identity verification maps here. Slight nuanc... — Evidence: details:
+                                                 'Biometric Authentication into mobile banking application'; legacy Use_case__c = 'Identity
+                                                 Verification / "Know Your Customer"' — Pass 2: Brazilian bank. Opp doc confirms biometric
+                                                 enroll/verify/match auth (~400k/day) into mobile banking = identity verification;…
+  $         14,400  Square                       CashApp: Know Your Customer (KYC) Refresh App — CashApp KYC Refresh app re-
+                                                 verifies/updates KYC contact details for customers and sends KYC reminders - core identity
+                                                 verification workflow. Litmus directly matches KYC. — Evidence: Details: 'Know Your
+                                                 Customer (KYC) Refresh app updates the KYC Contact details... send KYC reminders'.
+  $         13,200  Cargo                        Cargo- customer onboarding- workload — Opp name + details both center on 'customer
+                                                 onboarding use case' (20M actions/month, growth tied to onboarding). Onboarding is
+                                                 explicit, but details lack KYC/verification specifics, so Medium. — Evidence: Name
+                                                 'customer onboarding workload'; details 'Growth tied to customer onboarding use case',
+                                                 '20Mil actions per month'. — Pass 2: Doc shows Cargo IS a 'business orchestration
+                                                 platform' over the data warehouse; 'customer onboarding' = onboarding customers onto…
+  $          8,351  Glovo                        Glovo - Courier — Workload is the 'courier onboarding' use case (a distinct namespace per
+                                                 Gong). Primary outcome = onboard/activate new couriers onto the platform. Couriers are
+                                                 workers not KYC customers, and details add a 'monolith->microservice... — Evidence:
+                                                 Details: 'Courier Onboarding - modernization of a monolith app into a distributed
+                                                 application using microservices.' Gong lists 'courier onboarding' as a distinct ... — Pass
+                                                 2: Glovo=courier delivery app. Workload = courier onboarding (distinct namespace per
+                                                 Gong). Onboarding best fit but couriers aren't …
+  $          5,400  Kissht (OnEMI Technologies)  Kissht-Partner & Customer Onboarding- Workload — Opp name + details anchor on onboarding:
+                                                 'user onboarding... credit checks. partner onboarding and offboarding'. Doc shows a broad
+                                                 lending platform (LOS/LMS/disbursement), but this opp's own fields point at custo... —
+                                                 Evidence: Details: 'user onboarding, loan transactions, credit checks. partner onboarding
+                                                 and offboarding'. Doc 1vIh8...: 'Partner onboarding & offboarding; ... — Pass 2: Kissht =
+                                                 India unsecured lending. Opp NAME + details both 'customer & partner onboarding... credit
+                                                 checks' = KYC/onboarding …
+  $          5,064  Hotmart                      Hotmart - User Registration — User registration/onboarding process with KYC. Primary
+                                                 outcome is getting a new customer verified and onboarded - direct litmus match. Legacy
+                                                 'Identity Verification / KYC' maps cleanly here. — Evidence: Opp name 'Hotmart - User
+                                                 Registration'; details 'User onboarding process. KYC'.
+  $          4,253  Cisco                        Cisco - Expand - AI Team (Armorblox) - Customer Onboarding — Details: 'Assistants for
+                                                 customer onboarding and journey workflows.' Armorblox doc: Temporal used for customer
+                                                 onboarding where 'a lot of data fetches happen and are used for their AI...process the
+                                                 data correctly... — Evidence: Use_Case_Details__c: 'Assistants for customer onboarding and
+                                                 journey workflows'; doc: 'using Temporal for customer onboarding, where a lot of data ...
+                                                 — Pass 2: Armorblox doc section matches this opp: Temporal runs customer-onboarding
+                                                 assistants where data fetches feed their AI to pro…
 
 ============================================================================================
 Customer Service & Support
   total EAR: $103,900   (0.4% of all EAR, 1 workloads)
   ----------------------------------------------------------------------------------------
-  $        103,900  Twilio                       Twilio Flex
+  $        103,900  Twilio                       Twilio Flex — Doc separates Flex (contact center) from Twilio Engage (marketing); Flex
+                                                 orchestrates call routing, agent onl... — Evidence: Doc "Twilio - Flex 2.0 Use Case":
+                                                 Flex(contact center) vs Twilio Engage(marke...
 
 ============================================================================================
 AI — Agent Platforms
   total EAR: $16,680   (0.1% of all EAR, 2 workloads)
   ----------------------------------------------------------------------------------------
-  $         12,000  Coupang                      Coupang - Expand - eCommerce Eng - AI Agent Runner Infrastructure
-  $          4,680  Cisco                        Cisco - Expand - AI Bot Lifecycles (Jonty P)
+  $         12,000  Coupang                      Coupang - Expand - eCommerce Eng - AI Agent Runner Infrastructure — Details + linked doc
+                                                 describe an Internal AI Agent Platform ('Agent Builder Platform / emux') - an agent runner
+                                                 infrastructure that internal SW engineers plug into to build their own agent use cases
+                                                 (coding agents, incident ana... — Evidence: Doc 1Vcof9t0...: 'Internal AI Agent Platform
+                                                 (Agent Builder Platform / emux) built on Temporal'; details 'SW Engineer who is building
+                                                 AI Agent use case can come a...
+  $          4,680  Cisco                        Cisco - Expand - AI Bot Lifecycles (Jonty P) — Details: internal teams 'freely create AI
+                                                 chat bots in Webex'; need to track ownership/lifecycle of bots, what they're doing, clean
+                                                 up/kill them. A governance/lifecycle platform spanning many internal AI bots = a... —
+                                                 Evidence: Use_Case_Details__c: 'People at Cisco can freely create AI chat bots in Webex.
+                                                 Need a way to track ownership of bots, what they're doing, ability t... — Pass 2: Cisco
+                                                 internal teams freely create AI chatbots in Webex; platform tracks ownership/lifecycle,
+                                                 cleans up/kills bots. Internal…
 
 ============================================================================================
 AI — Model Training
   total EAR: $6,600   (0.0% of all EAR, 1 workloads)
   ----------------------------------------------------------------------------------------
-  $          6,600  Cisco                        Cisco (Armorblox) - AI Canvas
+  $          6,600  Cisco                        Cisco (Armorblox) - AI Canvas — Details: 'Behind the scene orchestrator for LLM learning
+                                                 processes.' Armorblox AI-team doc states they plan to use Temporal 'for training the
+                                                 models and keeping them up to date.' Orchestrating LLM learning = trai... — Evidence:
+                                                 Use_Case_Details__c: 'Behind the scene orchestrator for LLM learning processes'; Armorblox
+                                                 use-case doc IDENTIFIED PAIN: 'planning to use Temporal ... — Pass 2: Cisco AI team. Opp
+                                                 field = 'orchestrator for LLM learning processes'; Armorblox doc explicitly: Temporal 'for
+                                                 training the m…
 
 ============================================================================================
 GRAND TOTAL EAR: $27,749,007 across 302 workloads, 14 categories
