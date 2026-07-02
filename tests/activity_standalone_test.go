@@ -11676,6 +11676,63 @@ func (s *standaloneActivityTestSuite) TestResetActivityExecution() {
 		completeAttempt(ctx, t, pollResp3.TaskToken)
 	})
 
+	// Repro for the keep-paused deferred-reset retry-backoff bug (sibling of
+	// WhileRunningOnLaterAttemptDropsRetryBackoff). Reset(keepPaused=true) of a STARTED activity on
+	// attempt > 1 lands it back in PAUSED via TransitionResetAttemptFailedToPaused, which records the
+	// aborted attempt with a retry interval sized from the pre-reset attempt count and leaves
+	// CurrentRetryInterval set. Now that unpause honors any remaining retry backoff, the later
+	// unpause dispatches attempt 1 only after that stale (large) backoff instead of promptly. The
+	// bounded poll below times out until the deferred keep-paused reset clears the retry backoff.
+	t.Run("KeepPausedWhileRunningOnLaterAttemptDropsRetryBackoff", func(t *testing.T) {
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cancel()
+
+		activityID := testcore.RandomizeStr(t.Name())
+		// coeff=10: attempt-2 backoff (10s) is far larger than attempt-1's (1s).
+		retryPolicy := &commonpb.RetryPolicy{
+			InitialInterval:    durationpb.New(time.Second),
+			BackoffCoefficient: 10.0,
+		}
+		startResp, pollResp1, taskQueue := startAndPollActivity(ctx, t, activityID, retryPolicy)
+		require.EqualValues(t, 1, pollResp1.Attempt)
+
+		// Fail attempt 1 -> ~1s backoff, then attempt 2 is dispatched and picked up by a worker.
+		failAttemptRetryably(ctx, t, pollResp1.TaskToken, 0)
+		pollResp2 := pollActivity(ctx, t, taskQueue)
+		require.EqualValues(t, 2, pollResp2.Attempt)
+
+		// Pause the running attempt (-> PAUSE_REQUESTED), then reset with keepPaused so the activity
+		// lands back in PAUSED (not SCHEDULED) when the attempt yields.
+		pauseActivity(ctx, t, activityID, startResp.GetRunId())
+		_, err := env.FrontendClient().ResetActivityExecution(ctx, &workflowservice.ResetActivityExecutionRequest{
+			Namespace:  env.Namespace().String(),
+			ActivityId: activityID,
+			RunId:      startResp.GetRunId(),
+			KeepPaused: true,
+		})
+		require.NoError(t, err)
+
+		// Fail attempt 2 -> deferred keep-paused reset -> PAUSED at attempt 1.
+		failAttemptRetryably(ctx, t, pollResp2.TaskToken, 0)
+		waitForState(ctx, t, activityID, startResp.GetRunId(), enumspb.PENDING_ACTIVITY_STATE_PAUSED)
+
+		// Unpause: attempt 1 must dispatch promptly, not after attempt 2's 10s backoff.
+		unpauseActivity(ctx, t, activityID, startResp.GetRunId())
+
+		pollCtx, pollCancel := context.WithTimeout(ctx, 5*time.Second)
+		defer pollCancel()
+		pollResp3, err := env.FrontendClient().PollActivityTaskQueue(pollCtx, &workflowservice.PollActivityTaskQueueRequest{
+			Namespace: env.Namespace().String(),
+			TaskQueue: &taskqueuepb.TaskQueue{Name: taskQueue, Kind: enumspb.TASK_QUEUE_KIND_NORMAL},
+			Identity:  defaultIdentity,
+		})
+		require.NoError(t, err, "unpaused reset attempt should dispatch promptly, not after the in-flight attempt's retry backoff")
+		require.NotEmpty(t, pollResp3.GetTaskToken(), "unpaused reset attempt should dispatch promptly, not after the in-flight attempt's retry backoff")
+		require.EqualValues(t, 1, pollResp3.Attempt, "attempt should be reset to 1")
+
+		completeAttempt(ctx, t, pollResp3.TaskToken)
+	})
+
 	t.Run("WhileCancelRequestedReturnsFailedPrecondition", func(t *testing.T) {
 		// Reset on a CANCEL_REQUESTED activity is rejected: cancel takes precedence and the
 		// state machine has no meaningful transition for "reset while cancel is pending".
