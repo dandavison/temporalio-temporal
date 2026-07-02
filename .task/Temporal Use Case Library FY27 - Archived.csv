@@ -1,0 +1,22 @@
+Use Case,Description,Verticals,Customers,"Total Audience Size 
+(1 - 3)","Revenue Potential 
+(1 - 3)","Business criticality 
+(1 - 3)","Social proof
+(1 - 3)","Time to Revenue
+(1 - 3)
+1 - slow, 3 - fast","Total Score 
+(5 - 15)",Modernization vs. Greenfield,Status of Materials
+AI / ML Orchestration,"AI Agents, Inferences, RAG, MCP","AI, consumer insights, SaaS","Zoominfo, Dust, Gorgias, Gradient Labs, Fanatics, Retool, Replit, Hebbia",3,3,2,2,3,13,Greenfield,Complete
+Order Management & Bookings (OMS),Ensure reliable completion of order.,"Retail and e-commerce, travel, hospitality, food, manfacturing","Yum Brands! Turo, Airbnb, Alaska Air, Coupang, Maersk, StichFix",3,2,3,3,1,12,Modernization,Complete
+Communications/Marketing Platform,"Communicate with customers about marketing, notifications, updates, etc., at scale",All,"AirBnB, Zillow",2,3,2,2,2,11,Greenfield,Not Started
+Payment Processing,Ensure reliable completion of money movement.,"Payment networks, banks","Pay.com, Stripe, SoFi, Will Bank, JPMC, ANZ, Block, Coinbase, Green Got, AfterPay",1,3,3,3,1,11,Modernization,Complete
+Infrastructure Management & CI/CD,"Orchestrate the provisioning and maintenance of database, software, etc, or continuous delivery.",All,"Netflix, Brex, Nuon, Maersk, Smart Things (a division of Samsung)",3,1,3,1,3,11,Modernization,Complete
+Human-in-the-loop approval workflows,"Workflows that require a human-in-the-loop approval process, such as claims processing, mortage approval, and so on.",All,"Airwallex, Procore, Two Sigma, Cash App, Samsara, Lyft",3,2,3,2,1,11,Modernization,Not Started
+Lifecycle management,"Manage every step of an ongoing lifecycle with ""entity workflows,"" where each entity in a lifecycle has its own workflow",Verticals with long-running lifecycles for customers or products,"Block loyalty, Stripe, SoFi, Nvidia, Indeed",2,2,2,2,2,10,Modernization,In Progress
+"Inventory, fulfillment & Logistics (WMS)",Track and manage the transportation and storage of supplies.,"Retail and e-commerce, food, manufacturing, logistics, shipping","Maersk, Coupang, Quiet Platforms",2,2,3,2,1,10,Modernization,Not Started
+Customer Onboarding,Set up and activate accounts and the corresponding infra for new customers.,"SaaS, banking, marketplaces, businesses with subscriptions","Rippling, Checkr, Adobe, ADP",3,1,2,2,2,10,Modernization,Complete
+Workflows,"Power a workflow product, normally building a DSL on top of Temporal",,"Datadog, Retool, Common Room, Airbnb, Qualtrix, Rippling",1,2,2,3,1,9,Greenfield,Not Started
+Loan Origination,Manage a customer’s loan application and the loan decision and approval process.,Financial services,ANZ,1,1,2,3,2,9,Modernization,In Progress
+"Identity Verification /  ""Know Your Customer""",Verify a customer is who they claim and establish fraud and crime risk.,"Financial services, gambling","Checkr, CashApp",1,1,3,3,1,9,Modernization,Complete
+Data pipeline & ETL,"Coordinate moving of data from one API to another API, including ETL and batch processing",All,"Nutanix, Messari, Common Room, Amplify",3,1,2,1,2,9,Modernization,Not Started
+Control Plane,Build internal tooling for development teams to use,All,"Maersk, Cloudflare",2,1,2,1,2,8,Greenfield,Not Started
