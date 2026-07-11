@@ -50,17 +50,25 @@ func Model(cfg Config, s AbstractState, e Event) Outcome {
 // ---------------------------------------------------------------------------
 
 func modelPoll(_ Config, s AbstractState, _ Event) Outcome {
-	// A poll only advances a SCHEDULED activity to STARTED. In every other status there
-	// is no dispatchable task, so a poll leaves state unchanged. (Whether a task is
-	// *available yet* under backoff/start-delay is a timing concern handled by the
-	// explorer, which only issues Poll where it expects a task to be dispatchable.)
+	// A poll advances a SCHEDULED activity to STARTED. In any other status there is no
+	// activity task for a worker to pick up, so a poll leaves the state unchanged.
+	//
+	// A worker can only pick up the task after history's outbound queue has added it to
+	// Matching. That happens asynchronously after the activity is scheduled, and only after
+	// any start delay or retry backoff has elapsed. The explorer accounts for this: when it
+	// wants to advance the activity it polls repeatedly, up to a timeout, until it receives
+	// the task, and only then reads the resulting state to compare against this prediction.
+	// If this function predicts STARTED but no task is received within the timeout, the
+	// explorer reports it as a bug: a SCHEDULED activity that was never dispatched. The
+	// exploration uses zero start delay and short retry backoff so the wait is short; the
+	// timing of start delay and of longer backoffs is checked by separate tests.
 	if s.Status != Scheduled {
 		return noop(s)
 	}
 	n := s
 	n.Status = Started
-	n.FirstAttemptStarted = true // set once, on the first pickup
-	// NOTE: no stamp bump — Started keeps the attempt's dispatch stamp.
+	n.FirstAttemptStarted = true // set once, when the first attempt is picked up
+	// No stamp bump: STARTED keeps the attempt's dispatch stamp.
 	return Outcome{Next: n}
 }
 
