@@ -75,6 +75,10 @@ type saaExplorer struct {
 	cfg      saaspec.Config
 	cfgIdx   int
 	counter  int
+	// shortTimer, when set to one of the *Fires event kinds, makes that timeout short at Start so
+	// the timer test can trigger it. The explorer leaves it at its zero value (Poll), so all
+	// timeouts are long and no timer fires during RPC exploration.
+	shortTimer saaspec.EventKind
 }
 
 // explore does a breadth-first walk of the model's reachable states, verifying every decided
@@ -318,8 +322,17 @@ func (ex *saaExplorer) start(t require.TestingT) *saaActor {
 	return &saaActor{ex: ex, activityID: id, taskQueue: id, runID: resp.RunId, reqIDs: map[saaspec.EventKind]string{}}
 }
 
+const saaShortTimer = 2 * time.Second
+
 func (ex *saaExplorer) startRequest(activityID, taskQueue string) *workflowservice.StartActivityExecutionRequest {
 	long := durationpb.New(time.Hour)
+	// dur returns the short timeout for the one timer under test, long otherwise.
+	dur := func(k saaspec.EventKind) *durationpb.Duration {
+		if ex.shortTimer == k {
+			return durationpb.New(saaShortTimer)
+		}
+		return long
+	}
 	req := &workflowservice.StartActivityExecutionRequest{
 		Namespace:           ex.env.Namespace().String(),
 		ActivityId:          activityID,
@@ -327,7 +340,7 @@ func (ex *saaExplorer) startRequest(activityID, taskQueue string) *workflowservi
 		Identity:            "worker",
 		Input:               defaultInput,
 		TaskQueue:           &taskqueuepb.TaskQueue{Name: taskQueue},
-		StartToCloseTimeout: long,
+		StartToCloseTimeout: dur(saaspec.StartToCloseFires),
 		RetryPolicy: &commonpb.RetryPolicy{
 			InitialInterval:    durationpb.New(200 * time.Millisecond),
 			BackoffCoefficient: 1.0,
@@ -337,13 +350,13 @@ func (ex *saaExplorer) startRequest(activityID, taskQueue string) *workflowservi
 		RequestId: uuid.NewString(),
 	}
 	if ex.cfg.HasScheduleToClose {
-		req.ScheduleToCloseTimeout = long
+		req.ScheduleToCloseTimeout = dur(saaspec.ScheduleToCloseFires)
 	}
 	if ex.cfg.HasScheduleToStart {
-		req.ScheduleToStartTimeout = long
+		req.ScheduleToStartTimeout = dur(saaspec.ScheduleToStartFires)
 	}
 	if ex.cfg.HasHeartbeat {
-		req.HeartbeatTimeout = long
+		req.HeartbeatTimeout = dur(saaspec.HeartbeatFires)
 	}
 	return req
 }
