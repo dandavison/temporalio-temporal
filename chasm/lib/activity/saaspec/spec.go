@@ -162,8 +162,9 @@ type Observed struct {
 	DispatchTimeSet      bool
 }
 
-// abstract maps the observed internal snapshot onto the spec's AbstractState.
-func abstract(o Observed) AbstractState {
+// Abstract maps the observed internal snapshot onto the spec's AbstractState. The explorer
+// calls it to convert what it reads from the server into the value it compares with Model().
+func Abstract(o Observed) AbstractState {
 	return AbstractState{
 		Status:              mapStatus(o.Status),
 		Count:               o.Count,
@@ -207,6 +208,3 @@ func mapStatus(s activitypb.ActivityExecutionStatus) Status {
 		return Unspecified
 	}
 }
-
-// Ensure abstract is retained even before the harness (which will call it) is wired up.
-var _ = abstract
