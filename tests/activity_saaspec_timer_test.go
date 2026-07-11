@@ -29,6 +29,10 @@ var saaTimerProbes = []saaTimerProbe{
 	// workflow-activity behavior here).
 	{"STC/paused", saaspec.ScheduleToCloseFires, saaspec.Config{HasScheduleToClose: true}, []saaspec.Event{{Kind: saaspec.Pause}}, saaTimerWait},
 	{"S2S/scheduled", saaspec.ScheduleToStartFires, saaspec.Config{HasScheduleToStart: true}, nil, saaTimerWait},
+	// Stale-task no-op: pausing a SCHEDULED activity bumps the stamp, invalidating the pending
+	// schedule-to-start task; it must not fire. Model(Paused, ScheduleToStartFires) should be a
+	// no-op, so the harness waits and asserts the activity is still PAUSED.
+	{"S2S/paused-stale", saaspec.ScheduleToStartFires, saaspec.Config{HasScheduleToStart: true}, []saaspec.Event{{Kind: saaspec.Pause}}, saaTimerWait},
 	{"startToClose/started-retry", saaspec.StartToCloseFires, saaspec.Config{}, []saaspec.Event{{Kind: saaspec.Poll}}, saaTimerWait},
 	{"startToClose/started-exhausted", saaspec.StartToCloseFires, saaspec.Config{MaxAttempts: 1}, []saaspec.Event{{Kind: saaspec.Poll}}, saaTimerWait},
 	{"heartbeat/started-retry", saaspec.HeartbeatFires, saaspec.Config{HasHeartbeat: true}, []saaspec.Event{{Kind: saaspec.Poll}}, saaTimerWait},
@@ -62,7 +66,7 @@ func (s *standaloneActivityTestSuite) TestSpecTimerProbes() {
 		aborted := false
 		for _, e := range p.path {
 			out := saaspec.Model(p.cfg, cur, e)
-			if !a.apply(t, e, cur, out, false) {
+			if a.apply(t, e, cur, out, false) != saaVerified {
 				t.Errorf("probe %s: could not reach source state (diverged driving %s)", p.name, saaKindName(e.Kind))
 				aborted = true
 				break

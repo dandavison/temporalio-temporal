@@ -20,6 +20,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"sort"
 	"testing"
 	"time"
 
@@ -92,6 +93,9 @@ func (ex *saaExplorer) explore(t *testing.T) {
 	visited := map[string]bool{saaFingerprint(start): true}
 	frontier := []node{{nil, start}}
 
+	verifiedCells := map[saaCell]bool{}
+	skippedCells := map[saaCell]bool{}
+
 	ex.verifyPath(t, nil) // the freshly started activity matches Initial(cfg)
 
 	edges, states := 0, 1
@@ -105,7 +109,15 @@ func (ex *saaExplorer) explore(t *testing.T) {
 				}
 				edges++
 				path := append(append([]saaspec.Event{}, nd.path...), e)
-				ex.verifyPath(t, path)
+				res, reached := ex.verifyPath(t, path)
+				if reached {
+					c := saaCell{nd.state.Status, e.Kind}
+					if res == saaSkippedNoToken {
+						skippedCells[c] = true
+					} else {
+						verifiedCells[c] = true
+					}
+				}
 				if out.Reject != saaspec.NoError {
 					continue // rejected/no-op: no new state to extend from
 				}
@@ -119,14 +131,28 @@ func (ex *saaExplorer) explore(t *testing.T) {
 		}
 		frontier = next
 	}
-	t.Logf("cfg %d: verified %d decided edges across %d reachable states (depth<=%d)",
-		ex.cfgIdx, edges, states, saaExplorerMaxDepth)
+
+	// Coverage ledger. The only decided edges the explorer does not verify are worker RPCs reached
+	// on a path that never polled (no task token to send); surface those so the gap stays visible.
+	var unexercised []string
+	for c := range skippedCells {
+		if !verifiedCells[c] {
+			unexercised = append(unexercised, fmt.Sprintf("%s/%s", c.status, saaKindName(c.kind)))
+		}
+	}
+	sort.Strings(unexercised)
+	t.Logf("cfg %d: verified %d decided edges (%d distinct cells) across %d reachable states (depth<=%d)",
+		ex.cfgIdx, edges, len(verifiedCells), states, saaExplorerMaxDepth)
+	if len(unexercised) > 0 {
+		t.Logf("cfg %d: decided cells NOT exercised (worker RPC, no token on a never-polled path): %v",
+			ex.cfgIdx, unexercised)
+	}
 }
 
 // verifyPath starts a fresh activity, replays the path (asserting only the final edge), and
 // aborts silently if a prefix edge diverges — that edge is reported when it is itself a final
 // edge of its own shorter path.
-func (ex *saaExplorer) verifyPath(t require.TestingT, path []saaspec.Event) {
+func (ex *saaExplorer) verifyPath(t require.TestingT, path []saaspec.Event) (saaApply, bool) {
 	a := ex.start(t)
 	cur := saaspec.Initial(ex.cfg)
 
@@ -135,32 +161,51 @@ func (ex *saaExplorer) verifyPath(t require.TestingT, path []saaspec.Event) {
 	require.NoError(t, err)
 	if obs != cur {
 		t.Errorf("after Start (cfg %d): state got %+v want %+v", ex.cfgIdx, obs, cur)
-		return
+		return saaMismatch, false
 	}
 
 	for i, e := range path {
 		out := saaspec.Model(ex.cfg, cur, e) // decided: guaranteed by explore()
 		final := i == len(path)-1
-		if !a.apply(t, e, cur, out, final) && !final {
-			return // prefix diverged; reported elsewhere
+		res := a.apply(t, e, cur, out, final)
+		if final {
+			return res, true // res concerns the final edge, which the ledger records
+		}
+		if res != saaVerified {
+			return res, false // prefix diverged or was skipped; that edge is checked as its own path
 		}
 		cur = out.Next
 	}
+	return saaVerified, false // empty path: only the Initial check ran
 }
 
 // --- driving one event ---------------------------------------------------------------------
 
-func (a *saaActor) apply(t require.TestingT, e saaspec.Event, cur saaspec.AbstractState, out saaspec.Outcome, final bool) bool {
+// saaApply is the outcome of driving one event, for the coverage ledger.
+type saaApply int
+
+const (
+	saaVerified       saaApply = iota // the RPC was driven and the result checked
+	saaMismatch                       // driven, but the result did not match the model
+	saaSkippedNoToken                 // a worker RPC with no task token held; not drivable on this path
+)
+
+// saaCell identifies a (source status, event kind) pair for the coverage ledger.
+type saaCell struct {
+	status saaspec.Status
+	kind   saaspec.EventKind
+}
+
+func (a *saaActor) apply(t require.TestingT, e saaspec.Event, cur saaspec.AbstractState, out saaspec.Outcome, final bool) saaApply {
 	if e.Kind == saaspec.Poll {
 		return a.applyPoll(cur, out, final, t)
 	}
-	// Worker RPCs authenticate with a task token, which the actor only holds after a poll.
-	// On a path that never polled (e.g. a fresh SCHEDULED or PAUSED activity) there is no token
-	// to send, so this edge is not drivable here; skip it rather than send an empty token (which
-	// the server rejects with a different error than the token-validation NotFound the spec means).
-	// TODO: exercise the token-validation reject with a deliberately stale token via a retry path.
+	// Worker RPCs authenticate with a task token, which the actor only holds after a poll. On a path
+	// that never polled (e.g. a fresh SCHEDULED or PAUSED activity) there is no token; sending an
+	// empty token yields a different error than the token-validation NotFound the spec means, so this
+	// edge is not drivable here. The coverage ledger records the skip.
 	if saaNeedsToken(e.Kind) && a.token == nil {
-		return true
+		return saaSkippedNoToken
 	}
 	err := a.rpc(e)
 	ok := a.verify(t, e, out, err, final)
@@ -178,10 +223,14 @@ func (a *saaActor) apply(t require.TestingT, e saaspec.Event, cur saaspec.Abstra
 			}
 		}
 	}
-	return ok
+	if ok {
+		return saaVerified
+	}
+	return saaMismatch
 }
 
-// verify reads the current state and checks it against the model's predicted Outcome.
+// verify checks the current state against the model's predicted Outcome and, on the final edge, the
+// public Describe projection.
 func (a *saaActor) verify(t require.TestingT, e saaspec.Event, out saaspec.Outcome, rpcErr error, final bool) bool {
 	gotKind := saaRejectKind(rpcErr)
 	obs, err := a.observed()
@@ -194,35 +243,60 @@ func (a *saaActor) verify(t require.TestingT, e saaspec.Event, out saaspec.Outco
 		if obs != out.Next {
 			t.Errorf("%s: resulting state got %+v want %+v", saaKindName(e.Kind), obs, out.Next)
 		}
+		a.checkDescribe(t, out.Next)
 	}
 	return ok
 }
 
-func (a *saaActor) applyPoll(cur saaspec.AbstractState, out saaspec.Outcome, final bool, t require.TestingT) bool {
+func (a *saaActor) applyPoll(cur saaspec.AbstractState, out saaspec.Outcome, final bool, t require.TestingT) saaApply {
 	expectTask := cur.Status == saaspec.Scheduled && out.Next.Status == saaspec.Started
 	if expectTask {
-		tok := a.pollForTask(10 * time.Second)
-		if tok == nil {
+		resp := a.pollForTask(10 * time.Second)
+		if resp == nil {
 			if final {
 				t.Errorf("Poll from %s: spec predicts STARTED but no task was dispatched", cur.Status)
 			}
-			return false
+			return saaMismatch
 		}
-		a.token = tok
-	} else {
-		if tok := a.pollForTask(300 * time.Millisecond); tok != nil {
-			if final {
-				t.Errorf("Poll from %s: spec predicts no advance but a task was dispatched", cur.Status)
-			}
-			return false
+		a.token = resp.GetTaskToken()
+		if final && resp.GetAttempt() != out.Next.Count {
+			t.Errorf("Poll from %s: task Attempt got %d want %d", cur.Status, resp.GetAttempt(), out.Next.Count)
 		}
+	} else if resp := a.pollForTask(300 * time.Millisecond); resp != nil {
+		if final {
+			t.Errorf("Poll from %s: spec predicts no advance but a task was dispatched", cur.Status)
+		}
+		return saaMismatch
 	}
 	obs, err := a.observed()
 	require.NoError(t, err)
-	if final && obs != out.Next {
-		t.Errorf("Poll: resulting state got %+v want %+v", obs, out.Next)
+	if final {
+		if obs != out.Next {
+			t.Errorf("Poll: resulting state got %+v want %+v", obs, out.Next)
+		}
+		a.checkDescribe(t, out.Next)
 	}
-	return obs == out.Next
+	if obs == out.Next {
+		return saaVerified
+	}
+	return saaMismatch
+}
+
+// checkDescribe asserts the public status and run state DescribeActivityExecution reports match
+// ExpectedDescribe. It is a no-op when ExpectedDescribe has not decided this state.
+func (a *saaActor) checkDescribe(t require.TestingT, expected saaspec.AbstractState) {
+	st, rs, ok := saaExpectedDescribe(expected)
+	if !ok {
+		return
+	}
+	resp, err := a.ex.env.FrontendClient().DescribeActivityExecution(a.ex.ctx, &workflowservice.DescribeActivityExecutionRequest{
+		Namespace: a.ex.env.Namespace().String(), ActivityId: a.activityID, RunId: a.runID,
+	})
+	require.NoError(t, err)
+	gotSt, gotRs := resp.GetInfo().GetStatus(), resp.GetInfo().GetRunState()
+	if gotSt != st || gotRs != rs {
+		t.Errorf("Describe from %s: got (status=%v run=%v) want (status=%v run=%v)", expected.Status, gotSt, gotRs, st, rs)
+	}
 }
 
 // rpc performs the RPC for a non-Poll event and returns its error.
@@ -369,7 +443,7 @@ func (a *saaActor) observed() (saaspec.AbstractState, error) {
 	return saaspec.Abstract(o), nil
 }
 
-func (a *saaActor) pollForTask(timeout time.Duration) []byte {
+func (a *saaActor) pollForTask(timeout time.Duration) *workflowservice.PollActivityTaskQueueResponse {
 	ctx, cancel := context.WithTimeout(a.ex.ctx, timeout)
 	defer cancel()
 	resp, err := a.ex.env.FrontendClient().PollActivityTaskQueue(ctx, &workflowservice.PollActivityTaskQueueRequest{
@@ -382,7 +456,7 @@ func (a *saaActor) pollForTask(timeout time.Duration) []byte {
 	if err != nil || resp.GetActivityId() == "" {
 		return nil
 	}
-	return resp.GetTaskToken()
+	return resp
 }
 
 func (a *saaActor) reqID(e saaspec.Event) string {
@@ -425,6 +499,19 @@ func saaNeedsToken(k saaspec.EventKind) bool {
 	default:
 		return false
 	}
+}
+
+// saaExpectedDescribe wraps saaspec.ExpectedDescribe, returning ok=false when the spec has not yet
+// decided the projection for this state (the stub panics).
+func saaExpectedDescribe(s saaspec.AbstractState) (st enumspb.ActivityExecutionStatus, rs enumspb.PendingActivityState, ok bool) {
+	defer func() {
+		if recover() != nil {
+			ok = false
+		}
+	}()
+	st, rs = saaspec.ExpectedDescribe(s)
+	ok = true
+	return
 }
 
 func saaRejectKind(err error) saaspec.ErrorKind {
