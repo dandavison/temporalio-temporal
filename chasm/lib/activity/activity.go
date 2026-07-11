@@ -1096,6 +1096,7 @@ func (a *Activity) handleReset(ctx chasm.MutableContext, req *activitypb.ResetAc
 		// TODO (dan): define desired behavior and implement
 		return nil, serviceerror.NewFailedPrecondition("cannot reset an activity with a pending reset")
 	case activitypb.ACTIVITY_EXECUTION_STATUS_STARTED, activitypb.ACTIVITY_EXECUTION_STATUS_PAUSE_REQUESTED:
+		// TODO(dan): just want to double-check: this decision to honor a Reset request in PauseRequested is deliberate?
 		return a.deferResetWhileRunning(ctx, frontendReq, metricsHandler)
 	case activitypb.ACTIVITY_EXECUTION_STATUS_PAUSED:
 		// No worker is running; restore takes effect immediately.
