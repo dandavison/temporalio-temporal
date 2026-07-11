@@ -117,9 +117,9 @@ func modelPause(_ Config, s AbstractState, e Event) Outcome {
 func modelHeartbeat(cfg Config, s AbstractState, e Event) Outcome {
 	// Heartbeat does not change status/count/stamp/flags, so on the token-valid statuses
 	// {Started, CancelRequested, PauseRequested, ResetRequested} it is a state no-op;
-	// elsewhere the token is invalid -> NotFound. (The heartbeat RESPONSE flags —
-	// CancelRequested / ActivityPaused / ActivityReset — are a separate oracle in the
-	// explorer, not part of AbstractState.)
+	// elsewhere the token is invalid -> NotFound. The heartbeat response flags
+	// (CancelRequested / ActivityPaused / ActivityReset) are predicted separately by
+	// ExpectedHeartbeatFlags in responses.go, not by this function.
 	_ = cfg
 	_ = e
 	panic("TODO(spec): Heartbeat from " + s.Status.String())
