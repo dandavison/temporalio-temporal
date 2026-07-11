@@ -2,9 +2,10 @@
 // operator commands (pause / unpause / reset / update-options) and the worker-driven
 // transitions around them.
 //
-// It is the *judge*, never part of the system under test. Model() says what SHOULD
-// happen; a separate harness drives the real server and asserts the observed internal
-// state equals what Model() predicts. See .task/saa-verification-plan.md.
+// It is only used to check the implementation and is never part of the code under test.
+// Model() states what should happen; a separate harness drives the real server and
+// asserts that the observed internal state equals what Model() predicts. See
+// .task/saa-verification-plan.md.
 //
 // Authoring rule: write what the behavior SHOULD be, without consulting the
 // implementation. Divergences between this spec and the code are the findings we want.

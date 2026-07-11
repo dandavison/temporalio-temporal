@@ -135,8 +135,8 @@ func modelRespondCompleted(cfg Config, s AbstractState, e Event) Outcome {
 }
 
 func modelRespondFailed(cfg Config, s AbstractState, e Event) Outcome {
-	// The subtle one. Outcome depends on e.Retryable (failure retryable AND retries remain
-	// per cfg.MaxAttempts/Count) AND the current status:
+	// The outcome depends on e.Retryable (the failure is retryable and retries remain per
+	// cfg.MaxAttempts/Count) and on the current status:
 	//   - Started         -> Scheduled (retry) or Failed (exhausted/non-retryable)
 	//   - PauseRequested  -> Paused (retry) or Failed
 	//   - ResetRequested  -> Scheduled or Paused (per ResetKeepPaused); reset is honored even
