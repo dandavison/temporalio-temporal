@@ -116,6 +116,11 @@ func (s *standaloneActivityTestSuite) newTestEnv(opts ...testcore.TestOption) *s
 	cluster.OverrideDynamicConfig(s.T(), activity.Enabled, nsValues(true))
 	cluster.OverrideDynamicConfig(s.T(), activity.EnableCallbacks, nsValues(true))
 	cluster.OverrideDynamicConfig(s.T(), activity.StartDelayEnabled, nsValues(true))
+	// The spec harness replays hundreds of activities, each on its own task queue; with the default
+	// 4 partitions the burst of task-queue creation trips matching's rate/persistence limiters.
+	// Collapse each task queue to a single partition.
+	cluster.OverrideDynamicConfig(s.T(), dynamicconfig.MatchingNumTaskqueueReadPartitions, nsValues(1))
+	cluster.OverrideDynamicConfig(s.T(), dynamicconfig.MatchingNumTaskqueueWritePartitions, nsValues(1))
 	return env
 }
 
