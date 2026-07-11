@@ -8,6 +8,7 @@ package tests
 // probe. Probes whose (state, timer-event) Model() has not decided are skipped.
 
 import (
+	"testing"
 	"time"
 
 	"github.com/stretchr/testify/require"
@@ -47,52 +48,45 @@ func (s *standaloneActivityTestSuite) TestSpecTimerProbes() {
 	chasmCtx, err := env.GetTestCluster().Host().ChasmContext(ctx)
 	require.NoError(t, err)
 
-	verified, skipped := 0, 0
+	// Each probe is an independent subtest, so `-run 'TestSpecTimerProbes/heartbeat'` selects by
+	// timer/scenario (names embed a "/" hierarchy: e.g. "heartbeat/started-retry").
 	for i, p := range saaTimerProbes {
-		ex := &saaExplorer{
-			env: env, ctx: ctx, chasmCtx: chasmCtx, nsID: env.NamespaceID().String(),
-			cfg: p.cfg, cfgIdx: i, shortTimer: p.timer,
-		}
-		a := ex.start(t)
-		cur := saaspec.Initial(p.cfg)
-
-		obs, err := a.observed()
-		require.NoError(t, err)
-		if obs != cur {
-			t.Errorf("probe %s: after Start, state got %+v want %+v", p.name, obs, cur)
-			continue
-		}
-
-		aborted := false
-		for _, e := range p.path {
-			out := saaspec.Model(p.cfg, cur, e)
-			if a.apply(t, e, cur, out, false) != saaVerified {
-				t.Errorf("probe %s: could not reach source state (diverged driving %s)", p.name, saaKindName(e.Kind))
-				aborted = true
-				break
+		t.Run(p.name, func(t *testing.T) {
+			ex := &saaExplorer{
+				env: env, ctx: ctx, chasmCtx: chasmCtx, nsID: env.NamespaceID().String(),
+				cfg: p.cfg, cfgIdx: i, shortTimer: p.timer,
 			}
-			cur = out.Next
-		}
-		if aborted {
-			continue
-		}
+			a := ex.start(t)
+			cur := saaspec.Initial(p.cfg)
 
-		out, decided := saaEvalModel(p.cfg, cur, saaspec.Event{Kind: p.timer})
-		if !decided {
-			t.Logf("probe %s: Model has not decided %s from %s; skipping", p.name, saaKindName(p.timer), cur.Status)
-			skipped++
-			continue
-		}
+			obs, err := a.observed()
+			require.NoError(t, err)
+			if obs != cur {
+				t.Errorf("after Start, state got %+v want %+v", obs, cur)
+				return
+			}
 
-		src := cur.Status
-		time.Sleep(p.wait)
-		obs, err = a.observed()
-		require.NoError(t, err)
-		if obs != out.Next {
-			t.Errorf("probe %s: %s from %s: state got %+v want %+v", p.name, saaKindName(p.timer), src, obs, out.Next)
-		} else {
-			verified++
-		}
+			for _, e := range p.path {
+				out := saaspec.Model(p.cfg, cur, e)
+				if a.apply(t, e, cur, out, false) != saaVerified {
+					t.Errorf("could not reach source state (diverged driving %s)", saaKindName(e.Kind))
+					return
+				}
+				cur = out.Next
+			}
+
+			out, decided := saaEvalModel(p.cfg, cur, saaspec.Event{Kind: p.timer})
+			if !decided {
+				t.Skipf("Model has not decided %s from %s", saaKindName(p.timer), cur.Status)
+			}
+
+			src := cur.Status
+			time.Sleep(p.wait)
+			obs, err = a.observed()
+			require.NoError(t, err)
+			if obs != out.Next {
+				t.Errorf("%s from %s: state got %+v want %+v", saaKindName(p.timer), src, obs, out.Next)
+			}
+		})
 	}
-	t.Logf("timer probes: verified=%d skipped(undecided)=%d", verified, skipped)
 }

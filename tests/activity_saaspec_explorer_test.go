@@ -20,7 +20,9 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"os"
 	"sort"
+	"strings"
 	"testing"
 	"time"
 
@@ -50,6 +52,13 @@ func (s *standaloneActivityTestSuite) TestSpecExplorer() {
 	chasmCtx, err := env.GetTestCluster().Host().ChasmContext(ctx)
 	require.NoError(t, err)
 
+	// SAASPEC_EVENT=Reset,Pause focuses reporting on those event kinds. The full graph is still
+	// traversed (reaching a state needs the other events); only the listed events are asserted.
+	focus := saaParseFocus(os.Getenv("SAASPEC_EVENT"))
+	if len(focus) > 0 {
+		t.Logf("SAASPEC_EVENT focus: reporting only on %s", os.Getenv("SAASPEC_EVENT"))
+	}
+
 	for i, cfg := range saaExplorerConfigs {
 		ex := &saaExplorer{
 			env:      env,
@@ -58,10 +67,43 @@ func (s *standaloneActivityTestSuite) TestSpecExplorer() {
 			nsID:     env.NamespaceID().String(),
 			cfg:      cfg,
 			cfgIdx:   i,
+			focus:    focus,
 		}
 		ex.explore(t)
 	}
 }
+
+// saaParseFocus turns a comma-separated list of event-kind names (case-insensitive, e.g.
+// "Reset,Pause") into a set; empty input means "report everything".
+func saaParseFocus(env string) map[saaspec.EventKind]bool {
+	if strings.TrimSpace(env) == "" {
+		return nil
+	}
+	want := map[string]bool{}
+	for _, tok := range strings.Split(env, ",") {
+		want[strings.ToLower(strings.TrimSpace(tok))] = true
+	}
+	focus := map[saaspec.EventKind]bool{}
+	for _, k := range saaAllEventKinds {
+		if want[strings.ToLower(saaKindName(k))] {
+			focus[k] = true
+		}
+	}
+	return focus
+}
+
+var saaAllEventKinds = []saaspec.EventKind{
+	saaspec.Poll, saaspec.Heartbeat, saaspec.RespondCompleted, saaspec.RespondFailed,
+	saaspec.RespondCanceled, saaspec.RequestCancel, saaspec.Terminate, saaspec.Pause,
+	saaspec.Unpause, saaspec.Reset, saaspec.UpdateOptions,
+}
+
+// saaDiscardT is a require.TestingT that swallows assertions, used to run a non-focused edge
+// (drive + check) without reporting its result.
+type saaDiscardT struct{}
+
+func (saaDiscardT) Errorf(string, ...any) {}
+func (saaDiscardT) FailNow()              {}
 
 var saaExplorerConfigs = []saaspec.Config{
 	{}, // no schedule-to-close, unlimited attempts
@@ -76,6 +118,9 @@ type saaExplorer struct {
 	cfg      saaspec.Config
 	cfgIdx   int
 	counter  int
+	// focus, when non-empty, limits which final-edge events are reported (see SAASPEC_EVENT). The
+	// full graph is still traversed.
+	focus map[saaspec.EventKind]bool
 	// shortTimer, when set to one of the *Fires event kinds, makes that timeout short at Start so
 	// the timer test can trigger it. The explorer leaves it at its zero value (Poll), so all
 	// timeouts are long and no timer fires during RPC exploration.
@@ -167,7 +212,13 @@ func (ex *saaExplorer) verifyPath(t require.TestingT, path []saaspec.Event) (saa
 	for i, e := range path {
 		out := saaspec.Model(ex.cfg, cur, e) // decided: guaranteed by explore()
 		final := i == len(path)-1
-		res := a.apply(t, e, cur, out, final)
+		// On a focused run, drive+check the final edge but swallow its report unless it is a
+		// focused event. Prefix edges always use the real t so reachability failures surface.
+		et := t
+		if final && len(ex.focus) > 0 && !ex.focus[e.Kind] {
+			et = saaDiscardT{}
+		}
+		res := a.apply(et, e, cur, out, final)
 		if final {
 			return res, true // res concerns the final edge, which the ledger records
 		}
