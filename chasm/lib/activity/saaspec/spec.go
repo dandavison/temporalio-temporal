@@ -23,14 +23,14 @@ const (
 	Unspecified Status = iota
 	Scheduled
 	Started
-	CancelRequested
 	Completed
 	Failed
+	CancelRequested
 	Canceled
 	Terminated
 	TimedOut
-	Paused
 	PauseRequested
+	Paused
 	ResetRequested
 )
 
@@ -117,13 +117,21 @@ const (
 	Unpause
 	Reset
 	UpdateOptions
+
+	// Timer firings, modeled as events so the timer tests are spec-driven: Model() defines the
+	// outcome of each firing per status, exactly like an RPC event. The harness triggers a firing
+	// by configuring the matching timeout short and waiting for it to elapse.
+	ScheduleToStartFires
+	ScheduleToCloseFires
+	StartToCloseFires
+	HeartbeatFires
 )
 
 // Event carries the variant flags that affect the outcome. Leave irrelevant flags zero.
 type Event struct {
 	Kind EventKind
 
-	Retryable       bool // RespondFailed: failure is retryable AND retries remain per policy
+	Retryable       bool // RespondFailed: the failure sent is retryable (NonRetryable=false). Whether the activity actually retries also depends on cfg.MaxAttempts and s.Count, which Model() decides.
 	KeepPaused      bool // Reset
 	RestoreOriginal bool // Reset / UpdateOptions
 	ResetHeartbeat  bool // Reset / Unpause

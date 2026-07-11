@@ -65,7 +65,36 @@ type HeartbeatFlags struct {
 // the poll that reached STARTED; that token stays valid through
 // STARTED -> PauseRequested / ResetRequested / CancelRequested, because Count does not change.
 func ExpectedHeartbeatFlags(s AbstractState) HeartbeatFlags {
-	panic("TODO(spec): ExpectedHeartbeatFlags for status " + s.Status.String())
+	switch s.Status {
+	case Started:
+		return HeartbeatFlags{
+			ActivityPaused:  false,
+			ActivityReset:   false,
+			CancelRequested: false,
+		}
+	case CancelRequested:
+		return HeartbeatFlags{
+			ActivityPaused:  false,
+			ActivityReset:   false,
+			CancelRequested: true,
+		}
+	case ResetRequested:
+		return HeartbeatFlags{
+			ActivityPaused:  false,
+			ActivityReset:   true,
+			CancelRequested: false,
+		}
+	case PauseRequested:
+		// TODO(dan): our code honors a reset request while in PauseRequested; just want to
+		// double-check that's intentional. If so need to decide on spec for heartbeat flags.
+		return HeartbeatFlags{
+			ActivityPaused:  true,
+			ActivityReset:   false,
+			CancelRequested: false,
+		}
+	default:
+		panic("TODO(spec): ExpectedHeartbeatFlags for status " + s.Status.String())
+	}
 }
 
 // ExpectedDescribe predicts the public execution status and pending-activity run state that
