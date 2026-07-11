@@ -46,7 +46,10 @@ func Model(cfg Config, s AbstractState, e Event) Outcome {
 }
 
 // ---------------------------------------------------------------------------
-// Worked example #1: Poll (worker pickup). Fully implemented — use as a pattern.
+// Below, each must handle EVERY status (use a `switch s.Status`), returning either a mutated copy
+// (`n := s; n.X = ...; return Outcome{Next: n}`), a `noop(s)`, or a `reject(s, kind)`. Where a
+// (status,event) truly cannot be reached, panic("unreachable: ...") so the static diff can confirm
+// the code agrees.
 // ---------------------------------------------------------------------------
 
 func modelPoll(_ Config, s AbstractState, _ Event) Outcome {
@@ -68,70 +71,63 @@ func modelPoll(_ Config, s AbstractState, _ Event) Outcome {
 	n := s
 	n.Status = Started
 	n.FirstAttemptStarted = true // set once, when the first attempt is picked up
-	// No stamp bump: STARTED keeps the attempt's dispatch stamp.
+	// Do not invalidate attempt tasks
 	return Outcome{Next: n}
 }
-
-// ---------------------------------------------------------------------------
-// Worked example #2: Pause. Implemented, but REVIEW against your intended spec —
-// especially the ResetRequested case, which is left as a decision.
-// ---------------------------------------------------------------------------
 
 func modelPause(_ Config, s AbstractState, e Event) Outcome {
 	switch s.Status {
 	case Scheduled:
 		n := s
 		n.Status = Paused
-		n.Stamp++ // must invalidate the pending dispatch task so we don't dispatch while paused
+		n.Stamp++ // invalidate any pending dispatch task
 		return Outcome{Next: n}
 	case Started:
 		n := s
-		n.Status = PauseRequested // worker still in charge; NO stamp bump (its timers stay valid)
+		n.Status = PauseRequested
+		// do not invalidate attempt timer tasks
 		return Outcome{Next: n}
 	case Paused, PauseRequested:
 		if e.SameRequestID {
-			return noop(s) // idempotent repeat
+			return noop(s) // requestID-based idempotency
 		}
 		return reject(s, FailedPrecondition) // "already paused"
 	case CancelRequested:
-		return reject(s, FailedPrecondition) // cancel takes precedence
+		return reject(s, FailedPrecondition) // earlier cancel takes precedence
 	case ResetRequested:
-		// DECISION POINT: reject? no-op? depends on ResetKeepPaused? Resolve and replace.
-		panic("TODO(spec): Pause during ResetRequested — decide")
+		return reject(s, FailedPrecondition) // earlier reset takes precedence
 	default:
-		if s.Status.Terminal() {
-			return reject(s, FailedPrecondition)
-		}
-		panic("TODO(spec): Pause from " + s.Status.String())
+		panic("TODO(spec): Pause while in status " + s.Status.String())
 	}
 }
 
-// ---------------------------------------------------------------------------
-// TODO(spec): fill these in, following the modelPause pattern. Each must handle EVERY
-// status (use a `switch s.Status`), returning either a mutated copy (`n := s; n.X = ...;
-// return Outcome{Next: n}`), a `noop(s)`, or a `reject(s, kind)`. Where a (status,event)
-// truly cannot be reached, panic("unreachable: ...") so the static diff can confirm the
-// code agrees.
-// ---------------------------------------------------------------------------
-
-func modelHeartbeat(cfg Config, s AbstractState, e Event) Outcome {
-	// Heartbeat does not change status/count/stamp/flags, so on the token-valid statuses
-	// {Started, CancelRequested, PauseRequested, ResetRequested} it is a state no-op;
-	// elsewhere the token is invalid -> NotFound. The heartbeat response flags
-	// (CancelRequested / ActivityPaused / ActivityReset) are predicted separately by
-	// ExpectedHeartbeatFlags in responses.go, not by this function.
-	_ = cfg
-	_ = e
-	panic("TODO(spec): Heartbeat from " + s.Status.String())
+func modelHeartbeat(_ Config, s AbstractState, _ Event) Outcome {
+	// See ExpectedHeartbeatFlags in responses.go for the spec related to heartbeat response flags
+	// (CancelRequested / ActivityPaused / ActivityReset).
+	switch s.Status {
+	case Started, PauseRequested, CancelRequested, ResetRequested:
+		return noop(s)
+	case Scheduled, Paused:
+		return reject(s, NotFound)
+	default:
+		panic("TODO(spec): Heartbeat while in status " + s.Status.String())
+	}
 }
 
 func modelRespondCompleted(cfg Config, s AbstractState, e Event) Outcome {
-	// Worker success. Token-valid statuses complete the activity; note completion is
-	// accepted even in PauseRequested / ResetRequested (worker finished — honor it). Does
-	// any deferred flag need clearing on completion?
+	// TODO(dan) Does any deferred flag need clearing on completion?
 	_ = cfg
 	_ = e
-	panic("TODO(spec): RespondCompleted from " + s.Status.String())
+	switch s.Status {
+	case Started, PauseRequested, CancelRequested, ResetRequested:
+		n := s
+		n.Status = Completed
+		return Outcome{Next: n}
+	case Scheduled, Paused:
+		return reject(s, NotFound)
+	default:
+		panic("TODO(spec): RespondCompleted while in status " + s.Status.String())
+	}
 }
 
 func modelRespondFailed(cfg Config, s AbstractState, e Event) Outcome {
@@ -144,13 +140,51 @@ func modelRespondFailed(cfg Config, s AbstractState, e Event) Outcome {
 	// On a retry, Count++ and Stamp++ (a fresh attempt); on the reset paths Count resets to 1.
 	_ = cfg
 	_ = e
-	panic("TODO(spec): RespondFailed from " + s.Status.String())
+	switch s.Status {
+	case Started, PauseRequested, ResetRequested:
+		// TODO(dan): It's more complicated than this. A reset schedule attempt 1 even if the error
+		// is non-retryable/retries exhausted. And PauseRequested -> Paused. But let's leave it for
+		// now and check that the harness catches it.
+		switch {
+		case e.Retryable && s.Count < cfg.MaxAttempts:
+			// retry
+			n := s
+			n.Status = Scheduled
+			n.Count++
+			// TODO(dan) deliberately missing stamp bump
+			return Outcome{Next: n}
+		default:
+			// no retry
+			n := s
+			n.Status = Failed
+			return Outcome{Next: n}
+		}
+	case CancelRequested:
+		// TODO(dan): is this right? Worker must respondCanceled to transition to Canceled
+		n := s
+		n.Status = Failed
+		return Outcome{Next: n}
+	case Scheduled, Paused:
+		return reject(s, NotFound)
+	default:
+		panic("TODO(spec): RespondFailed while in status " + s.Status.String())
+	}
 }
 
 func modelRespondCanceled(cfg Config, s AbstractState, e Event) Outcome {
+	// This is the worker API. It is only accepted when an attempt is in progress.
 	_ = cfg
 	_ = e
-	panic("TODO(spec): RespondCanceled from " + s.Status.String())
+	switch s.Status {
+	case Started, PauseRequested, CancelRequested, ResetRequested:
+		n := s
+		n.Status = Canceled
+		return Outcome{Next: n}
+	case Scheduled, Paused:
+		return reject(s, NotFound)
+	default:
+		panic("TODO(spec): RespondCanceled while in status " + s.Status.String())
+	}
 }
 
 func modelRequestCancel(cfg Config, s AbstractState, e Event) Outcome {
@@ -159,14 +193,42 @@ func modelRequestCancel(cfg Config, s AbstractState, e Event) Outcome {
 	// repeat request id.
 	_ = cfg
 	_ = e
-	panic("TODO(spec): RequestCancel from " + s.Status.String())
+	switch s.Status {
+	case Scheduled, Paused:
+		n := s
+		s.Status = Canceled
+		// TODO(dan) stamp bump?
+		return Outcome{Next: n}
+	case Started, PauseRequested:
+		n := s
+		s.Status = CancelRequested
+		return Outcome{Next: n}
+	case CancelRequested:
+		return noop(s)
+	case ResetRequested:
+		panic("TODO(spec) how do we handle Reset while in CancelRequested?")
+	default:
+		panic("TODO(spec): RequestCancel while in status " + s.Status.String())
+	}
 }
 
 func modelTerminate(cfg Config, s AbstractState, e Event) Outcome {
 	// Terminates from any non-terminal status -> Terminated; idempotent on repeat request id.
 	_ = cfg
 	_ = e
-	panic("TODO(spec): Terminate from " + s.Status.String())
+	switch s.Status {
+	case Scheduled, Paused:
+		n := s
+		s.Status = Terminated
+		return Outcome{Next: n}
+	case Started, PauseRequested, CancelRequested, ResetRequested:
+		n := s
+		s.Status = Terminated
+		// TODO(dan) stamp bump?
+		return Outcome{Next: n}
+	default:
+		panic("TODO(spec): Terminate while in status " + s.Status.String())
+	}
 }
 
 func modelUnpause(cfg Config, s AbstractState, e Event) Outcome {
@@ -175,7 +237,16 @@ func modelUnpause(cfg Config, s AbstractState, e Event) Outcome {
 	// no-op or reject?
 	_ = cfg
 	_ = e
-	panic("TODO(spec): Unpause from " + s.Status.String())
+	switch s.Status {
+	case Paused:
+		n := s
+		n.Status = Scheduled
+		return Outcome{Next: n}
+	case Scheduled, Started, PauseRequested, CancelRequested, ResetRequested:
+		return reject(s, FailedPrecondition)
+	default:
+		panic("TODO(spec): Unpause while in status " + s.Status.String())
+	}
 }
 
 func modelReset(cfg Config, s AbstractState, e Event) Outcome {
@@ -186,7 +257,17 @@ func modelReset(cfg Config, s AbstractState, e Event) Outcome {
 	// CANCEL_REQUESTED / RESET_REQUESTED: reject? terminal: reject.
 	_ = cfg
 	_ = e
-	panic("TODO(spec): Reset from " + s.Status.String())
+	switch s.Status {
+	case Scheduled:
+	case Paused:
+	case Started:
+	case PauseRequested:
+	case CancelRequested:
+	case ResetRequested:
+	default:
+		panic("TODO(spec): Reset while in status " + s.Status.String())
+	}
+	panic("TODO(spec): Reset while in status " + s.Status.String())
 }
 
 func modelUpdateOptions(cfg Config, s AbstractState, e Event) Outcome {
@@ -195,5 +276,15 @@ func modelUpdateOptions(cfg Config, s AbstractState, e Event) Outcome {
 	// re-dispatch when SCHEDULED?
 	_ = cfg
 	_ = e
-	panic("TODO(spec): UpdateOptions from " + s.Status.String())
+	switch s.Status {
+	case Scheduled:
+	case Paused:
+	case Started:
+	case PauseRequested:
+	case CancelRequested:
+	case ResetRequested:
+	default:
+		panic("TODO(spec): UpdateOptions while in status " + s.Status.String())
+	}
+	panic("TODO(spec): UpdateOptions while in status " + s.Status.String())
 }
