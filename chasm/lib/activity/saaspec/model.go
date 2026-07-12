@@ -249,7 +249,12 @@ func modelReset(cfg Config, s AbstractState, e Event) Outcome {
 		n.Status = ResetRequested
 		if s.Status == PauseRequested {
 			// KeepPaused is stored if a Reset arrives during PauseRequested
-			n.ResetKeepPaused = e.KeepPaused
+			if e.KeepPaused {
+				n.ResetKeepPaused = true
+				s.Status = PauseRequested
+			} else {
+				n.ResetKeepPaused = false
+			}
 		}
 		n.ResetHeartbeats = e.ResetHeartbeat
 		n.ResetRestoreOptions = e.RestoreOriginal
