@@ -12,5 +12,5 @@ go test -tags test_dep -run 'TestStandaloneActivityTestSuite/TestSpecTimerProbes
 # also: /STC  /S2S  /startToClose  /heartbeat/started-retry  etc.
 
 # Explorer focused on an event type (SAASPEC_EVENT, comma-separated, case-insensitive):
-SAASPEC_EVENT=Reset,Pause go test -tags test_dep -run '.../TestSpecExplorer' -v ./tests/
+SAASPEC_EVENT=Reset,Pause go test -tags test_dep -run 'TestStandaloneActivityTestSuite/TestSpecExplorer' -v ./tests/
 ```
