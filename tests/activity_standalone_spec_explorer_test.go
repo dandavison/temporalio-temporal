@@ -18,11 +18,9 @@ package tests
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"os"
 	"sort"
-	"strings"
 	"testing"
 	"time"
 
@@ -31,8 +29,6 @@ import (
 	apiactivitypb "go.temporal.io/api/activity/v1"
 	commonpb "go.temporal.io/api/common/v1"
 	enumspb "go.temporal.io/api/enums/v1"
-	failurepb "go.temporal.io/api/failure/v1"
-	"go.temporal.io/api/serviceerror"
 	taskqueuepb "go.temporal.io/api/taskqueue/v1"
 	"go.temporal.io/api/workflowservice/v1"
 	"go.temporal.io/server/chasm"
@@ -72,38 +68,6 @@ func (s *standaloneActivityTestSuite) TestSpecExplorer() {
 		ex.explore(t)
 	}
 }
-
-// saaParseFocus turns a comma-separated list of event-kind names (case-insensitive, e.g.
-// "Reset,Pause") into a set; empty input means "report everything".
-func saaParseFocus(env string) map[saaspec.EventKind]bool {
-	if strings.TrimSpace(env) == "" {
-		return nil
-	}
-	want := map[string]bool{}
-	for tok := range strings.SplitSeq(env, ",") {
-		want[strings.ToLower(strings.TrimSpace(tok))] = true
-	}
-	focus := map[saaspec.EventKind]bool{}
-	for _, k := range saaAllEventKinds {
-		if want[strings.ToLower(saaKindName(k))] {
-			focus[k] = true
-		}
-	}
-	return focus
-}
-
-var saaAllEventKinds = []saaspec.EventKind{
-	saaspec.Poll, saaspec.Heartbeat, saaspec.RespondCompleted, saaspec.RespondFailed,
-	saaspec.RespondCanceled, saaspec.RequestCancel, saaspec.Terminate, saaspec.Pause,
-	saaspec.Unpause, saaspec.Reset, saaspec.UpdateOptions,
-}
-
-// saaDiscardT is a require.TestingT that swallows assertions, used to run a non-focused edge
-// (drive + check) without reporting its result.
-type saaDiscardT struct{}
-
-func (saaDiscardT) Errorf(string, ...any) {}
-func (saaDiscardT) FailNow()              {}
 
 var saaExplorerConfigs = []saaspec.Config{
 	{}, // no schedule-to-close, unlimited attempts
@@ -199,13 +163,15 @@ func (ex *saaExplorer) explore(t *testing.T) {
 // edge of its own shorter path.
 func (ex *saaExplorer) verifyPath(t require.TestingT, path []saaspec.Event) (saaApply, bool) {
 	a := ex.start(t)
+	a.path = path
 	cur := saaspec.Initial(ex.cfg)
 
 	// The freshly started activity should match Initial(cfg).
 	obs, err := a.observed()
 	require.NoError(t, err)
 	if obs != cur {
-		t.Errorf("after Start (cfg %d): state got %+v want %+v", ex.cfgIdx, obs, cur)
+		t.Errorf("cfg %d: state immediately after StartActivityExecution disagrees with Initial(cfg).\n%s",
+			ex.cfgIdx, saaStateDiff(obs, cur))
 		return saaMismatch, false
 	}
 
@@ -259,18 +225,18 @@ func (a *saaActor) apply(t require.TestingT, e saaspec.Event, cur saaspec.Abstra
 		return saaSkippedNoToken
 	}
 	err := a.rpc(e)
-	ok := a.verify(t, e, out, err, final)
+	ok := a.verify(t, e, cur, out, err, final)
 	if e.Kind == saaspec.Heartbeat && out.Reject == saaspec.NoError {
-		got := saaspec.HeartbeatFlags{
+		observed := saaspec.HeartbeatFlags{
 			CancelRequested: a.lastHeartbeat.GetCancelRequested(),
 			ActivityPaused:  a.lastHeartbeat.GetActivityPaused(),
 			ActivityReset:   a.lastHeartbeat.GetActivityReset(),
 		}
-		want := saaspec.ExpectedHeartbeatFlags(cur)
-		if got != want {
+		expected := saaspec.ExpectedHeartbeatFlags(cur)
+		if observed != expected {
 			ok = false
 			if final {
-				t.Errorf("Heartbeat flags from %s: got %+v want %+v", cur.Status, got, want)
+				t.Errorf("%s", a.flagsFailure(e, cur.Status, observed, expected))
 			}
 		}
 	}
@@ -282,17 +248,17 @@ func (a *saaActor) apply(t require.TestingT, e saaspec.Event, cur saaspec.Abstra
 
 // verify checks the current state against the model's predicted Outcome and, on the final edge, the
 // public Describe projection.
-func (a *saaActor) verify(t require.TestingT, e saaspec.Event, out saaspec.Outcome, rpcErr error, final bool) bool {
+func (a *saaActor) verify(t require.TestingT, e saaspec.Event, cur saaspec.AbstractState, out saaspec.Outcome, rpcErr error, final bool) bool {
 	gotKind := saaRejectKind(rpcErr)
 	obs, err := a.observed()
 	require.NoError(t, err)
 	ok := gotKind == out.Reject && obs == out.Next
 	if final {
 		if gotKind != out.Reject {
-			t.Errorf("%s from %s: reject kind got %v want %v (err=%v)", saaKindName(e.Kind), out.Next.Status, gotKind, out.Reject, rpcErr)
+			t.Errorf("%s", a.rejectFailure(e, cur.Status, gotKind, out.Reject, rpcErr))
 		}
 		if obs != out.Next {
-			t.Errorf("%s: resulting state got %+v want %+v", saaKindName(e.Kind), obs, out.Next)
+			t.Errorf("%s", a.stateFailure(e, cur.Status, obs, out.Next))
 		}
 		a.checkDescribe(t, out.Next)
 	}
@@ -300,22 +266,26 @@ func (a *saaActor) verify(t require.TestingT, e saaspec.Event, out saaspec.Outco
 }
 
 func (a *saaActor) applyPoll(cur saaspec.AbstractState, out saaspec.Outcome, final bool, t require.TestingT) saaApply {
+	poll := saaspec.Event{Kind: saaspec.Poll}
 	expectTask := cur.Status == saaspec.Scheduled && out.Next.Status == saaspec.Started
 	if expectTask {
 		resp := a.pollForTask(10 * time.Second)
 		if resp == nil {
 			if final {
-				t.Errorf("Poll from %s: spec predicts STARTED but no task was dispatched", cur.Status)
+				t.Errorf("%s: model expected STARTED but no task was dispatched within 10s (scheduled, never dispatched)\n%s",
+					a.edge(poll, cur.Status), a.pathLine())
 			}
 			return saaMismatch
 		}
 		a.token = resp.GetTaskToken()
 		if final && resp.GetAttempt() != out.Next.Count {
-			t.Errorf("Poll from %s: task Attempt got %d want %d", cur.Status, resp.GetAttempt(), out.Next.Count)
+			t.Errorf("%s: dispatched task attempt number disagrees — server saw %d, model expected %d\n%s",
+				a.edge(poll, cur.Status), resp.GetAttempt(), out.Next.Count, a.pathLine())
 		}
 	} else if resp := a.pollForTask(300 * time.Millisecond); resp != nil {
 		if final {
-			t.Errorf("Poll from %s: spec predicts no advance but a task was dispatched", cur.Status)
+			t.Errorf("%s: model expected no advance but a task WAS dispatched\n%s",
+				a.edge(poll, cur.Status), a.pathLine())
 		}
 		return saaMismatch
 	}
@@ -323,7 +293,7 @@ func (a *saaActor) applyPoll(cur saaspec.AbstractState, out saaspec.Outcome, fin
 	require.NoError(t, err)
 	if final {
 		if obs != out.Next {
-			t.Errorf("Poll: resulting state got %+v want %+v", obs, out.Next)
+			t.Errorf("%s", a.stateFailure(poll, cur.Status, obs, out.Next))
 		}
 		a.checkDescribe(t, out.Next)
 	}
@@ -346,7 +316,10 @@ func (a *saaActor) checkDescribe(t require.TestingT, expected saaspec.AbstractSt
 	require.NoError(t, err)
 	gotSt, gotRs := resp.GetInfo().GetStatus(), resp.GetInfo().GetRunState()
 	if gotSt != st || gotRs != rs {
-		t.Errorf("Describe from %s: got (status=%v run=%v) want (status=%v run=%v)", expected.Status, gotSt, gotRs, st, rs)
+		t.Errorf("Describe in internal status %s: public projection disagrees\n%s\n"+
+			"  server saw:     status=%v run=%v\n"+
+			"  model expected: status=%v run=%v",
+			expected.Status, a.pathLine(), gotSt, gotRs, st, rs)
 	}
 }
 
@@ -437,6 +410,7 @@ type saaActor struct {
 	token         []byte
 	lastHeartbeat *workflowservice.RecordActivityTaskHeartbeatResponse
 	reqIDs        map[saaspec.EventKind]string
+	path          []saaspec.Event // events replayed to reach the edge under test, for failure reports
 }
 
 func (ex *saaExplorer) start(t require.TestingT) *saaActor {
@@ -552,52 +526,6 @@ func saaNeedsToken(k saaspec.EventKind) bool {
 	}
 }
 
-// saaExpectedDescribe wraps saaspec.ExpectedDescribe, returning ok=false when the spec has not yet
-// decided the projection for this state (the stub panics).
-func saaExpectedDescribe(s saaspec.AbstractState) (st enumspb.ActivityExecutionStatus, rs enumspb.PendingActivityState, ok bool) {
-	defer func() {
-		if recover() != nil {
-			ok = false
-		}
-	}()
-	st, rs = saaspec.ExpectedDescribe(s)
-	ok = true
-	return
-}
-
-func saaRejectKind(err error) saaspec.ErrorKind {
-	if err == nil {
-		return saaspec.NoError
-	}
-	// The FrontendClient returns Temporal serviceerror types, so classify by type rather than by
-	// gRPC status code.
-	var nf *serviceerror.NotFound
-	var fp *serviceerror.FailedPrecondition
-	var ia *serviceerror.InvalidArgument
-	switch {
-	case errors.As(err, &nf):
-		return saaspec.NotFound
-	case errors.As(err, &fp):
-		return saaspec.FailedPrecondition
-	case errors.As(err, &ia):
-		return saaspec.InvalidArgument
-	default:
-		return saaspec.ErrorKind(-1) // unrecognized: will not match any predicted kind
-	}
-}
-
-func saaFailure(retryable bool) *failurepb.Failure {
-	return &failurepb.Failure{
-		Message: "explore",
-		FailureInfo: &failurepb.Failure_ApplicationFailureInfo{
-			ApplicationFailureInfo: &failurepb.ApplicationFailureInfo{
-				Type:         "explore",
-				NonRetryable: !retryable,
-			},
-		},
-	}
-}
-
 // saaEvalModel calls Model, treating a TODO(spec)/unreachable panic as "undecided" so the explorer
 // skips that cell. Anything else Model returns — including an accidental empty Outcome{} — is a real
 // decision and is checked; an empty Outcome surfaces as a mismatch against the server.
@@ -645,33 +573,4 @@ func saaCandidateEvents() []saaspec.Event {
 		out = append(out, saaspec.Event{Kind: saaspec.Unpause, ResetAttempts: ra})
 	}
 	return out
-}
-
-func saaKindName(k saaspec.EventKind) string {
-	switch k {
-	case saaspec.Poll:
-		return "Poll"
-	case saaspec.Heartbeat:
-		return "Heartbeat"
-	case saaspec.RespondCompleted:
-		return "RespondCompleted"
-	case saaspec.RespondFailed:
-		return "RespondFailed"
-	case saaspec.RespondCanceled:
-		return "RespondCanceled"
-	case saaspec.RequestCancel:
-		return "RequestCancel"
-	case saaspec.Terminate:
-		return "Terminate"
-	case saaspec.Pause:
-		return "Pause"
-	case saaspec.Unpause:
-		return "Unpause"
-	case saaspec.Reset:
-		return "Reset"
-	case saaspec.UpdateOptions:
-		return "UpdateOptions"
-	default:
-		return fmt.Sprintf("EventKind(%d)", k)
-	}
 }
