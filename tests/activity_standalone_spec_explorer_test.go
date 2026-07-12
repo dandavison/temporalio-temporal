@@ -150,18 +150,23 @@ func (ex *saaExplorer) explore(t *testing.T) {
 
 	// Coverage ledger. The only decided edges the explorer does not verify are worker RPCs reached
 	// on a path that never polled (no task token to send); surface those so the gap stays visible.
-	var unexercised []string
-	for c := range skippedCells {
-		if !verifiedCells[c] {
-			unexercised = append(unexercised, fmt.Sprintf("%s/%s", c.status, saaKindName(c.kind)))
-		}
-	}
-	sort.Strings(unexercised)
 	t.Logf("cfg %d: verified %d decided edges (%d distinct cells) across %d reachable states (depth<=%d)",
 		ex.cfgIdx, edges, len(verifiedCells), states, saaExplorerMaxDepth)
-	if len(unexercised) > 0 {
-		t.Logf("cfg %d: decided cells NOT exercised (worker RPC, no token on a never-polled path): %v",
-			ex.cfgIdx, unexercised)
+
+	// Coverage detail (the no-token-skip ledger) prints only under SAASPEC_COMPLETENESS, so the
+	// default output is just the spec violations.
+	if os.Getenv("SAASPEC_COMPLETENESS") != "" {
+		var unexercised []string
+		for c := range skippedCells {
+			if !verifiedCells[c] {
+				unexercised = append(unexercised, fmt.Sprintf("%s/%s", c.status, saaKindName(c.kind)))
+			}
+		}
+		sort.Strings(unexercised)
+		if len(unexercised) > 0 {
+			t.Logf("cfg %d: decided cells NOT exercised (worker RPC, no token on a never-polled path): %v",
+				ex.cfgIdx, unexercised)
+		}
 	}
 
 	ex.checkCompleteness(t, verifiedFine, skippedFine)
@@ -174,6 +179,11 @@ func (ex *saaExplorer) explore(t *testing.T) {
 // how the harness flags "you should have exercised this but didn't" (e.g. RespondFailed at the
 // retry-exhaustion boundary, which sits deeper than the bound).
 func (ex *saaExplorer) checkCompleteness(t *testing.T, verifiedFine, skippedFine map[string]bool) {
+	// Off by default so the explorer's failures are just spec violations. Set SAASPEC_COMPLETENESS=1
+	// to enable the type-(A) reachable-but-unexercised report.
+	if os.Getenv("SAASPEC_COMPLETENESS") == "" {
+		return
+	}
 	var gaps []string
 	for key, kind := range saaModelReachable(ex.cfg) {
 		if verifiedFine[key] || skippedFine[key] {

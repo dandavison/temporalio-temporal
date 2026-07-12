@@ -1,8 +1,7 @@
 # saaspec — model-based tests for standalone activities
 
 `saaspec` is the human-authored spec of intended SAA behavior. The harness that checks it against a
-real onebox server lives in `tests/` (`activity_standalone_spec_*_test.go`). Design and status:
-`docs/development/saa-model-tests-plan.md`.
+real onebox server lives in `tests/` (`activity_standalone_spec_*_test.go`).
 
 Run the tests (`-count=1` skips the test cache; `-v` shows the per-cell logs):
 
@@ -14,9 +13,11 @@ go test ./chasm/lib/activity/saaspec/...
 #   conformance.TestModelEdgesReachableInCode  — every model edge is reachable in the code's transitions
 
 # Explorer (onebox) — drives every decided edge against the server and checks state, reject kind,
-# heartbeat flags, Describe projection, and poll attempt; then a completeness check for
-# reachable-but-unexercised cells. Expected red today (WIP model + completeness gaps).
+# heartbeat flags, Describe projection, and poll attempt. Expected red today (WIP model).
 go test -tags test_dep -run 'TestStandaloneActivityTestSuite/TestSpecExplorer' -count=1 -v ./tests/
+
+# Same + the type-(A) completeness report (reachable-but-unexercised cells; off by default):
+SAASPEC_COMPLETENESS=1 go test -tags test_dep -run 'TestStandaloneActivityTestSuite/TestSpecExplorer' -count=1 -v ./tests/
 
 # Explorer focused on event kind(s) (SAASPEC_EVENT, comma-separated, case-insensitive) — reports only
 # those events; the full graph is still traversed. Poll,RespondCompleted is the happy path (green).
