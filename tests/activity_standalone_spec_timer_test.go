@@ -75,7 +75,7 @@ func (s *standaloneActivityTestSuite) TestSpecTimerProbes() {
 				cur = out.Next
 			}
 
-			out, decided, _ := saaEvalModel(p.cfg, cur, saaspec.Event{Kind: p.timer})
+			out, decided := saaEvalModel(p.cfg, cur, saaspec.Event{Kind: p.timer})
 			if !decided {
 				t.Skipf("Model has not decided %s from %s", saaKindName(p.timer), cur.Status)
 			}
