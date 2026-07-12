@@ -320,7 +320,7 @@ func (a *saaActor) applyPoll(cur saaspec.AbstractState, out saaspec.Outcome, fin
 	poll := saaspec.Event{Kind: saaspec.Poll}
 	expectTask := cur.Status == saaspec.Scheduled && out.Next.Status == saaspec.Started
 	if expectTask {
-		resp := a.pollForTask(10 * time.Second)
+		resp := a.pollForTask(t, 10*time.Second)
 		if resp == nil {
 			if final {
 				t.Errorf("%s: model expected STARTED but no task was dispatched within 10s (scheduled, never dispatched)\n%s",
@@ -333,7 +333,7 @@ func (a *saaActor) applyPoll(cur saaspec.AbstractState, out saaspec.Outcome, fin
 			t.Errorf("%s: dispatched task attempt number disagrees — server saw %d, model expected %d\n%s",
 				a.edge(poll, cur.Status), resp.GetAttempt(), out.Next.Count, a.pathLine())
 		}
-	} else if resp := a.pollForTask(300 * time.Millisecond); resp != nil {
+	} else if resp := a.pollForTask(t, 300*time.Millisecond); resp != nil {
 		if final {
 			t.Errorf("%s: model expected no advance but a task WAS dispatched\n%s",
 				a.edge(poll, cur.Status), a.pathLine())
@@ -519,7 +519,7 @@ func (a *saaActor) observed() (saaspec.AbstractState, error) {
 	return saaspec.Abstract(o), nil
 }
 
-func (a *saaActor) pollForTask(timeout time.Duration) *workflowservice.PollActivityTaskQueueResponse {
+func (a *saaActor) pollForTask(t require.TestingT, timeout time.Duration) *workflowservice.PollActivityTaskQueueResponse {
 	ctx, cancel := context.WithTimeout(a.ex.ctx, timeout)
 	defer cancel()
 	resp, err := a.ex.env.FrontendClient().PollActivityTaskQueue(ctx, &workflowservice.PollActivityTaskQueueRequest{
@@ -527,9 +527,26 @@ func (a *saaActor) pollForTask(timeout time.Duration) *workflowservice.PollActiv
 		TaskQueue: &taskqueuepb.TaskQueue{Name: a.taskQueue, Kind: enumspb.TASK_QUEUE_KIND_NORMAL},
 		Identity:  "worker",
 	})
-	// Any error (deadline, transient) means we did not get a task; the caller decides whether that
-	// is expected. The empty response at a server-side long-poll timeout is likewise "no task".
-	if err != nil || resp.GetActivityId() == "" {
+	if err != nil {
+		// Matching signals "waited, found nothing" with an empty response and a nil error (see
+		// matching_engine.go: errNoTasks -> emptyPoll...Response, returned just before the deadline via
+		// returnEmptyTaskTimeBudget). So a genuine no-task result never surfaces as an error. Any error
+		// here means the poll did not complete cleanly — the server rejected it (e.g.
+		// ErrContextTimeoutTooShort when the deadline is below MinLongPollTimeout=2s) or our deadline
+		// fired before matching returned its verdict. Treating that as "no task" is the vacuity trap
+		// (a paused activity could dispatch and we would never notice), so fail loudly. The one benign
+		// case is teardown: if the explorer's parent context is done, the poll errors through no fault
+		// of the server.
+		if a.ex.ctx.Err() != nil {
+			return nil
+		}
+		t.Errorf("saaExplorer harness bug: PollActivityTaskQueue did not complete cleanly (server rejected the poll, "+
+			"or the deadline fired before matching answered): %v\n"+
+			"  the poll timeout must be >= MinLongPollTimeout (2s); only an empty response with a nil error means \"no task\"", err)
+		return nil
+	}
+	// Empty response with a nil error is matching's authoritative "waited, no task available".
+	if resp.GetActivityId() == "" {
 		return nil
 	}
 	return resp
