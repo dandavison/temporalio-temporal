@@ -43,11 +43,7 @@ func Model(cfg Config, s AbstractState, e Event) Outcome {
 	}
 }
 
-// ---------------------------------------------------------------------------
-// Below, each modelFoo must return Outcome{Next: n}`), a `noop(s)`, or a `reject(s, kind)`. Where a
-// (status,event) truly cannot be reached, panic("unreachable: ...") so the static diff can confirm
-// the code agrees.
-// ---------------------------------------------------------------------------
+// Below, each modelFoo must return Outcome{Next: n}`), a `noop(s)`, or a `reject(s, kind)`.
 
 // Worker PollActivityTaskQueue advances a Scheduled attempt to Started.
 func modelPoll(_ Config, s AbstractState, _ Event) Outcome {
@@ -81,15 +77,16 @@ func modelRespondFailed(cfg Config, s AbstractState, e Event) Outcome {
 	retriesRemaining := cfg.MaxAttempts == 0 || s.Count < cfg.MaxAttempts
 	switch s.Status {
 	case Started, ResetRequested, PauseRequested:
-		// TODO(dan): It's more complicated than this. A reset schedule attempt 1 even if the error
-		// is non-retryable/retries exhausted.
-		retryTo := Scheduled
-		if s.Status == PauseRequested {
-			retryTo = Paused
-		}
 		n := s
-		if e.Retryable && retriesRemaining {
-			n.Status = retryTo
+		if s.Status == ResetRequested {
+			n.Status = Scheduled
+			n.Count = 1
+			n.Stamp++ // invalidate last attempt's tasks
+		} else if e.Retryable && retriesRemaining {
+			n.Status = Scheduled
+			if s.Status == PauseRequested {
+				n.Status = Paused
+			}
 			n.Count++
 			n.Stamp++ // invalidate last attempt's tasks
 		} else {
@@ -98,12 +95,11 @@ func modelRespondFailed(cfg Config, s AbstractState, e Event) Outcome {
 		}
 		return Outcome{Next: n}
 	case CancelRequested:
-		// TODO(dan): is this right? Worker must respondCanceled to transition to Canceled
 		n := s
 		n.Status = Failed
 		return Outcome{Next: n}
 	case Scheduled, Paused:
-		return reject(s, NotFound)
+		return reject(s, NotFound) // task token invalid
 	default:
 		panic("SAA model does not handle RespondFailed while in status " + s.Status.String())
 	}
