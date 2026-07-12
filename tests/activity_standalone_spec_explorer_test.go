@@ -21,6 +21,7 @@ import (
 	"fmt"
 	"os"
 	"sort"
+	"strings"
 	"testing"
 	"time"
 
@@ -104,6 +105,9 @@ func (ex *saaExplorer) explore(t *testing.T) {
 
 	verifiedCells := map[saaCell]bool{}
 	skippedCells := map[saaCell]bool{}
+	// Fingerprint-granularity ledger (includes attempt-count bucket etc.) for the completeness check.
+	verifiedFine := map[string]bool{}
+	skippedFine := map[string]bool{}
 
 	ex.verifyPath(t, nil) // the freshly started activity matches Initial(cfg)
 
@@ -121,10 +125,13 @@ func (ex *saaExplorer) explore(t *testing.T) {
 				res, reached := ex.verifyPath(t, path)
 				if reached {
 					c := saaCell{nd.state.Status, e.Kind}
+					key := saaCellKey(nd.state, e.Kind)
 					if res == saaSkippedNoToken {
 						skippedCells[c] = true
+						skippedFine[key] = true
 					} else {
 						verifiedCells[c] = true
+						verifiedFine[key] = true
 					}
 				}
 				if out.Reject != saaspec.NoError {
@@ -156,6 +163,40 @@ func (ex *saaExplorer) explore(t *testing.T) {
 		t.Logf("cfg %d: decided cells NOT exercised (worker RPC, no token on a never-polled path): %v",
 			ex.cfgIdx, unexercised)
 	}
+
+	ex.checkCompleteness(t, verifiedFine, skippedFine)
+}
+
+// checkCompleteness is the type-(A) coverage check: compare what this run verified/skipped against
+// the model's OWN reachable set, computed to fixpoint with no depth bound (server-free — it walks
+// Model() alone). Any (state, event) cell the model can reach but that this run neither verified nor
+// skipped is a coverage gap — normally because saaExplorerMaxDepth stopped the walk short. This is
+// how the harness flags "you should have exercised this but didn't" (e.g. RespondFailed at the
+// retry-exhaustion boundary, which sits deeper than the bound).
+func (ex *saaExplorer) checkCompleteness(t *testing.T, verifiedFine, skippedFine map[string]bool) {
+	var gaps []string
+	for key, kind := range saaModelReachable(ex.cfg) {
+		if verifiedFine[key] || skippedFine[key] {
+			continue
+		}
+		if len(ex.focus) > 0 && !ex.focus[kind] {
+			continue // focused run: only report gaps for the focused events
+		}
+		gaps = append(gaps, key)
+	}
+	if len(gaps) == 0 {
+		return
+	}
+	sort.Strings(gaps)
+	shown := gaps
+	suffix := ""
+	if len(shown) > 30 {
+		shown, suffix = shown[:30], fmt.Sprintf("\n  … and %d more", len(gaps)-30)
+	}
+	t.Errorf("cfg %d: %d model-reachable cell(s) not exercised (the model reaches them to fixpoint, "+
+		"but the explorer stopped at depth<=%d — raise the bound or add a config that reaches them shallower).\n"+
+		"  fingerprint = Status|count|stc>0|resetKeepPaused|resetHeartbeats|resetRestoreOpts|firstStarted|dispatchSet\n  %s%s",
+		ex.cfgIdx, len(gaps), saaExplorerMaxDepth, strings.Join(shown, "\n  "), suffix)
 }
 
 // verifyPath starts a fresh activity, replays the path (asserting only the final edge), and
@@ -544,6 +585,45 @@ func saaFingerprint(s saaspec.AbstractState) string {
 	return fmt.Sprintf("%v|%d|%v|%v|%v|%v|%v|%v",
 		s.Status, count, s.STCStamp > 0, s.ResetKeepPaused, s.ResetHeartbeats,
 		s.ResetRestoreOptions, s.FirstAttemptStarted, s.DispatchTimeSet)
+}
+
+// saaCellKey identifies a (state, event kind) cell at fingerprint granularity — the unit the
+// completeness check and the coverage ledger reason about.
+func saaCellKey(s saaspec.AbstractState, kind saaspec.EventKind) string {
+	return saaFingerprint(s) + " / " + saaKindName(kind)
+}
+
+// saaModelReachable computes, purely from Model() (no server), every (state, event) cell the model
+// can reach from Initial(cfg) by following decided non-reject edges to fixpoint. States are
+// deduplicated by fingerprint, so the walk is finite and terminates. This is the reference set the
+// explorer's verified/skipped cells are checked against, independent of any depth bound.
+func saaModelReachable(cfg saaspec.Config) map[string]saaspec.EventKind {
+	cells := map[string]saaspec.EventKind{}
+	start := saaspec.Initial(cfg)
+	visited := map[string]bool{saaFingerprint(start): true}
+	frontier := []saaspec.AbstractState{start}
+	for len(frontier) > 0 {
+		var next []saaspec.AbstractState
+		for _, s := range frontier {
+			for _, e := range saaCandidateEvents() {
+				out, decided := saaEvalModel(cfg, s, e)
+				if !decided {
+					continue
+				}
+				cells[saaCellKey(s, e.Kind)] = e.Kind
+				if out.Reject != saaspec.NoError {
+					continue // no state change; nothing new to reach
+				}
+				fp := saaFingerprint(out.Next)
+				if !visited[fp] {
+					visited[fp] = true
+					next = append(next, out.Next)
+				}
+			}
+		}
+		frontier = next
+	}
+	return cells
 }
 
 func saaCandidateEvents() []saaspec.Event {
