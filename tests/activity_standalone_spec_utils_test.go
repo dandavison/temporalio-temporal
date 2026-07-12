@@ -144,10 +144,11 @@ func (a *saaActor) flagsFailure(e saaspec.Event, src saaspec.Status, observed, e
 }
 
 // saaPathString renders the sequence of events that reached an edge, e.g.
-// "Start → Poll → RespondFailed[retryable=false]".
+// "Schedule → Poll → RespondFailed[retryable=false]". The origin is labeled Schedule
+// (the status the StartActivityExecution RPC lands in) to avoid confusion with the Started status.
 func saaPathString(path []saaspec.Event) string {
 	parts := make([]string, 0, len(path)+1)
-	parts = append(parts, "Start")
+	parts = append(parts, "Schedule")
 	for _, e := range path {
 		parts = append(parts, saaEventLabel(e))
 	}
