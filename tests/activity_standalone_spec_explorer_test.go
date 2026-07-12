@@ -35,6 +35,7 @@ import (
 	"go.temporal.io/server/chasm"
 	"go.temporal.io/server/chasm/lib/activity"
 	"go.temporal.io/server/chasm/lib/activity/saaspec"
+	"go.temporal.io/server/common"
 	"google.golang.org/protobuf/types/known/durationpb"
 	"google.golang.org/protobuf/types/known/fieldmaskpb"
 )
@@ -318,8 +319,9 @@ func (a *saaActor) verify(t require.TestingT, e saaspec.Event, cur saaspec.Abstr
 
 func (a *saaActor) applyPoll(cur saaspec.AbstractState, out saaspec.Outcome, final bool, t require.TestingT) saaApply {
 	poll := saaspec.Event{Kind: saaspec.Poll}
-	expectTask := cur.Status == saaspec.Scheduled && out.Next.Status == saaspec.Started
-	if expectTask {
+	switch {
+	case cur.Status == saaspec.Scheduled && out.Next.Status == saaspec.Started:
+		// Positive: a SCHEDULED activity must be dispatched to a worker.
 		resp := a.pollForTask(t, 10*time.Second)
 		if resp == nil {
 			if final {
@@ -333,13 +335,22 @@ func (a *saaActor) applyPoll(cur saaspec.AbstractState, out saaspec.Outcome, fin
 			t.Errorf("%s: dispatched task attempt number disagrees — server saw %d, model expected %d\n%s",
 				a.edge(poll, cur.Status), resp.GetAttempt(), out.Next.Count, a.pathLine())
 		}
-	} else if resp := a.pollForTask(t, 300*time.Millisecond); resp != nil {
-		if final {
-			t.Errorf("%s: model expected no advance but a task WAS dispatched\n%s",
-				a.edge(poll, cur.Status), a.pathLine())
+	case cur.Status == saaspec.Paused:
+		// Negative safety check: a PAUSED activity must not be dispatchable. Pause bumped the attempt
+		// stamp, invalidating the pending dispatch task, so matching must have nothing. This is the
+		// only status where a spurious dispatch is possible (worker-token and terminal statuses cannot
+		// dispatch), so it is the only place we pay the full long-poll wait. The timeout must exceed
+		// MinLongPollTimeout or the frontend rejects the poll without ever consulting matching.
+		if resp := a.pollForTask(t, saaNegativePollTimeout); resp != nil {
+			if final {
+				t.Errorf("%s: model expected no advance but a task WAS dispatched\n%s",
+					a.edge(poll, cur.Status), a.pathLine())
+			}
+			return saaMismatch
 		}
-		return saaMismatch
 	}
+	// For all other statuses a dispatch is structurally impossible, so we skip the poll entirely and
+	// rely on the ReadComponent state comparison below (which also catches the pause stamp bump).
 	obs, err := a.observed()
 	require.NoError(t, err)
 	if final {
@@ -518,6 +529,12 @@ func (a *saaActor) observed() (saaspec.AbstractState, error) {
 	}
 	return saaspec.Abstract(o), nil
 }
+
+// saaNegativePollTimeout is the deadline for the "must not dispatch" poll. It must exceed
+// common.MinLongPollTimeout, or the frontend rejects the poll before consulting matching (making the
+// check vacuous). A genuine empty long poll blocks for roughly this long, so we only pay it where a
+// spurious dispatch is actually possible (see applyPoll).
+const saaNegativePollTimeout = common.MinLongPollTimeout + time.Second
 
 func (a *saaActor) pollForTask(t require.TestingT, timeout time.Duration) *workflowservice.PollActivityTaskQueueResponse {
 	ctx, cancel := context.WithTimeout(a.ex.ctx, timeout)
