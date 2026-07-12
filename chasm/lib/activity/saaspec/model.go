@@ -254,25 +254,56 @@ func modelUnpause(cfg Config, s AbstractState, e Event) Outcome {
 	}
 }
 
+// ResetActivityExecution makes the activity behave as if it were starting its first attempt, except
+// for the ScheduleToCLose timer which keeps running. The reset is not applied until any current
+// attempt has ended.
 func modelReset(cfg Config, s AbstractState, e Event) Outcome {
-	// SCHEDULED / PAUSED (no worker): immediate reset to attempt 1 (Count=1, Stamp++,
-	//   discard backoff). Does STCStamp change? Is start_delay re-honored?
-	// STARTED / PAUSE_REQUESTED: deferred -> ResetRequested; which flags get set from
-	//   e.RestoreOriginal / e.ResetHeartbeat / e.KeepPaused?
-	// CANCEL_REQUESTED / RESET_REQUESTED: reject? terminal: reject.
 	_ = cfg
 	_ = e
 	switch s.Status {
 	case Scheduled:
+		n := s
+		n.Count = 1
+		n.Stamp++
+		if e.RestoreOriginal && cfg.HasScheduleToClose {
+			n.STCStamp++
+		}
+		n.DispatchTimeSet = true
+		return Outcome{Next: n}
 	case Paused:
-	case Started:
-	case PauseRequested:
+		n := s
+		n.Count = 1
+		n.Stamp++
+		if e.KeepPaused {
+			n.DispatchTimeSet = false
+		} else {
+			n.Status = Scheduled
+			n.DispatchTimeSet = true
+		}
+		if e.RestoreOriginal && cfg.HasScheduleToClose {
+			n.STCStamp++
+		}
+		return Outcome{Next: n}
+	case Started, PauseRequested:
+		n := s
+		n.Status = ResetRequested
+		if s.Status == PauseRequested {
+			// KeepPaused is stored if a Reset arrives during PauseRequested
+			n.ResetKeepPaused = e.KeepPaused
+		}
+		n.ResetHeartbeats = e.ResetHeartbeat
+		n.ResetRestoreOptions = e.RestoreOriginal
+		// Current attempt remains live and reset will be ignored if it completes; do not invalidate
+		// attempt tasks.
+		return Outcome{Next: n}
 	case CancelRequested:
+		return reject(s, FailedPrecondition)
 	case ResetRequested:
+		// TODO(dan): we might prefer to support idempotent repeat requests?
+		return reject(s, FailedPrecondition)
 	default:
 		panic("SAA model does not handle Reset while in status " + s.Status.String())
 	}
-	panic("SAA model does not handle Reset while in status " + s.Status.String())
 }
 
 func modelUpdateOptions(cfg Config, s AbstractState, e Event) Outcome {
