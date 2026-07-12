@@ -1,10 +1,12 @@
+// Order of precedence is Cancel > Reset > Pause
+// I.e. you can Cancel in {Reset,Pause}Requested, and you can Reset in PauseRequested.
 package saaspec
 
 // Initial is the state immediately after a successful StartActivityExecution.
 func Initial(cfg Config) AbstractState {
 	s := AbstractState{Status: Scheduled, Count: 1, Stamp: 1, DispatchTimeSet: true}
 	if cfg.HasScheduleToClose {
-		s.STCStamp = 1 // TransitionScheduled bumps schedule_to_close_stamp when STC is set
+		s.STCStamp = 1 // bumped by TransitionScheduled when STC is set
 	}
 	return s
 }
@@ -12,10 +14,6 @@ func Initial(cfg Config) AbstractState {
 func noop(s AbstractState) Outcome                { return Outcome{Next: s, Reject: NoError} }
 func reject(s AbstractState, k ErrorKind) Outcome { return Outcome{Next: s, Reject: k} }
 
-// Model is the spec. It is TOTAL: every (status, event) must be handled. Making it total
-// is the point — it forces every open corner of the intended behavior to be resolved.
-// Unfilled cases panic with "SAA model does not handle ..."; fill them in, following the two worked
-// examples below (modelPoll and modelPause).
 func Model(cfg Config, s AbstractState, e Event) Outcome {
 	switch e.Kind {
 	case Poll:
@@ -46,8 +44,7 @@ func Model(cfg Config, s AbstractState, e Event) Outcome {
 }
 
 // ---------------------------------------------------------------------------
-// Below, each must handle EVERY status (use a `switch s.Status`), returning either a mutated copy
-// (`n := s; n.X = ...; return Outcome{Next: n}`), a `noop(s)`, or a `reject(s, kind)`. Where a
+// Below, each modelFoo must return Outcome{Next: n}`), a `noop(s)`, or a `reject(s, kind)`. Where a
 // (status,event) truly cannot be reached, panic("unreachable: ...") so the static diff can confirm
 // the code agrees.
 // ---------------------------------------------------------------------------
@@ -65,10 +62,8 @@ func modelPoll(_ Config, s AbstractState, _ Event) Outcome {
 }
 
 // Worker RespondActivityTaskCompleted with task token completes an in-progress attempt.
-func modelRespondCompleted(cfg Config, s AbstractState, e Event) Outcome {
+func modelRespondCompleted(_ Config, s AbstractState, _ Event) Outcome {
 	// TODO(dan) Does any deferred flag need clearing on completion?
-	_ = cfg
-	_ = e
 	switch s.Status {
 	case Started, PauseRequested, CancelRequested, ResetRequested:
 		n := s
@@ -85,38 +80,23 @@ func modelRespondCompleted(cfg Config, s AbstractState, e Event) Outcome {
 func modelRespondFailed(cfg Config, s AbstractState, e Event) Outcome {
 	retriesRemaining := cfg.MaxAttempts == 0 || s.Count < cfg.MaxAttempts
 	switch s.Status {
-	case Started, ResetRequested:
+	case Started, ResetRequested, PauseRequested:
 		// TODO(dan): It's more complicated than this. A reset schedule attempt 1 even if the error
 		// is non-retryable/retries exhausted.
-		switch {
-		case e.Retryable && retriesRemaining:
-			// retry
-			n := s
-			n.Status = Scheduled
+		retryTo := Scheduled
+		if s.Status == PauseRequested {
+			retryTo = Paused
+		}
+		n := s
+		if e.Retryable && retriesRemaining {
+			n.Status = retryTo
 			n.Count++
 			n.Stamp++ // invalidate last attempt's tasks
-			return Outcome{Next: n}
-		default:
+		} else {
 			// no retry: terminal failure
-			n := s
 			n.Status = Failed
-			return Outcome{Next: n}
 		}
-	case PauseRequested:
-		switch {
-		case e.Retryable && retriesRemaining:
-			// pause before retry
-			n := s
-			n.Status = Paused
-			n.Count++
-			n.Stamp++ // invalidate last attempt's tasks
-			return Outcome{Next: n}
-		default:
-			// no retry: terminal failure
-			n := s
-			n.Status = Failed
-			return Outcome{Next: n}
-		}
+		return Outcome{Next: n}
 	case CancelRequested:
 		// TODO(dan): is this right? Worker must respondCanceled to transition to Canceled
 		n := s
@@ -171,10 +151,8 @@ func modelRespondCanceled(_ Config, s AbstractState, _ Event) Outcome {
 }
 
 // TerminateActivityExecution terminates a non-closed
-func modelTerminate(cfg Config, s AbstractState, e Event) Outcome {
+func modelTerminate(_ Config, s AbstractState, _ Event) Outcome {
 	// Terminates from any non-terminal status -> Terminated; idempotent on repeat request id.
-	_ = cfg
-	_ = e
 	switch s.Status {
 	case Scheduled, Paused, Started, PauseRequested, CancelRequested, ResetRequested:
 		n := s
@@ -217,19 +195,16 @@ func modelPause(_ Config, s AbstractState, e Event) Outcome {
 			return noop(s) // requestID-based idempotency
 		}
 		return reject(s, FailedPrecondition) // "already paused"
-	case CancelRequested:
-		return reject(s, FailedPrecondition) // earlier cancel takes precedence
-	case ResetRequested:
-		return reject(s, FailedPrecondition) // earlier reset takes precedence
+	case CancelRequested, ResetRequested:
+		// Cancel > Reset > Pause
+		return reject(s, FailedPrecondition)
 	default:
 		panic("SAA model does not handle Pause while in status " + s.Status.String())
 	}
 }
 
 // UnpauseActivityExecution
-func modelUnpause(cfg Config, s AbstractState, e Event) Outcome {
-	_ = cfg
-	_ = e
+func modelUnpause(_ Config, s AbstractState, e Event) Outcome {
 	switch s.Status {
 	case Paused:
 		n := s
@@ -257,11 +232,7 @@ func modelUnpause(cfg Config, s AbstractState, e Event) Outcome {
 // ResetActivityExecution makes the activity behave as if it were starting its first attempt, except
 // for the ScheduleToCLose timer which keeps running. The reset is not applied until any current
 // attempt has ended.
-// Order of precedence is Cancel > Reset > Pause
-// I.e. you can Cancel in {Reset,Pause}Requested, and you can Reset in PauseRequested.
 func modelReset(cfg Config, s AbstractState, e Event) Outcome {
-	_ = cfg
-	_ = e
 	switch s.Status {
 	case Scheduled, Paused:
 		n := s
@@ -297,21 +268,18 @@ func modelReset(cfg Config, s AbstractState, e Event) Outcome {
 	}
 }
 
-func modelUpdateOptions(cfg Config, s AbstractState, e Event) Outcome {
-	// Rejected only in terminal/unspecified statuses. Otherwise bumps Stamp (and reissues
-	// STC -> STCStamp++ when STC is set). RestoreOriginal vs field-mask merge. Does it
-	// re-dispatch when SCHEDULED?
-	_ = cfg
-	_ = e
+// UpdateActivityExecutionOptions
+func modelUpdateOptions(cfg Config, s AbstractState, _ Event) Outcome {
+	// TODO(dan): RestoreOriginal, field-mask merge. Does it re-dispatch when SCHEDULED?
 	switch s.Status {
-	case Scheduled:
-	case Paused:
-	case Started:
-	case PauseRequested:
-	case CancelRequested:
-	case ResetRequested:
+	case Scheduled, Paused, Started, PauseRequested, CancelRequested, ResetRequested:
+		n := s
+		n.Stamp++
+		if cfg.HasScheduleToClose {
+			n.STCStamp++
+		}
+		return Outcome{Next: n}
 	default:
 		panic("SAA model does not handle UpdateOptions while in status " + s.Status.String())
 	}
-	panic("SAA model does not handle UpdateOptions while in status " + s.Status.String())
 }
