@@ -86,8 +86,7 @@ func srcState(cfg saaspec.Config, st saaspec.Status, keepPaused bool, count int3
 type verdict int
 
 const (
-	decided     verdict = iota // Model returned a complete Outcome
-	incomplete                 // Model returned an empty Outcome (Next unset): a placeholder, not finished
+	decided     verdict = iota // Model returned an Outcome
 	todo                       // Model panicked with TODO(spec): still to be written
 	unreachable                // Model panicked with "unreachable": author asserts this can't happen
 	unexpected                 // Model panicked with something else
@@ -108,14 +107,7 @@ func evalModel(cfg saaspec.Config, s saaspec.AbstractState, e saaspec.Event) (ou
 		}
 	}()
 	out = saaspec.Model(cfg, s, e)
-	// An accepted Outcome whose Next.Status is Unspecified, when the input was not itself
-	// Unspecified, is an empty Outcome{} — a branch that returned a placeholder without setting
-	// Next. Nothing legitimately transitions into Unspecified, so treat this as unfinished.
-	if out.Reject == saaspec.NoError && out.Next.Status == saaspec.Unspecified && s.Status != saaspec.Unspecified {
-		v = incomplete
-	} else {
-		v = decided
-	}
+	v = decided
 	return
 }
 
@@ -131,9 +123,8 @@ type cell struct {
 
 func TestModelDecisionCoverage(t *testing.T) {
 	todoCells := map[cell]bool{}
-	incompleteCells := map[cell]bool{}
 	decidedCells := map[cell]bool{}
-	var counts [5]int
+	var counts [4]int
 
 	for _, cfg := range cfgs {
 		for _, st := range allSpecStatuses {
@@ -147,8 +138,6 @@ func TestModelDecisionCoverage(t *testing.T) {
 							switch v {
 							case decided, unreachable:
 								decidedCells[c] = true
-							case incomplete:
-								incompleteCells[c] = true
 							case todo:
 								todoCells[c] = true
 							case unexpected:
@@ -162,15 +151,10 @@ func TestModelDecisionCoverage(t *testing.T) {
 		}
 	}
 
-	t.Logf("cells evaluated: decided=%d incomplete=%d todo=%d unreachable=%d unexpected=%d",
-		counts[decided], counts[incomplete], counts[todo], counts[unreachable], counts[unexpected])
-	t.Logf("distinct (status,event): decided=%d incomplete=%d still-TODO=%d",
-		len(decidedCells), len(incompleteCells), len(todoCells))
-
+	t.Logf("cells evaluated: decided=%d todo=%d unreachable=%d unexpected=%d",
+		counts[decided], counts[todo], counts[unreachable], counts[unexpected])
+	t.Logf("distinct (status,event): decided=%d still-TODO=%d", len(decidedCells), len(todoCells))
 	t.Logf("still to specify (status, event):\n%s", formatCells(todoCells))
-	if len(incompleteCells) > 0 {
-		t.Logf("returns an empty Outcome (finish these) (status, event):\n%s", formatCells(incompleteCells))
-	}
 }
 
 func formatCells(cells map[cell]bool) string {

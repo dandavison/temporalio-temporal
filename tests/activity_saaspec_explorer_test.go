@@ -80,7 +80,7 @@ func saaParseFocus(env string) map[saaspec.EventKind]bool {
 		return nil
 	}
 	want := map[string]bool{}
-	for _, tok := range strings.Split(env, ",") {
+	for tok := range strings.SplitSeq(env, ",") {
 		want[strings.ToLower(strings.TrimSpace(tok))] = true
 	}
 	focus := map[saaspec.EventKind]bool{}
@@ -598,8 +598,9 @@ func saaFailure(retryable bool) *failurepb.Failure {
 	}
 }
 
-// saaEvalModel calls Model, treating TODO panics and empty Outcomes as "undecided" so the
-// explorer skips them.
+// saaEvalModel calls Model, treating a TODO(spec)/unreachable panic as "undecided" so the explorer
+// skips that cell. Anything else Model returns — including an accidental empty Outcome{} — is a real
+// decision and is checked; an empty Outcome surfaces as a mismatch against the server.
 func saaEvalModel(cfg saaspec.Config, s saaspec.AbstractState, e saaspec.Event) (out saaspec.Outcome, decided bool) {
 	defer func() {
 		if r := recover(); r != nil {
@@ -607,9 +608,6 @@ func saaEvalModel(cfg saaspec.Config, s saaspec.AbstractState, e saaspec.Event) 
 		}
 	}()
 	out = saaspec.Model(cfg, s, e)
-	if out.Reject == saaspec.NoError && out.Next.Status == saaspec.Unspecified && s.Status != saaspec.Unspecified {
-		return out, false // empty Outcome placeholder
-	}
 	return out, true
 }
 
