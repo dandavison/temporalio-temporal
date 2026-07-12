@@ -257,24 +257,17 @@ func modelUnpause(cfg Config, s AbstractState, e Event) Outcome {
 // ResetActivityExecution makes the activity behave as if it were starting its first attempt, except
 // for the ScheduleToCLose timer which keeps running. The reset is not applied until any current
 // attempt has ended.
+// Order of precedence is Cancel > Reset > Pause
+// I.e. you can Cancel in {Reset,Pause}Requested, and you can Reset in PauseRequested.
 func modelReset(cfg Config, s AbstractState, e Event) Outcome {
 	_ = cfg
 	_ = e
 	switch s.Status {
-	case Scheduled:
+	case Scheduled, Paused:
 		n := s
 		n.Count = 1
 		n.Stamp++
-		if e.RestoreOriginal && cfg.HasScheduleToClose {
-			n.STCStamp++
-		}
-		n.DispatchTimeSet = true
-		return Outcome{Next: n}
-	case Paused:
-		n := s
-		n.Count = 1
-		n.Stamp++
-		if e.KeepPaused {
+		if s.Status == Paused && e.KeepPaused {
 			n.DispatchTimeSet = false
 		} else {
 			n.Status = Scheduled
@@ -296,10 +289,8 @@ func modelReset(cfg Config, s AbstractState, e Event) Outcome {
 		// Current attempt remains live and reset will be ignored if it completes; do not invalidate
 		// attempt tasks.
 		return Outcome{Next: n}
-	case CancelRequested:
-		return reject(s, FailedPrecondition)
-	case ResetRequested:
-		// TODO(dan): we might prefer to support idempotent repeat requests?
+	case CancelRequested, ResetRequested:
+		// TODO(dan): should we support repeat reset requests?
 		return reject(s, FailedPrecondition)
 	default:
 		panic("SAA model does not handle Reset while in status " + s.Status.String())
