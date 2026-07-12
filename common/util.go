@@ -646,7 +646,7 @@ func ValidateLongPollContextTimeout(
 	timeout := time.Until(deadline)
 	if timeout < MinLongPollTimeout {
 		err := ErrContextTimeoutTooShort
-		logger.Error("Context timeout is too short for long poll API.",
+		logger.Warn("Context timeout is too short for long poll API.",
 			tag.WorkflowHandlerName(handlerName), tag.Error(err), tag.WorkflowPollContextTimeout(timeout))
 		return err
 	}
