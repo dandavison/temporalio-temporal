@@ -91,6 +91,15 @@ type saaExplorer struct {
 	// the timer test can trigger it. The explorer leaves it at its zero value (Poll), so all
 	// timeouts are long and no timer fires during RPC exploration.
 	shortTimer saaspec.EventKind
+	// negativePollDone records whether the "a PAUSED activity must not dispatch" long-poll has run
+	// yet for this config. The check is state-independent (pause bumps the attempt stamp, killing the
+	// pending dispatch), so paying the full MinLongPollTimeout wait once per config suffices; every
+	// other PAUSED edge relies on the per-edge ReadComponent comparison, which re-checks the stamp.
+	negativePollDone bool
+
+	// TEMP instrumentation: where does the wall-clock go?
+	posPollCount, negPollCount, startCount, readCount int
+	posPollTime, negPollTime, startTime, readTime     time.Duration
 }
 
 // explore does a breadth-first walk of the model's reachable states, verifying every decided
@@ -153,6 +162,11 @@ func (ex *saaExplorer) explore(t *testing.T) {
 	// on a path that never polled (no task token to send); surface those so the gap stays visible.
 	t.Logf("cfg %d: verified %d decided edges (%d distinct cells) across %d reachable states (depth<=%d)",
 		ex.cfgIdx, edges, len(verifiedCells), states, saaExplorerMaxDepth)
+	t.Logf("cfg %d TIMING: posPoll %d calls / %s | negPoll %d calls / %s | start %d calls / %s | read %d calls / %s",
+		ex.cfgIdx, ex.posPollCount, ex.posPollTime.Round(time.Millisecond),
+		ex.negPollCount, ex.negPollTime.Round(time.Millisecond),
+		ex.startCount, ex.startTime.Round(time.Millisecond),
+		ex.readCount, ex.readTime.Round(time.Millisecond))
 
 	// Coverage detail (the no-token-skip ledger) prints only under SAASPEC_COMPLETENESS, so the
 	// default output is just the spec violations.
@@ -322,7 +336,10 @@ func (a *saaActor) applyPoll(cur saaspec.AbstractState, out saaspec.Outcome, fin
 	switch {
 	case cur.Status == saaspec.Scheduled && out.Next.Status == saaspec.Started:
 		// Positive: a SCHEDULED activity must be dispatched to a worker.
+		posStart := time.Now()
 		resp := a.pollForTask(t, 10*time.Second)
+		a.ex.posPollCount++
+		a.ex.posPollTime += time.Since(posStart)
 		if resp == nil {
 			if final {
 				t.Errorf("%s: model expected STARTED but no task was dispatched within 10s (scheduled, never dispatched)\n%s",
@@ -335,13 +352,20 @@ func (a *saaActor) applyPoll(cur saaspec.AbstractState, out saaspec.Outcome, fin
 			t.Errorf("%s: dispatched task attempt number disagrees — server saw %d, model expected %d\n%s",
 				a.edge(poll, cur.Status), resp.GetAttempt(), out.Next.Count, a.pathLine())
 		}
-	case cur.Status == saaspec.Paused:
+	case cur.Status == saaspec.Paused && !a.ex.negativePollDone:
 		// Negative safety check: a PAUSED activity must not be dispatchable. Pause bumped the attempt
 		// stamp, invalidating the pending dispatch task, so matching must have nothing. This is the
 		// only status where a spurious dispatch is possible (worker-token and terminal statuses cannot
-		// dispatch), so it is the only place we pay the full long-poll wait. The timeout must exceed
-		// MinLongPollTimeout or the frontend rejects the poll without ever consulting matching.
-		if resp := a.pollForTask(t, saaNegativePollTimeout); resp != nil {
+		// dispatch). The timeout must exceed MinLongPollTimeout or the frontend rejects the poll
+		// without ever consulting matching, so the poll blocks for the full wait; we run it once per
+		// config (the invariant does not depend on count/flags, and the ReadComponent comparison below
+		// re-checks the stamp bump on every PAUSED edge) rather than paying that wait per PAUSED state.
+		a.ex.negativePollDone = true
+		negStart := time.Now()
+		resp := a.pollForTask(t, saaNegativePollTimeout)
+		a.ex.negPollCount++
+		a.ex.negPollTime += time.Since(negStart)
+		if resp != nil {
 			if final {
 				t.Errorf("%s: model expected no advance but a task WAS dispatched\n%s",
 					a.edge(poll, cur.Status), a.pathLine())
@@ -478,7 +502,10 @@ type saaActor struct {
 func (ex *saaExplorer) start(t require.TestingT) *saaActor {
 	ex.counter++
 	id := fmt.Sprintf("saaexp-%d-%d", ex.cfgIdx, ex.counter)
+	startT := time.Now()
 	resp, err := ex.env.FrontendClient().StartActivityExecution(ex.ctx, ex.startRequest(id, id))
+	ex.startCount++
+	ex.startTime += time.Since(startT)
 	require.NoError(t, err)
 	return &saaActor{ex: ex, activityID: id, taskQueue: id, runID: resp.RunId, reqIDs: map[saaspec.EventKind]string{}}
 }
@@ -523,6 +550,8 @@ func (ex *saaExplorer) startRequest(activityID, taskQueue string) *workflowservi
 }
 
 func (a *saaActor) observed() (saaspec.AbstractState, error) {
+	readT := time.Now()
+	defer func() { a.ex.readCount++; a.ex.readTime += time.Since(readT) }()
 	o, err := saaReadObserved(a.ex.chasmCtx, a.ex.nsID, a.activityID, a.runID)
 	if err != nil {
 		return saaspec.AbstractState{}, err
