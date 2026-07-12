@@ -76,16 +76,31 @@ func modelRespondCompleted(_ Config, s AbstractState, _ Event) Outcome {
 func modelRespondFailed(cfg Config, s AbstractState, e Event) Outcome {
 	retriesRemaining := cfg.MaxAttempts == 0 || s.Count < cfg.MaxAttempts
 	switch s.Status {
-	case Started, ResetRequested, PauseRequested:
+	case ResetRequested:
+		// Deferred reset: consume the flags set at reset time and apply their effects.
 		n := s
-		if s.Status == ResetRequested {
+		n.Count = 1
+		n.Stamp++ // invalidate last attempt's tasks
+		if s.ResetRestoreOptions && cfg.HasScheduleToClose {
+			n.STCStamp++ // restoring options reissues the schedule-to-close task
+		}
+		if s.ResetKeepPaused {
+			n.Status = Paused
+			n.DispatchTimeSet = false // no dispatch task while paused
+		} else {
 			n.Status = Scheduled
-			n.Count = 1
-			n.Stamp++ // invalidate last attempt's tasks
-		} else if e.Retryable && retriesRemaining {
+			n.DispatchTimeSet = true
+		}
+		n.ResetKeepPaused = false
+		n.ResetRestoreOptions = false
+		n.ResetHeartbeats = false
+		return Outcome{Next: n}
+	case Started, PauseRequested:
+		n := s
+		if e.Retryable && retriesRemaining {
 			n.Status = Scheduled
 			if s.Status == PauseRequested {
-				n.Status = Paused
+				n.Status = Paused // pause takes effect on the retry
 			}
 			n.Count++
 			n.Stamp++ // invalidate last attempt's tasks
