@@ -140,18 +140,19 @@ func modelRespondFailed(cfg Config, s AbstractState, e Event) Outcome {
 	// On a retry, Count++ and Stamp++ (a fresh attempt); on the reset paths Count resets to 1.
 	_ = cfg
 	_ = e
+	retriesRemaining := cfg.MaxAttempts == 0 || s.Count < cfg.MaxAttempts
 	switch s.Status {
 	case Started, PauseRequested, ResetRequested:
 		// TODO(dan): It's more complicated than this. A reset schedule attempt 1 even if the error
 		// is non-retryable/retries exhausted. And PauseRequested -> Paused. But let's leave it for
 		// now and check that the harness catches it.
 		switch {
-		case e.Retryable && s.Count < cfg.MaxAttempts:
+		case e.Retryable && retriesRemaining:
 			// retry
 			n := s
 			n.Status = Scheduled
 			n.Count++
-			// TODO(dan) deliberately missing stamp bump
+			n.Stamp++
 			return Outcome{Next: n}
 		default:
 			// no retry
