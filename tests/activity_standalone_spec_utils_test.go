@@ -158,23 +158,23 @@ func saaPathString(path []saaspec.Event) string {
 // saaEventLabel names an event and appends the flags that affect its outcome.
 func saaEventLabel(e saaspec.Event) string {
 	var flags []string
+	add := func(cond bool, name string) {
+		if cond {
+			flags = append(flags, name)
+		}
+	}
 	switch e.Kind {
 	case saaspec.RespondFailed:
 		flags = append(flags, fmt.Sprintf("retryable=%v", e.Retryable))
 	case saaspec.Reset:
-		flags = append(flags, fmt.Sprintf("keepPaused=%v", e.KeepPaused), fmt.Sprintf("restoreOriginal=%v", e.RestoreOriginal))
-		if e.ResetHeartbeat {
-			flags = append(flags, "resetHeartbeat=true")
-		}
+		add(e.KeepPaused, "keepPaused")
+		add(e.RestoreOriginal, "restoreOriginal")
+		add(e.ResetHeartbeat, "resetHeartbeat")
 	case saaspec.Unpause:
-		flags = append(flags, fmt.Sprintf("resetAttempts=%v", e.ResetAttempts))
-		if e.ResetHeartbeat {
-			flags = append(flags, "resetHeartbeat=true")
-		}
+		add(e.ResetAttempts, "resetAttempts")
+		add(e.ResetHeartbeat, "resetHeartbeat")
 	case saaspec.Pause, saaspec.Terminate, saaspec.RequestCancel:
-		if e.SameRequestID {
-			flags = append(flags, "sameRequestID=true")
-		}
+		add(e.SameRequestID, "sameRequestID")
 	}
 	if len(flags) == 0 {
 		return saaKindName(e.Kind)
