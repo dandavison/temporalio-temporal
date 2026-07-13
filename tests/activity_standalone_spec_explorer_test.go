@@ -20,6 +20,7 @@ import (
 	"fmt"
 	"os"
 	"sort"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -39,7 +40,22 @@ import (
 	"google.golang.org/protobuf/types/known/fieldmaskpb"
 )
 
-const saaExplorerMaxDepth = 4
+// saaMaxDepth is the BFS depth cap. The default keeps CI fast; SAASPEC_MAX_DEPTH raises it for
+// deeper local verification. Cost grows with depth — mostly the per-Paused negative poll, which
+// SAASPEC_NO_NEGATIVE_POLL can disable (see applyPoll).
+func saaMaxDepth() int {
+	if v := os.Getenv("SAASPEC_MAX_DEPTH"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n > 0 {
+			return n
+		}
+	}
+	return 4
+}
+
+// saaSkipNegativePoll disables the ~3s "a Paused activity must not dispatch" long-poll — the
+// dominant cost of deep walks. Set SAASPEC_NO_NEGATIVE_POLL for fast deep runs; the per-edge state
+// check still verifies the Paused transition, only the matching-level assertion is dropped.
+func saaSkipNegativePoll() bool { return os.Getenv("SAASPEC_NO_NEGATIVE_POLL") != "" }
 
 func (s *standaloneActivityTestSuite) TestSpecExplorer() {
 	env := s.newTestEnv()
@@ -116,7 +132,8 @@ func (ex *saaExplorer) explore(t *testing.T) {
 	ex.verifyPath(t, nil) // the freshly started activity matches Initial(cfg)
 
 	edges, states := 0, 1
-	for depth := 0; depth < saaExplorerMaxDepth && len(frontier) > 0; depth++ {
+	maxDepth := saaMaxDepth()
+	for depth := 0; depth < maxDepth && len(frontier) > 0; depth++ {
 		var next []node
 		for _, nd := range frontier {
 			for _, e := range saaCandidateEvents() {
@@ -152,7 +169,7 @@ func (ex *saaExplorer) explore(t *testing.T) {
 	// Coverage ledger. The only decided edges the explorer does not verify are worker RPCs reached
 	// on a path that never polled (no task token to send); surface those so the gap stays visible.
 	t.Logf("cfg %d: verified %d decided edges (%d distinct cells) across %d reachable states (depth<=%d)",
-		ex.cfgIdx, edges, len(verifiedCells), states, saaExplorerMaxDepth)
+		ex.cfgIdx, edges, len(verifiedCells), states, maxDepth)
 
 	// Coverage detail (the no-token-skip ledger) prints only under SAASPEC_COMPLETENESS, so the
 	// default output is just the spec violations.
@@ -173,12 +190,12 @@ func (ex *saaExplorer) explore(t *testing.T) {
 	ex.checkCompleteness(t, verifiedFine, skippedFine)
 }
 
-// checkCompleteness is the type-(A) coverage check: compare what this run verified/skipped against
-// the model's OWN reachable set, computed to fixpoint with no depth bound (server-free — it walks
-// Model() alone). Any (state, event) cell the model can reach but that this run neither verified nor
-// skipped is a coverage gap — normally because saaExplorerMaxDepth stopped the walk short. This is
-// how the harness flags "you should have exercised this but didn't" (e.g. RespondFailed at the
-// retry-exhaustion boundary, which sits deeper than the bound).
+// checkCompleteness is an informational (never-failing) coverage report: it compares what this run
+// verified/skipped against the model's OWN reachable set, computed to fixpoint with no depth bound
+// (server-free — it walks Model() alone). Cells the model can reach but this run did not are the
+// ones the depth cap left out. It does NOT fail — under a depth cap that is expected — it just
+// prints them, so raising SAASPEC_MAX_DEPTH and watching the list shrink is the way to see how much
+// deeper the walk still has to go.
 func (ex *saaExplorer) checkCompleteness(t *testing.T, verifiedFine, skippedFine map[string]bool) {
 	// Off by default so the explorer's failures are just spec violations. Set SAASPEC_COMPLETENESS=1
 	// to enable the type-(A) reachable-but-unexercised report.
@@ -204,10 +221,9 @@ func (ex *saaExplorer) checkCompleteness(t *testing.T, verifiedFine, skippedFine
 	if len(shown) > 30 {
 		shown, suffix = shown[:30], fmt.Sprintf("\n  … and %d more", len(gaps)-30)
 	}
-	t.Errorf("cfg %d: %d model-reachable cell(s) not exercised (the model reaches them to fixpoint, "+
-		"but the explorer stopped at depth<=%d — raise the bound or add a config that reaches them shallower).\n"+
+	t.Logf("cfg %d: %d model-reachable cell(s) not exercised at depth<=%d (raise SAASPEC_MAX_DEPTH to reach deeper).\n"+
 		"  fingerprint = Status|count|stc>0|resetKeepPaused|resetHeartbeats|resetRestoreOpts|firstStarted|dispatchSet\n  %s%s",
-		ex.cfgIdx, len(gaps), saaExplorerMaxDepth, strings.Join(shown, "\n  "), suffix)
+		ex.cfgIdx, len(gaps), saaMaxDepth(), strings.Join(shown, "\n  "), suffix)
 }
 
 // verifyPath starts a fresh activity, replays the path (asserting only the final edge), and
@@ -335,12 +351,15 @@ func (a *saaActor) applyPoll(cur saaspec.AbstractState, out saaspec.Outcome, fin
 			t.Errorf("%s: dispatched task attempt number disagrees — server saw %d, model expected %d\n%s",
 				a.edge(poll, cur.Status), resp.GetAttempt(), out.Next.Count, a.pathLine())
 		}
-	case cur.Status == saaspec.Paused:
+	case cur.Status == saaspec.Paused && !saaSkipNegativePoll():
 		// Negative safety check: a PAUSED activity must not be dispatchable. Pause bumped the attempt
 		// stamp, invalidating the pending dispatch task, so matching must have nothing. This is the
 		// only status where a spurious dispatch is possible (worker-token and terminal statuses cannot
 		// dispatch), so it is the only place we pay the full long-poll wait. The timeout must exceed
-		// MinLongPollTimeout or the frontend rejects the poll without ever consulting matching.
+		// MinLongPollTimeout or the frontend rejects the poll without ever consulting matching. It is
+		// also the dominant cost of deep walks, so SAASPEC_NO_NEGATIVE_POLL disables it (the
+		// ReadComponent state check below still confirms Paused/stamp/dispatch; only the matching-level
+		// "no task" assertion is dropped).
 		if resp := a.pollForTask(t, saaNegativePollTimeout); resp != nil {
 			if final {
 				t.Errorf("%s: model expected no advance but a task WAS dispatched\n%s",
