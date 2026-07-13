@@ -137,7 +137,7 @@ func requestCancel(_ Config, s AbstractState, e Event) Outcome {
 		n.Status = Canceled
 		// TODO(dan) stamp bump?
 		return Outcome{Next: n}
-	case Started, PauseRequested:
+	case Started, PauseRequested, ResetRequested:
 		n := s
 		n.Status = CancelRequested
 		return Outcome{Next: n}
@@ -146,8 +146,6 @@ func requestCancel(_ Config, s AbstractState, e Event) Outcome {
 			return noop(s) // requestID-based idempotency
 		}
 		return reject(s, FailedPrecondition) // TODO(dan): should we consider making is idempotent success even when requestID differs?
-	case ResetRequested:
-		panic("TODO(spec) how do we handle Reset while in CancelRequested?")
 	default:
 		panic("SAA model does not handle RequestCancel while in status " + s.Status.String())
 	}
