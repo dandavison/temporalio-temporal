@@ -275,14 +275,14 @@ func saaKindName(k saaspec.EventKind) string {
 		return "Reset"
 	case saaspec.UpdateOptions:
 		return "UpdateOptions"
-	case saaspec.ScheduleToStartFires:
-		return "ScheduleToStartFires"
-	case saaspec.ScheduleToCloseFires:
-		return "ScheduleToCloseFires"
-	case saaspec.StartToCloseFires:
-		return "StartToCloseFires"
-	case saaspec.HeartbeatFires:
-		return "HeartbeatFires"
+	case saaspec.ScheduleToStartElapses:
+		return "ScheduleToStartElapses"
+	case saaspec.ScheduleToCloseElapses:
+		return "ScheduleToCloseElapses"
+	case saaspec.StartToCloseElapses:
+		return "StartToCloseElapses"
+	case saaspec.HeartbeatElapses:
+		return "HeartbeatElapses"
 	case saaspec.StartDelayElapses:
 		return "StartDelayElapses"
 	case saaspec.BackoffElapses:

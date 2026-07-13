@@ -1,7 +1,7 @@
 package tests
 
 // Timeout traces for the standalone-activity behavior spec. A timeout firing is modeled as an event
-// (saaspec.ScheduleToCloseFires, etc.); this harness triggers it by configuring the matching timeout
+// (saaspec.ScheduleToCloseElapses, etc.); this harness triggers it by configuring the matching timeout
 // short and waiting. Each is a trace — RPCs to reach a source state, then the timeout event — driven
 // by driveTrace, so the resulting state is checked against Model() exactly like every other event.
 // The harness never encodes the intended outcome; Model() does. Model must handle every timeout event;
@@ -33,16 +33,16 @@ const saaLongStartDelay = time.Hour
 
 // To read these: `timeout` is the timeout that fires first; `path` is the events leading up to it.
 var saaTimeoutTraces = []saaTimeoutTrace{
-	{name: "schedule-to-close/elapses-while-paused", timeout: saaspec.ScheduleToCloseFires, path: []saaspec.Event{{Kind: saaspec.Pause}}, cfg: saaspec.Config{HasScheduleToClose: true}},
-	{name: "schedule-to-start/elapses-while-scheduled", timeout: saaspec.ScheduleToStartFires, cfg: saaspec.Config{HasScheduleToStart: true}},
-	{name: "schedule-to-start/elapses-while-paused", timeout: saaspec.ScheduleToStartFires, path: []saaspec.Event{{Kind: saaspec.Pause}}, cfg: saaspec.Config{HasScheduleToStart: true}},
-	{name: "start-to-close/elapses-while-started/retries-remain", timeout: saaspec.StartToCloseFires, path: []saaspec.Event{{Kind: saaspec.Poll}}, cfg: saaspec.Config{}},
-	{name: "start-to-close/elapses-while-started/last-attempt", timeout: saaspec.StartToCloseFires, path: []saaspec.Event{{Kind: saaspec.Poll}}, cfg: saaspec.Config{MaxAttempts: 1}},
-	{name: "heartbeat/elapses-while-started/retries-remain", timeout: saaspec.HeartbeatFires, path: []saaspec.Event{{Kind: saaspec.Poll}}, cfg: saaspec.Config{HasHeartbeat: true}},
-	{name: "heartbeat/elapses-while-started/last-attempt", timeout: saaspec.HeartbeatFires, path: []saaspec.Event{{Kind: saaspec.Poll}}, cfg: saaspec.Config{HasHeartbeat: true, MaxAttempts: 1}},
+	{name: "schedule-to-close/elapses-while-paused", timeout: saaspec.ScheduleToCloseElapses, path: []saaspec.Event{{Kind: saaspec.Pause}}, cfg: saaspec.Config{HasScheduleToClose: true}},
+	{name: "schedule-to-start/elapses-while-scheduled", timeout: saaspec.ScheduleToStartElapses, cfg: saaspec.Config{HasScheduleToStart: true}},
+	{name: "schedule-to-start/elapses-while-paused", timeout: saaspec.ScheduleToStartElapses, path: []saaspec.Event{{Kind: saaspec.Pause}}, cfg: saaspec.Config{HasScheduleToStart: true}},
+	{name: "start-to-close/elapses-while-started/retries-remain", timeout: saaspec.StartToCloseElapses, path: []saaspec.Event{{Kind: saaspec.Poll}}, cfg: saaspec.Config{}},
+	{name: "start-to-close/elapses-while-started/last-attempt", timeout: saaspec.StartToCloseElapses, path: []saaspec.Event{{Kind: saaspec.Poll}}, cfg: saaspec.Config{MaxAttempts: 1}},
+	{name: "heartbeat/elapses-while-started/retries-remain", timeout: saaspec.HeartbeatElapses, path: []saaspec.Event{{Kind: saaspec.Poll}}, cfg: saaspec.Config{HasHeartbeat: true}},
+	{name: "heartbeat/elapses-while-started/last-attempt", timeout: saaspec.HeartbeatElapses, path: []saaspec.Event{{Kind: saaspec.Poll}}, cfg: saaspec.Config{HasHeartbeat: true, MaxAttempts: 1}},
 	// Dispatch-delay interactions
-	{name: "schedule-to-start/elapses-within-start-delay", timeout: saaspec.ScheduleToStartFires, startDelay: saaLongStartDelay, cfg: saaspec.Config{HasStartDelay: true, HasScheduleToStart: true}},
-	{name: "schedule-to-close/elapses-within-start-delay", timeout: saaspec.ScheduleToCloseFires, startDelay: saaLongStartDelay, cfg: saaspec.Config{HasStartDelay: true, HasScheduleToClose: true}},
+	{name: "schedule-to-start/elapses-within-start-delay", timeout: saaspec.ScheduleToStartElapses, startDelay: saaLongStartDelay, cfg: saaspec.Config{HasStartDelay: true, HasScheduleToStart: true}},
+	{name: "schedule-to-close/elapses-within-start-delay", timeout: saaspec.ScheduleToCloseElapses, startDelay: saaLongStartDelay, cfg: saaspec.Config{HasStartDelay: true, HasScheduleToClose: true}},
 }
 
 func (s *standaloneActivityTestSuite) TestSpecTimeoutPaths() {

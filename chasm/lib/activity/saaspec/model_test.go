@@ -88,7 +88,7 @@ func TestScheduleToCloseFiresDuringStartDelay(t *testing.T) {
 	if s.Dispatchability != StartDelayPending {
 		t.Fatalf("Initial with start delay should be StartDelayPending, got %v", s.Dispatchability)
 	}
-	if out := Model(cfg, s, Event{Kind: ScheduleToCloseFires}); out.Next.Status != TimedOut {
+	if out := Model(cfg, s, Event{Kind: ScheduleToCloseElapses}); out.Next.Status != TimedOut {
 		t.Fatalf("schedule-to-close must fire during the start delay, got %v", out.Next.Status)
 	}
 }
@@ -139,17 +139,17 @@ func TestPauseUnpauseDuringBackoff(t *testing.T) {
 func TestScheduleToStartPushedBackByDispatchDelay(t *testing.T) {
 	startDelayCfg := Config{HasStartDelay: true, HasScheduleToStart: true}
 	s := Initial(startDelayCfg)
-	if out := Model(startDelayCfg, s, Event{Kind: ScheduleToStartFires}); out.Next.Status != Scheduled {
+	if out := Model(startDelayCfg, s, Event{Kind: ScheduleToStartElapses}); out.Next.Status != Scheduled {
 		t.Fatalf("schedule-to-start must not fire during the start delay (pushed back), got %v", out.Next.Status)
 	}
 	dispatched := Model(startDelayCfg, s, Event{Kind: StartDelayElapses}).Next
-	if out := Model(startDelayCfg, dispatched, Event{Kind: ScheduleToStartFires}); out.Next.Status != TimedOut {
+	if out := Model(startDelayCfg, dispatched, Event{Kind: ScheduleToStartElapses}); out.Next.Status != TimedOut {
 		t.Fatalf("schedule-to-start should fire once the delay elapses, got %v", out.Next.Status)
 	}
 
 	backoffCfg := Config{HasScheduleToStart: true}
 	retry := backedOffRetry(t, backoffCfg)
-	if out := Model(backoffCfg, retry, Event{Kind: ScheduleToStartFires}); out.Next.Status != Scheduled {
+	if out := Model(backoffCfg, retry, Event{Kind: ScheduleToStartElapses}); out.Next.Status != Scheduled {
 		t.Fatalf("schedule-to-start must not fire during the retry backoff (pushed back), got %v", out.Next.Status)
 	}
 }

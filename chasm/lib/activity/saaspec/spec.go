@@ -164,16 +164,18 @@ const (
 	Reset
 	UpdateOptions
 
-	// Timer firings, modeled as events so the timer tests are spec-driven: Model() defines the
-	// outcome of each firing per status, exactly like an RPC event. The harness triggers a firing
-	// by configuring the matching timeout short and waiting for it to elapse.
-	ScheduleToStartFires
-	ScheduleToCloseFires
-	StartToCloseFires
-	HeartbeatFires
+	// A timeout's nominal deadline elapsing, modeled as an event so the timer tests are spec-driven:
+	// the event denotes "the configured deadline window has passed in wall-clock", NOT "the timer
+	// fired" — whether it fires (or is pushed back / stale) is exactly what Model() decides per
+	// status, like an RPC event. The harness triggers one by configuring the matching timeout short
+	// and waiting for that window to pass.
+	ScheduleToStartElapses
+	ScheduleToCloseElapses
+	StartToCloseElapses
+	HeartbeatElapses
 
-	// Dispatch-delay clock firings, modeled as events like the timeouts: the harness triggers one by
-	// configuring the matching delay/backoff short and waiting for it to elapse. When it fires the
+	// A dispatch-delay clock elapsing, modeled as an event like the timeouts: the harness triggers one
+	// by configuring the matching delay/backoff short and waiting for it to elapse. When it elapses the
 	// delayed dispatch becomes available (Dispatchability -> Dispatchable); the status is unchanged, so the
 	// only observable is that a subsequent Poll now returns a task.
 	StartDelayElapses

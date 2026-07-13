@@ -12,7 +12,7 @@ func (s *standaloneActivityTestSuite) TestSpecKnownGaps() {
 	gaps := []string{
 		"spec decision (req 1): the impl measures schedule-to-close from first-dispatch-time " +
 			"(ScheduleTime + start_delay), so a start_delay pushes the schedule-to-close deadline back, " +
-			"like it does schedule-to-start. The model (scheduleToCloseFires) currently encodes the " +
+			"like it does schedule-to-start. The model (scheduleToCloseElapses) currently encodes the " +
 			"opposite — that schedule-to-close runs from schedule and fires during the start delay. " +
 			"Decide which is intended, then update the model to match and add the timeout trace " +
 			"(TestSpecDispatchDelayPaths / TestSpecTimeoutPaths) that exercises it against the server.",

@@ -44,14 +44,14 @@ func Model(cfg Config, s AbstractState, e Event) Outcome {
 		return reset(cfg, s, e)
 	case UpdateOptions:
 		return updateOptions(cfg, s, e)
-	case ScheduleToStartFires:
-		return scheduleToStartFires(cfg, s, e)
-	case ScheduleToCloseFires:
-		return scheduleToCloseFires(cfg, s, e)
-	case StartToCloseFires:
-		return startToCloseFires(cfg, s, e)
-	case HeartbeatFires:
-		return heartbeatFires(cfg, s, e)
+	case ScheduleToStartElapses:
+		return scheduleToStartElapses(cfg, s, e)
+	case ScheduleToCloseElapses:
+		return scheduleToCloseElapses(cfg, s, e)
+	case StartToCloseElapses:
+		return startToCloseElapses(cfg, s, e)
+	case HeartbeatElapses:
+		return heartbeatElapses(cfg, s, e)
 	case StartDelayElapses:
 		return startDelayElapses(cfg, s, e)
 	case BackoffElapses:
@@ -362,12 +362,12 @@ func updateOptions(cfg Config, s AbstractState, _ Event) Outcome {
 // A timeout task is not an RPC and never rejects: when it fires it either drives a transition or,
 // if it is stale (its attempt has moved on) or the activity has closed, no-ops.
 
-// ScheduleToStartFires: the attempt was not picked up by a worker within the schedule-to-start
+// ScheduleToStartElapses: the attempt was not picked up by a worker within the schedule-to-start
 // deadline. The deadline is measured from the dispatch time, so it is pushed back by a start_delay
 // or a retry backoff: while the dispatch is still delayed the schedule-to-start clock has not
 // started and this is a no-op. Only a Dispatchable-but-still-SCHEDULED attempt times out this way;
 // once started the deadline is satisfied, and Pause bumps the stamp so the pending task is stale.
-func scheduleToStartFires(_ Config, s AbstractState, _ Event) Outcome {
+func scheduleToStartElapses(_ Config, s AbstractState, _ Event) Outcome {
 	if s.Status != Scheduled || s.Dispatchability != Dispatchable {
 		return noop(s)
 	}
@@ -376,10 +376,12 @@ func scheduleToStartFires(_ Config, s AbstractState, _ Event) Outcome {
 	return Outcome{Next: n}
 }
 
-// ScheduleToCloseFires: the activity exceeded its total schedule-to-close deadline. This deadline
-// spans the whole lifetime and — a deliberate SAA departure from workflow-activity behavior — is
-// NOT suspended while paused, so any non-terminal status times out.
-func scheduleToCloseFires(_ Config, s AbstractState, _ Event) Outcome {
+// ScheduleToCloseElapses: the activity exceeded its total schedule-to-close deadline. The deadline
+// is anchored at first-dispatch time (schedule_time + start_delay), so it does not run during a
+// start_delay — a no-op while StartDelayPending. Once running it spans the whole lifetime and — a
+// deliberate SAA departure from workflow-activity behavior — is NOT suspended while paused, so any
+// other non-terminal status times out.
+func scheduleToCloseElapses(_ Config, s AbstractState, _ Event) Outcome {
 	if s.Dispatchability == StartDelayPending || s.Status.Terminal() {
 		return noop(s)
 	}
@@ -389,10 +391,12 @@ func scheduleToCloseFires(_ Config, s AbstractState, _ Event) Outcome {
 	return Outcome{Next: n}
 }
 
-// StartToCloseFires and HeartbeatFires both mean the running attempt ended by a per-attempt
+// StartToCloseElapses and HeartbeatElapses both mean the running attempt ended by a per-attempt
 // timeout (it ran too long, or the worker stopped heartbeating). They have the same effect.
-func startToCloseFires(cfg Config, s AbstractState, _ Event) Outcome { return attemptTimedOut(cfg, s) }
-func heartbeatFires(cfg Config, s AbstractState, _ Event) Outcome    { return attemptTimedOut(cfg, s) }
+func startToCloseElapses(cfg Config, s AbstractState, _ Event) Outcome {
+	return attemptTimedOut(cfg, s)
+}
+func heartbeatElapses(cfg Config, s AbstractState, _ Event) Outcome { return attemptTimedOut(cfg, s) }
 
 // StartDelayElapses fires when wall-clock reaches schedule_time + start_delay, making the delayed
 // first dispatch available. It only affects an attempt still waiting on the start delay; the status

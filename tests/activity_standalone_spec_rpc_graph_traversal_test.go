@@ -106,7 +106,7 @@ type saaHarness struct {
 	// focus, when non-empty, limits which final-edge events are reported (see SAASPEC_EVENT). The
 	// full graph is still traversed.
 	focus map[saaspec.EventKind]bool
-	// shortTimeout, when set to one of the four timeout *Fires kinds, makes that timeout short at
+	// shortTimeout, when set to one of the four timeout *Elapses kinds, makes that timeout short at
 	// Start so the timeout traces can trigger it. The traversal leaves it at its zero value (Poll),
 	// so all timeouts are long and none fires during RPC traversal.
 	shortTimeout saaspec.EventKind
@@ -617,8 +617,8 @@ const saaWallClockSettle = 2 * time.Second
 // dispatch-delay clocks — rather than synchronously like an RPC. apply drives these by waiting.
 func saaIsWallClock(k saaspec.EventKind) bool {
 	switch k {
-	case saaspec.ScheduleToStartFires, saaspec.ScheduleToCloseFires, saaspec.StartToCloseFires,
-		saaspec.HeartbeatFires, saaspec.StartDelayElapses, saaspec.BackoffElapses:
+	case saaspec.ScheduleToStartElapses, saaspec.ScheduleToCloseElapses, saaspec.StartToCloseElapses,
+		saaspec.HeartbeatElapses, saaspec.StartDelayElapses, saaspec.BackoffElapses:
 		return true
 	default:
 		return false
@@ -647,7 +647,7 @@ func (h *saaHarness) startRequest(activityID, taskQueue string) *workflowservice
 		Identity:            "worker",
 		Input:               defaultInput,
 		TaskQueue:           &taskqueuepb.TaskQueue{Name: taskQueue},
-		StartToCloseTimeout: dur(saaspec.StartToCloseFires),
+		StartToCloseTimeout: dur(saaspec.StartToCloseElapses),
 		RetryPolicy: &commonpb.RetryPolicy{
 			InitialInterval:    durationpb.New(interval),
 			BackoffCoefficient: 1.0,
@@ -660,13 +660,13 @@ func (h *saaHarness) startRequest(activityID, taskQueue string) *workflowservice
 		req.StartDelay = durationpb.New(h.startDelay)
 	}
 	if h.cfg.HasScheduleToClose {
-		req.ScheduleToCloseTimeout = dur(saaspec.ScheduleToCloseFires)
+		req.ScheduleToCloseTimeout = dur(saaspec.ScheduleToCloseElapses)
 	}
 	if h.cfg.HasScheduleToStart {
-		req.ScheduleToStartTimeout = dur(saaspec.ScheduleToStartFires)
+		req.ScheduleToStartTimeout = dur(saaspec.ScheduleToStartElapses)
 	}
 	if h.cfg.HasHeartbeat {
-		req.HeartbeatTimeout = dur(saaspec.HeartbeatFires)
+		req.HeartbeatTimeout = dur(saaspec.HeartbeatElapses)
 	}
 	return req
 }
