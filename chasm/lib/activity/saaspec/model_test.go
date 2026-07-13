@@ -80,21 +80,8 @@ func pollable(cfg Config, s AbstractState) bool {
 	return Model(cfg, s, Event{Kind: Poll}).Next.Status == Started
 }
 
-// (1) Schedule-to-close keeps running during a start delay: it fires even while the first dispatch
-// is still delayed.
-func TestScheduleToCloseFiresDuringStartDelay(t *testing.T) {
-	cfg := Config{HasStartDelay: true, HasScheduleToClose: true}
-	s := Initial(cfg)
-	if s.Dispatchability != StartDelayPending {
-		t.Fatalf("Initial with start delay should be StartDelayPending, got %v", s.Dispatchability)
-	}
-	if out := Model(cfg, s, Event{Kind: ScheduleToCloseElapses}); out.Next.Status != TimedOut {
-		t.Fatalf("schedule-to-close must fire during the start delay, got %v", out.Next.Status)
-	}
-}
-
-// (2) Pause during a start delay is possible; unpause does not dispatch immediately — it keeps
-// waiting for the delay, and only a StartDelayElapses makes it dispatchable.
+// Pause during a start delay is possible; unpause does not dispatch immediately — it keeps waiting
+// for the delay, and only a StartDelayElapses makes it dispatchable.
 func TestPauseUnpauseDuringStartDelay(t *testing.T) {
 	cfg := Config{HasStartDelay: true}
 	paused := Model(cfg, Initial(cfg), Event{Kind: Pause})
@@ -114,7 +101,7 @@ func TestPauseUnpauseDuringStartDelay(t *testing.T) {
 	}
 }
 
-// (3) Same as (2) for a retry backoff.
+// Same as TestPauseUnpauseDuringStartDelay but for a retry backoff.
 func TestPauseUnpauseDuringBackoff(t *testing.T) {
 	cfg := Config{}
 	retry := backedOffRetry(t, cfg)
@@ -134,8 +121,19 @@ func TestPauseUnpauseDuringBackoff(t *testing.T) {
 	}
 }
 
-// (4) Schedule-to-start is pushed back by a start delay (and a retry backoff): it must not fire
-// while the dispatch is still delayed, only after it becomes available.
+// Schedule-to-close is pushed back by a start delay (and a retry backoff)
+func TestScheduleToClosePushedBackByStartDelay(t *testing.T) {
+	cfg := Config{HasStartDelay: true, HasScheduleToClose: true}
+	s := Initial(cfg)
+	if s.Dispatchability != StartDelayPending {
+		t.Fatalf("Initial with start delay should be StartDelayPending, got %v", s.Dispatchability)
+	}
+	if out := Model(cfg, s, Event{Kind: ScheduleToCloseElapses}); out.Next.Status != Scheduled {
+		t.Fatalf("schedule-to-close must not fire during the start delay, got %v", out.Next.Status)
+	}
+}
+
+// Schedule-to-start is pushed back by a start delay (and a retry backoff)
 func TestScheduleToStartPushedBackByDispatchDelay(t *testing.T) {
 	startDelayCfg := Config{HasStartDelay: true, HasScheduleToStart: true}
 	s := Initial(startDelayCfg)
@@ -154,8 +152,8 @@ func TestScheduleToStartPushedBackByDispatchDelay(t *testing.T) {
 	}
 }
 
-// (5) Reset during a start delay is possible and behaves like unpause: it keeps waiting for the
-// delay rather than dispatching now.
+// Reset during a start delay is possible and behaves like unpause: it keeps waiting for the delay
+// rather than dispatching now.
 func TestResetDuringStartDelayPreservesDelay(t *testing.T) {
 	cfg := Config{HasStartDelay: true}
 	out := Model(cfg, Initial(cfg), Event{Kind: Reset})
@@ -170,7 +168,7 @@ func TestResetDuringStartDelayPreservesDelay(t *testing.T) {
 	}
 }
 
-// (6) Reset during a retry backoff discards the backoff: the reset attempt dispatches immediately.
+// Reset during a retry backoff discards the backoff: the reset attempt dispatches immediately.
 func TestResetDuringBackoffDispatchesImmediately(t *testing.T) {
 	cfg := Config{}
 	out := Model(cfg, backedOffRetry(t, cfg), Event{Kind: Reset})
