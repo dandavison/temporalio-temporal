@@ -53,25 +53,6 @@ One scenario (slash-hierarchy; also `/STC`, `/S2S`, `/startToClose`, `/heartbeat
 go test -tags test_dep -run 'TestStandaloneActivityTestSuite/TestSpecTimerProbes/heartbeat' -count=1 -v ./tests/
 ```
 
-## Dispatch probes (onebox, deferred dispatch)
-
-A deferred dispatch — a `start_delay` before the first attempt, or a retry backoff (policy-derived
-or a worker `next_retry_delay` override) before a later attempt — holds a `SCHEDULED` activity
-non-dispatchable until a wall-clock instant. That is invisible to the persisted-state oracle (status
-stays `SCHEDULED`), so these probes observe it by polling: no task during the window, a task (with
-the expected attempt number) once it elapses.
-
-```bash
-go test -tags test_dep -run 'TestStandaloneActivityTestSuite/TestSpecDispatchProbes' -count=1 -v ./tests/
-```
-
-One scenario (`/startDelay/first-dispatch`, `/startDelay/reset-preserves`, `/backoff/policy`,
-`/backoff/next-retry-delay`, `/backoff/reset-discards`):
-
-```bash
-go test -tags test_dep -run 'TestStandaloneActivityTestSuite/TestSpecDispatchProbes/backoff' -count=1 -v ./tests/
-```
-
 ## Known gaps
 
 Deliberately fails, listing verification work not yet implemented.

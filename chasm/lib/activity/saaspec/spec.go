@@ -75,6 +75,32 @@ func (s Status) Terminal() bool {
 	}
 }
 
+// Deferral is the latent dispatch state of a SCHEDULED attempt: what governs when its next dispatch
+// becomes available to a worker. It is NOT readable via ReadComponent — dispatch_time is a
+// wall-clock value that looks identical before and after it elapses — so it is excluded from
+// SameObserved and the harness verifies it by polling (Dispatchable <=> a poll returns a task).
+// Its zero value, Dispatchable, is also the canonical value for any non-SCHEDULED status.
+type Deferral int
+
+const (
+	Dispatchable      Deferral = iota // pollable now: a worker poll returns a task
+	StartDelayPending                 // first dispatch deferred until schedule_time + start_delay
+	BackoffPending                    // retry dispatch deferred until complete_time + retry interval
+)
+
+func (d Deferral) String() string {
+	switch d {
+	case Dispatchable:
+		return "Dispatchable"
+	case StartDelayPending:
+		return "StartDelayPending"
+	case BackoffPending:
+		return "BackoffPending"
+	default:
+		return "Deferral(?)"
+	}
+}
+
 // AbstractState is the EXACT projection of observable internal state that the spec
 // predicts. Every field is deterministic across replay-from-fresh (nothing here depends
 // on wall-clock time or run IDs) and readable via ReadComponent, so the oracle is exact
@@ -90,6 +116,19 @@ type AbstractState struct {
 	ResetRestoreOptions bool
 	FirstAttemptStarted bool
 	DispatchTimeSet     bool
+
+	// Deferral is latent (poll-observable, not ReadComponent-observable); see the Deferral type.
+	// It is excluded from SameObserved and verified by polling.
+	Deferral Deferral
+}
+
+// SameObserved reports whether two states agree on every field readable via ReadComponent. The
+// latent Deferral field is excluded — a poll, not ReadComponent, reveals it — so the exact-equality
+// oracle compares only what the server actually persists observably.
+func (s AbstractState) SameObserved(o AbstractState) bool {
+	s.Deferral = Dispatchable
+	o.Deferral = Dispatchable
+	return s == o
 }
 
 // Config captures the start-time options that change transition behavior. The explorer
@@ -125,6 +164,13 @@ const (
 	ScheduleToCloseFires
 	StartToCloseFires
 	HeartbeatFires
+
+	// Deferred-dispatch clock firings, modeled as events like the timeouts: the harness triggers one
+	// by configuring the matching delay/backoff short and waiting for it to elapse. When it fires the
+	// deferred dispatch becomes available (Deferral -> Dispatchable); the status is unchanged, so the
+	// only observable is that a subsequent Poll now returns a task.
+	StartDelayElapses
+	BackoffElapses
 )
 
 // Event carries the variant flags that affect the outcome. Leave irrelevant flags zero.

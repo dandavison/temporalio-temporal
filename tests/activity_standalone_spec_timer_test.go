@@ -61,7 +61,7 @@ func (s *standaloneActivityTestSuite) TestSpecTimerProbes() {
 
 			obs, err := a.observed()
 			require.NoError(t, err)
-			if obs != cur {
+			if !cur.SameObserved(obs) {
 				t.Errorf("after Start, state got %+v want %+v", obs, cur)
 				return
 			}
@@ -81,7 +81,7 @@ func (s *standaloneActivityTestSuite) TestSpecTimerProbes() {
 			time.Sleep(p.wait)
 			obs, err = a.observed()
 			require.NoError(t, err)
-			if obs != out.Next {
+			if !out.Next.SameObserved(obs) {
 				t.Errorf("%s from %s: state got %+v want %+v", saaKindName(p.timer), src, obs, out.Next)
 			}
 		})

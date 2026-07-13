@@ -226,7 +226,7 @@ func (ex *saaExplorer) checkCompleteness(t *testing.T, verifiedFine, skippedFine
 		shown, suffix = shown[:30], fmt.Sprintf("\n  … and %d more", len(gaps)-30)
 	}
 	t.Logf("cfg %d: %d model-reachable cell(s) not exercised at depth<=%d (raise SAASPEC_MAX_DEPTH to reach deeper).\n"+
-		"  fingerprint = Status|count|stc>0|resetKeepPaused|resetHeartbeats|resetRestoreOpts|firstStarted|dispatchSet\n  %s%s",
+		"  fingerprint = Status|count|stc>0|resetKeepPaused|resetHeartbeats|resetRestoreOpts|firstStarted|dispatchSet|deferral\n  %s%s",
 		ex.cfgIdx, len(gaps), saaMaxDepth(), strings.Join(shown, "\n  "), suffix)
 }
 
@@ -241,7 +241,7 @@ func (ex *saaExplorer) verifyPath(t require.TestingT, path []saaspec.Event) (saa
 	// The freshly started activity should match Initial(cfg).
 	obs, err := a.observed()
 	require.NoError(t, err)
-	if obs != cur {
+	if !cur.SameObserved(obs) {
 		t.Errorf("cfg %d: state immediately after StartActivityExecution disagrees with Initial(cfg).\n%s",
 			ex.cfgIdx, saaStateDiff(obs, cur))
 		return saaMismatch, false
@@ -324,12 +324,12 @@ func (a *saaActor) verify(t require.TestingT, e saaspec.Event, cur saaspec.Abstr
 	gotKind := saaRejectKind(rpcErr)
 	obs, err := a.observed()
 	require.NoError(t, err)
-	ok := gotKind == out.Reject && obs == out.Next
+	ok := gotKind == out.Reject && out.Next.SameObserved(obs)
 	if final {
 		if gotKind != out.Reject {
 			t.Errorf("%s", a.rejectFailure(e, cur.Status, gotKind, out.Reject, rpcErr))
 		}
-		if obs != out.Next {
+		if !out.Next.SameObserved(obs) {
 			t.Errorf("%s", a.stateFailure(e, cur.Status, obs, out.Next))
 		}
 		a.checkDescribe(t, out.Next)
@@ -377,12 +377,12 @@ func (a *saaActor) applyPoll(cur saaspec.AbstractState, out saaspec.Outcome, fin
 	obs, err := a.observed()
 	require.NoError(t, err)
 	if final {
-		if obs != out.Next {
+		if !out.Next.SameObserved(obs) {
 			t.Errorf("%s", a.stateFailure(poll, cur.Status, obs, out.Next))
 		}
 		a.checkDescribe(t, out.Next)
 	}
-	if obs == out.Next {
+	if out.Next.SameObserved(obs) {
 		return saaVerified
 	}
 	return saaMismatch
@@ -642,9 +642,9 @@ func saaNeedsToken(k saaspec.EventKind) bool {
 
 func saaFingerprint(s saaspec.AbstractState) string {
 	count := min(s.Count, 3)
-	return fmt.Sprintf("%v|%d|%v|%v|%v|%v|%v|%v",
+	return fmt.Sprintf("%v|%d|%v|%v|%v|%v|%v|%v|%v",
 		s.Status, count, s.STCStamp > 0, s.ResetKeepPaused, s.ResetHeartbeats,
-		s.ResetRestoreOptions, s.FirstAttemptStarted, s.DispatchTimeSet)
+		s.ResetRestoreOptions, s.FirstAttemptStarted, s.DispatchTimeSet, s.Deferral)
 }
 
 // saaCellKey identifies a (state, event kind) cell at fingerprint granularity — the unit the

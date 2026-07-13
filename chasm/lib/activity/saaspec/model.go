@@ -8,6 +8,9 @@ func Initial(cfg Config) AbstractState {
 	if cfg.HasScheduleToClose {
 		s.STCStamp = 1 // bumped by TransitionScheduled when STC is set
 	}
+	if cfg.HasStartDelay {
+		s.Deferral = StartDelayPending // first dispatch waits until schedule_time + start_delay
+	}
 	return s
 }
 
@@ -49,6 +52,10 @@ func Model(cfg Config, s AbstractState, e Event) Outcome {
 		return startToCloseFires(cfg, s, e)
 	case HeartbeatFires:
 		return heartbeatFires(cfg, s, e)
+	case StartDelayElapses:
+		return startDelayElapses(cfg, s, e)
+	case BackoffElapses:
+		return backoffElapses(cfg, s, e)
 	default:
 		panic("saaspec: unhandled event kind")
 	}
@@ -56,10 +63,11 @@ func Model(cfg Config, s AbstractState, e Event) Outcome {
 
 // Below, each modelFoo must return Outcome{Next: n}`), a `noop(s)`, or a `reject(s, kind)`.
 
-// Worker PollActivityTaskQueue advances a Scheduled attempt to Started.
+// Worker PollActivityTaskQueue advances a Scheduled attempt to Started, but only once its dispatch
+// is available: while a start_delay or retry backoff is still pending there is no task to hand out.
 func poll(_ Config, s AbstractState, _ Event) Outcome {
-	if s.Status != Scheduled {
-		// No activity task; no state change.
+	if s.Status != Scheduled || s.Deferral != Dispatchable {
+		// No dispatchable activity task; no state change.
 		return noop(s)
 	}
 	n := s
@@ -99,6 +107,7 @@ func respondFailed(cfg Config, s AbstractState, e Event) Outcome {
 		n := s
 		if e.Retryable && retriesRemaining {
 			n.Status = Scheduled
+			n.Deferral = BackoffPending // the retry waits for the backoff interval
 			if s.Status == PauseRequested {
 				n.Status = Paused // pause takes effect on the retry
 			}
@@ -128,6 +137,9 @@ func applyDeferredReset(cfg Config, s AbstractState) Outcome {
 	n := s
 	n.Count = 1
 	n.Stamp++ // invalidate last attempt's tasks
+	// Fresh attempt dispatches now: the first attempt already started (no start_delay left) and the
+	// reset discards any pending backoff.
+	n.Deferral = Dispatchable
 	if s.ResetRestoreOptions && cfg.HasScheduleToClose {
 		n.STCStamp++ // restoring options reissues the schedule-to-close task
 	}
@@ -312,6 +324,12 @@ func reset(cfg Config, s AbstractState, e Event) Outcome {
 		n := s
 		n.Count = 1
 		n.Stamp++
+		// A reset discards a pending retry backoff (the reset attempt dispatches immediately) but
+		// preserves a pending start_delay (it keeps waiting for the original schedule_time +
+		// start_delay), so reset behaves like unpause during a start delay.
+		if s.Deferral == BackoffPending {
+			n.Deferral = Dispatchable
+		}
 		if s.Status == Paused && e.KeepPaused {
 			n.DispatchTimeSet = false
 		} else {
@@ -369,11 +387,13 @@ func updateOptions(cfg Config, s AbstractState, _ Event) Outcome {
 // A timeout task is not an RPC and never rejects: when it fires it either drives a transition or,
 // if it is stale (its attempt has moved on) or the activity has closed, no-ops.
 
-// ScheduleToStartFires: the first attempt was not picked up by a worker within the
-// schedule-to-start deadline. Only a still-SCHEDULED attempt times out this way; once started, the
-// deadline is satisfied, and Pause bumps the stamp so the pending task is stale.
+// ScheduleToStartFires: the attempt was not picked up by a worker within the schedule-to-start
+// deadline. The deadline is measured from the dispatch time, so it is pushed back by a start_delay
+// or a retry backoff: while the dispatch is still deferred the schedule-to-start clock has not
+// started and this is a no-op. Only a Dispatchable-but-still-SCHEDULED attempt times out this way;
+// once started the deadline is satisfied, and Pause bumps the stamp so the pending task is stale.
 func scheduleToStartFires(_ Config, s AbstractState, _ Event) Outcome {
-	if s.Status != Scheduled {
+	if s.Status != Scheduled || s.Deferral != Dispatchable {
 		return noop(s)
 	}
 	n := s
@@ -414,6 +434,7 @@ func attemptTimedOut(cfg Config, s AbstractState) Outcome {
 		n := s
 		if retriesRemaining {
 			n.Status = Scheduled
+			n.Deferral = BackoffPending // the retry waits for the backoff interval
 			if s.Status == PauseRequested {
 				n.Status = Paused // pause takes effect on the retry
 			}
@@ -435,4 +456,28 @@ func attemptTimedOut(cfg Config, s AbstractState) Outcome {
 	default:
 		panic("SAA model does not handle a per-attempt timeout while in status " + s.Status.String())
 	}
+}
+
+// StartDelayElapses fires when wall-clock reaches schedule_time + start_delay, making the deferred
+// first dispatch available. It only affects an attempt still waiting on the start delay; the status
+// is unchanged (a Paused activity stays Paused, but its dispatch is now un-deferred, so unpausing it
+// dispatches immediately). Any other Deferral means the start delay is irrelevant — a no-op.
+func startDelayElapses(_ Config, s AbstractState, _ Event) Outcome {
+	if s.Deferral != StartDelayPending {
+		return noop(s)
+	}
+	n := s
+	n.Deferral = Dispatchable
+	return Outcome{Next: n}
+}
+
+// BackoffElapses fires when wall-clock reaches complete_time + retry interval, making the deferred
+// retry dispatch available. Symmetric to StartDelayElapses for the backoff case.
+func backoffElapses(_ Config, s AbstractState, _ Event) Outcome {
+	if s.Deferral != BackoffPending {
+		return noop(s)
+	}
+	n := s
+	n.Deferral = Dispatchable
+	return Outcome{Next: n}
 }
