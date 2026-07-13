@@ -116,6 +116,13 @@ func (s *standaloneActivityTestSuite) newTestEnv(opts ...testcore.TestOption) *s
 	cluster.OverrideDynamicConfig(s.T(), activity.Enabled, nsValues(true))
 	cluster.OverrideDynamicConfig(s.T(), activity.EnableCallbacks, nsValues(true))
 	cluster.OverrideDynamicConfig(s.T(), activity.StartDelayEnabled, nsValues(true))
+	// The spec explorer replays hundreds of activities, each on its own task queue. Every new task
+	// queue triggers matching user-data-propagation RPCs across its partitions, which are rate
+	// limited per namespace (MatchingNamespaceRPS; default 0 falls back to MatchingRPS=1200/host).
+	// A burst of task-queue creation trips that limiter, so partitions fail to load and tasks never
+	// dispatch. Raise it well above the burst so the explorer isn't throttled by a limit it is not
+	// trying to test.
+	cluster.OverrideDynamicConfig(s.T(), dynamicconfig.MatchingNamespaceRPS, nsValues(100_000))
 	return env
 }
 
