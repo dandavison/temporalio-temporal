@@ -59,7 +59,6 @@ func poll(_ Config, s AbstractState, _ Event) Outcome {
 
 // Worker RespondActivityTaskCompleted with task token completes an in-progress attempt.
 func respondCompleted(_ Config, s AbstractState, _ Event) Outcome {
-	// TODO(dan) Does any deferred flag need clearing on completion?
 	if s.Status.Terminal() {
 		return reject(s, NotFound) // task token invalid
 	}
@@ -67,6 +66,7 @@ func respondCompleted(_ Config, s AbstractState, _ Event) Outcome {
 	case Started, PauseRequested, CancelRequested, ResetRequested:
 		n := s
 		n.Status = Completed
+		n.ResetHeartbeats = false // terminal transition clears the deferred reset-heartbeat flag
 		return Outcome{Next: n}
 	case Scheduled, Paused:
 		return reject(s, NotFound)
@@ -113,11 +113,13 @@ func respondFailed(cfg Config, s AbstractState, e Event) Outcome {
 		} else {
 			// no retry: terminal failure
 			n.Status = Failed
+			n.ResetHeartbeats = false // terminal transition clears the deferred reset-heartbeat flag
 		}
 		return Outcome{Next: n}
 	case CancelRequested:
 		n := s
 		n.Status = Failed
+		n.ResetHeartbeats = false // terminal transition clears the deferred reset-heartbeat flag
 		return Outcome{Next: n}
 	case Scheduled, Paused:
 		return reject(s, NotFound) // task token invalid
@@ -161,6 +163,7 @@ func respondCanceled(_ Config, s AbstractState, _ Event) Outcome {
 	case CancelRequested:
 		n := s
 		n.Status = Canceled
+		n.ResetHeartbeats = false // terminal transition clears the deferred reset-heartbeat flag
 		return Outcome{Next: n}
 	case Scheduled, Paused:
 		return reject(s, NotFound) // task token invalid
@@ -186,6 +189,7 @@ func terminate(_ Config, s AbstractState, e Event) Outcome {
 	case Scheduled, Paused, Started, PauseRequested, CancelRequested, ResetRequested:
 		n := s
 		n.Status = Terminated
+		n.ResetHeartbeats = false // terminal transition clears the deferred reset-heartbeat flag
 		return Outcome{Next: n}
 	default:
 		panic("SAA model does not handle Terminate while in status " + s.Status.String())
