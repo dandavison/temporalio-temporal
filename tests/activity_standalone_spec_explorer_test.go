@@ -697,6 +697,10 @@ func saaCandidateEvents() []saaspec.Event {
 			out = append(out, saaspec.Event{Kind: saaspec.Reset, KeepPaused: kp, RestoreOriginal: ro})
 		}
 	}
+	// ResetHeartbeat is orthogonal to KeepPaused/RestoreOriginal (it only governs whether the
+	// deferred reset clears heartbeat state), so exercise it as its own axis rather than crossing
+	// it with the others and tripling the graph.
+	out = append(out, saaspec.Event{Kind: saaspec.Reset, ResetHeartbeat: true})
 	for _, ra := range []bool{false, true} {
 		out = append(out, saaspec.Event{Kind: saaspec.Unpause, ResetAttempts: ra})
 	}
