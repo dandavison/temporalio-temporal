@@ -275,6 +275,10 @@ func saaKindName(k saaspec.EventKind) string {
 		return "Reset"
 	case saaspec.UpdateOptions:
 		return "UpdateOptions"
+	case saaspec.StartDelayElapses:
+		return "StartDelayElapses"
+	case saaspec.BackoffElapses:
+		return "BackoffElapses"
 	default:
 		return fmt.Sprintf("EventKind(%d)", k)
 	}

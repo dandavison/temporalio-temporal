@@ -10,10 +10,12 @@ package tests
 
 func (s *standaloneActivityTestSuite) TestSpecKnownGaps() {
 	gaps := []string{
-		"deferred dispatch (server): Model() now specifies pollability under a start_delay / retry " +
-			"backoff via the Deferral field and the *Elapses events, and the model unit tests pin it, " +
-			"but the explorer does not yet drive the elapse events or verify pollability by polling. " +
-			"The generated deferred-dispatch coverage against the server is the next step.",
+		"spec decision (req 1): the impl measures schedule-to-close from first-dispatch-time " +
+			"(ScheduleTime + start_delay), so a start_delay pushes the schedule-to-close deadline back, " +
+			"like it does schedule-to-start. The model (scheduleToCloseFires) currently encodes the " +
+			"opposite — that schedule-to-close runs from schedule and fires during the start delay. " +
+			"Decide which is intended, then update the model to match and add the timer probe " +
+			"(TestSpecDeferredDispatch / TestSpecTimerProbes) that exercises it against the server.",
 		"pure-timing: start-to-close is measured from STARTED, not from schedule, so a start_delay " +
 			"must not eat into the running attempt's start-to-close budget (needs short start_delay + " +
 			"short start-to-close: poll after the delay, then assert the attempt times out one " +

@@ -16,28 +16,42 @@ import (
 )
 
 type saaTimerProbe struct {
-	name  string
-	timer saaspec.EventKind // one of the *Fires kinds
-	cfg   saaspec.Config    // the timer under test is made short via ex.shortTimer
-	path  []saaspec.Event   // RPCs to reach the source state (other timers stay long)
-	wait  time.Duration     // how long to wait for the timer to fire
+	name       string
+	timer      saaspec.EventKind // one of the *Fires kinds
+	cfg        saaspec.Config    // the timer under test is made short via ex.shortTimer
+	path       []saaspec.Event   // RPCs to reach the source state (other timers stay long)
+	wait       time.Duration     // how long to wait for the timer to fire
+	startDelay time.Duration     // StartActivityExecutionRequest.StartDelay (0 => none)
 }
 
 var saaTimerWait = saaShortTimer + 2*time.Second
 
+// saaLongStartDelay keeps a first attempt in its start-delay window for the whole probe, so a short
+// timer under test fires while the activity is still SCHEDULED and pending dispatch.
+const saaLongStartDelay = time.Hour
+
 var saaTimerProbes = []saaTimerProbe{
 	// The schedule-to-close deadline keeps running while paused (intended: SAA departs from the
 	// workflow-activity behavior here).
-	{"STC/paused", saaspec.ScheduleToCloseFires, saaspec.Config{HasScheduleToClose: true}, []saaspec.Event{{Kind: saaspec.Pause}}, saaTimerWait},
-	{"S2S/scheduled", saaspec.ScheduleToStartFires, saaspec.Config{HasScheduleToStart: true}, nil, saaTimerWait},
+	{name: "STC/paused", timer: saaspec.ScheduleToCloseFires, cfg: saaspec.Config{HasScheduleToClose: true}, path: []saaspec.Event{{Kind: saaspec.Pause}}, wait: saaTimerWait},
+	{name: "S2S/scheduled", timer: saaspec.ScheduleToStartFires, cfg: saaspec.Config{HasScheduleToStart: true}, wait: saaTimerWait},
 	// Stale-task no-op: pausing a SCHEDULED activity bumps the stamp, invalidating the pending
 	// schedule-to-start task; it must not fire. Model(Paused, ScheduleToStartFires) should be a
 	// no-op, so the harness waits and asserts the activity is still PAUSED.
-	{"S2S/paused-stale", saaspec.ScheduleToStartFires, saaspec.Config{HasScheduleToStart: true}, []saaspec.Event{{Kind: saaspec.Pause}}, saaTimerWait},
-	{"startToClose/started-retry", saaspec.StartToCloseFires, saaspec.Config{}, []saaspec.Event{{Kind: saaspec.Poll}}, saaTimerWait},
-	{"startToClose/started-exhausted", saaspec.StartToCloseFires, saaspec.Config{MaxAttempts: 1}, []saaspec.Event{{Kind: saaspec.Poll}}, saaTimerWait},
-	{"heartbeat/started-retry", saaspec.HeartbeatFires, saaspec.Config{HasHeartbeat: true}, []saaspec.Event{{Kind: saaspec.Poll}}, saaTimerWait},
-	{"heartbeat/started-exhausted", saaspec.HeartbeatFires, saaspec.Config{HasHeartbeat: true, MaxAttempts: 1}, []saaspec.Event{{Kind: saaspec.Poll}}, saaTimerWait},
+	{name: "S2S/paused-stale", timer: saaspec.ScheduleToStartFires, cfg: saaspec.Config{HasScheduleToStart: true}, path: []saaspec.Event{{Kind: saaspec.Pause}}, wait: saaTimerWait},
+	{name: "startToClose/started-retry", timer: saaspec.StartToCloseFires, cfg: saaspec.Config{}, path: []saaspec.Event{{Kind: saaspec.Poll}}, wait: saaTimerWait},
+	{name: "startToClose/started-exhausted", timer: saaspec.StartToCloseFires, cfg: saaspec.Config{MaxAttempts: 1}, path: []saaspec.Event{{Kind: saaspec.Poll}}, wait: saaTimerWait},
+	{name: "heartbeat/started-retry", timer: saaspec.HeartbeatFires, cfg: saaspec.Config{HasHeartbeat: true}, path: []saaspec.Event{{Kind: saaspec.Poll}}, wait: saaTimerWait},
+	{name: "heartbeat/started-exhausted", timer: saaspec.HeartbeatFires, cfg: saaspec.Config{HasHeartbeat: true, MaxAttempts: 1}, path: []saaspec.Event{{Kind: saaspec.Poll}}, wait: saaTimerWait},
+
+	// Deferred-dispatch interaction with a timeout (a long start_delay keeps the first attempt pending
+	// the whole probe, so the short timer fires during the start-delay window): schedule-to-start is
+	// pushed back behind the start delay -> it must NOT fire during the window, so the activity stays
+	// SCHEDULED (Model(StartDelayPending, ScheduleToStartFires) is a no-op).
+	//
+	// The schedule-to-close/start-delay interaction (req 1) is a pending spec decision — see
+	// TestSpecKnownGaps — so no probe for it yet.
+	{name: "S2S/pushed-back-by-start-delay", timer: saaspec.ScheduleToStartFires, cfg: saaspec.Config{HasStartDelay: true, HasScheduleToStart: true}, wait: saaTimerWait, startDelay: saaLongStartDelay},
 }
 
 func (s *standaloneActivityTestSuite) TestSpecTimerProbes() {
@@ -54,7 +68,7 @@ func (s *standaloneActivityTestSuite) TestSpecTimerProbes() {
 		t.Run(p.name, func(t *testing.T) {
 			ex := &saaExplorer{
 				env: env, ctx: ctx, chasmCtx: chasmCtx, nsID: env.NamespaceID().String(),
-				cfg: p.cfg, cfgIdx: i, shortTimer: p.timer,
+				cfg: p.cfg, cfgIdx: i, shortTimer: p.timer, startDelay: p.startDelay,
 			}
 			a := ex.start(t)
 			cur := saaspec.Initial(p.cfg)
