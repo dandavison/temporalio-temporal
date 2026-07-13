@@ -1,11 +1,9 @@
 package tests
 
-// Timeout traces for the standalone-activity behavior spec. A timeout firing is modeled as an event
-// (saaspec.ScheduleToCloseElapses, etc.); this harness triggers it by configuring the matching timeout
-// short and waiting. Each is a trace — RPCs to reach a source state, then the timeout event — driven
-// by driveTrace, so the resulting state is checked against Model() exactly like every other event.
-// The harness never encodes the intended outcome; Model() does. Model must handle every timeout event;
-// a trace for a (state, timeout-event) that Model() does not handle panics, failing the run.
+// Timeout traces for the standalone-activity spec. A timeout is modeled as an event
+// (saaspec.ScheduleToCloseElapses, etc.), triggered by configuring the matching timeout short and
+// waiting; driveTrace checks the resulting state against Model(). Model must handle every timeout
+// event, else the trace panics.
 
 import (
 	"testing"
@@ -53,8 +51,7 @@ func (s *standaloneActivityTestSuite) TestSpecTimeoutPaths() {
 	chasmCtx, err := env.GetTestCluster().Host().ChasmContext(ctx)
 	require.NoError(t, err)
 
-	// Each trace is an independent subtest, so `-run 'TestSpecTimeoutPaths/heartbeat'` selects by
-	// timeout/scenario (names embed a "/" hierarchy: e.g. "heartbeat/elapses-while-started/retries-remain").
+	// Each trace is an independent subtest, so `-run 'TestSpecTimeoutPaths/heartbeat'` selects by scenario.
 	for i, p := range saaTimeoutTraces {
 		t.Run(p.name, func(t *testing.T) {
 			h := &saaHarness{

@@ -1,13 +1,6 @@
 package tests
 
-// TestSpecKnownGaps fails on purpose. It enumerates verification work that is understood but not
-// yet implemented, so it cannot be silently forgotten (a t.Skip would be forgettable). Remove each
-// line as it is implemented; delete the test when the list is empty.
-//
-// These are the items that the model-driven harness (static check + graph traversal + timeout traces) does
-// not cover, either because they are about timing precision (when something happens, not what state
-// results) or because they need a scenario the harness does not construct.
-
+// TestSpecKnownGaps fails on purpose.
 func (s *standaloneActivityTestSuite) TestSpecKnownGaps() {
 	gaps := []string{
 		"pure-timing: start-to-close is measured from STARTED, not from schedule, so a start_delay " +

@@ -75,14 +75,11 @@ func (s Status) Terminal() bool {
 	}
 }
 
-// Dispatchability says whether a SCHEDULED attempt's next dispatch is available to a worker now,
-// or still delayed by a start_delay or a retry backoff. It is NOT readable via ReadComponent — dispatch_time
-// is a wall-clock value that looks identical before and after it elapses — so it is excluded from
-// SameObserved and the harness verifies it by polling (Dispatchable <=> a poll returns a task).
-// Its zero value, Dispatchable, is also the canonical value for any non-SCHEDULED status.
-//
-// Not to be confused with a "deferred" pause/reset, which is an operator command received mid-attempt
-// whose effect is applied when the attempt ends (see ResetKeepPaused, applyDeferredReset).
+// Dispatchability says whether a SCHEDULED attempt's next dispatch is available now, or still delayed
+// by a start_delay or retry backoff. Not readable via ReadComponent (dispatch_time looks identical
+// before and after it elapses), so it is excluded from SameObserved and verified by polling. Its zero
+// value Dispatchable is also the value for any non-SCHEDULED status. Distinct from a "deferred"
+// pause/reset (an operator command applied when the attempt ends; see ResetKeepPaused, applyDeferredReset).
 type Dispatchability int
 
 const (
@@ -104,11 +101,9 @@ func (d Dispatchability) String() string {
 	}
 }
 
-// AbstractState is the EXACT projection of observable internal state that the spec
-// predicts. Every field is deterministic across replay-from-fresh (nothing here depends
-// on wall-clock time or run IDs) and readable via ReadComponent, so the oracle is exact
-// equality. Keep every field a scalar — no pointers/slices/maps — so that `n := s` is a
-// true independent copy.
+// AbstractState is the exact projection of observable internal state the spec predicts. Every field is
+// replay-deterministic and readable via ReadComponent, so the oracle is exact equality. Keep every
+// field a scalar so that `n := s` is an independent copy.
 type AbstractState struct {
 	Status               Status
 	Count                int32 // attempt.count
@@ -118,28 +113,24 @@ type AbstractState struct {
 	ResetHeartbeats      bool
 	ResetRestoreOptions  bool
 	FirstAttemptStarted  bool
-	// DispatchTimeSet is whether a dispatch time is recorded (attempt.dispatch_time != nil) — the
-	// EXISTENCE of a dispatch, observable via ReadComponent. Distinct from Dispatchability below,
-	// which is the READINESS of that dispatch: a start-delayed attempt has DispatchTimeSet=true and
-	// Dispatchability=StartDelayPending.
+	// DispatchTimeSet is whether a dispatch time is recorded (attempt.dispatch_time != nil): the
+	// existence of a dispatch, observable via ReadComponent. Distinct from Dispatchability, its readiness.
 	DispatchTimeSet bool
 
-	// Dispatchability is latent (poll-observable, not ReadComponent-observable); see the
-	// Dispatchability type. It is excluded from SameObserved and verified by polling.
+	// Dispatchability is latent (poll-observable, not ReadComponent-observable), excluded from
+	// SameObserved and verified by polling.
 	Dispatchability Dispatchability
 }
 
-// SameObserved reports whether two states agree on every field readable via ReadComponent. The
-// latent Dispatchability field is excluded — a poll, not ReadComponent, reveals it — so the exact-equality
-// oracle compares only what the server actually persists observably.
+// SameObserved reports whether two states agree on every ReadComponent-readable field, excluding the
+// latent Dispatchability.
 func (s AbstractState) SameObserved(o AbstractState) bool {
 	s.Dispatchability = Dispatchable
 	o.Dispatchability = Dispatchable
 	return s == o
 }
 
-// Config captures the start-time options that change transition behavior. The graph traversal
-// runs the full search once per template (see the plan's config-template table).
+// Config captures the start-time options that change transition behavior.
 type Config struct {
 	HasScheduleToClose bool
 	HasScheduleToStart bool
@@ -164,20 +155,17 @@ const (
 	Reset
 	UpdateOptions
 
-	// A timeout's nominal deadline elapsing, modeled as an event so the timer tests are spec-driven:
-	// the event denotes "the configured deadline window has passed in wall-clock", NOT "the timer
-	// fired" — whether it fires (or is pushed back / stale) is exactly what Model() decides per
-	// status, like an RPC event. The harness triggers one by configuring the matching timeout short
-	// and waiting for that window to pass.
+	// Timeout deadlines elapsing. The event means the configured deadline window has passed in
+	// wall-clock, not that the timer fired; Model() decides the effect per status. The harness
+	// triggers one by configuring the timeout short and waiting.
 	ScheduleToStartElapses
 	ScheduleToCloseElapses
 	StartToCloseElapses
 	HeartbeatElapses
 
-	// A dispatch-delay clock elapsing, modeled as an event like the timeouts: the harness triggers one
-	// by configuring the matching delay/backoff short and waiting for it to elapse. When it elapses the
-	// delayed dispatch becomes available (Dispatchability -> Dispatchable); the status is unchanged, so the
-	// only observable is that a subsequent Poll now returns a task.
+	// Dispatch-delay clocks elapsing. When elapsed the delayed dispatch becomes available
+	// (Dispatchability -> Dispatchable); status is unchanged, so the only observable is a subsequent
+	// Poll returning a task. The harness triggers one by configuring the delay/backoff short and waiting.
 	StartDelayElapses
 	BackoffElapses
 )
@@ -186,7 +174,7 @@ const (
 type Event struct {
 	Kind EventKind
 
-	Retryable       bool // RespondFailed: the failure sent is retryable (NonRetryable=false). Whether the activity actually retries also depends on cfg.MaxAttempts and s.Count, which Model() decides.
+	Retryable       bool // RespondFailed: the failure is retryable. Whether it actually retries also depends on cfg.MaxAttempts and s.Count.
 	KeepPaused      bool // Reset
 	RestoreOriginal bool // Reset / UpdateOptions
 	ResetHeartbeat  bool // Reset / Unpause
@@ -226,8 +214,7 @@ type Observed struct {
 	DispatchTimeSet      bool
 }
 
-// Abstract maps the observed internal snapshot onto the spec's AbstractState. The harness
-// calls it to convert what it reads from the server into the value it compares with Model().
+// Abstract maps an observed internal snapshot onto the spec's AbstractState.
 func Abstract(o Observed) AbstractState {
 	return AbstractState{
 		Status:               mapStatus(o.Status),

@@ -1,9 +1,8 @@
 package tests
 
-// Presentation and plumbing for the standalone-activity spec harness: SAASPEC_EVENT parsing,
-// error classification, and the failure-report formatting. None of this expresses the harness's
-// verification logic — that lives in activity_standalone_spec_rpc_graph_traversal_test.go. It is split out so
-// that file reads as the core: traverse → verifyPath → apply → verify.
+// Presentation and plumbing for the spec harness: SAASPEC_EVENT parsing, error classification, and
+// failure-report formatting. The verification logic lives in
+// activity_standalone_spec_rpc_graph_traversal_test.go.
 
 import (
 	"errors"
@@ -87,10 +86,9 @@ func saaFailure(retryable bool, nextRetryDelay time.Duration) *failurepb.Failure
 
 // --- failure reporting ---------------------------------------------------------------------
 //
-// A failure means the real server ("observed") disagreed with saaspec.Model ("expected") after we
-// drove one event. Each report opens with a one-line summary of what diverged (the test framework
-// prefixes that line, and only that line, with file:line), then the path of events that reached
-// the edge, then a field-aligned diff.
+// A failure means the real server ("observed") disagreed with saaspec.Model ("expected") after one
+// event. Each report opens with a one-line summary of what diverged, then the path to the edge, then
+// a field-aligned diff.
 
 // edge names the event and the status it was driven from, e.g. "RespondFailed[retryable=true] from
 // Started".
@@ -130,9 +128,9 @@ func (a *saaActor) flagsFailure(e saaspec.Event, src saaspec.Status, observed, e
 		a.edge(e, src), a.pathLine(), saaDiffBlock(rows, agree))
 }
 
-// saaPathString renders the sequence of events that reached an edge, e.g.
-// "Schedule → Poll → RespondFailed[retryable=false]". The origin is labeled Schedule
-// (the status the StartActivityExecution RPC lands in) to avoid confusion with the Started status.
+// saaPathString renders the event sequence that reached an edge, e.g.
+// "Schedule → Poll → RespondFailed[retryable=false]". The origin is labeled Schedule (the status the
+// StartActivityExecution RPC lands in), to avoid confusion with Started.
 func saaPathString(path []saaspec.Event) string {
 	parts := make([]string, 0, len(path)+1)
 	parts = append(parts, "Schedule")

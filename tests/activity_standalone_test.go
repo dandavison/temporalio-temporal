@@ -116,12 +116,9 @@ func (s *standaloneActivityTestSuite) newTestEnv(opts ...testcore.TestOption) *s
 	cluster.OverrideDynamicConfig(s.T(), activity.Enabled, nsValues(true))
 	cluster.OverrideDynamicConfig(s.T(), activity.EnableCallbacks, nsValues(true))
 	cluster.OverrideDynamicConfig(s.T(), activity.StartDelayEnabled, nsValues(true))
-	// The spec explorer replays hundreds of activities, each on its own task queue. With the default
-	// 4 read/write partitions, every new task queue fans out user-data-propagation RPCs and
-	// create-task writes across its child partitions, and the burst of task-queue creation trips
-	// matching's rate/persistence limiters (service RPS, system/namespace persistence QPS) — which
-	// the SAA spec is not trying to exercise. Collapse each task queue to a single partition so that
-	// fanout (and the "failed to load child partition" churn) disappears at the root.
+	// The spec harness replays hundreds of activities, each on its own task queue; with the default
+	// 4 partitions the burst of task-queue creation trips matching's rate/persistence limiters.
+	// Collapse each task queue to a single partition.
 	cluster.OverrideDynamicConfig(s.T(), dynamicconfig.MatchingNumTaskqueueReadPartitions, nsValues(1))
 	cluster.OverrideDynamicConfig(s.T(), dynamicconfig.MatchingNumTaskqueueWritePartitions, nsValues(1))
 	return env

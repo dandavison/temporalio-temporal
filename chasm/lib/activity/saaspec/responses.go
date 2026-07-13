@@ -4,41 +4,13 @@ import (
 	enumspb "go.temporal.io/api/enums/v1"
 )
 
-// This file holds the parts of the spec that are NOT about the persisted state a
-// transition leaves behind, but about VALUES the server returns to a caller, computed from
-// the current state.
+// Spec for values the server returns to a caller (not persisted state), computed from the
+// current AbstractState. The harness calls the matching function after the RPC and asserts the
+// real response matches.
 //
-// Model() and AbstractState cover only the persisted state that the harness reads with
-// ReadComponent and compares after each event. That misses a whole category of behavior:
-// information the server hands back in an RPC response, or computes when a read API is
-// called. Some of it is the ONLY external evidence of an internal state, so it cannot be
-// checked by comparing persisted state alone.
-//
-// The functions here predict those returned values from AbstractState. The harness calls
-// the relevant one after issuing the corresponding RPC and asserts the real response
-// matches.
-//
-// Category members and where each is verified:
-//
-//   - Heartbeat response flags (CancelRequested / ActivityPaused / ActivityReset):
-//     ExpectedHeartbeatFlags, below. This is the only signal a running worker receives that
-//     a pause/reset/cancel was requested. For RESET_REQUESTED it is the only external
-//     observable at all, because Describe reports that status as STARTED.
-//
-//   - Describe public status + run state: ExpectedDescribe, below. The projection of the
-//     internal status onto the public enums that users actually see. The mapping has real
-//     logic and is only observable through Describe.
-//
-//   - RecordActivityTaskStarted response .Attempt: checked directly by the harness as
-//     equal to AbstractState.Count after a poll. No spec function is needed — it is just a
-//     field we already model. Catches wrong attempt numbering after a reset.
-//
-//   - UpdateActivityExecutionOptions response option VALUES (merged/normalized timeouts,
-//     retry policy, priority, task queue, start delay): deliberately NOT covered here.
-//     Tracking option values would grow AbstractState from a small scalar tuple into the
-//     full options and pull the merge/normalize logic into the spec. That correctness is
-//     left to dedicated update-options tests that compare the response and the Describe
-//     output field by field.
+// Covered: heartbeat response flags (ExpectedHeartbeatFlags) and the Describe status/run-state
+// projection (ExpectedDescribe). RecordActivityTaskStarted .Attempt is checked directly against
+// Count. UpdateActivityExecutionOptions response values are left to dedicated update-options tests.
 
 // HeartbeatFlags are the worker-facing flags on RecordActivityTaskHeartbeatResponse.
 type HeartbeatFlags struct {
@@ -47,17 +19,9 @@ type HeartbeatFlags struct {
 	ActivityReset   bool
 }
 
-// ExpectedHeartbeatFlags predicts the heartbeat-response flags for a status in which a
-// heartbeat is accepted: the token-valid statuses Started, CancelRequested, PauseRequested,
-// and ResetRequested. The harness sends a heartbeat in one of those statuses and asserts
-// the response flags equal this. In any other status it asserts the heartbeat is rejected
-// with NotFound, and does not call this function.
-//
-// How the harness will use it: after issuing a heartbeat in a token-valid status it builds
-// the real HeartbeatFlags from the response and asserts equality with
-// ExpectedHeartbeatFlags(currentState). To send a heartbeat it needs the task token from
-// the poll that reached STARTED; that token stays valid through
-// STARTED -> PauseRequested / ResetRequested / CancelRequested, because Count does not change.
+// ExpectedHeartbeatFlags predicts the heartbeat-response flags for a token-valid status
+// (Started, CancelRequested, PauseRequested, ResetRequested). Other statuses reject the
+// heartbeat with NotFound and do not call this.
 func ExpectedHeartbeatFlags(s AbstractState) HeartbeatFlags {
 	switch s.Status {
 	case Started:

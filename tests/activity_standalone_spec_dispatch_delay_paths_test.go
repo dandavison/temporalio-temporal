@@ -1,21 +1,14 @@
 package tests
 
-// Delayed-dispatch verification for the standalone-activity behavior spec: it checks the
-// implementation against the delayed-dispatch behavior that saaspec.Model() specifies via the
-// Dispatchability field (start_delay / retry backoff) and the *Elapses events.
+// Delayed-dispatch verification for the standalone-activity spec: checks the impl against the
+// Dispatchability behavior Model() specifies (start_delay / retry backoff) and the *Elapses events.
+// Each trace is an event sequence run once on one activity; at every step the harness asserts the
+// observed state and pollability against Model(). A *Elapses event is realized by waiting for the
+// real timer.
 //
-// It drives model-generated traces: each trace is an event sequence run once on a single activity,
-// and at every step the harness asserts the observed state and pollability against Model(). The
-// harness carries no product logic — Model() alone decides, at each step, whether a poll should find
-// a task (Dispatchability == Dispatchable) or nothing (a delay still pending), and what state results; a
-// *Elapses event is realized by waiting for the real timer. The trace list is only coverage
-// selection.
-//
-// Why traces rather than the full breadth-first walk TestSpecRPCGraphTraversal runs: each pending-delay
-// step costs a real multi-second wait or long poll (a delay must outlast the long-poll minimum to
-// be observable), and the traversal replays every path from a fresh activity, which would re-incur
-// every prefix wait. A trace incurs each wait once, so representative orderings fit the test's time
-// budget; an exhaustive walk of the delay dimension does not, absent clock control.
+// Traces rather than the breadth-first TestSpecRPCGraphTraversal because each pending-delay step costs
+// a real multi-second wait, and the traversal replays every path from scratch (re-incurring every
+// prefix wait). A trace pays each wait once.
 
 import (
 	"testing"

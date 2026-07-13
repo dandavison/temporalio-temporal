@@ -199,14 +199,9 @@ func (h *saaHarness) traverse(t *testing.T) {
 }
 
 // checkCompleteness is an informational (never-failing) coverage report: it compares what this run
-// verified/skipped against the model's OWN reachable set, computed to fixpoint with no depth bound
-// (server-free — it walks Model() alone). Cells the model can reach but this run did not are the
-// ones the depth cap left out. It does NOT fail — under a depth cap that is expected — it just
-// prints them, so raising SAASPEC_MAX_DEPTH and watching the list shrink is the way to see how much
-// deeper the walk still has to go.
+// verified/skipped against the model's own reachable set (computed server-free to fixpoint, no depth
+// bound). Cells the model can reach but this run did not are what the depth cap left out.
 func (h *saaHarness) checkCompleteness(t *testing.T, verifiedFine, skippedFine map[string]bool) {
-	// Off by default so the traversal's failures are just spec violations. Set SAASPEC_COMPLETENESS=1
-	// to enable the type-(A) reachable-but-unexercised report.
 	if os.Getenv("SAASPEC_COMPLETENESS") == "" {
 		return
 	}
@@ -296,10 +291,9 @@ func (a *saaActor) apply(t require.TestingT, e saaspec.Event, cur saaspec.Abstra
 	if saaIsWallClock(e.Kind) {
 		return a.applyWallClock(t, e, cur, out, final)
 	}
-	// Worker RPCs authenticate with a task token, which the actor only holds after a poll. On a path
-	// that never polled (e.g. a fresh SCHEDULED or PAUSED activity) there is no token; sending an
-	// empty token yields a different error than the token-validation NotFound the spec means, so this
-	// edge is not drivable here. The coverage ledger records the skip.
+	// Worker RPCs need a task token, held only after a poll. On a never-polled path there is no token,
+	// and an empty token yields a different error than the spec's NotFound, so the edge is not drivable
+	// here; the ledger records the skip.
 	if saaNeedsToken(e.Kind) && a.token == nil {
 		return saaSkippedNoToken
 	}
@@ -348,10 +342,8 @@ func (a *saaActor) applyPoll(cur saaspec.AbstractState, out saaspec.Outcome, fin
 	poll := saaspec.Event{Kind: saaspec.Poll}
 	switch {
 	case cur.Status == saaspec.Scheduled && out.Next.Status == saaspec.Started:
-		// Positive: a SCHEDULED+Dispatchable activity must be dispatched to a worker. The dispatch-delay
-		// traces shorten this deadline so "Dispatchable" means "dispatches promptly" — which is how it
-		// distinguishes an immediate dispatch (e.g. reset discarding a backoff) from one still waiting
-		// out a delay.
+		// Positive: a SCHEDULED+Dispatchable activity must be dispatched. The dispatch-delay traces
+		// shorten this deadline so "Dispatchable" means "dispatches promptly".
 		timeout := 10 * time.Second
 		if a.h.positivePollTimeout > 0 {
 			timeout = a.h.positivePollTimeout
@@ -370,10 +362,9 @@ func (a *saaActor) applyPoll(cur saaspec.AbstractState, out saaspec.Outcome, fin
 				a.edge(poll, cur.Status), resp.GetAttempt(), out.Next.Count, a.pathLine())
 		}
 	case cur.Status == saaspec.Scheduled && cur.Dispatchability != saaspec.Dispatchable:
-		// Delayed dispatch: a start_delay or retry backoff is still pending, so the model says the
-		// poll finds no task (it stays SCHEDULED). Verify with a negative poll — but only when the
-		// pending delay is long enough to outlast a valid long poll; under the fast-backoff configs
-		// it is not, so there we rely on the state comparison below alone.
+		// Delayed dispatch: a start_delay or backoff is still pending, so the poll finds no task. Verify
+		// with a negative poll, but only when the delay outlasts a valid long poll (not under the
+		// fast-backoff configs, where the state comparison below suffices).
 		if dur := a.h.dispatchDelay(cur.Dispatchability); dur > saaNegativePollTimeout {
 			if resp := a.pollForTask(t, saaNegativePollTimeout); resp != nil {
 				if final {
@@ -384,14 +375,10 @@ func (a *saaActor) applyPoll(cur saaspec.AbstractState, out saaspec.Outcome, fin
 			}
 		}
 	case cur.Status == saaspec.Paused && !saaSkipNegativePoll():
-		// Negative safety check: a PAUSED activity must not be dispatchable. Pause bumped the attempt
-		// stamp, invalidating the pending dispatch task, so matching must have nothing. This is the
-		// only status where a spurious dispatch is possible (worker-token and terminal statuses cannot
-		// dispatch), so it is the only place we pay the full long-poll wait. The timeout must exceed
-		// MinLongPollTimeout or the frontend rejects the poll without ever consulting matching. It is
-		// also the dominant cost of deep walks, so SAASPEC_NO_NEGATIVE_POLL disables it (the
-		// ReadComponent state check below still confirms Paused/stamp/dispatch; only the matching-level
-		// "no task" assertion is dropped).
+		// A PAUSED activity must not be dispatchable (Pause bumped the stamp, invalidating the pending
+		// task). The only status where a spurious dispatch is possible, so the only place we pay the
+		// full long-poll wait; the timeout must exceed MinLongPollTimeout. SAASPEC_NO_NEGATIVE_POLL
+		// disables it — the state check below still confirms Paused/stamp/dispatch.
 		if resp := a.pollForTask(t, saaNegativePollTimeout); resp != nil {
 			if final {
 				t.Errorf("%s: model expected no advance but a task WAS dispatched\n%s",
@@ -400,8 +387,7 @@ func (a *saaActor) applyPoll(cur saaspec.AbstractState, out saaspec.Outcome, fin
 			return saaMismatch
 		}
 	}
-	// For all other statuses a dispatch is structurally impossible, so we skip the poll entirely and
-	// rely on the ReadComponent state comparison below (which also catches the pause stamp bump).
+	// Other statuses cannot dispatch, so skip the poll and rely on the state comparison below.
 	obs, err := a.observed()
 	require.NoError(t, err)
 	if final {
@@ -416,13 +402,10 @@ func (a *saaActor) applyPoll(cur saaspec.AbstractState, out saaspec.Outcome, fin
 	return saaMismatch
 }
 
-// applyWallClock drives a wall-clock event — one of the four timeouts, or a dispatch-delay clock
-// (StartDelayElapses / BackoffElapses) — by waiting long enough for that clock to elapse on the
-// server, then asserting the observed state equals Model.Next. The single check covers all cases:
-// a timeout that fires changes the status (TimedOut, or a retry); a stale timeout or a stale elapse
-// changes nothing; and a live elapse changes only the latent Dispatchability (excluded from SameObserved),
-// so the status is unchanged and it is a subsequent Poll that confirms the activity became
-// dispatchable.
+// applyWallClock drives a wall-clock event (a timeout or a dispatch-delay clock) by waiting for it to
+// elapse on the server, then asserting the observed state equals Model.Next. A firing timeout changes
+// status; a stale timeout/elapse changes nothing; a live elapse changes only the latent Dispatchability
+// (excluded from SameObserved), which a later Poll confirms.
 func (a *saaActor) applyWallClock(t require.TestingT, e saaspec.Event, cur saaspec.AbstractState, out saaspec.Outcome, final bool) saaApply {
 	time.Sleep(a.h.eventClock(e, cur) + saaWallClockSettle)
 	obs, err := a.observed()
@@ -450,10 +433,9 @@ func (h *saaHarness) eventClock(e saaspec.Event, cur saaspec.AbstractState) time
 	}
 }
 
-// dispatchDelay is how long the harness configured the pending delay to last, so it knows how
-// long to wait for the clock to fire and whether a negative poll can validly sit inside the window.
-// For a backoff, a worker-supplied next_retry_delay overrides the policy interval, so it wins here
-// too — that is what lets a trace prove the override is honored.
+// dispatchDelay is how long the harness configured the pending delay to last. For a backoff, a
+// worker-supplied next_retry_delay overrides the policy interval — that is what lets a trace prove
+// the override is honored.
 func (h *saaHarness) dispatchDelay(d saaspec.Dispatchability) time.Duration {
 	switch d {
 	case saaspec.StartDelayPending:
@@ -698,15 +680,10 @@ func (a *saaActor) pollForTask(t require.TestingT, timeout time.Duration) *workf
 		Identity:  "worker",
 	})
 	if err != nil {
-		// Matching signals "waited, found nothing" with an empty response and a nil error (see
-		// matching_engine.go: errNoTasks -> emptyPoll...Response, returned just before the deadline via
-		// returnEmptyTaskTimeBudget). So a genuine no-task result never surfaces as an error. Any error
-		// here means the poll did not complete cleanly — the server rejected it (e.g.
-		// ErrContextTimeoutTooShort when the deadline is below MinLongPollTimeout=2s) or our deadline
-		// fired before matching returned its verdict. Treating that as "no task" is the vacuity trap
-		// (a paused activity could dispatch and we would never notice), so fail loudly. The one benign
-		// case is teardown: if the traversal's parent context is done, the poll errors through no fault
-		// of the server.
+		// Matching signals "waited, found nothing" with an empty response and a nil error, so a genuine
+		// no-task result never surfaces as an error. Any error here means the poll did not complete
+		// cleanly (e.g. deadline below MinLongPollTimeout, or our deadline fired first); treating that as
+		// "no task" would be vacuous, so fail loudly. Teardown (parent context done) is the benign case.
 		if a.h.ctx.Err() != nil {
 			return nil
 		}
@@ -777,10 +754,9 @@ func saaCellKey(s saaspec.AbstractState, kind saaspec.EventKind) string {
 	return saaFingerprint(s) + " / " + saaKindName(kind)
 }
 
-// saaModelReachable computes, purely from Model() (no server), every (state, event) cell the model
-// can reach from Initial(cfg) by following non-reject edges to fixpoint. States are deduplicated by
-// fingerprint, so the walk is finite and terminates. This is the reference set the traversal's
-// verified/skipped cells are checked against, independent of any depth bound.
+// saaModelReachable computes, purely from Model() (no server), every (state, event) cell reachable
+// from Initial(cfg) by following non-reject edges to fixpoint (states deduped by fingerprint). This
+// is the reference set the traversal's coverage is checked against, independent of any depth bound.
 func saaModelReachable(cfg saaspec.Config) map[string]saaspec.EventKind {
 	cells := map[string]saaspec.EventKind{}
 	start := saaspec.Initial(cfg)

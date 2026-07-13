@@ -1,5 +1,14 @@
-// Order of precedence is Cancel > Reset > Pause
-// I.e. you can Cancel in {Reset,Pause}Requested, and you can Reset in PauseRequested.
+// Activity product behavior specification
+//
+// The spec is defined by a collection of functions in this file that each represent one of 3 sorts
+// of events:
+//
+// 1. An RPC
+// 2. A timeout (schedule-to-close, schedule-to-start, start-to-close, heartbeat)
+// 3. A dispatch delay (start delay, retry backoff)
+//
+// The functions accept the current activity state, and information about the event, and return the
+// activity state after the event's consequences.
 package saaspec
 
 // Initial is the state immediately after a successful StartActivityExecution.
@@ -61,18 +70,20 @@ func Model(cfg Config, s AbstractState, e Event) Outcome {
 	}
 }
 
-// Below, each function must return Outcome{Next: n}`), a `noop(s)`, or a `reject(s, kind)`.
+// Each function below returns Outcome{Next: n}, noop(s), or reject(s, kind).
+//
+// Note: The spec implies an "order of precedence": Cancel > Reset > Pause. I.e. you can Cancel in
+// {Reset,Pause}Requested, and you can Reset in PauseRequested, but neither a Pause nor a Reset will
+// undo a Cancel request.
 
-// Worker PollActivityTaskQueue advances a Scheduled attempt to Started, but only once its dispatch
-// is available: while a start_delay or retry backoff is still pending there is no task to hand out.
+// PollActivityTaskQueue advances a dispatchable Scheduled attempt to Started.
 func poll(_ Config, s AbstractState, _ Event) Outcome {
 	if s.Status != Scheduled || s.Dispatchability != Dispatchable {
-		// No dispatchable activity task; no state change.
 		return noop(s)
 	}
 	n := s
 	n.Status = Started
-	n.FirstAttemptStarted = true // set once, when the first attempt is picked up
+	n.FirstAttemptStarted = true
 	return Outcome{Next: n}
 }
 
@@ -85,7 +96,7 @@ func respondCompleted(_ Config, s AbstractState, _ Event) Outcome {
 	case Started, PauseRequested, CancelRequested, ResetRequested:
 		n := s
 		n.Status = Completed
-		n.ResetHeartbeats = false // terminal transition clears the deferred reset-heartbeat flag
+		n.ResetHeartbeats = false
 		return Outcome{Next: n}
 	case Scheduled, Paused:
 		return reject(s, NotFound)
@@ -116,13 +127,13 @@ func respondFailed(cfg Config, s AbstractState, e Event) Outcome {
 		} else {
 			// no retry: terminal failure
 			n.Status = Failed
-			n.ResetHeartbeats = false // terminal transition clears the deferred reset-heartbeat flag
+			n.ResetHeartbeats = false
 		}
 		return Outcome{Next: n}
 	case CancelRequested:
 		n := s
 		n.Status = Failed
-		n.ResetHeartbeats = false // terminal transition clears the deferred reset-heartbeat flag
+		n.ResetHeartbeats = false
 		return Outcome{Next: n}
 	case Scheduled, Paused:
 		return reject(s, NotFound) // task token invalid
@@ -131,7 +142,7 @@ func respondFailed(cfg Config, s AbstractState, e Event) Outcome {
 	}
 }
 
-// RequestCancelActivityExecution requests cancellation an activity.
+// RequestCancelActivityExecution requests cancellation of an activity.
 func requestCancel(_ Config, s AbstractState, e Event) Outcome {
 	if s.Status.Terminal() {
 		return reject(s, FailedPrecondition)
@@ -166,7 +177,7 @@ func respondCanceled(_ Config, s AbstractState, _ Event) Outcome {
 	case CancelRequested:
 		n := s
 		n.Status = Canceled
-		n.ResetHeartbeats = false // terminal transition clears the deferred reset-heartbeat flag
+		n.ResetHeartbeats = false
 		return Outcome{Next: n}
 	case Scheduled, Paused:
 		return reject(s, NotFound) // task token invalid
@@ -192,7 +203,7 @@ func terminate(_ Config, s AbstractState, e Event) Outcome {
 	case Scheduled, Paused, Started, PauseRequested, CancelRequested, ResetRequested:
 		n := s
 		n.Status = Terminated
-		n.ResetHeartbeats = false // terminal transition clears the deferred reset-heartbeat flag
+		n.ResetHeartbeats = false
 		return Outcome{Next: n}
 	default:
 		panic("SAA model does not handle Terminate while in status " + s.Status.String())
@@ -287,9 +298,8 @@ func unpause(_ Config, s AbstractState, e Event) Outcome {
 	}
 }
 
-// ResetActivityExecution makes the activity behave as if it were starting its first attempt, except
-// for the ScheduleToCLose timer which keeps running. The reset is not applied until any current
-// attempt has ended.
+// ResetActivityExecution makes the activity behave as if starting its first attempt, except the
+// schedule-to-close timer keeps running. Applied only once any current attempt has ended.
 func reset(cfg Config, s AbstractState, e Event) Outcome {
 	if s.Status.Terminal() {
 		return reject(s, FailedPrecondition)
@@ -299,9 +309,8 @@ func reset(cfg Config, s AbstractState, e Event) Outcome {
 		n := s
 		n.Count = 1
 		n.Stamp++
-		// A reset discards a pending retry backoff (the reset attempt dispatches immediately) but
-		// preserves a pending start_delay (it keeps waiting for the original schedule_time +
-		// start_delay), so reset behaves like unpause during a start delay.
+		// Reset discards a pending retry backoff (the reset attempt dispatches immediately) but keeps
+		// a pending start_delay.
 		if s.Dispatchability == BackoffPending {
 			n.Dispatchability = Dispatchable
 		}
@@ -329,8 +338,7 @@ func reset(cfg Config, s AbstractState, e Event) Outcome {
 		}
 		n.ResetHeartbeats = e.ResetHeartbeat
 		n.ResetRestoreOptions = e.RestoreOriginal
-		// Current attempt remains live and reset will be ignored if it completes; do not invalidate
-		// attempt tasks.
+		// Current attempt stays live; do not invalidate its tasks.
 		return Outcome{Next: n}
 	case CancelRequested, ResetRequested:
 		// TODO(dan): should we support repeat reset requests?
@@ -363,14 +371,21 @@ func updateOptions(cfg Config, s AbstractState, e Event) Outcome {
 	}
 }
 
-// A timeout task is not an RPC and never rejects: when it fires it either drives a transition or,
-// if it is stale (its attempt has moved on) or the activity has closed, no-ops.
+// The events below represent timeouts (scheduleToStartElapses, scheduleToCloseElapses,
+// startToCloseElapses, heartbeatElapses) or dispatch delays (startDelayElapses, backoffElapses).
+// More precisely, they represent the end of a time window configured by the harness: whether or not
+// a timer task actually fires around that time depends on whether this nominal timeout or delay
+// should correspond to a real one in the product spec, and on the correctness of the
+// implementation. These events never reject; they either cause a transition, or no-op.
+//
+// An example of a nominal timeout that does not correspond to a real timeout in the product spec is
+// a schedule-to-close time configured shorter than the start delay. Interpreted naively (counting
+// from schedule time), its window would end during the start delay. But in fact, under the spec,
+// the schedule-to-close timer starts to count down at the end of the start delay.
 
-// ScheduleToStartElapses: the attempt was not picked up by a worker within the schedule-to-start
-// deadline. The deadline is measured from the dispatch time, so it is pushed back by a start_delay
-// or a retry backoff: while the dispatch is still delayed the schedule-to-start clock has not
-// started and this is a no-op. Only a Dispatchable-but-still-SCHEDULED attempt times out this way;
-// once started the deadline is satisfied, and Pause bumps the stamp so the pending task is stale.
+// scheduleToStartElapses represents the end of the nominal schedule-to-start timeout configured by
+// the harness. The product behavior is that the timeout starts counting from dispatch time, so a
+// start_delay or retry backoff effectively pushes it back.
 func scheduleToStartElapses(_ Config, s AbstractState, _ Event) Outcome {
 	if s.Status != Scheduled || s.Dispatchability != Dispatchable {
 		return noop(s)
@@ -380,11 +395,10 @@ func scheduleToStartElapses(_ Config, s AbstractState, _ Event) Outcome {
 	return Outcome{Next: n}
 }
 
-// ScheduleToCloseElapses: the activity exceeded its total schedule-to-close deadline. The deadline
-// is anchored at first-dispatch time (schedule_time + start_delay), so it does not run during a
-// start_delay — a no-op while StartDelayPending. Once running it spans the whole lifetime and — a
-// deliberate SAA departure from workflow-activity behavior — is NOT suspended while paused, so any
-// other non-terminal status times out.
+// scheduleToCloseElapses represents the end of the nominal schedule-to-close timeout configured by
+// the harness. The product behavior is that the deadline is anchored at first-dispatch time
+// (schedule_time + start_delay), so it does not run during a start_delay, and — unlike a workflow
+// activity — is not suspended while paused.
 func scheduleToCloseElapses(_ Config, s AbstractState, _ Event) Outcome {
 	if s.Dispatchability == StartDelayPending || s.Status.Terminal() {
 		return noop(s)
@@ -395,17 +409,18 @@ func scheduleToCloseElapses(_ Config, s AbstractState, _ Event) Outcome {
 	return Outcome{Next: n}
 }
 
-// StartToCloseElapses and HeartbeatElapses both mean the running attempt ended by a per-attempt
-// timeout (it ran too long, or the worker stopped heartbeating). They have the same effect.
+// startToCloseElapses and heartbeatElapses represent the end of the nominal per-attempt timeouts
+// configured by the harness. The product behavior is that either one ends the running attempt.
 func startToCloseElapses(cfg Config, s AbstractState, _ Event) Outcome {
 	return attemptTimedOut(cfg, s)
 }
-func heartbeatElapses(cfg Config, s AbstractState, _ Event) Outcome { return attemptTimedOut(cfg, s) }
+func heartbeatElapses(cfg Config, s AbstractState, _ Event) Outcome {
+	return attemptTimedOut(cfg, s)
+}
 
-// StartDelayElapses fires when wall-clock reaches schedule_time + start_delay, making the delayed
-// first dispatch available. It only affects an attempt still waiting on the start delay; the status
-// is unchanged (a Paused activity stays Paused, but its dispatch is no longer delayed, so unpausing
-// it dispatches immediately). Any other Dispatchability means the start delay is irrelevant — a no-op.
+// startDelayElapses represents the end of the nominal start_delay window configured by the harness.
+// The product behavior is that the delayed first dispatch becomes available; the status is unchanged
+// (a Paused activity stays Paused but now dispatches on unpause).
 func startDelayElapses(_ Config, s AbstractState, _ Event) Outcome {
 	if s.Dispatchability != StartDelayPending {
 		return noop(s)
@@ -415,8 +430,8 @@ func startDelayElapses(_ Config, s AbstractState, _ Event) Outcome {
 	return Outcome{Next: n}
 }
 
-// BackoffElapses fires when wall-clock reaches complete_time + retry interval, making the delayed
-// retry dispatch available. Symmetric to StartDelayElapses for the backoff case.
+// backoffElapses represents the end of the nominal retry-backoff window configured by the harness.
+// The product behavior is that the delayed retry dispatch becomes available; symmetric to startDelayElapses.
 func backoffElapses(_ Config, s AbstractState, _ Event) Outcome {
 	if s.Dispatchability != BackoffPending {
 		return noop(s)
@@ -428,6 +443,7 @@ func backoffElapses(_ Config, s AbstractState, _ Event) Outcome {
 
 // helpers
 
+// attemptTimedOut is a shared per-attempt timeout: retry if attempts remain, else TimedOut
 func attemptTimedOut(cfg Config, s AbstractState) Outcome {
 	if s.Status.Terminal() {
 		return noop(s) // already closed; the timer is stale
@@ -448,14 +464,14 @@ func attemptTimedOut(cfg Config, s AbstractState) Outcome {
 			n.Stamp++ // invalidate last attempt's tasks
 		} else {
 			n.Status = TimedOut
-			n.ResetHeartbeats = false // terminal transitions clear the flag
+			n.ResetHeartbeats = false
 		}
 		return Outcome{Next: n}
 	case CancelRequested:
-		// Timeout leads to TimedOut, not Canceled (similarly, RespondFailed leads to Failed not Canceled)
+		// Timeout -> TimedOut, not Canceled.
 		n := s
 		n.Status = TimedOut
-		n.ResetHeartbeats = false // terminal transitions clear the flag
+		n.ResetHeartbeats = false
 		return Outcome{Next: n}
 	case Scheduled, Paused:
 		// TODO(dan): should this be impossible?
@@ -471,7 +487,7 @@ func applyDeferredReset(cfg Config, s AbstractState) Outcome {
 	n := s
 	n.Count = 1
 	n.Stamp++                        // invalidate last attempt's tasks
-	n.Dispatchability = Dispatchable // dispatch immediately: reset discards remaining retry backoff (and we're beyond start delay)
+	n.Dispatchability = Dispatchable // reset discards remaining backoff
 	if s.ResetRestoreOptions && cfg.HasScheduleToClose {
 		n.ScheduleToCloseStamp++
 	}
