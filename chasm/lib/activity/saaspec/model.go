@@ -15,6 +15,9 @@ func noop(s AbstractState) Outcome                { return Outcome{Next: s, Reje
 func reject(s AbstractState, k ErrorKind) Outcome { return Outcome{Next: s, Reject: k} }
 
 func Model(cfg Config, s AbstractState, e Event) Outcome {
+	if s.Status == Unspecified {
+		panic("unreachable: no event is driven from the pre-creation zero value")
+	}
 	switch e.Kind {
 	case Poll:
 		return poll(cfg, s, e)
