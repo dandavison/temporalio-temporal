@@ -127,6 +127,7 @@ func saaEventLabel(e saaspec.Event) string {
 		add(e.SameRequestID, "sameRequestID")
 	case saaspec.UpdateOptions:
 		add(e.SetsStartDelay, "setsStartDelay")
+		add(e.SetsInvalidRetryPolicy, "setsInvalidRetryPolicy")
 	}
 	if len(flags) == 0 {
 		return saaKindName(e.Kind)
