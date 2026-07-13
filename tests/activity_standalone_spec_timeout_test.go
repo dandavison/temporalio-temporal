@@ -31,25 +31,18 @@ type saaTimeoutTrace struct {
 // timeout under test fires while the activity is still SCHEDULED and pending dispatch.
 const saaLongStartDelay = time.Hour
 
+// To read these: `timeout` is the timeout that fires first; `path` is the events leading up to it.
 var saaTimeoutTraces = []saaTimeoutTrace{
-	// The schedule-to-close deadline keeps running while paused.
-	{name: "schedule-to-close/elapses-while-paused", timeout: saaspec.ScheduleToCloseFires, cfg: saaspec.Config{HasScheduleToClose: true}, path: []saaspec.Event{{Kind: saaspec.Pause}}},
+	{name: "schedule-to-close/elapses-while-paused", timeout: saaspec.ScheduleToCloseFires, path: []saaspec.Event{{Kind: saaspec.Pause}}, cfg: saaspec.Config{HasScheduleToClose: true}},
 	{name: "schedule-to-start/elapses-while-scheduled", timeout: saaspec.ScheduleToStartFires, cfg: saaspec.Config{HasScheduleToStart: true}},
-	// Stale-task no-op: pausing a SCHEDULED activity bumps the stamp, invalidating the pending
-	// schedule-to-start task; it must not fire. Model(Paused, ScheduleToStartFires) should be a
-	// no-op, so the harness waits and asserts the activity is still PAUSED.
-	{name: "schedule-to-start/elapses-while-paused", timeout: saaspec.ScheduleToStartFires, cfg: saaspec.Config{HasScheduleToStart: true}, path: []saaspec.Event{{Kind: saaspec.Pause}}},
-	{name: "start-to-close/elapses-while-started/retries-remain", timeout: saaspec.StartToCloseFires, cfg: saaspec.Config{}, path: []saaspec.Event{{Kind: saaspec.Poll}}},
-	{name: "start-to-close/elapses-while-started/last-attempt", timeout: saaspec.StartToCloseFires, cfg: saaspec.Config{MaxAttempts: 1}, path: []saaspec.Event{{Kind: saaspec.Poll}}},
-	{name: "heartbeat/elapses-while-started/retries-remain", timeout: saaspec.HeartbeatFires, cfg: saaspec.Config{HasHeartbeat: true}, path: []saaspec.Event{{Kind: saaspec.Poll}}},
-	{name: "heartbeat/elapses-while-started/last-attempt", timeout: saaspec.HeartbeatFires, cfg: saaspec.Config{HasHeartbeat: true, MaxAttempts: 1}, path: []saaspec.Event{{Kind: saaspec.Poll}}},
-
-	// Dispatch-delay interaction with the timeouts: a long start_delay keeps the first attempt pending
-	// for the whole trace, and both schedule-to-start and schedule-to-close are anchored to the
-	// first-dispatch time (schedule_time + start_delay). So neither may fire while the dispatch is
-	// still delayed — the activity stays SCHEDULED — i.e. Model(StartDelayPending, *) is a no-op.
-	{name: "schedule-to-start/elapses-within-start-delay", timeout: saaspec.ScheduleToStartFires, cfg: saaspec.Config{HasStartDelay: true, HasScheduleToStart: true}, startDelay: saaLongStartDelay},
-	{name: "schedule-to-close/elapses-within-start-delay", timeout: saaspec.ScheduleToCloseFires, cfg: saaspec.Config{HasStartDelay: true, HasScheduleToClose: true}, startDelay: saaLongStartDelay},
+	{name: "schedule-to-start/elapses-while-paused", timeout: saaspec.ScheduleToStartFires, path: []saaspec.Event{{Kind: saaspec.Pause}}, cfg: saaspec.Config{HasScheduleToStart: true}},
+	{name: "start-to-close/elapses-while-started/retries-remain", timeout: saaspec.StartToCloseFires, path: []saaspec.Event{{Kind: saaspec.Poll}}, cfg: saaspec.Config{}},
+	{name: "start-to-close/elapses-while-started/last-attempt", timeout: saaspec.StartToCloseFires, path: []saaspec.Event{{Kind: saaspec.Poll}}, cfg: saaspec.Config{MaxAttempts: 1}},
+	{name: "heartbeat/elapses-while-started/retries-remain", timeout: saaspec.HeartbeatFires, path: []saaspec.Event{{Kind: saaspec.Poll}}, cfg: saaspec.Config{HasHeartbeat: true}},
+	{name: "heartbeat/elapses-while-started/last-attempt", timeout: saaspec.HeartbeatFires, path: []saaspec.Event{{Kind: saaspec.Poll}}, cfg: saaspec.Config{HasHeartbeat: true, MaxAttempts: 1}},
+	// Dispatch-delay interactions
+	{name: "schedule-to-start/elapses-within-start-delay", timeout: saaspec.ScheduleToStartFires, startDelay: saaLongStartDelay, cfg: saaspec.Config{HasStartDelay: true, HasScheduleToStart: true}},
+	{name: "schedule-to-close/elapses-within-start-delay", timeout: saaspec.ScheduleToCloseFires, startDelay: saaLongStartDelay, cfg: saaspec.Config{HasStartDelay: true, HasScheduleToClose: true}},
 }
 
 func (s *standaloneActivityTestSuite) TestSpecTimeouts() {
