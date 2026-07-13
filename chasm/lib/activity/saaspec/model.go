@@ -341,9 +341,13 @@ func reset(cfg Config, s AbstractState, e Event) Outcome {
 }
 
 // UpdateActivityExecutionOptions
-func updateOptions(cfg Config, s AbstractState, _ Event) Outcome {
+func updateOptions(cfg Config, s AbstractState, e Event) Outcome {
 	// TODO(dan): RestoreOriginal, field-mask merge. Does it re-dispatch when SCHEDULED?
 	if s.Status.Terminal() {
+		return reject(s, FailedPrecondition)
+	}
+	// start_delay is mutable only while the first dispatch is still pending
+	if e.SetsStartDelay && s.Dispatchability != StartDelayPending {
 		return reject(s, FailedPrecondition)
 	}
 	switch s.Status {

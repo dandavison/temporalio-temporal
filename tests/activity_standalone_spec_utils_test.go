@@ -162,6 +162,8 @@ func saaEventLabel(e saaspec.Event) string {
 		add(e.ResetHeartbeat, "resetHeartbeat")
 	case saaspec.Pause, saaspec.Terminate, saaspec.RequestCancel:
 		add(e.SameRequestID, "sameRequestID")
+	case saaspec.UpdateOptions:
+		add(e.SetsStartDelay, "setsStartDelay")
 	}
 	if len(flags) == 0 {
 		return saaKindName(e.Kind)

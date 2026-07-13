@@ -192,6 +192,7 @@ type Event struct {
 	ResetHeartbeat  bool // Reset / Unpause
 	ResetAttempts   bool // Unpause
 	SameRequestID   bool // Pause / Terminate / RequestCancel: repeat of the previous op's request id
+	SetsStartDelay  bool // UpdateOptions: the update changes start_delay
 }
 
 // ErrorKind is the API-level outcome the spec expects for a rejected or no-op call.

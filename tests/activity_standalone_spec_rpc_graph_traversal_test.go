@@ -573,9 +573,13 @@ func (a *saaActor) updateOptions(e saaspec.Event) error {
 	req := &workflowservice.UpdateActivityExecutionOptionsRequest{
 		Namespace: a.h.env.Namespace().String(), ActivityId: a.activityID, RunId: a.runID, Identity: "op",
 	}
-	if e.RestoreOriginal {
+	switch {
+	case e.RestoreOriginal:
 		req.RestoreOriginal = true
-	} else {
+	case e.SetsStartDelay:
+		req.ActivityOptions = &apiactivitypb.ActivityOptions{StartDelay: durationpb.New(time.Hour)}
+		req.UpdateMask = &fieldmaskpb.FieldMask{Paths: []string{"start_delay"}}
+	default:
 		// A minimal, always-valid update: re-set the heartbeat timeout. (RespondFailed-style
 		// retryability and richer option merges are refined when the model decides these cells.)
 		req.ActivityOptions = &apiactivitypb.ActivityOptions{HeartbeatTimeout: durationpb.New(time.Hour)}
@@ -811,6 +815,9 @@ func saaCandidateEvents() []saaspec.Event {
 	for _, k := range simple {
 		out = append(out, saaspec.Event{Kind: k})
 	}
+	// An update that changes start_delay: the model rejects it outside the StartDelayPending window
+	// (the only window it is mutable in), which is every state the RPC-only traversal reaches.
+	out = append(out, saaspec.Event{Kind: saaspec.UpdateOptions, SetsStartDelay: true})
 	for _, r := range []bool{false, true} {
 		out = append(out, saaspec.Event{Kind: saaspec.RespondFailed, Retryable: r})
 	}
