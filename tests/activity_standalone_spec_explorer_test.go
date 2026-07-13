@@ -74,6 +74,10 @@ func (s *standaloneActivityTestSuite) TestSpecExplorer() {
 var saaExplorerConfigs = []saaspec.Config{
 	{}, // no schedule-to-close, unlimited attempts
 	{HasScheduleToClose: true, HasScheduleToStart: true, HasHeartbeat: true, MaxAttempts: 3},
+	// Retries exhaust after the first attempt, so the RespondFailed exhaustion boundary
+	// (retryable failure with no retries left -> Failed) is reached at depth 2 rather than
+	// past the depth bound. See the completeness check.
+	{MaxAttempts: 1},
 }
 
 type saaExplorer struct {
