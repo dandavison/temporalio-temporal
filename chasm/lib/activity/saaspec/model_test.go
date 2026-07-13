@@ -3,7 +3,7 @@ package saaspec
 import "testing"
 
 // Smoke tests over the two worked examples, so the package starts green. As you fill in
-// Model(), add cases here (or rely on the explorer, which checks the whole graph).
+// Model(), add cases here (or rely on the graph traversal, which checks the whole graph).
 
 func TestInitial(t *testing.T) {
 	got := Initial(Config{HasScheduleToClose: true})
@@ -62,7 +62,7 @@ func TestPauseWhileStartedIsPauseRequested(t *testing.T) {
 
 // The tests below pin the six dispatch-delay requirements (start_delay and retry backoff
 // interacting with the timeouts and operator commands) at the spec level: they assert Model()
-// encodes the intended behavior. The server-side explorer checks the implementation against Model().
+// encodes the intended behavior. The server-side harness checks the implementation against Model().
 
 // backedOffRetry returns a Scheduled state with a pending retry backoff (attempt 2), reached the way
 // a worker would: poll the first attempt, then fail it retryably.

@@ -1,9 +1,9 @@
 package tests
 
-// Presentation and plumbing for the standalone-activity spec explorer: SAASPEC_EVENT parsing,
+// Presentation and plumbing for the standalone-activity spec harness: SAASPEC_EVENT parsing,
 // error classification, and the failure-report formatting. None of this expresses the harness's
-// verification logic — that lives in activity_standalone_spec_explorer_test.go. It is split out so
-// that file reads as the core: explore → verifyPath → apply → verify.
+// verification logic — that lives in activity_standalone_spec_rpc_graph_traversal_test.go. It is split out so
+// that file reads as the core: traverse → verifyPath → apply → verify.
 
 import (
 	"errors"
@@ -75,12 +75,12 @@ func saaRejectKind(err error) saaspec.ErrorKind {
 }
 
 func saaFailure(retryable bool, nextRetryDelay time.Duration) *failurepb.Failure {
-	info := &failurepb.ApplicationFailureInfo{Type: "explore", NonRetryable: !retryable}
+	info := &failurepb.ApplicationFailureInfo{Type: "traverse", NonRetryable: !retryable}
 	if nextRetryDelay > 0 {
 		info.NextRetryDelay = durationpb.New(nextRetryDelay)
 	}
 	return &failurepb.Failure{
-		Message:     "explore",
+		Message:     "traverse",
 		FailureInfo: &failurepb.Failure_ApplicationFailureInfo{ApplicationFailureInfo: info},
 	}
 }

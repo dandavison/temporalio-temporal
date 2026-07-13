@@ -138,7 +138,7 @@ func (s AbstractState) SameObserved(o AbstractState) bool {
 	return s == o
 }
 
-// Config captures the start-time options that change transition behavior. The explorer
+// Config captures the start-time options that change transition behavior. The graph traversal
 // runs the full search once per template (see the plan's config-template table).
 type Config struct {
 	HasScheduleToClose bool
@@ -223,7 +223,7 @@ type Observed struct {
 	DispatchTimeSet      bool
 }
 
-// Abstract maps the observed internal snapshot onto the spec's AbstractState. The explorer
+// Abstract maps the observed internal snapshot onto the spec's AbstractState. The harness
 // calls it to convert what it reads from the server into the value it compares with Model().
 func Abstract(o Observed) AbstractState {
 	return AbstractState{

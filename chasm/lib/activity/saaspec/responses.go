@@ -14,7 +14,7 @@ import (
 // called. Some of it is the ONLY external evidence of an internal state, so it cannot be
 // checked by comparing persisted state alone.
 //
-// The functions here predict those returned values from AbstractState. The explorer calls
+// The functions here predict those returned values from AbstractState. The harness calls
 // the relevant one after issuing the corresponding RPC and asserts the real response
 // matches.
 //
@@ -29,7 +29,7 @@ import (
 //     internal status onto the public enums that users actually see. The mapping has real
 //     logic and is only observable through Describe.
 //
-//   - RecordActivityTaskStarted response .Attempt: checked directly by the explorer as
+//   - RecordActivityTaskStarted response .Attempt: checked directly by the harness as
 //     equal to AbstractState.Count after a poll. No spec function is needed — it is just a
 //     field we already model. Catches wrong attempt numbering after a reset.
 //
@@ -49,11 +49,11 @@ type HeartbeatFlags struct {
 
 // ExpectedHeartbeatFlags predicts the heartbeat-response flags for a status in which a
 // heartbeat is accepted: the token-valid statuses Started, CancelRequested, PauseRequested,
-// and ResetRequested. The explorer sends a heartbeat in one of those statuses and asserts
+// and ResetRequested. The harness sends a heartbeat in one of those statuses and asserts
 // the response flags equal this. In any other status it asserts the heartbeat is rejected
 // with NotFound, and does not call this function.
 //
-// How the explorer will use it: after issuing a heartbeat in a token-valid status it builds
+// How the harness will use it: after issuing a heartbeat in a token-valid status it builds
 // the real HeartbeatFlags from the response and asserts equality with
 // ExpectedHeartbeatFlags(currentState). To send a heartbeat it needs the task token from
 // the poll that reached STARTED; that token stays valid through

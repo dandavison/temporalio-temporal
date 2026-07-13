@@ -45,7 +45,7 @@ var saaTimeoutTraces = []saaTimeoutTrace{
 	{name: "schedule-to-close/elapses-within-start-delay", timeout: saaspec.ScheduleToCloseFires, startDelay: saaLongStartDelay, cfg: saaspec.Config{HasStartDelay: true, HasScheduleToClose: true}},
 }
 
-func (s *standaloneActivityTestSuite) TestSpecTimeouts() {
+func (s *standaloneActivityTestSuite) TestSpecTimeoutPaths() {
 	env := s.newTestEnv()
 	t := s.T()
 	ctx := s.Context()
@@ -53,16 +53,16 @@ func (s *standaloneActivityTestSuite) TestSpecTimeouts() {
 	chasmCtx, err := env.GetTestCluster().Host().ChasmContext(ctx)
 	require.NoError(t, err)
 
-	// Each trace is an independent subtest, so `-run 'TestSpecTimeouts/heartbeat'` selects by
+	// Each trace is an independent subtest, so `-run 'TestSpecTimeoutPaths/heartbeat'` selects by
 	// timeout/scenario (names embed a "/" hierarchy: e.g. "heartbeat/elapses-while-started/retries-remain").
 	for i, p := range saaTimeoutTraces {
 		t.Run(p.name, func(t *testing.T) {
-			ex := &saaExplorer{
+			h := &saaHarness{
 				env: env, ctx: ctx, chasmCtx: chasmCtx, nsID: env.NamespaceID().String(),
 				cfg: p.cfg, cfgIdx: i, shortTimeout: p.timeout, startDelay: p.startDelay,
 			}
 			// The trace reaches the source state via the RPC path, then fires the timeout under test.
-			ex.driveTrace(t, append(append([]saaspec.Event{}, p.path...), saaspec.Event{Kind: p.timeout}))
+			h.driveTrace(t, append(append([]saaspec.Event{}, p.path...), saaspec.Event{Kind: p.timeout}))
 		})
 	}
 }

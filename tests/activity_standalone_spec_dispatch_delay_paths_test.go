@@ -11,9 +11,9 @@ package tests
 // *Elapses event is realized by waiting for the real timer. The trace list is only coverage
 // selection.
 //
-// Why traces rather than the full breadth-first walk TestSpecExplorer runs: each pending-delay
+// Why traces rather than the full breadth-first walk TestSpecRPCGraphTraversal runs: each pending-delay
 // step costs a real multi-second wait or long poll (a delay must outlast the long-poll minimum to
-// be observable), and the explorer replays every path from a fresh activity, which would re-incur
+// be observable), and the traversal replays every path from a fresh activity, which would re-incur
 // every prefix wait. A trace incurs each wait once, so representative orderings fit the test's time
 // budget; an exhaustive walk of the delay dimension does not, absent clock control.
 
@@ -85,7 +85,7 @@ var saaDispatchTraces = []saaDispatchTrace{
 	},
 }
 
-func (s *standaloneActivityTestSuite) TestSpecDispatchDelays() {
+func (s *standaloneActivityTestSuite) TestSpecDispatchDelayPaths() {
 	env := s.newTestEnv()
 
 	for i, tr := range saaDispatchTraces {
@@ -95,7 +95,7 @@ func (s *standaloneActivityTestSuite) TestSpecDispatchDelays() {
 			ctx := s.Context()
 			chasmCtx, err := env.GetTestCluster().Host().ChasmContext(ctx)
 			require.NoError(t, err)
-			ex := &saaExplorer{
+			h := &saaHarness{
 				env: env, ctx: ctx, chasmCtx: chasmCtx, nsID: env.NamespaceID().String(),
 				cfg: tr.cfg, cfgIdx: i,
 				startDelay: tr.startDelay, retryInterval: tr.retryInterval, nextRetryDelay: tr.nextRetryDelay,
@@ -103,7 +103,7 @@ func (s *standaloneActivityTestSuite) TestSpecDispatchDelays() {
 				// delay window — that is how reset-discards (immediate) is told from still-delayed.
 				positivePollTimeout: saaNegativePollTimeout,
 			}
-			ex.driveTrace(t, tr.trace)
+			h.driveTrace(t, tr.trace)
 		})
 	}
 }
