@@ -36,6 +36,9 @@ var saaTimeoutTraces = []saaTimeoutTrace{
 	{name: "schedule-to-start/elapses-while-paused", timeout: saaspec.ScheduleToStartElapses, path: []saaspec.Event{{Kind: saaspec.Pause}}, cfg: saaspec.Config{HasScheduleToStart: true}},
 	{name: "start-to-close/elapses-while-started/retries-remain", timeout: saaspec.StartToCloseElapses, path: []saaspec.Event{{Kind: saaspec.Poll}}, cfg: saaspec.Config{}},
 	{name: "start-to-close/elapses-while-started/last-attempt", timeout: saaspec.StartToCloseElapses, path: []saaspec.Event{{Kind: saaspec.Poll}}, cfg: saaspec.Config{MaxAttempts: 1}},
+	// A worker that ignores a cancellation request must still time out: even with retries remaining,
+	// a per-attempt timeout in CANCEL_REQUESTED ends the activity as TimedOut (not a retry).
+	{name: "start-to-close/elapses-while-cancel-requested", timeout: saaspec.StartToCloseElapses, path: []saaspec.Event{{Kind: saaspec.Poll}, {Kind: saaspec.RequestCancel}}, cfg: saaspec.Config{}},
 	{name: "heartbeat/elapses-while-started/retries-remain", timeout: saaspec.HeartbeatElapses, path: []saaspec.Event{{Kind: saaspec.Poll}}, cfg: saaspec.Config{HasHeartbeat: true}},
 	{name: "heartbeat/elapses-while-started/last-attempt", timeout: saaspec.HeartbeatElapses, path: []saaspec.Event{{Kind: saaspec.Poll}}, cfg: saaspec.Config{HasHeartbeat: true, MaxAttempts: 1}},
 	// Dispatch-delay interactions
