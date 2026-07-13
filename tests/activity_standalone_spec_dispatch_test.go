@@ -2,12 +2,12 @@ package tests
 
 // Delayed-dispatch verification for the standalone-activity behavior spec: it checks the
 // implementation against the delayed-dispatch behavior that saaspec.Model() specifies via the
-// Dispatch field (start_delay / retry backoff) and the *Elapses events.
+// Dispatchability field (start_delay / retry backoff) and the *Elapses events.
 //
 // It drives model-generated traces: each trace is an event sequence run once on a single activity,
 // and at every step the harness asserts the observed state and pollability against Model(). The
 // harness carries no product logic — Model() alone decides, at each step, whether a poll should find
-// a task (Dispatch == Dispatchable) or nothing (a delay still pending), and what state results; a
+// a task (Dispatchability == Dispatchable) or nothing (a delay still pending), and what state results; a
 // *Elapses event is realized by waiting for the real timer. The trace list is only coverage
 // selection.
 //

@@ -369,16 +369,16 @@ func (a *saaActor) applyPoll(cur saaspec.AbstractState, out saaspec.Outcome, fin
 			t.Errorf("%s: dispatched task attempt number disagrees — server saw %d, model expected %d\n%s",
 				a.edge(poll, cur.Status), resp.GetAttempt(), out.Next.Count, a.pathLine())
 		}
-	case cur.Status == saaspec.Scheduled && cur.Dispatch != saaspec.Dispatchable:
+	case cur.Status == saaspec.Scheduled && cur.Dispatchability != saaspec.Dispatchable:
 		// Delayed dispatch: a start_delay or retry backoff is still pending, so the model says the
 		// poll finds no task (it stays SCHEDULED). Verify with a negative poll — but only when the
 		// pending delay is long enough to outlast a valid long poll; under the fast-backoff configs
 		// it is not, so there we rely on the state comparison below alone.
-		if dur := a.ex.dispatchDelay(cur.Dispatch); dur > saaNegativePollTimeout {
+		if dur := a.ex.dispatchDelay(cur.Dispatchability); dur > saaNegativePollTimeout {
 			if resp := a.pollForTask(t, saaNegativePollTimeout); resp != nil {
 				if final {
 					t.Errorf("%s: model expected no dispatch (%s pending) but a task WAS dispatched (attempt %d)\n%s",
-						a.edge(poll, cur.Status), cur.Dispatch, resp.GetAttempt(), a.pathLine())
+						a.edge(poll, cur.Status), cur.Dispatchability, resp.GetAttempt(), a.pathLine())
 				}
 				return saaMismatch
 			}
@@ -420,7 +420,7 @@ func (a *saaActor) applyPoll(cur saaspec.AbstractState, out saaspec.Outcome, fin
 // (StartDelayElapses / BackoffElapses) — by waiting long enough for that clock to elapse on the
 // server, then asserting the observed state equals Model.Next. The single check covers all cases:
 // a timeout that fires changes the status (TimedOut, or a retry); a stale timeout or a stale elapse
-// changes nothing; and a live elapse changes only the latent Dispatch (excluded from SameObserved),
+// changes nothing; and a live elapse changes only the latent Dispatchability (excluded from SameObserved),
 // so the status is unchanged and it is a subsequent Poll that confirms the activity became
 // dispatchable.
 func (a *saaActor) applyWallClock(t require.TestingT, e saaspec.Event, cur saaspec.AbstractState, out saaspec.Outcome, final bool) saaApply {
@@ -444,7 +444,7 @@ func (a *saaActor) applyWallClock(t require.TestingT, e saaspec.Event, cur saasp
 func (ex *saaExplorer) eventClock(e saaspec.Event, cur saaspec.AbstractState) time.Duration {
 	switch e.Kind {
 	case saaspec.StartDelayElapses, saaspec.BackoffElapses:
-		return ex.dispatchDelay(cur.Dispatch)
+		return ex.dispatchDelay(cur.Dispatchability)
 	default: // the four timeouts
 		return saaShortTimeout
 	}
@@ -454,7 +454,7 @@ func (ex *saaExplorer) eventClock(e saaspec.Event, cur saaspec.AbstractState) ti
 // long to wait for the clock to fire and whether a negative poll can validly sit inside the window.
 // For a backoff, a worker-supplied next_retry_delay overrides the policy interval, so it wins here
 // too — that is what lets a trace prove the override is honored.
-func (ex *saaExplorer) dispatchDelay(d saaspec.Dispatch) time.Duration {
+func (ex *saaExplorer) dispatchDelay(d saaspec.Dispatchability) time.Duration {
 	switch d {
 	case saaspec.StartDelayPending:
 		return ex.startDelay
@@ -764,7 +764,7 @@ func saaFingerprint(s saaspec.AbstractState) string {
 	count := min(s.Count, 3)
 	return fmt.Sprintf("%v|%d|%v|%v|%v|%v|%v|%v|%v",
 		s.Status, count, s.STCStamp > 0, s.ResetKeepPaused, s.ResetHeartbeats,
-		s.ResetRestoreOptions, s.FirstAttemptStarted, s.DispatchTimeSet, s.Dispatch)
+		s.ResetRestoreOptions, s.FirstAttemptStarted, s.DispatchTimeSet, s.Dispatchability)
 }
 
 // saaCellKey identifies a (state, event kind) cell at fingerprint granularity — the unit the

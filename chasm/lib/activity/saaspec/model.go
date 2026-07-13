@@ -9,7 +9,7 @@ func Initial(cfg Config) AbstractState {
 		s.STCStamp = 1 // bumped by TransitionScheduled when STC is set
 	}
 	if cfg.HasStartDelay {
-		s.Dispatch = StartDelayPending // first dispatch waits until schedule_time + start_delay
+		s.Dispatchability = StartDelayPending // first dispatch waits until schedule_time + start_delay
 	}
 	return s
 }
@@ -66,7 +66,7 @@ func Model(cfg Config, s AbstractState, e Event) Outcome {
 // Worker PollActivityTaskQueue advances a Scheduled attempt to Started, but only once its dispatch
 // is available: while a start_delay or retry backoff is still pending there is no task to hand out.
 func poll(_ Config, s AbstractState, _ Event) Outcome {
-	if s.Status != Scheduled || s.Dispatch != Dispatchable {
+	if s.Status != Scheduled || s.Dispatchability != Dispatchable {
 		// No dispatchable activity task; no state change.
 		return noop(s)
 	}
@@ -107,7 +107,7 @@ func respondFailed(cfg Config, s AbstractState, e Event) Outcome {
 		n := s
 		if e.Retryable && retriesRemaining {
 			n.Status = Scheduled
-			n.Dispatch = BackoffPending // the retry waits for the backoff interval
+			n.Dispatchability = BackoffPending // the retry waits for the backoff interval
 			if s.Status == PauseRequested {
 				n.Status = Paused // pause takes effect on the retry
 			}
@@ -302,8 +302,8 @@ func reset(cfg Config, s AbstractState, e Event) Outcome {
 		// A reset discards a pending retry backoff (the reset attempt dispatches immediately) but
 		// preserves a pending start_delay (it keeps waiting for the original schedule_time +
 		// start_delay), so reset behaves like unpause during a start delay.
-		if s.Dispatch == BackoffPending {
-			n.Dispatch = Dispatchable
+		if s.Dispatchability == BackoffPending {
+			n.Dispatchability = Dispatchable
 		}
 		if s.Status == Paused && e.KeepPaused {
 			n.DispatchTimeSet = false
@@ -368,7 +368,7 @@ func updateOptions(cfg Config, s AbstractState, _ Event) Outcome {
 // started and this is a no-op. Only a Dispatchable-but-still-SCHEDULED attempt times out this way;
 // once started the deadline is satisfied, and Pause bumps the stamp so the pending task is stale.
 func scheduleToStartFires(_ Config, s AbstractState, _ Event) Outcome {
-	if s.Status != Scheduled || s.Dispatch != Dispatchable {
+	if s.Status != Scheduled || s.Dispatchability != Dispatchable {
 		return noop(s)
 	}
 	n := s
@@ -397,24 +397,24 @@ func heartbeatFires(cfg Config, s AbstractState, _ Event) Outcome    { return at
 // StartDelayElapses fires when wall-clock reaches schedule_time + start_delay, making the delayed
 // first dispatch available. It only affects an attempt still waiting on the start delay; the status
 // is unchanged (a Paused activity stays Paused, but its dispatch is no longer delayed, so unpausing
-// it dispatches immediately). Any other Dispatch means the start delay is irrelevant — a no-op.
+// it dispatches immediately). Any other Dispatchability means the start delay is irrelevant — a no-op.
 func startDelayElapses(_ Config, s AbstractState, _ Event) Outcome {
-	if s.Dispatch != StartDelayPending {
+	if s.Dispatchability != StartDelayPending {
 		return noop(s)
 	}
 	n := s
-	n.Dispatch = Dispatchable
+	n.Dispatchability = Dispatchable
 	return Outcome{Next: n}
 }
 
 // BackoffElapses fires when wall-clock reaches complete_time + retry interval, making the delayed
 // retry dispatch available. Symmetric to StartDelayElapses for the backoff case.
 func backoffElapses(_ Config, s AbstractState, _ Event) Outcome {
-	if s.Dispatch != BackoffPending {
+	if s.Dispatchability != BackoffPending {
 		return noop(s)
 	}
 	n := s
-	n.Dispatch = Dispatchable
+	n.Dispatchability = Dispatchable
 	return Outcome{Next: n}
 }
 
@@ -435,7 +435,7 @@ func attemptTimedOut(cfg Config, s AbstractState) Outcome {
 			if s.Status == PauseRequested {
 				n.Status = Paused
 			}
-			n.Dispatch = BackoffPending
+			n.Dispatchability = BackoffPending
 			n.Count++
 			n.Stamp++ // invalidate last attempt's tasks
 		} else {
@@ -462,8 +462,8 @@ func attemptTimedOut(cfg Config, s AbstractState) Outcome {
 func applyDeferredReset(cfg Config, s AbstractState) Outcome {
 	n := s
 	n.Count = 1
-	n.Stamp++                 // invalidate last attempt's tasks
-	n.Dispatch = Dispatchable // dispatch immediately: reset discards remaining retry backoff (and we're beyond start delay)
+	n.Stamp++                        // invalidate last attempt's tasks
+	n.Dispatchability = Dispatchable // dispatch immediately: reset discards remaining retry backoff (and we're beyond start delay)
 	if s.ResetRestoreOptions && cfg.HasScheduleToClose {
 		n.STCStamp++
 	}
