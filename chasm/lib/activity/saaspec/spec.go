@@ -171,6 +171,9 @@ type Event struct {
 	ResetAttempts   bool // Unpause
 	SameRequestID   bool // Pause / Terminate / RequestCancel: repeat of the previous op's request id
 	SetsStartDelay  bool // UpdateOptions: the update changes start_delay
+	// SetsInvalidRetryPolicy: UpdateOptions whose retry-policy subfield merge yields an invalid policy
+	// (e.g. initial_interval > maximum_interval). Rejected with InvalidArgument on any non-terminal state.
+	SetsInvalidRetryPolicy bool
 }
 
 // ErrorKind is the API-level outcome the spec expects for a rejected or no-op call.

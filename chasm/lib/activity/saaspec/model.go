@@ -354,6 +354,12 @@ func updateOptions(cfg Config, s AbstractState, e Event) Outcome {
 	if s.Status.Terminal() {
 		return reject(s, FailedPrecondition)
 	}
+	// An update whose merged retry policy is invalid is rejected before any state change. A
+	// single-attempt policy (MaxAttempts == 1) disables retries, so the server skips retry-interval
+	// validation entirely and the update is accepted like any other.
+	if e.SetsInvalidRetryPolicy && cfg.MaxAttempts != 1 {
+		return reject(s, InvalidArgument)
+	}
 	// start_delay is mutable only while the first dispatch is still pending
 	if e.SetsStartDelay && s.Dispatchability != StartDelayPending {
 		return reject(s, FailedPrecondition)

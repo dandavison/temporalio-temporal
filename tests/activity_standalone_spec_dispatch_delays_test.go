@@ -71,6 +71,21 @@ var saaDispatchTraces = []saaDispatchTrace{
 		name: "backoff/pause-then-unpause", cfg: saaspec.Config{MaxAttempts: 3}, retryInterval: saaDispatchWindow,
 		trace: []saaspec.Event{saaPoll, saaFailRetry, {Kind: saaspec.Pause}, {Kind: saaspec.Unpause}, saaPoll, saaBOElapse, saaPoll},
 	},
+	// pause/unpause during the backoff, then an unrelated options update: the pending backoff must
+	// survive the update and not re-dispatch early (regression guard for the unpause path clearing
+	// CurrentRetryInterval so a later re-dispatch loses the retry deadline).
+	{
+		name: "backoff/pause-unpause-then-update", cfg: saaspec.Config{MaxAttempts: 3}, retryInterval: saaDispatchWindow,
+		trace: []saaspec.Event{saaPoll, saaFailRetry, {Kind: saaspec.Pause}, {Kind: saaspec.Unpause}, {Kind: saaspec.UpdateOptions}, saaPoll, saaBOElapse, saaPoll},
+	},
+	// a worker next_retry_delay override followed by an unrelated options update: the override must be
+	// preserved (not recalculated to the short policy interval), so the retry stays delayed. The policy
+	// backoff is ~200ms, so if the update dropped the override the retry would dispatch during the
+	// negative poll and the trace would catch it.
+	{
+		name: "backoff/next-retry-delay-override-then-update", cfg: saaspec.Config{MaxAttempts: 3}, nextRetryDelay: saaDispatchWindow,
+		trace: []saaspec.Event{saaPoll, saaFailRetry, {Kind: saaspec.UpdateOptions}, saaPoll, saaBOElapse, saaPoll},
+	},
 	// reset during the backoff discards it: the reset attempt dispatches immediately.
 	{
 		name: "backoff/reset", cfg: saaspec.Config{MaxAttempts: 3}, retryInterval: saaDispatchWindow,
