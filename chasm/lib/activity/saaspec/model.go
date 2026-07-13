@@ -17,27 +17,27 @@ func reject(s AbstractState, k ErrorKind) Outcome { return Outcome{Next: s, Reje
 func Model(cfg Config, s AbstractState, e Event) Outcome {
 	switch e.Kind {
 	case Poll:
-		return modelPoll(cfg, s, e)
+		return poll(cfg, s, e)
 	case Heartbeat:
-		return modelHeartbeat(cfg, s, e)
+		return heartbeat(cfg, s, e)
 	case RespondCompleted:
-		return modelRespondCompleted(cfg, s, e)
+		return respondCompleted(cfg, s, e)
 	case RespondFailed:
-		return modelRespondFailed(cfg, s, e)
+		return respondFailed(cfg, s, e)
 	case RespondCanceled:
-		return modelRespondCanceled(cfg, s, e)
+		return respondCanceled(cfg, s, e)
 	case RequestCancel:
-		return modelRequestCancel(cfg, s, e)
+		return requestCancel(cfg, s, e)
 	case Terminate:
-		return modelTerminate(cfg, s, e)
+		return terminate(cfg, s, e)
 	case Pause:
-		return modelPause(cfg, s, e)
+		return pause(cfg, s, e)
 	case Unpause:
-		return modelUnpause(cfg, s, e)
+		return unpause(cfg, s, e)
 	case Reset:
-		return modelReset(cfg, s, e)
+		return reset(cfg, s, e)
 	case UpdateOptions:
-		return modelUpdateOptions(cfg, s, e)
+		return updateOptions(cfg, s, e)
 	default:
 		panic("saaspec: unhandled event kind")
 	}
@@ -46,7 +46,7 @@ func Model(cfg Config, s AbstractState, e Event) Outcome {
 // Below, each modelFoo must return Outcome{Next: n}`), a `noop(s)`, or a `reject(s, kind)`.
 
 // Worker PollActivityTaskQueue advances a Scheduled attempt to Started.
-func modelPoll(_ Config, s AbstractState, _ Event) Outcome {
+func poll(_ Config, s AbstractState, _ Event) Outcome {
 	if s.Status != Scheduled {
 		// No activity task; no state change.
 		return noop(s)
@@ -58,7 +58,7 @@ func modelPoll(_ Config, s AbstractState, _ Event) Outcome {
 }
 
 // Worker RespondActivityTaskCompleted with task token completes an in-progress attempt.
-func modelRespondCompleted(_ Config, s AbstractState, _ Event) Outcome {
+func respondCompleted(_ Config, s AbstractState, _ Event) Outcome {
 	// TODO(dan) Does any deferred flag need clearing on completion?
 	switch s.Status {
 	case Started, PauseRequested, CancelRequested, ResetRequested:
@@ -73,7 +73,7 @@ func modelRespondCompleted(_ Config, s AbstractState, _ Event) Outcome {
 }
 
 // Worker RespondActivityTaskFailed with task token fails an in-progress attempt
-func modelRespondFailed(cfg Config, s AbstractState, e Event) Outcome {
+func respondFailed(cfg Config, s AbstractState, e Event) Outcome {
 	retriesRemaining := cfg.MaxAttempts == 0 || s.Count < cfg.MaxAttempts
 	switch s.Status {
 	case ResetRequested:
@@ -121,7 +121,7 @@ func modelRespondFailed(cfg Config, s AbstractState, e Event) Outcome {
 }
 
 // RequestCancelActivityExecution requests cancellation an activity.
-func modelRequestCancel(_ Config, s AbstractState, e Event) Outcome {
+func requestCancel(_ Config, s AbstractState, e Event) Outcome {
 	switch s.Status {
 	case Scheduled, Paused:
 		n := s
@@ -146,7 +146,7 @@ func modelRequestCancel(_ Config, s AbstractState, e Event) Outcome {
 
 // Worker RespondActivityTaskCanceled with task token cancels an in-progress attempt for which
 // cancellation has been requested.
-func modelRespondCanceled(_ Config, s AbstractState, _ Event) Outcome {
+func respondCanceled(_ Config, s AbstractState, _ Event) Outcome {
 	switch s.Status {
 	case CancelRequested:
 		n := s
@@ -162,7 +162,7 @@ func modelRespondCanceled(_ Config, s AbstractState, _ Event) Outcome {
 }
 
 // TerminateActivityExecution terminates a non-closed
-func modelTerminate(_ Config, s AbstractState, _ Event) Outcome {
+func terminate(_ Config, s AbstractState, _ Event) Outcome {
 	// Terminates from any non-terminal status -> Terminated; idempotent on repeat request id.
 	switch s.Status {
 	case Scheduled, Paused, Started, PauseRequested, CancelRequested, ResetRequested:
@@ -175,7 +175,7 @@ func modelTerminate(_ Config, s AbstractState, _ Event) Outcome {
 }
 
 // RecordActivityTaskHeartbeat
-func modelHeartbeat(_ Config, s AbstractState, _ Event) Outcome {
+func heartbeat(_ Config, s AbstractState, _ Event) Outcome {
 	// See ExpectedHeartbeatFlags in responses.go for the spec related to heartbeat response flags
 	// (CancelRequested / ActivityPaused / ActivityReset).
 	switch s.Status {
@@ -189,7 +189,7 @@ func modelHeartbeat(_ Config, s AbstractState, _ Event) Outcome {
 }
 
 // PauseActivityExecution
-func modelPause(_ Config, s AbstractState, e Event) Outcome {
+func pause(_ Config, s AbstractState, e Event) Outcome {
 	switch s.Status {
 	case Scheduled:
 		n := s
@@ -220,7 +220,7 @@ func modelPause(_ Config, s AbstractState, e Event) Outcome {
 }
 
 // UnpauseActivityExecution
-func modelUnpause(_ Config, s AbstractState, e Event) Outcome {
+func unpause(_ Config, s AbstractState, e Event) Outcome {
 	switch s.Status {
 	case Paused:
 		n := s
@@ -256,7 +256,7 @@ func modelUnpause(_ Config, s AbstractState, e Event) Outcome {
 // ResetActivityExecution makes the activity behave as if it were starting its first attempt, except
 // for the ScheduleToCLose timer which keeps running. The reset is not applied until any current
 // attempt has ended.
-func modelReset(cfg Config, s AbstractState, e Event) Outcome {
+func reset(cfg Config, s AbstractState, e Event) Outcome {
 	switch s.Status {
 	case Scheduled, Paused:
 		n := s
@@ -298,7 +298,7 @@ func modelReset(cfg Config, s AbstractState, e Event) Outcome {
 }
 
 // UpdateActivityExecutionOptions
-func modelUpdateOptions(cfg Config, s AbstractState, _ Event) Outcome {
+func updateOptions(cfg Config, s AbstractState, _ Event) Outcome {
 	// TODO(dan): RestoreOriginal, field-mask merge. Does it re-dispatch when SCHEDULED?
 	switch s.Status {
 	case Scheduled, Paused, Started, PauseRequested, CancelRequested, ResetRequested:
