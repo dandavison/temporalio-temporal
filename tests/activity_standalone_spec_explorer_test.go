@@ -501,7 +501,7 @@ func (a *saaActor) checkDescribe(t require.TestingT, expected saaspec.AbstractSt
 	require.NoError(t, err)
 	gotSt, gotRs := resp.GetInfo().GetStatus(), resp.GetInfo().GetRunState()
 	if gotSt != st || gotRs != rs {
-		t.Errorf("Describe in internal status %s: public projection disagrees\n%s\n"+
+		t.Errorf("Describe while in internal status %s does not match model expectation\n%s\n"+
 			"  server saw:     status=%v run=%v\n"+
 			"  model expected: status=%v run=%v",
 			expected.Status, a.pathLine(), gotSt, gotRs, st, rs)
