@@ -380,8 +380,8 @@ func scheduleToStartFires(_ Config, s AbstractState, _ Event) Outcome {
 // spans the whole lifetime and — a deliberate SAA departure from workflow-activity behavior — is
 // NOT suspended while paused, so any non-terminal status times out.
 func scheduleToCloseFires(_ Config, s AbstractState, _ Event) Outcome {
-	if s.Status.Terminal() {
-		return noop(s) // already closed; the task is stale
+	if s.Dispatchability == StartDelayPending || s.Status.Terminal() {
+		return noop(s)
 	}
 	n := s
 	n.Status = TimedOut
