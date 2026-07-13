@@ -18,17 +18,11 @@ go test ./chasm/lib/activity/saaspec/...
 
 ## Explorer (onebox)
 
-Drives every decided edge against the server and checks state, reject kind, heartbeat flags,
-Describe projection, and poll attempt. Expected red today (WIP model).
+Walks the whole reachable state graph to fixpoint (states dedup by fingerprint) and checks every
+edge against the server: state, reject kind, heartbeat flags, Describe projection, and poll attempt.
 
 ```bash
 go test -tags test_dep -run 'TestStandaloneActivityTestSuite/TestSpecExplorer' -count=1 -v ./tests/
-```
-
-Same, plus the type-(A) completeness report (reachable-but-unexercised cells; off by default):
-
-```bash
-SAASPEC_COMPLETENESS=1 go test -tags test_dep -run 'TestStandaloneActivityTestSuite/TestSpecExplorer' -count=1 -v ./tests/
 ```
 
 Focused on event kind(s) via `SAASPEC_EVENT` (comma-separated, case-insensitive) — reports only
