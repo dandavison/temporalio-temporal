@@ -1,11 +1,11 @@
 package tests
 
-// Timer probes for the standalone-activity behavior spec. A timer firing is modeled as an event
+// Timer traces for the standalone-activity behavior spec. A timer firing is modeled as an event
 // (saaspec.ScheduleToCloseFires, etc.); this harness triggers it by configuring the matching timeout
-// short and waiting. Each probe is a trace — RPCs to reach a source state, then the timer event —
-// driven by driveTrace, so the resulting state is checked against Model() exactly like every other
-// event. The harness never encodes the intended outcome; Model() does. Model must handle every timer
-// event; a probe for a (state, timer-event) that Model() does not handle panics, failing the probe.
+// short and waiting. Each is a trace — RPCs to reach a source state, then the timer event — driven
+// by driveTrace, so the resulting state is checked against Model() exactly like every other event.
+// The harness never encodes the intended outcome; Model() does. Model must handle every timer event;
+// a trace for a (state, timer-event) that Model() does not handle panics, failing the run.
 
 import (
 	"testing"
@@ -15,7 +15,7 @@ import (
 	"go.temporal.io/server/chasm/lib/activity/saaspec"
 )
 
-type saaTimerProbe struct {
+type saaTimerTrace struct {
 	name       string
 	timer      saaspec.EventKind // made short at Start (ex.shortTimer) and appended as the trace's last event
 	cfg        saaspec.Config
@@ -23,11 +23,11 @@ type saaTimerProbe struct {
 	startDelay time.Duration   // StartActivityExecutionRequest.StartDelay (0 => none)
 }
 
-// saaLongStartDelay keeps a first attempt in its start-delay window for the whole probe, so a short
+// saaLongStartDelay keeps a first attempt in its start-delay window for the whole trace, so a short
 // timer under test fires while the activity is still SCHEDULED and pending dispatch.
 const saaLongStartDelay = time.Hour
 
-var saaTimerProbes = []saaTimerProbe{
+var saaTimerTraces = []saaTimerTrace{
 	// The schedule-to-close deadline keeps running while paused (intended: SAA departs from the
 	// workflow-activity behavior here).
 	{name: "STC/paused", timer: saaspec.ScheduleToCloseFires, cfg: saaspec.Config{HasScheduleToClose: true}, path: []saaspec.Event{{Kind: saaspec.Pause}}},
@@ -42,16 +42,16 @@ var saaTimerProbes = []saaTimerProbe{
 	{name: "heartbeat/started-exhausted", timer: saaspec.HeartbeatFires, cfg: saaspec.Config{HasHeartbeat: true, MaxAttempts: 1}, path: []saaspec.Event{{Kind: saaspec.Poll}}},
 
 	// Dispatch-delay interaction with a timeout (a long start_delay keeps the first attempt pending
-	// the whole probe, so the short timer fires during the start-delay window): schedule-to-start is
+	// the whole trace, so the short timer fires during the start-delay window): schedule-to-start is
 	// pushed back behind the start delay -> it must NOT fire during the window, so the activity stays
 	// SCHEDULED (Model(StartDelayPending, ScheduleToStartFires) is a no-op).
 	//
 	// The schedule-to-close/start-delay interaction (req 1) is a pending spec decision — see
-	// TestSpecKnownGaps — so no probe for it yet.
+	// TestSpecKnownGaps — so no trace for it yet.
 	{name: "S2S/pushed-back-by-start-delay", timer: saaspec.ScheduleToStartFires, cfg: saaspec.Config{HasStartDelay: true, HasScheduleToStart: true}, startDelay: saaLongStartDelay},
 }
 
-func (s *standaloneActivityTestSuite) TestSpecTimerProbes() {
+func (s *standaloneActivityTestSuite) TestSpecTimerTraces() {
 	env := s.newTestEnv()
 	t := s.T()
 	ctx := s.Context()
@@ -59,9 +59,9 @@ func (s *standaloneActivityTestSuite) TestSpecTimerProbes() {
 	chasmCtx, err := env.GetTestCluster().Host().ChasmContext(ctx)
 	require.NoError(t, err)
 
-	// Each probe is an independent subtest, so `-run 'TestSpecTimerProbes/heartbeat'` selects by
+	// Each trace is an independent subtest, so `-run 'TestSpecTimerTraces/heartbeat'` selects by
 	// timer/scenario (names embed a "/" hierarchy: e.g. "heartbeat/started-retry").
-	for i, p := range saaTimerProbes {
+	for i, p := range saaTimerTraces {
 		t.Run(p.name, func(t *testing.T) {
 			ex := &saaExplorer{
 				env: env, ctx: ctx, chasmCtx: chasmCtx, nsID: env.NamespaceID().String(),

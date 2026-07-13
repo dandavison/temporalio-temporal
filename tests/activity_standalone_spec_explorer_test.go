@@ -469,7 +469,7 @@ func (ex *saaExplorer) dispatchDelay(d saaspec.Dispatch) time.Duration {
 }
 
 // driveTrace runs one trace on a single fresh activity, asserting the observed state and pollability
-// against Model() at every step. Both the timer probes and the dispatch-delay traces use it: every
+// against Model() at every step. Both the timer traces and the dispatch-delay traces use it: every
 // event — RPC, poll, timeout firing, or dispatch-delay clock — is driven through apply and checked
 // against Model. (The explorer, by contrast, replays each path from a fresh activity so it can walk
 // the graph exhaustively; a trace pays each real wall-clock wait once.)
@@ -635,7 +635,7 @@ func (ex *saaExplorer) startRequest(activityID, taskQueue string) *workflowservi
 		return long
 	}
 	// Retries dispatch after this interval. The default is short so the explorer can traverse retry
-	// loops quickly; the dispatch probes lengthen it to observe the backoff.
+	// loops quickly; the dispatch-delay traces lengthen it to observe the backoff.
 	interval := 200 * time.Millisecond
 	if ex.retryInterval > 0 {
 		interval = ex.retryInterval
