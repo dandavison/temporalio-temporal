@@ -6,7 +6,7 @@ package saaspec
 func Initial(cfg Config) AbstractState {
 	s := AbstractState{Status: Scheduled, Count: 1, Stamp: 1, DispatchTimeSet: true}
 	if cfg.HasScheduleToClose {
-		s.STCStamp = 1 // bumped by TransitionScheduled when STC is set
+		s.ScheduleToCloseStamp = 1 // bumped by TransitionScheduled when schedule-to-close is set
 	}
 	if cfg.HasStartDelay {
 		s.Dispatchability = StartDelayPending // first dispatch waits until schedule_time + start_delay
@@ -312,7 +312,7 @@ func reset(cfg Config, s AbstractState, e Event) Outcome {
 			n.DispatchTimeSet = true
 		}
 		if e.RestoreOriginal && cfg.HasScheduleToClose {
-			n.STCStamp++
+			n.ScheduleToCloseStamp++
 		}
 		return Outcome{Next: n}
 	case Started, PauseRequested:
@@ -351,7 +351,7 @@ func updateOptions(cfg Config, s AbstractState, _ Event) Outcome {
 		n := s
 		n.Stamp++
 		if cfg.HasScheduleToClose {
-			n.STCStamp++
+			n.ScheduleToCloseStamp++
 		}
 		return Outcome{Next: n}
 	default:
@@ -465,7 +465,7 @@ func applyDeferredReset(cfg Config, s AbstractState) Outcome {
 	n.Stamp++                        // invalidate last attempt's tasks
 	n.Dispatchability = Dispatchable // dispatch immediately: reset discards remaining retry backoff (and we're beyond start delay)
 	if s.ResetRestoreOptions && cfg.HasScheduleToClose {
-		n.STCStamp++
+		n.ScheduleToCloseStamp++
 	}
 	if s.ResetKeepPaused {
 		n.Status = Paused

@@ -7,7 +7,7 @@ import "testing"
 
 func TestInitial(t *testing.T) {
 	got := Initial(Config{HasScheduleToClose: true})
-	want := AbstractState{Status: Scheduled, Count: 1, Stamp: 1, STCStamp: 1, DispatchTimeSet: true}
+	want := AbstractState{Status: Scheduled, Count: 1, Stamp: 1, ScheduleToCloseStamp: 1, DispatchTimeSet: true}
 	if got != want {
 		t.Fatalf("Initial: got %+v want %+v", got, want)
 	}
@@ -40,8 +40,8 @@ func TestPauseFromScheduledBumpsStamp(t *testing.T) {
 	if out.Next.Stamp != s.Stamp+1 {
 		t.Fatalf("pause from scheduled must bump stamp: %d -> %d", s.Stamp, out.Next.Stamp)
 	}
-	if out.Next.STCStamp != s.STCStamp {
-		t.Fatalf("pause must not touch STCStamp: %d -> %d", s.STCStamp, out.Next.STCStamp)
+	if out.Next.ScheduleToCloseStamp != s.ScheduleToCloseStamp {
+		t.Fatalf("pause must not touch ScheduleToCloseStamp: %d -> %d", s.ScheduleToCloseStamp, out.Next.ScheduleToCloseStamp)
 	}
 }
 

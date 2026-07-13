@@ -110,14 +110,14 @@ func (d Dispatchability) String() string {
 // equality. Keep every field a scalar — no pointers/slices/maps — so that `n := s` is a
 // true independent copy.
 type AbstractState struct {
-	Status              Status
-	Count               int32 // attempt.count
-	Stamp               int32 // attempt.stamp
-	STCStamp            int32 // schedule_to_close_stamp
-	ResetKeepPaused     bool
-	ResetHeartbeats     bool
-	ResetRestoreOptions bool
-	FirstAttemptStarted bool
+	Status               Status
+	Count                int32 // attempt.count
+	Stamp                int32 // attempt.stamp
+	ScheduleToCloseStamp int32 // schedule_to_close_stamp
+	ResetKeepPaused      bool
+	ResetHeartbeats      bool
+	ResetRestoreOptions  bool
+	FirstAttemptStarted  bool
 	// DispatchTimeSet is whether a dispatch time is recorded (attempt.dispatch_time != nil) — the
 	// EXISTENCE of a dispatch, observable via ReadComponent. Distinct from Dispatchability below,
 	// which is the READINESS of that dispatch: a start-delayed attempt has DispatchTimeSet=true and
@@ -227,15 +227,15 @@ type Observed struct {
 // calls it to convert what it reads from the server into the value it compares with Model().
 func Abstract(o Observed) AbstractState {
 	return AbstractState{
-		Status:              mapStatus(o.Status),
-		Count:               o.Count,
-		Stamp:               o.Stamp,
-		STCStamp:            o.ScheduleToCloseStamp,
-		ResetKeepPaused:     o.ResetKeepPaused,
-		ResetHeartbeats:     o.ResetHeartbeats,
-		ResetRestoreOptions: o.ResetRestoreOptions,
-		FirstAttemptStarted: o.FirstAttemptStarted,
-		DispatchTimeSet:     o.DispatchTimeSet,
+		Status:               mapStatus(o.Status),
+		Count:                o.Count,
+		Stamp:                o.Stamp,
+		ScheduleToCloseStamp: o.ScheduleToCloseStamp,
+		ResetKeepPaused:      o.ResetKeepPaused,
+		ResetHeartbeats:      o.ResetHeartbeats,
+		ResetRestoreOptions:  o.ResetRestoreOptions,
+		FirstAttemptStarted:  o.FirstAttemptStarted,
+		DispatchTimeSet:      o.DispatchTimeSet,
 	}
 }
 

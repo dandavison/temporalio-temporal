@@ -53,17 +53,17 @@ var saaDispatchTraces = []saaDispatchTrace{
 	},
 	// pause during the start delay, then unpause: still delayed (poll finds nothing) until it elapses.
 	{
-		name: "start-delay/unpause-keeps-waiting", cfg: saaspec.Config{HasStartDelay: true}, startDelay: saaDispatchWindow,
+		name: "start-delay/pause-then-unpause", cfg: saaspec.Config{HasStartDelay: true}, startDelay: saaDispatchWindow,
 		trace: []saaspec.Event{{Kind: saaspec.Pause}, {Kind: saaspec.Unpause}, saaPoll, saaSDElapse, saaPoll},
 	},
 	// reset during the start delay: still delayed (behaves like unpause).
 	{
-		name: "start-delay/reset-keeps-waiting", cfg: saaspec.Config{HasStartDelay: true}, startDelay: saaDispatchWindow,
+		name: "start-delay/reset", cfg: saaspec.Config{HasStartDelay: true}, startDelay: saaDispatchWindow,
 		trace: []saaspec.Event{{Kind: saaspec.Reset}, saaPoll, saaSDElapse, saaPoll},
 	},
 	// a retry is delayed by the policy backoff: a poll finds no task until the backoff elapses.
 	{
-		name: "backoff/delayed", cfg: saaspec.Config{MaxAttempts: 3}, retryInterval: saaDispatchWindow,
+		name: "backoff/retry-dispatch", cfg: saaspec.Config{MaxAttempts: 3}, retryInterval: saaDispatchWindow,
 		trace: []saaspec.Event{saaPoll, saaFailRetry, saaPoll, saaBOElapse, saaPoll},
 	},
 	// a worker-supplied next_retry_delay overrides the (short, default) policy interval: the retry is
@@ -75,12 +75,12 @@ var saaDispatchTraces = []saaDispatchTrace{
 	},
 	// pause during the backoff, then unpause: still delayed until the backoff elapses.
 	{
-		name: "backoff/unpause-keeps-waiting", cfg: saaspec.Config{MaxAttempts: 3}, retryInterval: saaDispatchWindow,
+		name: "backoff/pause-then-unpause", cfg: saaspec.Config{MaxAttempts: 3}, retryInterval: saaDispatchWindow,
 		trace: []saaspec.Event{saaPoll, saaFailRetry, {Kind: saaspec.Pause}, {Kind: saaspec.Unpause}, saaPoll, saaBOElapse, saaPoll},
 	},
 	// reset during the backoff discards it: the reset attempt dispatches immediately.
 	{
-		name: "backoff/reset-discards", cfg: saaspec.Config{MaxAttempts: 3}, retryInterval: saaDispatchWindow,
+		name: "backoff/reset", cfg: saaspec.Config{MaxAttempts: 3}, retryInterval: saaDispatchWindow,
 		trace: []saaspec.Event{saaPoll, saaFailRetry, {Kind: saaspec.Reset}, saaPoll},
 	},
 }

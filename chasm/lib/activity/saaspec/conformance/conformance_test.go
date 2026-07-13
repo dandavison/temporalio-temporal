@@ -70,7 +70,7 @@ func eventsFor(k saaspec.EventKind) []saaspec.Event {
 func srcState(cfg saaspec.Config, st saaspec.Status, keepPaused bool, count int32) saaspec.AbstractState {
 	s := saaspec.AbstractState{Status: st, Count: count, Stamp: count, ResetKeepPaused: keepPaused}
 	if cfg.HasScheduleToClose {
-		s.STCStamp = 1
+		s.ScheduleToCloseStamp = 1
 	}
 	switch st {
 	case saaspec.Unspecified, saaspec.Scheduled:

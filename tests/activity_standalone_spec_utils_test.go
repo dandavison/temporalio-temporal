@@ -177,7 +177,7 @@ func saaStateDiff(observed, expected saaspec.AbstractState) string {
 		{"Status", observed.Status.String(), expected.Status.String()},
 		{"Count", fmt.Sprint(observed.Count), fmt.Sprint(expected.Count)},
 		{"Stamp", fmt.Sprint(observed.Stamp), fmt.Sprint(expected.Stamp)},
-		{"STCStamp", fmt.Sprint(observed.STCStamp), fmt.Sprint(expected.STCStamp)},
+		{"ScheduleToCloseStamp", fmt.Sprint(observed.ScheduleToCloseStamp), fmt.Sprint(expected.ScheduleToCloseStamp)},
 		{"ResetKeepPaused", b2s(observed.ResetKeepPaused), b2s(expected.ResetKeepPaused)},
 		{"ResetHeartbeats", b2s(observed.ResetHeartbeats), b2s(expected.ResetHeartbeats)},
 		{"ResetRestoreOptions", b2s(observed.ResetRestoreOptions), b2s(expected.ResetRestoreOptions)},

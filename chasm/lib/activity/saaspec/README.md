@@ -59,9 +59,10 @@ one timeout, and reads the resulting state.
 go test -tags test_dep -run 'TestStandaloneActivityTestSuite/TestSpecTimeouts/$scenario' -count=1 -v ./tests/
 ```
 
-Scenarios (drop `/$scenario` to run all): `STC/paused`, `S2S/scheduled`, `S2S/paused-stale`,
-`startToClose/started-retry`, `startToClose/started-exhausted`, `heartbeat/started-retry`,
-`heartbeat/started-exhausted`, `S2S/pushed-back-by-start-delay`.
+Scenarios (drop `/$scenario` to run all): `schedule-to-close/elapses-while-paused`, `schedule-to-start/elapses-while-scheduled`, `schedule-to-start/elapses-while-paused`,
+`start-to-close/elapses-while-started/retries-remain`, `start-to-close/elapses-while-started/last-attempt`, `heartbeat/elapses-while-started/retries-remain`,
+`heartbeat/elapses-while-started/last-attempt`, `schedule-to-start/elapses-within-start-delay`,
+`schedule-to-close/elapses-within-start-delay`.
 
 ### Dispatch-delay traces — observed by polling
 
@@ -76,8 +77,8 @@ go test -tags test_dep -run 'TestStandaloneActivityTestSuite/TestSpecDispatchDel
 ```
 
 Scenarios (drop `/$scenario` to run all): `start-delay/first-dispatch`,
-`start-delay/unpause-keeps-waiting`, `start-delay/reset-keeps-waiting`, `backoff/delayed`,
-`backoff/next-retry-delay-override`, `backoff/unpause-keeps-waiting`, `backoff/reset-discards`.
+`start-delay/pause-then-unpause`, `start-delay/reset`, `backoff/retry-dispatch`,
+`backoff/next-retry-delay-override`, `backoff/pause-then-unpause`, `backoff/reset`.
 
 ## Known gaps
 

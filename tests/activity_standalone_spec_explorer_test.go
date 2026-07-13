@@ -230,7 +230,7 @@ func (ex *saaExplorer) checkCompleteness(t *testing.T, verifiedFine, skippedFine
 		shown, suffix = shown[:30], fmt.Sprintf("\n  … and %d more", len(gaps)-30)
 	}
 	t.Logf("cfg %d: %d model-reachable cell(s) not exercised at depth<=%d (raise SAASPEC_MAX_DEPTH to reach deeper).\n"+
-		"  fingerprint = Status|count|stc>0|resetKeepPaused|resetHeartbeats|resetRestoreOpts|firstStarted|dispatchSet|dispatch\n  %s%s",
+		"  fingerprint = Status|count|scheduleToClose>0|resetKeepPaused|resetHeartbeats|resetRestoreOpts|firstStarted|dispatchSet|dispatch\n  %s%s",
 		ex.cfgIdx, len(gaps), saaMaxDepth(), strings.Join(shown, "\n  "), suffix)
 }
 
@@ -763,7 +763,7 @@ func saaNeedsToken(k saaspec.EventKind) bool {
 func saaFingerprint(s saaspec.AbstractState) string {
 	count := min(s.Count, 3)
 	return fmt.Sprintf("%v|%d|%v|%v|%v|%v|%v|%v|%v",
-		s.Status, count, s.STCStamp > 0, s.ResetKeepPaused, s.ResetHeartbeats,
+		s.Status, count, s.ScheduleToCloseStamp > 0, s.ResetKeepPaused, s.ResetHeartbeats,
 		s.ResetRestoreOptions, s.FirstAttemptStarted, s.DispatchTimeSet, s.Dispatchability)
 }
 
