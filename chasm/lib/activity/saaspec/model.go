@@ -41,6 +41,14 @@ func Model(cfg Config, s AbstractState, e Event) Outcome {
 		return reset(cfg, s, e)
 	case UpdateOptions:
 		return updateOptions(cfg, s, e)
+	case ScheduleToStartFires:
+		return scheduleToStartFires(cfg, s, e)
+	case ScheduleToCloseFires:
+		return scheduleToCloseFires(cfg, s, e)
+	case StartToCloseFires:
+		return startToCloseFires(cfg, s, e)
+	case HeartbeatFires:
+		return heartbeatFires(cfg, s, e)
 	default:
 		panic("saaspec: unhandled event kind")
 	}
@@ -86,24 +94,7 @@ func respondFailed(cfg Config, s AbstractState, e Event) Outcome {
 	}
 	switch s.Status {
 	case ResetRequested:
-		// Deferred reset: consume the flags set at reset time and apply their effects.
-		n := s
-		n.Count = 1
-		n.Stamp++ // invalidate last attempt's tasks
-		if s.ResetRestoreOptions && cfg.HasScheduleToClose {
-			n.STCStamp++ // restoring options reissues the schedule-to-close task
-		}
-		if s.ResetKeepPaused {
-			n.Status = Paused
-			n.DispatchTimeSet = false // no dispatch task while paused
-		} else {
-			n.Status = Scheduled
-			n.DispatchTimeSet = true
-		}
-		n.ResetKeepPaused = false
-		n.ResetRestoreOptions = false
-		n.ResetHeartbeats = false
-		return Outcome{Next: n}
+		return applyDeferredReset(cfg, s)
 	case Started, PauseRequested:
 		n := s
 		if e.Retryable && retriesRemaining {
@@ -129,6 +120,28 @@ func respondFailed(cfg Config, s AbstractState, e Event) Outcome {
 	default:
 		panic("SAA model does not handle RespondFailed while in status " + s.Status.String())
 	}
+}
+
+// applyDeferredReset consumes the reset flags stored while the activity was RESET_REQUESTED and
+// returns the state the reset produces once the running attempt has ended (by failure or timeout).
+func applyDeferredReset(cfg Config, s AbstractState) Outcome {
+	n := s
+	n.Count = 1
+	n.Stamp++ // invalidate last attempt's tasks
+	if s.ResetRestoreOptions && cfg.HasScheduleToClose {
+		n.STCStamp++ // restoring options reissues the schedule-to-close task
+	}
+	if s.ResetKeepPaused {
+		n.Status = Paused
+		n.DispatchTimeSet = false // no dispatch task while paused
+	} else {
+		n.Status = Scheduled
+		n.DispatchTimeSet = true
+	}
+	n.ResetKeepPaused = false
+	n.ResetRestoreOptions = false
+	n.ResetHeartbeats = false
+	return Outcome{Next: n}
 }
 
 // RequestCancelActivityExecution requests cancellation an activity.
@@ -350,5 +363,76 @@ func updateOptions(cfg Config, s AbstractState, _ Event) Outcome {
 		return Outcome{Next: n}
 	default:
 		panic("SAA model does not handle UpdateOptions while in status " + s.Status.String())
+	}
+}
+
+// A timeout task is not an RPC and never rejects: when it fires it either drives a transition or,
+// if it is stale (its attempt has moved on) or the activity has closed, no-ops.
+
+// ScheduleToStartFires: the first attempt was not picked up by a worker within the
+// schedule-to-start deadline. Only a still-SCHEDULED attempt times out this way; once started, the
+// deadline is satisfied, and Pause bumps the stamp so the pending task is stale.
+func scheduleToStartFires(_ Config, s AbstractState, _ Event) Outcome {
+	if s.Status != Scheduled {
+		return noop(s)
+	}
+	n := s
+	n.Status = TimedOut
+	return Outcome{Next: n}
+}
+
+// ScheduleToCloseFires: the activity exceeded its total schedule-to-close deadline. This deadline
+// spans the whole lifetime and — a deliberate SAA departure from workflow-activity behavior — is
+// NOT suspended while paused, so any non-terminal status times out.
+func scheduleToCloseFires(_ Config, s AbstractState, _ Event) Outcome {
+	if s.Status.Terminal() {
+		return noop(s) // already closed; the task is stale
+	}
+	n := s
+	n.Status = TimedOut
+	n.ResetHeartbeats = false // terminal transition clears the deferred reset-heartbeat flag
+	return Outcome{Next: n}
+}
+
+// StartToCloseFires and HeartbeatFires both mean the running attempt ended by a per-attempt
+// timeout (it ran too long, or the worker stopped heartbeating). They have the same effect.
+func startToCloseFires(cfg Config, s AbstractState, _ Event) Outcome { return attemptTimedOut(cfg, s) }
+func heartbeatFires(cfg Config, s AbstractState, _ Event) Outcome    { return attemptTimedOut(cfg, s) }
+
+// attemptTimedOut mirrors a retryable RespondFailed — retry if attempts remain, else terminal —
+// with two differences: the terminal status is TimedOut rather than Failed, and (like a failure) a
+// deferred reset is applied when the attempt ends.
+func attemptTimedOut(cfg Config, s AbstractState) Outcome {
+	if s.Status.Terminal() {
+		return noop(s) // already closed; the timer is stale
+	}
+	retriesRemaining := cfg.MaxAttempts == 0 || s.Count < cfg.MaxAttempts
+	switch s.Status {
+	case ResetRequested:
+		return applyDeferredReset(cfg, s)
+	case Started, PauseRequested:
+		n := s
+		if retriesRemaining {
+			n.Status = Scheduled
+			if s.Status == PauseRequested {
+				n.Status = Paused // pause takes effect on the retry
+			}
+			n.Count++
+			n.Stamp++ // invalidate last attempt's tasks
+		} else {
+			n.Status = TimedOut
+			n.ResetHeartbeats = false // terminal transition clears the deferred reset-heartbeat flag
+		}
+		return Outcome{Next: n}
+	case CancelRequested:
+		// A cancel-requested attempt cannot retry (mirrors RespondFailed), so the timeout is terminal.
+		n := s
+		n.Status = TimedOut
+		n.ResetHeartbeats = false
+		return Outcome{Next: n}
+	case Scheduled, Paused:
+		return noop(s) // no running attempt: the per-attempt timer is stale
+	default:
+		panic("SAA model does not handle a per-attempt timeout while in status " + s.Status.String())
 	}
 }
