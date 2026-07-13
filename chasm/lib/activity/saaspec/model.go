@@ -60,6 +60,9 @@ func poll(_ Config, s AbstractState, _ Event) Outcome {
 // Worker RespondActivityTaskCompleted with task token completes an in-progress attempt.
 func respondCompleted(_ Config, s AbstractState, _ Event) Outcome {
 	// TODO(dan) Does any deferred flag need clearing on completion?
+	if s.Status.Terminal() {
+		return reject(s, NotFound) // task token invalid
+	}
 	switch s.Status {
 	case Started, PauseRequested, CancelRequested, ResetRequested:
 		n := s
@@ -75,6 +78,9 @@ func respondCompleted(_ Config, s AbstractState, _ Event) Outcome {
 // Worker RespondActivityTaskFailed with task token fails an in-progress attempt
 func respondFailed(cfg Config, s AbstractState, e Event) Outcome {
 	retriesRemaining := cfg.MaxAttempts == 0 || s.Count < cfg.MaxAttempts
+	if s.Status.Terminal() {
+		return reject(s, NotFound) // task token invalid
+	}
 	switch s.Status {
 	case ResetRequested:
 		// Deferred reset: consume the flags set at reset time and apply their effects.
@@ -122,6 +128,9 @@ func respondFailed(cfg Config, s AbstractState, e Event) Outcome {
 
 // RequestCancelActivityExecution requests cancellation an activity.
 func requestCancel(_ Config, s AbstractState, e Event) Outcome {
+	if s.Status.Terminal() {
+		return reject(s, FailedPrecondition)
+	}
 	switch s.Status {
 	case Scheduled, Paused:
 		n := s
@@ -147,6 +156,9 @@ func requestCancel(_ Config, s AbstractState, e Event) Outcome {
 // Worker RespondActivityTaskCanceled with task token cancels an in-progress attempt for which
 // cancellation has been requested.
 func respondCanceled(_ Config, s AbstractState, _ Event) Outcome {
+	if s.Status.Terminal() {
+		return reject(s, NotFound) // task token invalid
+	}
 	switch s.Status {
 	case CancelRequested:
 		n := s
@@ -161,9 +173,17 @@ func respondCanceled(_ Config, s AbstractState, _ Event) Outcome {
 	}
 }
 
-// TerminateActivityExecution terminates a non-closed
-func terminate(_ Config, s AbstractState, _ Event) Outcome {
-	// Terminates from any non-terminal status -> Terminated; idempotent on repeat request id.
+// TerminateActivityExecution from any non-terminal status -> Terminated; idempotent on repeat
+// request id.
+func terminate(_ Config, s AbstractState, e Event) Outcome {
+	if s.Status.Terminal() {
+		if s.Status == Terminated && e.SameRequestID {
+			// Idempotent only from Terminated
+			return noop(s)
+		}
+		// Other terminals (Completed/Failed/Canceled/TimedOut), or Terminated with a different id
+		return reject(s, FailedPrecondition)
+	}
 	switch s.Status {
 	case Scheduled, Paused, Started, PauseRequested, CancelRequested, ResetRequested:
 		n := s
@@ -178,6 +198,9 @@ func terminate(_ Config, s AbstractState, _ Event) Outcome {
 func heartbeat(_ Config, s AbstractState, _ Event) Outcome {
 	// See ExpectedHeartbeatFlags in responses.go for the spec related to heartbeat response flags
 	// (CancelRequested / ActivityPaused / ActivityReset).
+	if s.Status.Terminal() {
+		return reject(s, NotFound) // task token invalid
+	}
 	switch s.Status {
 	case Started, PauseRequested, CancelRequested, ResetRequested:
 		return noop(s)
@@ -190,6 +213,9 @@ func heartbeat(_ Config, s AbstractState, _ Event) Outcome {
 
 // PauseActivityExecution
 func pause(_ Config, s AbstractState, e Event) Outcome {
+	if s.Status.Terminal() {
+		return reject(s, FailedPrecondition)
+	}
 	switch s.Status {
 	case Scheduled:
 		n := s
@@ -221,6 +247,9 @@ func pause(_ Config, s AbstractState, e Event) Outcome {
 
 // UnpauseActivityExecution
 func unpause(_ Config, s AbstractState, e Event) Outcome {
+	if s.Status.Terminal() {
+		return reject(s, FailedPrecondition)
+	}
 	switch s.Status {
 	case Paused:
 		n := s
@@ -257,6 +286,9 @@ func unpause(_ Config, s AbstractState, e Event) Outcome {
 // for the ScheduleToCLose timer which keeps running. The reset is not applied until any current
 // attempt has ended.
 func reset(cfg Config, s AbstractState, e Event) Outcome {
+	if s.Status.Terminal() {
+		return reject(s, FailedPrecondition)
+	}
 	switch s.Status {
 	case Scheduled, Paused:
 		n := s
@@ -300,6 +332,9 @@ func reset(cfg Config, s AbstractState, e Event) Outcome {
 // UpdateActivityExecutionOptions
 func updateOptions(cfg Config, s AbstractState, _ Event) Outcome {
 	// TODO(dan): RestoreOriginal, field-mask merge. Does it re-dispatch when SCHEDULED?
+	if s.Status.Terminal() {
+		return reject(s, FailedPrecondition)
+	}
 	switch s.Status {
 	case Scheduled, Paused, Started, PauseRequested, CancelRequested, ResetRequested:
 		n := s
