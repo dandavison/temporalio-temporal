@@ -56,15 +56,12 @@ heartbeat). A timeout firing changes the status, so the trace reaches a source s
 one timeout, and reads the resulting state.
 
 ```bash
-go test -tags test_dep -run 'TestStandaloneActivityTestSuite/TestSpecTimeoutTraces' -count=1 -v ./tests/
+go test -tags test_dep -run 'TestStandaloneActivityTestSuite/TestSpecTimeoutTraces/$scenario' -count=1 -v ./tests/
 ```
 
-One scenario (slash-hierarchy; e.g. `/STC/paused`, `/S2S/paused-stale`, `/startToClose/started-retry`,
-`/heartbeat/started-retry`, `/S2S/pushed-back-by-start-delay`):
-
-```bash
-go test -tags test_dep -run 'TestStandaloneActivityTestSuite/TestSpecTimeoutTraces/heartbeat' -count=1 -v ./tests/
-```
+Scenarios (drop `/$scenario` to run all): `STC/paused`, `S2S/scheduled`, `S2S/paused-stale`,
+`startToClose/started-retry`, `startToClose/started-exhausted`, `heartbeat/started-retry`,
+`heartbeat/started-exhausted`, `S2S/pushed-back-by-start-delay`.
 
 ### Dispatch-delay traces — observed by polling
 
@@ -75,16 +72,12 @@ field, excluded from the state oracle); the trace observes it by **polling**: no
 dispatch is delayed, a task once the matching `*Elapses` event (driven by waiting) fires.
 
 ```bash
-go test -tags test_dep -run 'TestStandaloneActivityTestSuite/TestSpecDispatchDelay' -count=1 -v ./tests/
+go test -tags test_dep -run 'TestStandaloneActivityTestSuite/TestSpecDispatchDelay/$scenario' -count=1 -v ./tests/
 ```
 
-One scenario (`/start-delay/first-dispatch`, `/start-delay/unpause-keeps-waiting`,
-`/start-delay/reset-keeps-waiting`, `/backoff/delayed`, `/backoff/next-retry-delay-override`,
-`/backoff/unpause-keeps-waiting`, `/backoff/reset-discards`):
-
-```bash
-go test -tags test_dep -run 'TestStandaloneActivityTestSuite/TestSpecDispatchDelay/backoff' -count=1 -v ./tests/
-```
+Scenarios (drop `/$scenario` to run all): `start-delay/first-dispatch`,
+`start-delay/unpause-keeps-waiting`, `start-delay/reset-keeps-waiting`, `backoff/delayed`,
+`backoff/next-retry-delay-override`, `backoff/unpause-keeps-waiting`, `backoff/reset-discards`.
 
 ## Known gaps
 
