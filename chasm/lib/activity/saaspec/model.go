@@ -41,12 +41,36 @@ func Model(cfg Config, s AbstractState, e Event) Outcome {
 		return reset(cfg, s, e)
 	case UpdateOptions:
 		return updateOptions(cfg, s, e)
+	case ScheduleToStartFires:
+		return scheduleToStartFires(cfg, s, e)
+	case ScheduleToCloseFires:
+		return scheduleToCloseFires(cfg, s, e)
+	case StartToCloseFires:
+		return startToCloseFires(cfg, s, e)
+	case HeartbeatFires:
+		return heartbeatFires(cfg, s, e)
 	default:
 		panic("saaspec: unhandled event kind")
 	}
 }
 
 // Below, each modelFoo must return Outcome{Next: n}`), a `noop(s)`, or a `reject(s, kind)`.
+
+func scheduleToStartFires(_ Config, s AbstractState, _ Event) Outcome {
+	return noop(s)
+}
+
+func scheduleToCloseFires(_ Config, s AbstractState, _ Event) Outcome {
+	return noop(s)
+}
+
+func startToCloseFires(_ Config, s AbstractState, _ Event) Outcome {
+	return noop(s)
+}
+
+func heartbeatFires(_ Config, s AbstractState, _ Event) Outcome {
+	return noop(s)
+}
 
 // Worker PollActivityTaskQueue advances a Scheduled attempt to Started.
 func poll(_ Config, s AbstractState, _ Event) Outcome {
