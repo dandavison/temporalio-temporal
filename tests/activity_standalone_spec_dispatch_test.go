@@ -107,23 +107,3 @@ func (s *standaloneActivityTestSuite) TestSpecDispatchDelay() {
 		})
 	}
 }
-
-// driveTrace runs one trace on a single fresh activity, asserting the observed state and pollability
-// against Model() at every step.
-func (ex *saaExplorer) driveTrace(t *testing.T, trace []saaspec.Event) {
-	a := ex.start(t)
-	a.path = trace
-	cur := saaspec.Initial(ex.cfg)
-
-	obs, err := a.observed()
-	require.NoError(t, err)
-	if !cur.SameObserved(obs) {
-		t.Fatalf("after Start, state disagrees with Initial(cfg).\n%s", saaStateDiff(obs, cur))
-	}
-
-	for _, e := range trace {
-		out := saaspec.Model(ex.cfg, cur, e)
-		a.apply(t, e, cur, out, true)
-		cur = out.Next
-	}
-}

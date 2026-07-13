@@ -293,8 +293,8 @@ func (a *saaActor) apply(t require.TestingT, e saaspec.Event, cur saaspec.Abstra
 	if e.Kind == saaspec.Poll {
 		return a.applyPoll(cur, out, final, t)
 	}
-	if e.Kind == saaspec.StartDelayElapses || e.Kind == saaspec.BackoffElapses {
-		return a.applyElapse(t, e, cur, out, final)
+	if saaIsWallClock(e.Kind) {
+		return a.applyWallClock(t, e, cur, out, final)
 	}
 	// Worker RPCs authenticate with a task token, which the actor only holds after a poll. On a path
 	// that never polled (e.g. a fresh SCHEDULED or PAUSED activity) there is no token; sending an
@@ -416,15 +416,15 @@ func (a *saaActor) applyPoll(cur saaspec.AbstractState, out saaspec.Outcome, fin
 	return saaMismatch
 }
 
-// applyElapse drives a dispatch-delay clock (StartDelayElapses / BackoffElapses). When the model
-// says this firing makes the dispatch available, it waits for the real timer to fire before
-// observing; otherwise the firing is a stale no-op. The elapse changes only latent Dispatch, so the
-// observable state must be unchanged either way — that it became dispatchable is confirmed by the
-// subsequent Poll.
-func (a *saaActor) applyElapse(t require.TestingT, e saaspec.Event, cur saaspec.AbstractState, out saaspec.Outcome, final bool) saaApply {
-	if out.Next.Dispatch == saaspec.Dispatchable && cur.Dispatch != saaspec.Dispatchable {
-		time.Sleep(a.ex.dispatchDelay(cur.Dispatch) + saaElapseSettle)
-	}
+// applyWallClock drives a wall-clock event — one of the four timeouts, or a dispatch-delay clock
+// (StartDelayElapses / BackoffElapses) — by waiting long enough for that clock to elapse on the
+// server, then asserting the observed state equals Model.Next. The single check covers all cases:
+// a timeout that fires changes the status (TimedOut, or a retry); a stale timeout or a stale elapse
+// changes nothing; and a live elapse changes only the latent Dispatch (excluded from SameObserved),
+// so the status is unchanged and it is a subsequent Poll that confirms the activity became
+// dispatchable.
+func (a *saaActor) applyWallClock(t require.TestingT, e saaspec.Event, cur saaspec.AbstractState, out saaspec.Outcome, final bool) saaApply {
+	time.Sleep(a.ex.eventClock(e, cur) + saaWallClockSettle)
 	obs, err := a.observed()
 	require.NoError(t, err)
 	if final {
@@ -437,6 +437,17 @@ func (a *saaActor) applyElapse(t require.TestingT, e saaspec.Event, cur saaspec.
 		return saaVerified
 	}
 	return saaMismatch
+}
+
+// eventClock is how long the clock behind a wall-clock event takes to elapse: a timeout under test is
+// configured short (saaShortTimer), and a dispatch delay lasts dispatchDelay.
+func (ex *saaExplorer) eventClock(e saaspec.Event, cur saaspec.AbstractState) time.Duration {
+	switch e.Kind {
+	case saaspec.StartDelayElapses, saaspec.BackoffElapses:
+		return ex.dispatchDelay(cur.Dispatch)
+	default: // the four timeouts
+		return saaShortTimer
+	}
 }
 
 // dispatchDelay is how long the harness configured the pending delay to last, so it knows how
@@ -454,6 +465,29 @@ func (ex *saaExplorer) dispatchDelay(d saaspec.Dispatch) time.Duration {
 		return ex.retryInterval
 	default:
 		return 0
+	}
+}
+
+// driveTrace runs one trace on a single fresh activity, asserting the observed state and pollability
+// against Model() at every step. Both the timer probes and the dispatch-delay traces use it: every
+// event — RPC, poll, timeout firing, or dispatch-delay clock — is driven through apply and checked
+// against Model. (The explorer, by contrast, replays each path from a fresh activity so it can walk
+// the graph exhaustively; a trace pays each real wall-clock wait once.)
+func (ex *saaExplorer) driveTrace(t *testing.T, trace []saaspec.Event) {
+	a := ex.start(t)
+	a.path = trace
+	cur := saaspec.Initial(ex.cfg)
+
+	obs, err := a.observed()
+	require.NoError(t, err)
+	if !cur.SameObserved(obs) {
+		t.Fatalf("after Start, state disagrees with Initial(cfg).\n%s", saaStateDiff(obs, cur))
+	}
+
+	for _, e := range trace {
+		out := saaspec.Model(ex.cfg, cur, e)
+		a.apply(t, e, cur, out, true)
+		cur = out.Next
 	}
 }
 
@@ -574,10 +608,22 @@ func (ex *saaExplorer) start(t require.TestingT) *saaActor {
 
 const saaShortTimer = 2 * time.Second
 
-// saaElapseSettle is slack added to a delay duration when waiting for its clock to fire, so the
-// wait comfortably outlasts the dispatch-delay instant (schedule_time + start_delay, or
-// complete_time + backoff).
-const saaElapseSettle = 2 * time.Second
+// saaWallClockSettle is slack added to a wall-clock event's clock when waiting for it to fire, so
+// the wait comfortably outlasts the firing instant (a timeout deadline, or a dispatch-delay instant
+// like schedule_time + start_delay or complete_time + backoff).
+const saaWallClockSettle = 2 * time.Second
+
+// saaIsWallClock reports whether an event fires on a real timer — the four timeouts and the two
+// dispatch-delay clocks — rather than synchronously like an RPC. apply drives these by waiting.
+func saaIsWallClock(k saaspec.EventKind) bool {
+	switch k {
+	case saaspec.ScheduleToStartFires, saaspec.ScheduleToCloseFires, saaspec.StartToCloseFires,
+		saaspec.HeartbeatFires, saaspec.StartDelayElapses, saaspec.BackoffElapses:
+		return true
+	default:
+		return false
+	}
+}
 
 func (ex *saaExplorer) startRequest(activityID, taskQueue string) *workflowservice.StartActivityExecutionRequest {
 	long := durationpb.New(time.Hour)
