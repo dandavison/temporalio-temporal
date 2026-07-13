@@ -420,56 +420,52 @@ func backoffElapses(_ Config, s AbstractState, _ Event) Outcome {
 
 // helpers
 
-// attemptTimedOut mirrors a retryable RespondFailed — retry if attempts remain, else terminal —
-// with two differences: the terminal status is TimedOut rather than Failed, and (like a failure) a
-// deferred reset is applied when the attempt ends.
 func attemptTimedOut(cfg Config, s AbstractState) Outcome {
 	if s.Status.Terminal() {
 		return noop(s) // already closed; the timer is stale
 	}
-	retriesRemaining := cfg.MaxAttempts == 0 || s.Count < cfg.MaxAttempts
 	switch s.Status {
 	case ResetRequested:
 		return applyDeferredReset(cfg, s)
 	case Started, PauseRequested:
 		n := s
-		if retriesRemaining {
+		if cfg.MaxAttempts == 0 || s.Count < cfg.MaxAttempts {
+			// retry
 			n.Status = Scheduled
-			n.Dispatch = BackoffPending // the retry waits for the backoff interval
 			if s.Status == PauseRequested {
-				n.Status = Paused // pause takes effect on the retry
+				n.Status = Paused
 			}
+			n.Dispatch = BackoffPending
 			n.Count++
 			n.Stamp++ // invalidate last attempt's tasks
 		} else {
 			n.Status = TimedOut
-			n.ResetHeartbeats = false // terminal transition clears the deferred reset-heartbeat flag
+			n.ResetHeartbeats = false // terminal transitions clear the flag
 		}
 		return Outcome{Next: n}
 	case CancelRequested:
-		// A cancel-requested attempt cannot retry (mirrors RespondFailed), so the timeout is terminal.
+		// Timeout leads to TimedOut, not Canceled (similarly, RespondFailed leads to Failed not Canceled)
 		n := s
 		n.Status = TimedOut
-		n.ResetHeartbeats = false
+		n.ResetHeartbeats = false // terminal transitions clear the flag
 		return Outcome{Next: n}
 	case Scheduled, Paused:
-		return noop(s) // no running attempt: the per-attempt timer is stale
+		// TODO(dan): should this be impossible?
+		return noop(s) // no running attempt: timer is stale
 	default:
 		panic("SAA model does not handle a per-attempt timeout while in status " + s.Status.String())
 	}
 }
 
-// applyDeferredReset consumes the reset flags stored while the activity was RESET_REQUESTED and
-// returns the state the reset produces once the running attempt has ended (by failure or timeout).
+// applyDeferredReset is triggered by failure or timeout. It consumes the reset flags stored while
+// the activity was RESET_REQUESTED and applies the reset.
 func applyDeferredReset(cfg Config, s AbstractState) Outcome {
 	n := s
 	n.Count = 1
-	n.Stamp++ // invalidate last attempt's tasks
-	// Fresh attempt dispatches now: the first attempt already started (no start_delay left) and the
-	// reset discards any pending backoff.
-	n.Dispatch = Dispatchable
+	n.Stamp++                 // invalidate last attempt's tasks
+	n.Dispatch = Dispatchable // dispatch immediately: reset discards remaining retry backoff (and we're beyond start delay)
 	if s.ResetRestoreOptions && cfg.HasScheduleToClose {
-		n.STCStamp++ // restoring options reissues the schedule-to-close task
+		n.STCStamp++
 	}
 	if s.ResetKeepPaused {
 		n.Status = Paused
