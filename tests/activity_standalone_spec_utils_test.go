@@ -9,10 +9,12 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"time"
 
 	failurepb "go.temporal.io/api/failure/v1"
 	"go.temporal.io/api/serviceerror"
 	"go.temporal.io/server/chasm/lib/activity/saaspec"
+	"google.golang.org/protobuf/types/known/durationpb"
 )
 
 // --- SAASPEC_EVENT focus -------------------------------------------------------------------
@@ -72,15 +74,14 @@ func saaRejectKind(err error) saaspec.ErrorKind {
 	}
 }
 
-func saaFailure(retryable bool) *failurepb.Failure {
+func saaFailure(retryable bool, nextRetryDelay time.Duration) *failurepb.Failure {
+	info := &failurepb.ApplicationFailureInfo{Type: "explore", NonRetryable: !retryable}
+	if nextRetryDelay > 0 {
+		info.NextRetryDelay = durationpb.New(nextRetryDelay)
+	}
 	return &failurepb.Failure{
-		Message: "explore",
-		FailureInfo: &failurepb.Failure_ApplicationFailureInfo{
-			ApplicationFailureInfo: &failurepb.ApplicationFailureInfo{
-				Type:         "explore",
-				NonRetryable: !retryable,
-			},
-		},
+		Message:     "explore",
+		FailureInfo: &failurepb.Failure_ApplicationFailureInfo{ApplicationFailureInfo: info},
 	}
 }
 

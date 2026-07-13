@@ -110,6 +110,10 @@ type saaExplorer struct {
 	// the timer test can trigger it. The explorer leaves it at its zero value (Poll), so all
 	// timeouts are long and no timer fires during RPC exploration.
 	shortTimer saaspec.EventKind
+	// The dispatch probes set these to exercise deferred dispatch; the explorer leaves them zero.
+	startDelay     time.Duration // StartActivityExecutionRequest.StartDelay
+	retryInterval  time.Duration // RetryPolicy InitialInterval; 0 => the default short backoff
+	nextRetryDelay time.Duration // ApplicationFailureInfo.NextRetryDelay injected into RespondFailed
 }
 
 // explore does a breadth-first walk of the model's reachable states, verifying every decided
@@ -420,7 +424,7 @@ func (a *saaActor) rpc(e saaspec.Event) error {
 		return err
 	case saaspec.RespondFailed:
 		_, err := fc.RespondActivityTaskFailed(a.ex.ctx, &workflowservice.RespondActivityTaskFailedRequest{
-			Namespace: ns, TaskToken: a.token, Identity: "worker", Failure: saaFailure(e.Retryable),
+			Namespace: ns, TaskToken: a.token, Identity: "worker", Failure: saaFailure(e.Retryable, a.ex.nextRetryDelay),
 		})
 		return err
 	case saaspec.RespondCanceled:
@@ -510,6 +514,12 @@ func (ex *saaExplorer) startRequest(activityID, taskQueue string) *workflowservi
 		}
 		return long
 	}
+	// Retries dispatch after this interval. The default is short so the explorer can traverse retry
+	// loops quickly; the dispatch probes lengthen it to observe the backoff.
+	interval := 200 * time.Millisecond
+	if ex.retryInterval > 0 {
+		interval = ex.retryInterval
+	}
 	req := &workflowservice.StartActivityExecutionRequest{
 		Namespace:           ex.env.Namespace().String(),
 		ActivityId:          activityID,
@@ -519,12 +529,15 @@ func (ex *saaExplorer) startRequest(activityID, taskQueue string) *workflowservi
 		TaskQueue:           &taskqueuepb.TaskQueue{Name: taskQueue},
 		StartToCloseTimeout: dur(saaspec.StartToCloseFires),
 		RetryPolicy: &commonpb.RetryPolicy{
-			InitialInterval:    durationpb.New(200 * time.Millisecond),
+			InitialInterval:    durationpb.New(interval),
 			BackoffCoefficient: 1.0,
-			MaximumInterval:    durationpb.New(200 * time.Millisecond),
+			MaximumInterval:    durationpb.New(interval),
 			MaximumAttempts:    ex.cfg.MaxAttempts,
 		},
 		RequestId: uuid.NewString(),
+	}
+	if ex.startDelay > 0 {
+		req.StartDelay = durationpb.New(ex.startDelay)
 	}
 	if ex.cfg.HasScheduleToClose {
 		req.ScheduleToCloseTimeout = dur(saaspec.ScheduleToCloseFires)
