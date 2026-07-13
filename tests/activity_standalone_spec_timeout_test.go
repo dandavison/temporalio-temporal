@@ -15,12 +15,16 @@ import (
 	"go.temporal.io/server/chasm/lib/activity/saaspec"
 )
 
+// An saaTimeoutTrace specifies a sequence of events (involving timeouts and/or delay elapses) to be
+// tested.
 type saaTimeoutTrace struct {
-	name       string
-	timeout    saaspec.EventKind // made short at Start (ex.shortTimeout) and appended as the trace's last event
+	name string
+	// The timeout under test. It's set to a short value, while all the others are long, and placed
+	// as the last event in the trace.
+	timeout    saaspec.EventKind
 	cfg        saaspec.Config
-	path       []saaspec.Event // RPCs to reach the source state (other timeouts stay long)
-	startDelay time.Duration   // StartActivityExecutionRequest.StartDelay (0 => none)
+	path       []saaspec.Event
+	startDelay time.Duration
 }
 
 // saaLongStartDelay keeps a first attempt in its start-delay window for the whole trace, so a short
@@ -28,8 +32,7 @@ type saaTimeoutTrace struct {
 const saaLongStartDelay = time.Hour
 
 var saaTimeoutTraces = []saaTimeoutTrace{
-	// The schedule-to-close deadline keeps running while paused (intended: SAA departs from the
-	// workflow-activity behavior here).
+	// The schedule-to-close deadline keeps running while paused.
 	{name: "STC/paused", timeout: saaspec.ScheduleToCloseFires, cfg: saaspec.Config{HasScheduleToClose: true}, path: []saaspec.Event{{Kind: saaspec.Pause}}},
 	{name: "S2S/scheduled", timeout: saaspec.ScheduleToStartFires, cfg: saaspec.Config{HasScheduleToStart: true}},
 	// Stale-task no-op: pausing a SCHEDULED activity bumps the stamp, invalidating the pending
