@@ -110,12 +110,12 @@ type saaExplorer struct {
 	// the timer test can trigger it. The explorer leaves it at its zero value (Poll), so all
 	// timeouts are long and no timer fires during RPC exploration.
 	shortTimer saaspec.EventKind
-	// The deferred-dispatch exploration sets these; the RPC explorer leaves them zero.
+	// The dispatch-delay exploration sets these; the RPC explorer leaves them zero.
 	startDelay     time.Duration // StartActivityExecutionRequest.StartDelay
 	retryInterval  time.Duration // RetryPolicy InitialInterval; 0 => the default short backoff
 	nextRetryDelay time.Duration // ApplicationFailureInfo.NextRetryDelay injected into RespondFailed
 	// positivePollTimeout bounds the "must dispatch" poll; 0 => 10s (the RPC explorer's generous
-	// default). The deferred-dispatch traces set it just above the long-poll minimum so a Dispatchable
+	// default). The dispatch-delay traces set it just above the long-poll minimum so a Dispatchable
 	// state must dispatch promptly, not merely eventually.
 	positivePollTimeout time.Duration
 }
@@ -230,7 +230,7 @@ func (ex *saaExplorer) checkCompleteness(t *testing.T, verifiedFine, skippedFine
 		shown, suffix = shown[:30], fmt.Sprintf("\n  … and %d more", len(gaps)-30)
 	}
 	t.Logf("cfg %d: %d model-reachable cell(s) not exercised at depth<=%d (raise SAASPEC_MAX_DEPTH to reach deeper).\n"+
-		"  fingerprint = Status|count|stc>0|resetKeepPaused|resetHeartbeats|resetRestoreOpts|firstStarted|dispatchSet|deferral\n  %s%s",
+		"  fingerprint = Status|count|stc>0|resetKeepPaused|resetHeartbeats|resetRestoreOpts|firstStarted|dispatchSet|dispatch\n  %s%s",
 		ex.cfgIdx, len(gaps), saaMaxDepth(), strings.Join(shown, "\n  "), suffix)
 }
 
@@ -348,10 +348,10 @@ func (a *saaActor) applyPoll(cur saaspec.AbstractState, out saaspec.Outcome, fin
 	poll := saaspec.Event{Kind: saaspec.Poll}
 	switch {
 	case cur.Status == saaspec.Scheduled && out.Next.Status == saaspec.Started:
-		// Positive: a SCHEDULED+Dispatchable activity must be dispatched to a worker. The deferred
-		// exploration shortens this deadline so "Dispatchable" means "dispatches promptly" — which is
-		// how it distinguishes an immediate dispatch (e.g. reset discarding a backoff) from one still
-		// waiting out a deferral.
+		// Positive: a SCHEDULED+Dispatchable activity must be dispatched to a worker. The dispatch-delay
+		// traces shorten this deadline so "Dispatchable" means "dispatches promptly" — which is how it
+		// distinguishes an immediate dispatch (e.g. reset discarding a backoff) from one still waiting
+		// out a delay.
 		timeout := 10 * time.Second
 		if a.ex.positivePollTimeout > 0 {
 			timeout = a.ex.positivePollTimeout
@@ -369,16 +369,16 @@ func (a *saaActor) applyPoll(cur saaspec.AbstractState, out saaspec.Outcome, fin
 			t.Errorf("%s: dispatched task attempt number disagrees — server saw %d, model expected %d\n%s",
 				a.edge(poll, cur.Status), resp.GetAttempt(), out.Next.Count, a.pathLine())
 		}
-	case cur.Status == saaspec.Scheduled && cur.Deferral != saaspec.Dispatchable:
-		// Deferred dispatch: a start_delay or retry backoff is still pending, so the model says the
+	case cur.Status == saaspec.Scheduled && cur.Dispatch != saaspec.Dispatchable:
+		// Delayed dispatch: a start_delay or retry backoff is still pending, so the model says the
 		// poll finds no task (it stays SCHEDULED). Verify with a negative poll — but only when the
-		// pending deferral is long enough to outlast a valid long poll; under the fast-backoff configs
+		// pending delay is long enough to outlast a valid long poll; under the fast-backoff configs
 		// it is not, so there we rely on the state comparison below alone.
-		if dur := a.ex.deferralDuration(cur.Deferral); dur > saaNegativePollTimeout {
+		if dur := a.ex.dispatchDelay(cur.Dispatch); dur > saaNegativePollTimeout {
 			if resp := a.pollForTask(t, saaNegativePollTimeout); resp != nil {
 				if final {
 					t.Errorf("%s: model expected no dispatch (%s pending) but a task WAS dispatched (attempt %d)\n%s",
-						a.edge(poll, cur.Status), cur.Deferral, resp.GetAttempt(), a.pathLine())
+						a.edge(poll, cur.Status), cur.Dispatch, resp.GetAttempt(), a.pathLine())
 				}
 				return saaMismatch
 			}
@@ -416,13 +416,14 @@ func (a *saaActor) applyPoll(cur saaspec.AbstractState, out saaspec.Outcome, fin
 	return saaMismatch
 }
 
-// applyElapse drives a deferred-dispatch clock (StartDelayElapses / BackoffElapses). When the model
-// says this firing un-defers the dispatch, it waits for the real timer to fire before observing;
-// otherwise the firing is a stale no-op. The elapse changes only latent Deferral, so the observable
-// state must be unchanged either way — the un-deferral itself is confirmed by the subsequent Poll.
+// applyElapse drives a dispatch-delay clock (StartDelayElapses / BackoffElapses). When the model
+// says this firing makes the dispatch available, it waits for the real timer to fire before
+// observing; otherwise the firing is a stale no-op. The elapse changes only latent Dispatch, so the
+// observable state must be unchanged either way — that it became dispatchable is confirmed by the
+// subsequent Poll.
 func (a *saaActor) applyElapse(t require.TestingT, e saaspec.Event, cur saaspec.AbstractState, out saaspec.Outcome, final bool) saaApply {
-	if out.Next.Deferral == saaspec.Dispatchable && cur.Deferral != saaspec.Dispatchable {
-		time.Sleep(a.ex.deferralDuration(cur.Deferral) + saaElapseSettle)
+	if out.Next.Dispatch == saaspec.Dispatchable && cur.Dispatch != saaspec.Dispatchable {
+		time.Sleep(a.ex.dispatchDelay(cur.Dispatch) + saaElapseSettle)
 	}
 	obs, err := a.observed()
 	require.NoError(t, err)
@@ -438,11 +439,11 @@ func (a *saaActor) applyElapse(t require.TestingT, e saaspec.Event, cur saaspec.
 	return saaMismatch
 }
 
-// deferralDuration is how long the harness configured the pending deferral to last, so it knows how
+// dispatchDelay is how long the harness configured the pending delay to last, so it knows how
 // long to wait for the clock to fire and whether a negative poll can validly sit inside the window.
 // For a backoff, a worker-supplied next_retry_delay overrides the policy interval, so it wins here
 // too — that is what lets a trace prove the override is honored.
-func (ex *saaExplorer) deferralDuration(d saaspec.Deferral) time.Duration {
+func (ex *saaExplorer) dispatchDelay(d saaspec.Dispatch) time.Duration {
 	switch d {
 	case saaspec.StartDelayPending:
 		return ex.startDelay
@@ -573,8 +574,8 @@ func (ex *saaExplorer) start(t require.TestingT) *saaActor {
 
 const saaShortTimer = 2 * time.Second
 
-// saaElapseSettle is slack added to a deferral duration when waiting for its clock to fire, so the
-// wait comfortably outlasts the deferred-dispatch instant (schedule_time + start_delay, or
+// saaElapseSettle is slack added to a delay duration when waiting for its clock to fire, so the
+// wait comfortably outlasts the dispatch-delay instant (schedule_time + start_delay, or
 // complete_time + backoff).
 const saaElapseSettle = 2 * time.Second
 
@@ -717,7 +718,7 @@ func saaFingerprint(s saaspec.AbstractState) string {
 	count := min(s.Count, 3)
 	return fmt.Sprintf("%v|%d|%v|%v|%v|%v|%v|%v|%v",
 		s.Status, count, s.STCStamp > 0, s.ResetKeepPaused, s.ResetHeartbeats,
-		s.ResetRestoreOptions, s.FirstAttemptStarted, s.DispatchTimeSet, s.Deferral)
+		s.ResetRestoreOptions, s.FirstAttemptStarted, s.DispatchTimeSet, s.Dispatch)
 }
 
 // saaCellKey identifies a (state, event kind) cell at fingerprint granularity — the unit the

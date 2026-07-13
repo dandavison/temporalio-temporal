@@ -44,7 +44,7 @@ var saaTimerProbes = []saaTimerProbe{
 	{name: "heartbeat/started-retry", timer: saaspec.HeartbeatFires, cfg: saaspec.Config{HasHeartbeat: true}, path: []saaspec.Event{{Kind: saaspec.Poll}}, wait: saaTimerWait},
 	{name: "heartbeat/started-exhausted", timer: saaspec.HeartbeatFires, cfg: saaspec.Config{HasHeartbeat: true, MaxAttempts: 1}, path: []saaspec.Event{{Kind: saaspec.Poll}}, wait: saaTimerWait},
 
-	// Deferred-dispatch interaction with a timeout (a long start_delay keeps the first attempt pending
+	// Dispatch-delay interaction with a timeout (a long start_delay keeps the first attempt pending
 	// the whole probe, so the short timer fires during the start-delay window): schedule-to-start is
 	// pushed back behind the start delay -> it must NOT fire during the window, so the activity stays
 	// SCHEDULED (Model(StartDelayPending, ScheduleToStartFires) is a no-op).

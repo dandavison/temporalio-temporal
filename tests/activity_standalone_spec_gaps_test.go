@@ -15,7 +15,7 @@ func (s *standaloneActivityTestSuite) TestSpecKnownGaps() {
 			"like it does schedule-to-start. The model (scheduleToCloseFires) currently encodes the " +
 			"opposite — that schedule-to-close runs from schedule and fires during the start delay. " +
 			"Decide which is intended, then update the model to match and add the timer probe " +
-			"(TestSpecDeferredDispatch / TestSpecTimerProbes) that exercises it against the server.",
+			"(TestSpecDispatchDelay / TestSpecTimerProbes) that exercises it against the server.",
 		"pure-timing: start-to-close is measured from STARTED, not from schedule, so a start_delay " +
 			"must not eat into the running attempt's start-to-close budget (needs short start_delay + " +
 			"short start-to-close: poll after the delay, then assert the attempt times out one " +

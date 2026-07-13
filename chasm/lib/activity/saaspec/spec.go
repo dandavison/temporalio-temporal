@@ -75,20 +75,23 @@ func (s Status) Terminal() bool {
 	}
 }
 
-// Deferral is the latent dispatch state of a SCHEDULED attempt: what governs when its next dispatch
-// becomes available to a worker. It is NOT readable via ReadComponent — dispatch_time is a
-// wall-clock value that looks identical before and after it elapses — so it is excluded from
+// Dispatch says whether a SCHEDULED attempt's next dispatch is available to a worker now, or still
+// delayed by a start_delay or a retry backoff. It is NOT readable via ReadComponent — dispatch_time
+// is a wall-clock value that looks identical before and after it elapses — so it is excluded from
 // SameObserved and the harness verifies it by polling (Dispatchable <=> a poll returns a task).
 // Its zero value, Dispatchable, is also the canonical value for any non-SCHEDULED status.
-type Deferral int
+//
+// Not to be confused with a "deferred" pause/reset, which is an operator command received mid-attempt
+// whose effect is applied when the attempt ends (see ResetKeepPaused, applyDeferredReset).
+type Dispatch int
 
 const (
-	Dispatchable      Deferral = iota // pollable now: a worker poll returns a task
-	StartDelayPending                 // first dispatch deferred until schedule_time + start_delay
-	BackoffPending                    // retry dispatch deferred until complete_time + retry interval
+	Dispatchable      Dispatch = iota // pollable now: a worker poll returns a task
+	StartDelayPending                 // first dispatch delayed until schedule_time + start_delay
+	BackoffPending                    // retry dispatch delayed until complete_time + retry interval
 )
 
-func (d Deferral) String() string {
+func (d Dispatch) String() string {
 	switch d {
 	case Dispatchable:
 		return "Dispatchable"
@@ -97,7 +100,7 @@ func (d Deferral) String() string {
 	case BackoffPending:
 		return "BackoffPending"
 	default:
-		return "Deferral(?)"
+		return "Dispatch(?)"
 	}
 }
 
@@ -117,17 +120,17 @@ type AbstractState struct {
 	FirstAttemptStarted bool
 	DispatchTimeSet     bool
 
-	// Deferral is latent (poll-observable, not ReadComponent-observable); see the Deferral type.
+	// Dispatch is latent (poll-observable, not ReadComponent-observable); see the Dispatch type.
 	// It is excluded from SameObserved and verified by polling.
-	Deferral Deferral
+	Dispatch Dispatch
 }
 
 // SameObserved reports whether two states agree on every field readable via ReadComponent. The
-// latent Deferral field is excluded — a poll, not ReadComponent, reveals it — so the exact-equality
+// latent Dispatch field is excluded — a poll, not ReadComponent, reveals it — so the exact-equality
 // oracle compares only what the server actually persists observably.
 func (s AbstractState) SameObserved(o AbstractState) bool {
-	s.Deferral = Dispatchable
-	o.Deferral = Dispatchable
+	s.Dispatch = Dispatchable
+	o.Dispatch = Dispatchable
 	return s == o
 }
 
@@ -165,9 +168,9 @@ const (
 	StartToCloseFires
 	HeartbeatFires
 
-	// Deferred-dispatch clock firings, modeled as events like the timeouts: the harness triggers one
-	// by configuring the matching delay/backoff short and waiting for it to elapse. When it fires the
-	// deferred dispatch becomes available (Deferral -> Dispatchable); the status is unchanged, so the
+	// Dispatch-delay clock firings, modeled as events like the timeouts: the harness triggers one by
+	// configuring the matching delay/backoff short and waiting for it to elapse. When it fires the
+	// delayed dispatch becomes available (Dispatch -> Dispatchable); the status is unchanged, so the
 	// only observable is that a subsequent Poll now returns a task.
 	StartDelayElapses
 	BackoffElapses

@@ -9,7 +9,7 @@ func Initial(cfg Config) AbstractState {
 		s.STCStamp = 1 // bumped by TransitionScheduled when STC is set
 	}
 	if cfg.HasStartDelay {
-		s.Deferral = StartDelayPending // first dispatch waits until schedule_time + start_delay
+		s.Dispatch = StartDelayPending // first dispatch waits until schedule_time + start_delay
 	}
 	return s
 }
@@ -66,7 +66,7 @@ func Model(cfg Config, s AbstractState, e Event) Outcome {
 // Worker PollActivityTaskQueue advances a Scheduled attempt to Started, but only once its dispatch
 // is available: while a start_delay or retry backoff is still pending there is no task to hand out.
 func poll(_ Config, s AbstractState, _ Event) Outcome {
-	if s.Status != Scheduled || s.Deferral != Dispatchable {
+	if s.Status != Scheduled || s.Dispatch != Dispatchable {
 		// No dispatchable activity task; no state change.
 		return noop(s)
 	}
@@ -107,7 +107,7 @@ func respondFailed(cfg Config, s AbstractState, e Event) Outcome {
 		n := s
 		if e.Retryable && retriesRemaining {
 			n.Status = Scheduled
-			n.Deferral = BackoffPending // the retry waits for the backoff interval
+			n.Dispatch = BackoffPending // the retry waits for the backoff interval
 			if s.Status == PauseRequested {
 				n.Status = Paused // pause takes effect on the retry
 			}
@@ -139,7 +139,7 @@ func applyDeferredReset(cfg Config, s AbstractState) Outcome {
 	n.Stamp++ // invalidate last attempt's tasks
 	// Fresh attempt dispatches now: the first attempt already started (no start_delay left) and the
 	// reset discards any pending backoff.
-	n.Deferral = Dispatchable
+	n.Dispatch = Dispatchable
 	if s.ResetRestoreOptions && cfg.HasScheduleToClose {
 		n.STCStamp++ // restoring options reissues the schedule-to-close task
 	}
@@ -327,8 +327,8 @@ func reset(cfg Config, s AbstractState, e Event) Outcome {
 		// A reset discards a pending retry backoff (the reset attempt dispatches immediately) but
 		// preserves a pending start_delay (it keeps waiting for the original schedule_time +
 		// start_delay), so reset behaves like unpause during a start delay.
-		if s.Deferral == BackoffPending {
-			n.Deferral = Dispatchable
+		if s.Dispatch == BackoffPending {
+			n.Dispatch = Dispatchable
 		}
 		if s.Status == Paused && e.KeepPaused {
 			n.DispatchTimeSet = false
@@ -389,11 +389,11 @@ func updateOptions(cfg Config, s AbstractState, _ Event) Outcome {
 
 // ScheduleToStartFires: the attempt was not picked up by a worker within the schedule-to-start
 // deadline. The deadline is measured from the dispatch time, so it is pushed back by a start_delay
-// or a retry backoff: while the dispatch is still deferred the schedule-to-start clock has not
+// or a retry backoff: while the dispatch is still delayed the schedule-to-start clock has not
 // started and this is a no-op. Only a Dispatchable-but-still-SCHEDULED attempt times out this way;
 // once started the deadline is satisfied, and Pause bumps the stamp so the pending task is stale.
 func scheduleToStartFires(_ Config, s AbstractState, _ Event) Outcome {
-	if s.Status != Scheduled || s.Deferral != Dispatchable {
+	if s.Status != Scheduled || s.Dispatch != Dispatchable {
 		return noop(s)
 	}
 	n := s
@@ -434,7 +434,7 @@ func attemptTimedOut(cfg Config, s AbstractState) Outcome {
 		n := s
 		if retriesRemaining {
 			n.Status = Scheduled
-			n.Deferral = BackoffPending // the retry waits for the backoff interval
+			n.Dispatch = BackoffPending // the retry waits for the backoff interval
 			if s.Status == PauseRequested {
 				n.Status = Paused // pause takes effect on the retry
 			}
@@ -458,26 +458,26 @@ func attemptTimedOut(cfg Config, s AbstractState) Outcome {
 	}
 }
 
-// StartDelayElapses fires when wall-clock reaches schedule_time + start_delay, making the deferred
+// StartDelayElapses fires when wall-clock reaches schedule_time + start_delay, making the delayed
 // first dispatch available. It only affects an attempt still waiting on the start delay; the status
-// is unchanged (a Paused activity stays Paused, but its dispatch is now un-deferred, so unpausing it
-// dispatches immediately). Any other Deferral means the start delay is irrelevant — a no-op.
+// is unchanged (a Paused activity stays Paused, but its dispatch is no longer delayed, so unpausing
+// it dispatches immediately). Any other Dispatch means the start delay is irrelevant — a no-op.
 func startDelayElapses(_ Config, s AbstractState, _ Event) Outcome {
-	if s.Deferral != StartDelayPending {
+	if s.Dispatch != StartDelayPending {
 		return noop(s)
 	}
 	n := s
-	n.Deferral = Dispatchable
+	n.Dispatch = Dispatchable
 	return Outcome{Next: n}
 }
 
-// BackoffElapses fires when wall-clock reaches complete_time + retry interval, making the deferred
+// BackoffElapses fires when wall-clock reaches complete_time + retry interval, making the delayed
 // retry dispatch available. Symmetric to StartDelayElapses for the backoff case.
 func backoffElapses(_ Config, s AbstractState, _ Event) Outcome {
-	if s.Deferral != BackoffPending {
+	if s.Dispatch != BackoffPending {
 		return noop(s)
 	}
 	n := s
-	n.Deferral = Dispatchable
+	n.Dispatch = Dispatchable
 	return Outcome{Next: n}
 }

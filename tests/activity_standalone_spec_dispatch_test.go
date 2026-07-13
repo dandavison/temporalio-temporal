@@ -1,21 +1,21 @@
 package tests
 
-// Deferred-dispatch verification for the standalone-activity behavior spec: it checks the
-// implementation against the deferred-dispatch behavior that saaspec.Model() specifies via the
-// Deferral field (start_delay / retry backoff) and the *Elapses events.
+// Delayed-dispatch verification for the standalone-activity behavior spec: it checks the
+// implementation against the delayed-dispatch behavior that saaspec.Model() specifies via the
+// Dispatch field (start_delay / retry backoff) and the *Elapses events.
 //
 // It drives model-generated traces: each trace is an event sequence run once on a single activity,
 // and at every step the harness asserts the observed state and pollability against Model(). The
 // harness carries no product logic — Model() alone decides, at each step, whether a poll should find
-// a task (Deferral == Dispatchable) or nothing (a deferral still pending), and what state results; a
+// a task (Dispatch == Dispatchable) or nothing (a delay still pending), and what state results; a
 // *Elapses event is realized by waiting for the real timer. The trace list is only coverage
 // selection.
 //
-// Why traces rather than the full breadth-first walk TestSpecExplorer runs: each pending-deferral
-// step costs a real multi-second wait or long poll (a deferral must outlast the long-poll minimum to
+// Why traces rather than the full breadth-first walk TestSpecExplorer runs: each pending-delay
+// step costs a real multi-second wait or long poll (a delay must outlast the long-poll minimum to
 // be observable), and the explorer replays every path from a fresh activity, which would re-incur
 // every prefix wait. A trace incurs each wait once, so representative orderings fit the test's time
-// budget; an exhaustive walk of the deferral dimension does not, absent clock control.
+// budget; an exhaustive walk of the delay dimension does not, absent clock control.
 
 import (
 	"testing"
@@ -25,11 +25,11 @@ import (
 	"go.temporal.io/server/chasm/lib/activity/saaspec"
 )
 
-// The deferral windows are long enough to outlast a valid negative long poll (> the long-poll
+// The delay windows are long enough to outlast a valid negative long poll (> the long-poll
 // minimum), so "not dispatchable yet" is observable.
-const saaDeferralWindow = 5 * time.Second
+const saaDispatchWindow = 5 * time.Second
 
-type saaDeferredTrace struct {
+type saaDispatchTrace struct {
 	name           string
 	cfg            saaspec.Config
 	startDelay     time.Duration
@@ -45,50 +45,50 @@ var (
 	saaBOElapse  = saaspec.Event{Kind: saaspec.BackoffElapses}
 )
 
-var saaDeferredTraces = []saaDeferredTrace{
-	// start_delay defers the first dispatch: a poll finds no task until the delay elapses.
+var saaDispatchTraces = []saaDispatchTrace{
+	// start_delay delays the first dispatch: a poll finds no task until the delay elapses.
 	{
-		name: "start-delay/first-dispatch", cfg: saaspec.Config{HasStartDelay: true}, startDelay: saaDeferralWindow,
+		name: "start-delay/first-dispatch", cfg: saaspec.Config{HasStartDelay: true}, startDelay: saaDispatchWindow,
 		trace: []saaspec.Event{saaPoll, saaSDElapse, saaPoll},
 	},
-	// pause during the start delay, then unpause: still deferred (poll finds nothing) until it elapses.
+	// pause during the start delay, then unpause: still delayed (poll finds nothing) until it elapses.
 	{
-		name: "start-delay/unpause-keeps-waiting", cfg: saaspec.Config{HasStartDelay: true}, startDelay: saaDeferralWindow,
+		name: "start-delay/unpause-keeps-waiting", cfg: saaspec.Config{HasStartDelay: true}, startDelay: saaDispatchWindow,
 		trace: []saaspec.Event{{Kind: saaspec.Pause}, {Kind: saaspec.Unpause}, saaPoll, saaSDElapse, saaPoll},
 	},
-	// reset during the start delay: still deferred (behaves like unpause).
+	// reset during the start delay: still delayed (behaves like unpause).
 	{
-		name: "start-delay/reset-keeps-waiting", cfg: saaspec.Config{HasStartDelay: true}, startDelay: saaDeferralWindow,
+		name: "start-delay/reset-keeps-waiting", cfg: saaspec.Config{HasStartDelay: true}, startDelay: saaDispatchWindow,
 		trace: []saaspec.Event{{Kind: saaspec.Reset}, saaPoll, saaSDElapse, saaPoll},
 	},
-	// a retry is deferred by the policy backoff: a poll finds no task until the backoff elapses.
+	// a retry is delayed by the policy backoff: a poll finds no task until the backoff elapses.
 	{
-		name: "backoff/deferred", cfg: saaspec.Config{MaxAttempts: 3}, retryInterval: saaDeferralWindow,
+		name: "backoff/delayed", cfg: saaspec.Config{MaxAttempts: 3}, retryInterval: saaDispatchWindow,
 		trace: []saaspec.Event{saaPoll, saaFailRetry, saaPoll, saaBOElapse, saaPoll},
 	},
 	// a worker-supplied next_retry_delay overrides the (short, default) policy interval: the retry is
-	// deferred by the override. The policy backoff is ~200ms, so if the override were ignored the
+	// delayed by the override. The policy backoff is ~200ms, so if the override were ignored the
 	// retry would dispatch during the negative poll and the trace would catch it.
 	{
-		name: "backoff/next-retry-delay-override", cfg: saaspec.Config{MaxAttempts: 3}, nextRetryDelay: saaDeferralWindow,
+		name: "backoff/next-retry-delay-override", cfg: saaspec.Config{MaxAttempts: 3}, nextRetryDelay: saaDispatchWindow,
 		trace: []saaspec.Event{saaPoll, saaFailRetry, saaPoll, saaBOElapse, saaPoll},
 	},
-	// pause during the backoff, then unpause: still deferred until the backoff elapses.
+	// pause during the backoff, then unpause: still delayed until the backoff elapses.
 	{
-		name: "backoff/unpause-keeps-waiting", cfg: saaspec.Config{MaxAttempts: 3}, retryInterval: saaDeferralWindow,
+		name: "backoff/unpause-keeps-waiting", cfg: saaspec.Config{MaxAttempts: 3}, retryInterval: saaDispatchWindow,
 		trace: []saaspec.Event{saaPoll, saaFailRetry, {Kind: saaspec.Pause}, {Kind: saaspec.Unpause}, saaPoll, saaBOElapse, saaPoll},
 	},
 	// reset during the backoff discards it: the reset attempt dispatches immediately.
 	{
-		name: "backoff/reset-discards", cfg: saaspec.Config{MaxAttempts: 3}, retryInterval: saaDeferralWindow,
+		name: "backoff/reset-discards", cfg: saaspec.Config{MaxAttempts: 3}, retryInterval: saaDispatchWindow,
 		trace: []saaspec.Event{saaPoll, saaFailRetry, {Kind: saaspec.Reset}, saaPoll},
 	},
 }
 
-func (s *standaloneActivityTestSuite) TestSpecDeferredDispatch() {
+func (s *standaloneActivityTestSuite) TestSpecDispatchDelay() {
 	env := s.newTestEnv()
 
-	for i, tr := range saaDeferredTraces {
+	for i, tr := range saaDispatchTraces {
 		s.T().Run(tr.name, func(t *testing.T) {
 			// Fresh context per trace: each carries the default 90s deadline, so the multi-second
 			// waits do not accumulate against a single shared budget.
@@ -100,7 +100,7 @@ func (s *standaloneActivityTestSuite) TestSpecDeferredDispatch() {
 				cfg: tr.cfg, cfgIdx: i,
 				startDelay: tr.startDelay, retryInterval: tr.retryInterval, nextRetryDelay: tr.nextRetryDelay,
 				// "Dispatchable" must mean "dispatches promptly", so bound the positive poll below the
-				// deferral window — that is how reset-discards (immediate) is told from still-deferred.
+				// delay window — that is how reset-discards (immediate) is told from still-delayed.
 				positivePollTimeout: saaNegativePollTimeout,
 			}
 			ex.driveTrace(t, tr.trace)

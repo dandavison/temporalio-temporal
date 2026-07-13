@@ -9,7 +9,7 @@ In every command below, `-count=1` skips the test cache and `-v` shows the per-s
 
 ## No server (~1s) — spec unit tests + static Model↔code checks
 
-Runs the `model_test.go` assertions (including the deferred-dispatch requirements for start_delay
+Runs the `model_test.go` assertions (including the dispatch-delay requirements for start_delay
 and retry backoff), `conformance.TestModelDecisionCoverage` (`Model` is total over the RPC domain —
 no unexpected panics), and `conformance.TestModelEdgesReachableInCode` (every status change the
 model accepts is reachable in the code's declared transitions).
@@ -56,25 +56,25 @@ One scenario (slash-hierarchy; e.g. `/STC/paused`, `/S2S/paused-stale`, `/startT
 go test -tags test_dep -run 'TestStandaloneActivityTestSuite/TestSpecTimerProbes/heartbeat' -count=1 -v ./tests/
 ```
 
-## Deferred-dispatch traces (onebox, start_delay / retry backoff)
+## Dispatch-delay traces (onebox, start_delay / retry backoff)
 
-A deferred dispatch — a `start_delay` before the first attempt, or a retry backoff (policy-derived
+A delayed dispatch — a `start_delay` before the first attempt, or a retry backoff (policy-derived
 or a worker `next_retry_delay` override) before a later attempt — holds a SCHEDULED activity
 non-dispatchable until a wall-clock instant. That is not readable via ReadComponent (the status
-stays SCHEDULED), so the model tracks it as the latent `Deferral` field and the harness observes it
-by polling: no task while a deferral is pending, a task once the matching `*Elapses` event (driven
+stays SCHEDULED), so the model tracks it as the latent `Dispatch` field and the harness observes it
+by polling: no task while the dispatch is delayed, a task once the matching `*Elapses` event (driven
 by waiting) fires. Each check is a model-generated trace run once on a single activity.
 
 ```bash
-go test -tags test_dep -run 'TestStandaloneActivityTestSuite/TestSpecDeferredDispatch' -count=1 -v ./tests/
+go test -tags test_dep -run 'TestStandaloneActivityTestSuite/TestSpecDispatchDelay' -count=1 -v ./tests/
 ```
 
 One scenario (`/start-delay/first-dispatch`, `/start-delay/unpause-keeps-waiting`,
-`/start-delay/reset-keeps-waiting`, `/backoff/deferred`, `/backoff/next-retry-delay-override`,
+`/start-delay/reset-keeps-waiting`, `/backoff/delayed`, `/backoff/next-retry-delay-override`,
 `/backoff/unpause-keeps-waiting`, `/backoff/reset-discards`):
 
 ```bash
-go test -tags test_dep -run 'TestStandaloneActivityTestSuite/TestSpecDeferredDispatch/backoff' -count=1 -v ./tests/
+go test -tags test_dep -run 'TestStandaloneActivityTestSuite/TestSpecDispatchDelay/backoff' -count=1 -v ./tests/
 ```
 
 ## Known gaps
@@ -87,7 +87,7 @@ go test -tags test_dep -run 'TestStandaloneActivityTestSuite/TestSpecKnownGaps' 
 
 ## All the spec tests at once, no other suites
 
-`TestSpec` matches the explorer, timer probes, deferred-dispatch traces, and known-gaps. (Known-gaps
+`TestSpec` matches the explorer, timer probes, dispatch-delay traces, and known-gaps. (Known-gaps
 fails by design.)
 
 ```bash

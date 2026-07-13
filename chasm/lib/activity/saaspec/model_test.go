@@ -60,7 +60,7 @@ func TestPauseWhileStartedIsPauseRequested(t *testing.T) {
 	}
 }
 
-// The tests below pin the six deferred-dispatch requirements (start_delay and retry backoff
+// The tests below pin the six dispatch-delay requirements (start_delay and retry backoff
 // interacting with the timeouts and operator commands) at the spec level: they assert Model()
 // encodes the intended behavior. The server-side explorer checks the implementation against Model().
 
@@ -70,8 +70,8 @@ func backedOffRetry(t *testing.T, cfg Config) AbstractState {
 	t.Helper()
 	started := Model(cfg, Initial(cfg), Event{Kind: Poll}).Next
 	s := Model(cfg, started, Event{Kind: RespondFailed, Retryable: true}).Next
-	if s.Status != Scheduled || s.Deferral != BackoffPending {
-		t.Fatalf("expected a Scheduled/BackoffPending retry, got %v/%v", s.Status, s.Deferral)
+	if s.Status != Scheduled || s.Dispatch != BackoffPending {
+		t.Fatalf("expected a Scheduled/BackoffPending retry, got %v/%v", s.Status, s.Dispatch)
 	}
 	return s
 }
@@ -81,12 +81,12 @@ func pollable(cfg Config, s AbstractState) bool {
 }
 
 // (1) Schedule-to-close keeps running during a start delay: it fires even while the first dispatch
-// is still deferred.
+// is still delayed.
 func TestScheduleToCloseFiresDuringStartDelay(t *testing.T) {
 	cfg := Config{HasStartDelay: true, HasScheduleToClose: true}
 	s := Initial(cfg)
-	if s.Deferral != StartDelayPending {
-		t.Fatalf("Initial with start delay should be StartDelayPending, got %v", s.Deferral)
+	if s.Dispatch != StartDelayPending {
+		t.Fatalf("Initial with start delay should be StartDelayPending, got %v", s.Dispatch)
 	}
 	if out := Model(cfg, s, Event{Kind: ScheduleToCloseFires}); out.Next.Status != TimedOut {
 		t.Fatalf("schedule-to-close must fire during the start delay, got %v", out.Next.Status)
@@ -102,8 +102,8 @@ func TestPauseUnpauseDuringStartDelay(t *testing.T) {
 		t.Fatalf("pause during start delay must succeed -> Paused, got %v/%v", paused.Reject, paused.Next.Status)
 	}
 	unpaused := Model(cfg, paused.Next, Event{Kind: Unpause}).Next
-	if unpaused.Status != Scheduled || unpaused.Deferral != StartDelayPending {
-		t.Fatalf("unpause during start delay must resume waiting (Scheduled/StartDelayPending), got %v/%v", unpaused.Status, unpaused.Deferral)
+	if unpaused.Status != Scheduled || unpaused.Dispatch != StartDelayPending {
+		t.Fatalf("unpause during start delay must resume waiting (Scheduled/StartDelayPending), got %v/%v", unpaused.Status, unpaused.Dispatch)
 	}
 	if pollable(cfg, unpaused) {
 		t.Fatalf("a poll must find no task while the start delay is still pending")
@@ -123,8 +123,8 @@ func TestPauseUnpauseDuringBackoff(t *testing.T) {
 		t.Fatalf("pause during backoff must succeed -> Paused, got %v/%v", paused.Reject, paused.Next.Status)
 	}
 	unpaused := Model(cfg, paused.Next, Event{Kind: Unpause}).Next
-	if unpaused.Deferral != BackoffPending {
-		t.Fatalf("unpause during backoff must resume waiting (BackoffPending), got %v", unpaused.Deferral)
+	if unpaused.Dispatch != BackoffPending {
+		t.Fatalf("unpause during backoff must resume waiting (BackoffPending), got %v", unpaused.Dispatch)
 	}
 	if pollable(cfg, unpaused) {
 		t.Fatalf("a poll must find no task while the backoff is still pending")
@@ -135,8 +135,8 @@ func TestPauseUnpauseDuringBackoff(t *testing.T) {
 }
 
 // (4) Schedule-to-start is pushed back by a start delay (and a retry backoff): it must not fire
-// while the dispatch is still deferred, only after it becomes available.
-func TestScheduleToStartPushedBackByDeferral(t *testing.T) {
+// while the dispatch is still delayed, only after it becomes available.
+func TestScheduleToStartPushedBackByDispatch(t *testing.T) {
 	startDelayCfg := Config{HasStartDelay: true, HasScheduleToStart: true}
 	s := Initial(startDelayCfg)
 	if out := Model(startDelayCfg, s, Event{Kind: ScheduleToStartFires}); out.Next.Status != Scheduled {
@@ -162,8 +162,8 @@ func TestResetDuringStartDelayPreservesDelay(t *testing.T) {
 	if out.Reject != NoError {
 		t.Fatalf("reset during start delay must be accepted, got reject %v", out.Reject)
 	}
-	if out.Next.Deferral != StartDelayPending {
-		t.Fatalf("reset during start delay must keep waiting (StartDelayPending), got %v", out.Next.Deferral)
+	if out.Next.Dispatch != StartDelayPending {
+		t.Fatalf("reset during start delay must keep waiting (StartDelayPending), got %v", out.Next.Dispatch)
 	}
 	if pollable(cfg, out.Next) {
 		t.Fatalf("a poll must find no task after a reset during the start delay")
@@ -177,8 +177,8 @@ func TestResetDuringBackoffDispatchesImmediately(t *testing.T) {
 	if out.Reject != NoError {
 		t.Fatalf("reset during backoff must be accepted, got reject %v", out.Reject)
 	}
-	if out.Next.Deferral != Dispatchable {
-		t.Fatalf("reset during backoff must discard the backoff (Dispatchable), got %v", out.Next.Deferral)
+	if out.Next.Dispatch != Dispatchable {
+		t.Fatalf("reset during backoff must discard the backoff (Dispatchable), got %v", out.Next.Dispatch)
 	}
 	if !pollable(cfg, out.Next) {
 		t.Fatalf("a poll after reset-during-backoff must dispatch immediately")
