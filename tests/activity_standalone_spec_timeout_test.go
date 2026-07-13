@@ -41,14 +41,12 @@ var saaTimeoutTraces = []saaTimeoutTrace{
 	{name: "heartbeat/started-retry", timeout: saaspec.HeartbeatFires, cfg: saaspec.Config{HasHeartbeat: true}, path: []saaspec.Event{{Kind: saaspec.Poll}}},
 	{name: "heartbeat/started-exhausted", timeout: saaspec.HeartbeatFires, cfg: saaspec.Config{HasHeartbeat: true, MaxAttempts: 1}, path: []saaspec.Event{{Kind: saaspec.Poll}}},
 
-	// Dispatch-delay interaction with a timeout (a long start_delay keeps the first attempt pending
-	// the whole trace, so the short timeout fires during the start-delay window): schedule-to-start is
-	// pushed back behind the start delay -> it must NOT fire during the window, so the activity stays
-	// SCHEDULED (Model(StartDelayPending, ScheduleToStartFires) is a no-op).
-	//
-	// The schedule-to-close/start-delay interaction (req 1) is a pending spec decision — see
-	// TestSpecKnownGaps — so no trace for it yet.
+	// Dispatch-delay interaction with the timeouts: a long start_delay keeps the first attempt pending
+	// for the whole trace, and both schedule-to-start and schedule-to-close are anchored to the
+	// first-dispatch time (schedule_time + start_delay). So neither may fire while the dispatch is
+	// still delayed — the activity stays SCHEDULED — i.e. Model(StartDelayPending, *) is a no-op.
 	{name: "S2S/pushed-back-by-start-delay", timeout: saaspec.ScheduleToStartFires, cfg: saaspec.Config{HasStartDelay: true, HasScheduleToStart: true}, startDelay: saaLongStartDelay},
+	{name: "S2S/pushed-back-by-start-delay", timeout: saaspec.ScheduleToCloseFires, cfg: saaspec.Config{HasStartDelay: true, HasScheduleToClose: true}, startDelay: saaLongStartDelay},
 }
 
 func (s *standaloneActivityTestSuite) TestSpecTimeouts() {
