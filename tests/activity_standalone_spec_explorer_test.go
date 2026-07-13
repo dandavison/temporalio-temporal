@@ -12,7 +12,7 @@ package tests
 //   - for a heartbeat, the response flags equal ExpectedHeartbeatFlags.
 // Model() is total over the RPC event alphabet; a cell it does not handle panics and fails the run.
 //
-// Timers are configured long (hours) so no timeout fires mid-scenario; retry backoff is short so
+// Timeouts are configured long (hours) so none fires mid-scenario; retry backoff is short so
 // retries can be traversed. Timeout timing is checked by separate tests, not here.
 
 import (
@@ -106,10 +106,10 @@ type saaExplorer struct {
 	// focus, when non-empty, limits which final-edge events are reported (see SAASPEC_EVENT). The
 	// full graph is still traversed.
 	focus map[saaspec.EventKind]bool
-	// shortTimer, when set to one of the *Fires event kinds, makes that timeout short at Start so
-	// the timer test can trigger it. The explorer leaves it at its zero value (Poll), so all
-	// timeouts are long and no timer fires during RPC exploration.
-	shortTimer saaspec.EventKind
+	// shortTimeout, when set to one of the four timeout *Fires kinds, makes that timeout short at
+	// Start so the timeout traces can trigger it. The explorer leaves it at its zero value (Poll),
+	// so all timeouts are long and none fires during RPC exploration.
+	shortTimeout saaspec.EventKind
 	// The dispatch-delay exploration sets these; the RPC explorer leaves them zero.
 	startDelay     time.Duration // StartActivityExecutionRequest.StartDelay
 	retryInterval  time.Duration // RetryPolicy InitialInterval; 0 => the default short backoff
@@ -440,13 +440,13 @@ func (a *saaActor) applyWallClock(t require.TestingT, e saaspec.Event, cur saasp
 }
 
 // eventClock is how long the clock behind a wall-clock event takes to elapse: a timeout under test is
-// configured short (saaShortTimer), and a dispatch delay lasts dispatchDelay.
+// configured short (saaShortTimeout), and a dispatch delay lasts dispatchDelay.
 func (ex *saaExplorer) eventClock(e saaspec.Event, cur saaspec.AbstractState) time.Duration {
 	switch e.Kind {
 	case saaspec.StartDelayElapses, saaspec.BackoffElapses:
 		return ex.dispatchDelay(cur.Dispatch)
 	default: // the four timeouts
-		return saaShortTimer
+		return saaShortTimeout
 	}
 }
 
@@ -469,7 +469,7 @@ func (ex *saaExplorer) dispatchDelay(d saaspec.Dispatch) time.Duration {
 }
 
 // driveTrace runs one trace on a single fresh activity, asserting the observed state and pollability
-// against Model() at every step. Both the timer traces and the dispatch-delay traces use it: every
+// against Model() at every step. Both the timeout traces and the dispatch-delay traces use it: every
 // event — RPC, poll, timeout firing, or dispatch-delay clock — is driven through apply and checked
 // against Model. (The explorer, by contrast, replays each path from a fresh activity so it can walk
 // the graph exhaustively; a trace pays each real wall-clock wait once.)
@@ -606,14 +606,14 @@ func (ex *saaExplorer) start(t require.TestingT) *saaActor {
 	return &saaActor{ex: ex, activityID: id, taskQueue: id, runID: resp.RunId, reqIDs: map[saaspec.EventKind]string{}}
 }
 
-const saaShortTimer = 2 * time.Second
+const saaShortTimeout = 2 * time.Second
 
 // saaWallClockSettle is slack added to a wall-clock event's clock when waiting for it to fire, so
 // the wait comfortably outlasts the firing instant (a timeout deadline, or a dispatch-delay instant
 // like schedule_time + start_delay or complete_time + backoff).
 const saaWallClockSettle = 2 * time.Second
 
-// saaIsWallClock reports whether an event fires on a real timer — the four timeouts and the two
+// saaIsWallClock reports whether an event fires on wall-clock time — the four timeouts and the two
 // dispatch-delay clocks — rather than synchronously like an RPC. apply drives these by waiting.
 func saaIsWallClock(k saaspec.EventKind) bool {
 	switch k {
@@ -627,10 +627,10 @@ func saaIsWallClock(k saaspec.EventKind) bool {
 
 func (ex *saaExplorer) startRequest(activityID, taskQueue string) *workflowservice.StartActivityExecutionRequest {
 	long := durationpb.New(time.Hour)
-	// dur returns the short timeout for the one timer under test, long otherwise.
+	// dur returns the short timeout for the one timeout under test, long otherwise.
 	dur := func(k saaspec.EventKind) *durationpb.Duration {
-		if ex.shortTimer == k {
-			return durationpb.New(saaShortTimer)
+		if ex.shortTimeout == k {
+			return durationpb.New(saaShortTimeout)
 		}
 		return long
 	}

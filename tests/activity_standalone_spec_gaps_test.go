@@ -4,7 +4,7 @@ package tests
 // yet implemented, so it cannot be silently forgotten (a t.Skip would be forgettable). Remove each
 // line as it is implemented; delete the test when the list is empty.
 //
-// These are the items that the model-driven harness (static check + explorer + timer traces) does
+// These are the items that the model-driven harness (static check + explorer + timeout traces) does
 // not cover, either because they are about timing precision (when something happens, not what state
 // results) or because they need a scenario the harness does not construct.
 
@@ -14,8 +14,8 @@ func (s *standaloneActivityTestSuite) TestSpecKnownGaps() {
 			"(ScheduleTime + start_delay), so a start_delay pushes the schedule-to-close deadline back, " +
 			"like it does schedule-to-start. The model (scheduleToCloseFires) currently encodes the " +
 			"opposite — that schedule-to-close runs from schedule and fires during the start delay. " +
-			"Decide which is intended, then update the model to match and add the timer trace " +
-			"(TestSpecDispatchDelay / TestSpecTimerTraces) that exercises it against the server.",
+			"Decide which is intended, then update the model to match and add the timeout trace " +
+			"(TestSpecDispatchDelay / TestSpecTimeoutTraces) that exercises it against the server.",
 		"pure-timing: start-to-close is measured from STARTED, not from schedule, so a start_delay " +
 			"must not eat into the running attempt's start-to-close budget (needs short start_delay + " +
 			"short start-to-close: poll after the delay, then assert the attempt times out one " +

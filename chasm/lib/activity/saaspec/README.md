@@ -49,20 +49,21 @@ below. RPC/poll events fire synchronously; a wall-clock event (a timeout or a di
 is realized by configuring it short and waiting. Outcomes are never hard-coded — they come from
 `Model`. The two groups differ only in how the result is observed.
 
-### Timer traces — observed via ReadComponent
+### Timeout traces — observed via ReadComponent
 
-A timeout firing changes the status, so the trace reaches a source state via RPCs, fires one timeout,
-and reads the resulting state.
+Cover the four activity timeout types (schedule-to-start, schedule-to-close, start-to-close,
+heartbeat). A timeout firing changes the status, so the trace reaches a source state via RPCs, fires
+one timeout, and reads the resulting state.
 
 ```bash
-go test -tags test_dep -run 'TestStandaloneActivityTestSuite/TestSpecTimerTraces' -count=1 -v ./tests/
+go test -tags test_dep -run 'TestStandaloneActivityTestSuite/TestSpecTimeoutTraces' -count=1 -v ./tests/
 ```
 
 One scenario (slash-hierarchy; e.g. `/STC/paused`, `/S2S/paused-stale`, `/startToClose/started-retry`,
 `/heartbeat/started-retry`, `/S2S/pushed-back-by-start-delay`):
 
 ```bash
-go test -tags test_dep -run 'TestStandaloneActivityTestSuite/TestSpecTimerTraces/heartbeat' -count=1 -v ./tests/
+go test -tags test_dep -run 'TestStandaloneActivityTestSuite/TestSpecTimeoutTraces/heartbeat' -count=1 -v ./tests/
 ```
 
 ### Dispatch-delay traces — observed by polling
@@ -95,7 +96,7 @@ go test -tags test_dep -run 'TestStandaloneActivityTestSuite/TestSpecKnownGaps' 
 
 ## All the spec tests at once, no other suites
 
-`TestSpec` matches the explorer, timer traces, dispatch-delay traces, and known-gaps. (Known-gaps
+`TestSpec` matches the explorer, timeout traces, dispatch-delay traces, and known-gaps. (Known-gaps
 fails by design.)
 
 ```bash
