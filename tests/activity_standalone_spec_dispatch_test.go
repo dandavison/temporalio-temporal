@@ -85,7 +85,7 @@ var saaDispatchTraces = []saaDispatchTrace{
 	},
 }
 
-func (s *standaloneActivityTestSuite) TestSpecDispatchDelay() {
+func (s *standaloneActivityTestSuite) TestSpecDispatchDelays() {
 	env := s.newTestEnv()
 
 	for i, tr := range saaDispatchTraces {

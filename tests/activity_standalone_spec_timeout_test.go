@@ -51,7 +51,7 @@ var saaTimeoutTraces = []saaTimeoutTrace{
 	{name: "S2S/pushed-back-by-start-delay", timeout: saaspec.ScheduleToStartFires, cfg: saaspec.Config{HasStartDelay: true, HasScheduleToStart: true}, startDelay: saaLongStartDelay},
 }
 
-func (s *standaloneActivityTestSuite) TestSpecTimeoutTraces() {
+func (s *standaloneActivityTestSuite) TestSpecTimeouts() {
 	env := s.newTestEnv()
 	t := s.T()
 	ctx := s.Context()
@@ -59,7 +59,7 @@ func (s *standaloneActivityTestSuite) TestSpecTimeoutTraces() {
 	chasmCtx, err := env.GetTestCluster().Host().ChasmContext(ctx)
 	require.NoError(t, err)
 
-	// Each trace is an independent subtest, so `-run 'TestSpecTimeoutTraces/heartbeat'` selects by
+	// Each trace is an independent subtest, so `-run 'TestSpecTimeouts/heartbeat'` selects by
 	// timeout/scenario (names embed a "/" hierarchy: e.g. "heartbeat/started-retry").
 	for i, p := range saaTimeoutTraces {
 		t.Run(p.name, func(t *testing.T) {
