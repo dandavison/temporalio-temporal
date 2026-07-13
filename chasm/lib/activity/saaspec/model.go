@@ -206,8 +206,13 @@ func modelPause(_ Config, s AbstractState, e Event) Outcome {
 			return noop(s) // requestID-based idempotency
 		}
 		return reject(s, FailedPrecondition) // "already paused"
-	case CancelRequested, ResetRequested:
-		// Cancel > Reset > Pause
+	case CancelRequested:
+		return reject(s, FailedPrecondition)
+	case ResetRequested:
+		if s.ResetKeepPaused && e.SameRequestID {
+			// Pause -> Reset(keepPaused) -> Pause(same requestID)
+			return noop(s)
+		}
 		return reject(s, FailedPrecondition)
 	default:
 		panic("SAA model does not handle Pause while in status " + s.Status.String())
@@ -221,6 +226,7 @@ func modelUnpause(_ Config, s AbstractState, e Event) Outcome {
 		n := s
 		n.Status = Scheduled
 		n.Stamp++ // TODO(dan) double-check this is as it should be: we bump the stamp on Unpause, not on entry to Paused?
+		n.DispatchTimeSet = true
 		if e.ResetAttempts {
 			n.Count = 1
 		}
@@ -230,7 +236,14 @@ func modelUnpause(_ Config, s AbstractState, e Event) Outcome {
 		n := s
 		n.Status = Started
 		return Outcome{Next: n}
-	case Scheduled, Started, CancelRequested, ResetRequested:
+	case ResetRequested:
+		n := s
+		// TODO(dan): our implementation has Unpause strip the ResetKeepPaused flag from a pending
+		// Reset. But is that really what we want? Does it not seem like rather complex/ambitious
+		// behavior?
+		n.ResetKeepPaused = false // TODO(dan) see comment above; not sure this line should be in the spec
+		return Outcome{Next: n}
+	case Scheduled, Started, CancelRequested:
 		// TODO(dan): is it desirable that repeat Unpause are accepted idempotently but other things
 		// such as repeat cancel requests are FailedPrecondition? If the repeat Unpauses carry
 		// e.ResetAttempts / e.ResetHeartbeat, should they be no-op or reject?
