@@ -4,14 +4,13 @@ package tests
 // .task/saa-verification-plan.md).
 //
 // It walks the transition graph that saaspec.Model() describes and verifies every edge against
-// a real onebox server. From each reachable state it tries every event; for the events Model()
-// has decided, it replays the path from a fresh activity, drives the event as a real RPC, reads
-// the internal state back with ReadComponent, and asserts:
+// a real onebox server. From each reachable state it tries every event, replays the path from a
+// fresh activity, drives the event as a real RPC, reads the internal state back with
+// ReadComponent, and asserts:
 //   - the resulting internal state equals Model().Next exactly (all fields, both stamps);
 //   - the RPC's accept/reject outcome matches Model().Reject;
 //   - for a heartbeat, the response flags equal ExpectedHeartbeatFlags.
-// Undecided cells (Model panics with TODO, or returns an empty Outcome) are skipped, so coverage
-// grows as the spec is filled in.
+// Model() is total over the RPC event alphabet; a cell it does not handle panics and fails the run.
 //
 // Timers are configured long (hours) so no timeout fires mid-scenario; retry backoff is short so
 // retries can be traversed. Timeout timing is checked by separate tests, not here.
@@ -121,10 +120,7 @@ func (ex *saaExplorer) explore(t *testing.T) {
 		var next []node
 		for _, nd := range frontier {
 			for _, e := range saaCandidateEvents() {
-				out, decided := saaEvalModel(ex.cfg, nd.state, e)
-				if !decided {
-					continue
-				}
+				out := saaspec.Model(ex.cfg, nd.state, e)
 				edges++
 				path := append(append([]saaspec.Event{}, nd.path...), e)
 				res, reached := ex.verifyPath(t, path)
@@ -232,7 +228,7 @@ func (ex *saaExplorer) verifyPath(t require.TestingT, path []saaspec.Event) (saa
 	}
 
 	for i, e := range path {
-		out := saaspec.Model(ex.cfg, cur, e) // decided: guaranteed by explore()
+		out := saaspec.Model(ex.cfg, cur, e)
 		final := i == len(path)-1
 		// On a focused run, drive+check the final edge but swallow its report unless it is a
 		// focused event. Prefix edges always use the real t so reachability failures surface.
@@ -370,12 +366,9 @@ func (a *saaActor) applyPoll(cur saaspec.AbstractState, out saaspec.Outcome, fin
 }
 
 // checkDescribe asserts the public status and run state DescribeActivityExecution reports match
-// ExpectedDescribe. It is a no-op when ExpectedDescribe has not decided this state.
+// ExpectedDescribe.
 func (a *saaActor) checkDescribe(t require.TestingT, expected saaspec.AbstractState) {
-	st, rs, ok := saaExpectedDescribe(expected)
-	if !ok {
-		return
-	}
+	st, rs := saaspec.ExpectedDescribe(expected)
 	resp, err := a.ex.env.FrontendClient().DescribeActivityExecution(a.ex.ctx, &workflowservice.DescribeActivityExecutionRequest{
 		Namespace: a.ex.env.Namespace().String(), ActivityId: a.activityID, RunId: a.runID,
 	})
@@ -615,19 +608,6 @@ func saaNeedsToken(k saaspec.EventKind) bool {
 	}
 }
 
-// saaEvalModel calls Model, treating a TODO(spec)/unreachable panic as "undecided" so the explorer
-// skips that cell. Anything else Model returns — including an accidental empty Outcome{} — is a real
-// decision and is checked; an empty Outcome surfaces as a mismatch against the server.
-func saaEvalModel(cfg saaspec.Config, s saaspec.AbstractState, e saaspec.Event) (out saaspec.Outcome, decided bool) {
-	defer func() {
-		if r := recover(); r != nil {
-			decided = false
-		}
-	}()
-	out = saaspec.Model(cfg, s, e)
-	return out, true
-}
-
 func saaFingerprint(s saaspec.AbstractState) string {
 	count := min(s.Count, 3)
 	return fmt.Sprintf("%v|%d|%v|%v|%v|%v|%v|%v",
@@ -642,9 +622,9 @@ func saaCellKey(s saaspec.AbstractState, kind saaspec.EventKind) string {
 }
 
 // saaModelReachable computes, purely from Model() (no server), every (state, event) cell the model
-// can reach from Initial(cfg) by following decided non-reject edges to fixpoint. States are
-// deduplicated by fingerprint, so the walk is finite and terminates. This is the reference set the
-// explorer's verified/skipped cells are checked against, independent of any depth bound.
+// can reach from Initial(cfg) by following non-reject edges to fixpoint. States are deduplicated by
+// fingerprint, so the walk is finite and terminates. This is the reference set the explorer's
+// verified/skipped cells are checked against, independent of any depth bound.
 func saaModelReachable(cfg saaspec.Config) map[string]saaspec.EventKind {
 	cells := map[string]saaspec.EventKind{}
 	start := saaspec.Initial(cfg)
@@ -654,10 +634,7 @@ func saaModelReachable(cfg saaspec.Config) map[string]saaspec.EventKind {
 		var next []saaspec.AbstractState
 		for _, s := range frontier {
 			for _, e := range saaCandidateEvents() {
-				out, decided := saaEvalModel(cfg, s, e)
-				if !decided {
-					continue
-				}
+				out := saaspec.Model(cfg, s, e)
 				cells[saaCellKey(s, e.Kind)] = e.Kind
 				if out.Reject != saaspec.NoError {
 					continue // no state change; nothing new to reach

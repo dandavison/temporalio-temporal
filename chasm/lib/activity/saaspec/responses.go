@@ -53,12 +53,6 @@ type HeartbeatFlags struct {
 // the response flags equal this. In any other status it asserts the heartbeat is rejected
 // with NotFound, and does not call this function.
 //
-// TODO(spec): fill this in. Each flag is a pure function of s.Status, and one case also
-// depends on s.ResetKeepPaused. Decide the exact conditions and return the three booleans.
-// For example, consider whether ActivityPaused should be true in ResetRequested only when
-// the reset kept the activity paused, and whether both ActivityReset and ActivityPaused can
-// be true at the same time.
-//
 // How the explorer will use it: after issuing a heartbeat in a token-valid status it builds
 // the real HeartbeatFlags from the response and asserts equality with
 // ExpectedHeartbeatFlags(currentState). To send a heartbeat it needs the task token from
@@ -93,7 +87,7 @@ func ExpectedHeartbeatFlags(s AbstractState) HeartbeatFlags {
 			CancelRequested: false,
 		}
 	default:
-		panic("TODO(spec): ExpectedHeartbeatFlags for status " + s.Status.String())
+		panic("ExpectedHeartbeatFlags: not a token-valid status: " + s.Status.String())
 	}
 }
 

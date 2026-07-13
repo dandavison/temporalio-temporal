@@ -4,8 +4,8 @@ package tests
 // (saaspec.ScheduleToCloseFires, etc.); this harness triggers it by configuring the matching
 // timeout short and waiting, then asserts the resulting internal state equals what Model()
 // predicts for that (state, timer-event). The harness never encodes the intended outcome — it
-// comes entirely from Model() — so filling in the timer cases in Model() is what activates each
-// probe. Probes whose (state, timer-event) Model() has not decided are skipped.
+// comes entirely from Model(). Model must handle every timer event; a probe for a (state,
+// timer-event) that Model() does not handle panics, failing the probe.
 
 import (
 	"testing"
@@ -75,10 +75,7 @@ func (s *standaloneActivityTestSuite) TestSpecTimerProbes() {
 				cur = out.Next
 			}
 
-			out, decided := saaEvalModel(p.cfg, cur, saaspec.Event{Kind: p.timer})
-			if !decided {
-				t.Skipf("Model has not decided %s from %s", saaKindName(p.timer), cur.Status)
-			}
+			out := saaspec.Model(p.cfg, cur, saaspec.Event{Kind: p.timer})
 
 			src := cur.Status
 			time.Sleep(p.wait)

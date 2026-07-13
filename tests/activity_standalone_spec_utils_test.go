@@ -10,7 +10,6 @@ import (
 	"fmt"
 	"strings"
 
-	enumspb "go.temporal.io/api/enums/v1"
 	failurepb "go.temporal.io/api/failure/v1"
 	"go.temporal.io/api/serviceerror"
 	"go.temporal.io/server/chasm/lib/activity/saaspec"
@@ -71,19 +70,6 @@ func saaRejectKind(err error) saaspec.ErrorKind {
 	default:
 		return saaspec.ErrorKind(-1) // unrecognized: will not match any predicted kind
 	}
-}
-
-// saaExpectedDescribe wraps saaspec.ExpectedDescribe, returning ok=false when the spec has not yet
-// decided the projection for this state (the stub panics).
-func saaExpectedDescribe(s saaspec.AbstractState) (st enumspb.ActivityExecutionStatus, rs enumspb.PendingActivityState, ok bool) {
-	defer func() {
-		if recover() != nil {
-			ok = false
-		}
-	}()
-	st, rs = saaspec.ExpectedDescribe(s)
-	ok = true
-	return
 }
 
 func saaFailure(retryable bool) *failurepb.Failure {

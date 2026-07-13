@@ -3,7 +3,6 @@ package conformance
 import (
 	"fmt"
 	"reflect"
-	"sort"
 	"strings"
 	"testing"
 
@@ -81,27 +80,23 @@ func srcState(cfg saaspec.Config, st saaspec.Status, keepPaused bool, count int3
 	return s
 }
 
-// evalModel calls Model, turning the TODO(spec) and unreachable panics into classifications
-// instead of crashing the test.
+// evalModel calls Model, classifying an "unreachable" assertion panic separately from any other
+// (unexpected) panic instead of crashing the enumeration.
 type verdict int
 
 const (
 	decided     verdict = iota // Model returned an Outcome
-	todo                       // Model panicked with TODO(spec): still to be written
 	unreachable                // Model panicked with "unreachable": author asserts this can't happen
-	unexpected                 // Model panicked with something else
+	unexpected                 // Model panicked with something else: a bug
 )
 
 func evalModel(cfg saaspec.Config, s saaspec.AbstractState, e saaspec.Event) (out saaspec.Outcome, v verdict, panicMsg string) {
 	defer func() {
 		if r := recover(); r != nil {
 			panicMsg = fmt.Sprint(r)
-			switch {
-			case strings.Contains(panicMsg, "TODO(spec)"):
-				v = todo
-			case strings.Contains(panicMsg, "unreachable"):
+			if strings.Contains(panicMsg, "unreachable") {
 				v = unreachable
-			default:
+			} else {
 				v = unexpected
 			}
 		}
@@ -113,18 +108,17 @@ func evalModel(cfg saaspec.Config, s saaspec.AbstractState, e saaspec.Event) (ou
 
 // --- checks --------------------------------------------------------------------------------
 
-// TestModelDecisionCoverage is informational: it reports which (status, event kind) cells the
-// spec has decided and which still panic with TODO(spec). It fails only on an unexpected panic
-// (one that is neither TODO(spec) nor unreachable), which indicates a bug in Model or here.
+// TestModelDecisionCoverage asserts Model is total over the RPC domain: every (status, event)
+// cell either returns an Outcome or is an explicit unreachable assertion (the pre-creation
+// Unspecified status). Any other panic is a bug in Model or here and fails the test.
 type cell struct {
 	status saaspec.Status
 	kind   saaspec.EventKind
 }
 
 func TestModelDecisionCoverage(t *testing.T) {
-	todoCells := map[cell]bool{}
 	decidedCells := map[cell]bool{}
-	var counts [4]int
+	var counts [3]int
 
 	for _, cfg := range cfgs {
 		for _, st := range allSpecStatuses {
@@ -134,12 +128,9 @@ func TestModelDecisionCoverage(t *testing.T) {
 						for _, e := range eventsFor(k) {
 							_, v, msg := evalModel(cfg, srcState(cfg, st, kp, ct), e)
 							counts[v]++
-							c := cell{st, k}
 							switch v {
 							case decided, unreachable:
-								decidedCells[c] = true
-							case todo:
-								todoCells[c] = true
+								decidedCells[cell{st, k}] = true
 							case unexpected:
 								t.Errorf("unexpected panic: status=%s kind=%s event=%+v: %s",
 									st, kindName(k), e, msg)
@@ -151,19 +142,9 @@ func TestModelDecisionCoverage(t *testing.T) {
 		}
 	}
 
-	t.Logf("cells evaluated: decided=%d todo=%d unreachable=%d unexpected=%d",
-		counts[decided], counts[todo], counts[unreachable], counts[unexpected])
-	t.Logf("distinct (status,event): decided=%d still-TODO=%d", len(decidedCells), len(todoCells))
-	t.Logf("still to specify (status, event):\n%s", formatCells(todoCells))
-}
-
-func formatCells(cells map[cell]bool) string {
-	var lines []string
-	for c := range cells {
-		lines = append(lines, fmt.Sprintf("  %-16s %s", c.status, kindName(c.kind)))
-	}
-	sort.Strings(lines)
-	return strings.Join(lines, "\n")
+	t.Logf("cells evaluated: decided=%d unreachable=%d unexpected=%d",
+		counts[decided], counts[unreachable], counts[unexpected])
+	t.Logf("distinct (status,event) covered: %d", len(decidedCells))
 }
 
 // TestModelEdgesReachableInCode asserts that every status change the spec accepts can actually

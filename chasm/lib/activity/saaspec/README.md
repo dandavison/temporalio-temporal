@@ -8,7 +8,7 @@ In every command below, `-count=1` skips the test cache and `-v` shows the per-c
 ## No server (~1s) — spec smoke tests + static Model↔code checks
 
 Runs the `model_test.go` `Model`/`Initial` unit assertions, `conformance.TestModelDecisionCoverage`
-(which `(status,event)` cells are decided vs `TODO(spec)`), and
+(`Model` is total over the RPC domain — no unexpected panics), and
 `conformance.TestModelEdgesReachableInCode` (every model edge is reachable in the code's
 transitions).
 
