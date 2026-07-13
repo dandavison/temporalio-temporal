@@ -6,6 +6,21 @@ package tests
 // by driveTrace, so the resulting state is checked against Model() exactly like every other event.
 // The harness never encodes the intended outcome; Model() does. Model must handle every timeout event;
 // a trace for a (state, timeout-event) that Model() does not handle panics, failing the run.
+//
+// How a trace runs (each step below is one apply() call inside driveTrace):
+//  1. TestSpecTimeouts builds the trace = path ++ [timeout] and sets ex.shortTimeout, which makes
+//     startRequest configure that one timeout short (saaShortTimeout, 2s) and all others long (1h),
+//     so nothing else fires mid-trace.
+//  2. driveTrace starts one fresh activity and drives each event, comparing the observed state to
+//     Model() at every step.
+//  3. The RPC path steps advance to the source state; the final timeout event routes to
+//     applyWallClock, which sleeps out the 2s timeout, then asserts the resulting state == Model.Next.
+//
+// Worked example — "startToClose/started-retry" (trace [Poll, StartToCloseFires], start-to-close made
+// short): driveTrace starts an activity; Poll drives a real poll (SCHEDULED -> STARTED); then
+// StartToCloseFires is driven by sleeping until the 2s start-to-close fires on the server, which
+// retries the attempt (back to SCHEDULED, attempt 2). The S2S/* traces instead assert a timeout does
+// NOT fire — Model returns a no-op, applyWallClock waits the same and the state is asserted unchanged.
 
 import (
 	"testing"

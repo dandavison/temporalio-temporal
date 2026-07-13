@@ -289,6 +289,15 @@ type saaCell struct {
 	kind   saaspec.EventKind
 }
 
+// apply drives one event on the actor's activity and checks the result against Model, routing by how
+// the event is realized on a real server:
+//   - Poll is a real worker long-poll (applyPoll);
+//   - a wall-clock event — one of the four timeouts, or a dispatch-delay clock — is "driven" by
+//     waiting for the server's timer to fire (applyWallClock);
+//   - everything else is a worker/operator RPC (the tail below).
+//
+// It is the per-event step shared by driveTrace (timeout / dispatch-delay traces) and the explorer's
+// verifyPath (the RPC graph walk).
 func (a *saaActor) apply(t require.TestingT, e saaspec.Event, cur saaspec.AbstractState, out saaspec.Outcome, final bool) saaApply {
 	if e.Kind == saaspec.Poll {
 		return a.applyPoll(cur, out, final, t)
