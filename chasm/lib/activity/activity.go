@@ -322,9 +322,6 @@ func (a *Activity) GenerateRecordActivityTaskStartedResponse(
 
 // dispatchTimeForAttempt returns the dispatch time of the given attempt.
 func (a *Activity) dispatchTimeForAttempt(attempt *activitypb.ActivityAttemptState) *timestamppb.Timestamp {
-	if dispatchTime := attempt.GetDispatchTime(); dispatchTime != nil {
-		return dispatchTime
-	}
 	if attempt.GetCount() == 1 {
 		return timestamppb.New(a.firstDispatchTime())
 	}
@@ -977,7 +974,6 @@ func (a *Activity) unpause(
 ) {
 	attempt := a.LastAttempt.Get(ctx)
 	dispatchTime := a.unpauseDispatchTime(ctx, event)
-	attempt.DispatchTime = timestamppb.New(dispatchTime)
 
 	if event.req.GetResetAttempts() {
 		attempt.Count = 1
@@ -1045,7 +1041,6 @@ func (a *Activity) reset(ctx chasm.MutableContext, event resetEvent) {
 		a.clearHeartbeat(ctx)
 	}
 	dispatchTime := a.dispatchTimeRespectingStartDelay(event.resetTime)
-	attempt.DispatchTime = timestamppb.New(dispatchTime)
 	if timeout := a.GetScheduleToStartTimeout().AsDuration(); timeout > 0 {
 		ctx.AddTask(
 			a,
@@ -1162,7 +1157,6 @@ func (a *Activity) resetKeepPaused(
 	attempt.Count = 1
 	attempt.Stamp++
 	attempt.CurrentRetryInterval = nil
-	attempt.DispatchTime = nil
 	if frontendReq.GetResetHeartbeat() {
 		a.clearHeartbeat(ctx)
 	}
@@ -1329,7 +1323,6 @@ func (a *Activity) reissueDispatchAndScheduleToStart(ctx chasm.MutableContext, a
 	} else {
 		dispatchTime = a.dispatchTimeRespectingStartDelay(ctx.Now(a))
 	}
-	attempt.DispatchTime = timestamppb.New(dispatchTime)
 	ctx.AddTask(
 		a,
 		chasm.TaskAttributes{ScheduledTime: dispatchTime},
