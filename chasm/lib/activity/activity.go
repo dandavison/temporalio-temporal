@@ -671,19 +671,8 @@ func (a *Activity) UpdateActivityExecutionOptions(
 	policyRetryIntervalBeforeUpdate := backoff.CalculateExponentialRetryInterval(a.RetryPolicy, attempt.GetCount()-1)
 
 	if frontendReq.GetRestoreOriginal() {
-		ogOptions := a.GetOriginalOptions()
-		a.TaskQueue = common.CloneProto(ogOptions.GetTaskQueue())
-		a.ScheduleToCloseTimeout = common.CloneProto(ogOptions.GetScheduleToCloseTimeout())
-		a.ScheduleToStartTimeout = common.CloneProto(ogOptions.GetScheduleToStartTimeout())
-		a.StartToCloseTimeout = common.CloneProto(ogOptions.GetStartToCloseTimeout())
-		a.HeartbeatTimeout = common.CloneProto(ogOptions.GetHeartbeatTimeout())
-		a.RetryPolicy = common.CloneProto(ogOptions.GetRetryPolicy())
-		a.Priority = common.CloneProto(ogOptions.GetPriority())
-		// start_delay only governs the first dispatch. Once the first attempt has started, restoring
-		// the original value would shift ScheduleToClose without affecting dispatch timing.
-		if a.GetFirstAttemptStartedTime() == nil {
-			a.StartDelay = common.CloneProto(ogOptions.GetStartDelay())
-		}
+		// ABLATION: restore-original does nothing (originals not restored)
+		_ = a.GetOriginalOptions()
 	} else {
 		if err := a.mergeActivityOptions(frontendReq); err != nil {
 			return nil, err
@@ -704,8 +693,6 @@ func (a *Activity) UpdateActivityExecutionOptions(
 
 	// Recreate the ScheduleToClose task at the (possibly updated) deadline.
 	a.reissueScheduleToClose(ctx)
-
-	attempt.Stamp++
 
 	a.reissueRunningAttemptTimers(ctx, attempt)
 	if a.GetStatus() == activitypb.ACTIVITY_EXECUTION_STATUS_SCHEDULED {
@@ -1139,6 +1126,7 @@ func (a *Activity) deferResetWhileRunning(
 	}
 	if frontendReq.GetRestoreOriginalOptions() {
 		a.ResetRestoreOptions = true
+		a.LastAttempt.Get(ctx).Stamp++ // ABLATION: restore-original disturbs the in-progress attempt
 	}
 	if frontendReq.GetResetHeartbeat() {
 		a.ResetHeartbeats = true
