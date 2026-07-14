@@ -280,6 +280,12 @@ func (a *saaActor) apply(t require.TestingT, e saaspec.Event, cur saaspec.Abstra
 		return saaSkippedNoToken
 	}
 	err := a.rpc(e)
+	if saaCarriesReqID(e.Kind) && out.Reject == saaspec.NoError && out.Next.Status != cur.Status {
+		// This request established a new state, so its id is the one a later SameRequestID must reuse
+		// for the server's request-id idempotency; an intervening rejected/no-op request must not
+		// overwrite it.
+		a.establishedReqID[e.Kind] = a.lastReqID
+	}
 	ok := a.verify(t, e, cur, out, err, final)
 	if e.Kind == saaspec.Heartbeat && out.Reject == saaspec.NoError {
 		observed := saaspec.HeartbeatFlags{
@@ -586,8 +592,14 @@ type saaActor struct {
 	runID         string
 	token         []byte
 	lastHeartbeat *workflowservice.RecordActivityTaskHeartbeatResponse
-	reqIDs        map[saaspec.EventKind]string
-	path          []saaspec.Event // events replayed to reach the edge under test, for failure reports
+	// establishedReqID[kind] is the request id that established the current idempotent state for an
+	// operator command (RequestCancel/Terminate/Pause); a SameRequestID event reuses it so the server's
+	// request-id idempotency check sees the establishing id, not merely the last id used for that
+	// operation. lastReqID is the id used by the most recent operator RPC, promoted into
+	// establishedReqID when that RPC changes state.
+	establishedReqID map[saaspec.EventKind]string
+	lastReqID        string
+	path             []saaspec.Event // events replayed to reach the edge under test, for failure reports
 
 	// Raw stamps read across the edge under test. observed() shifts cur->prev on each read, so after
 	// driving edge N, cur is the post-N value and prev the post-(N-1) value: their inequality is the
@@ -601,7 +613,7 @@ func (h *saaHarness) start(t require.TestingT) *saaActor {
 	id := fmt.Sprintf("saaexp-%d-%d", h.cfgIdx, h.counter)
 	resp, err := h.env.FrontendClient().StartActivityExecution(h.ctx, h.startRequest(id, id))
 	require.NoError(t, err)
-	return &saaActor{h: h, activityID: id, taskQueue: id, runID: resp.RunId, reqIDs: map[saaspec.EventKind]string{}}
+	return &saaActor{h: h, activityID: id, taskQueue: id, runID: resp.RunId, establishedReqID: map[saaspec.EventKind]string{}}
 }
 
 const saaShortTimeout = 2 * time.Second
@@ -722,14 +734,25 @@ func (a *saaActor) pollForTask(t require.TestingT, timeout time.Duration) *workf
 }
 
 func (a *saaActor) reqID(e saaspec.Event) string {
+	id := uuid.NewString()
 	if e.SameRequestID {
-		if id, ok := a.reqIDs[e.Kind]; ok {
-			return id
+		if est, ok := a.establishedReqID[e.Kind]; ok {
+			id = est // reuse the id that established the current state, not merely the last one used
 		}
 	}
-	id := uuid.NewString()
-	a.reqIDs[e.Kind] = id
+	a.lastReqID = id
 	return id
+}
+
+// saaCarriesReqID reports whether an operator command carries a request id whose server-side
+// idempotency is keyed on it (RequestCancel/Terminate/Pause).
+func saaCarriesReqID(k saaspec.EventKind) bool {
+	switch k {
+	case saaspec.RequestCancel, saaspec.Terminate, saaspec.Pause:
+		return true
+	default:
+		return false
+	}
 }
 
 // --- helpers -------------------------------------------------------------------------------
