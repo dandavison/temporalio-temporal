@@ -4,10 +4,9 @@ package tests
 // spec — a total function Model(cfg, state, event) -> Outcome — and these tests drive a real onebox
 // server through the same event alphabet, asserting the server agrees with Model() at every step.
 //
-// This file holds the parts intended to be edited: the traversal configs and the dispatch-delay /
-// timeout traces (top), followed by the four test entry points, all subtests of
-// TestStandaloneActivityTestSuite/TestSpec. The harness that drives and checks each event lives in
-// activity_standalone_spec_utils_test.go.
+// This file holds the parts intended to be edited: the traversal configs and the traces (top),
+// followed by the three test entry points, all subtests of TestStandaloneActivityTestSuite/TestSpec.
+// The harness that drives and checks each event lives in activity_standalone_spec_utils_test.go.
 
 import (
 	"math/rand"
@@ -16,6 +15,7 @@ import (
 
 	"github.com/stretchr/testify/require"
 	"go.temporal.io/server/chasm/lib/activity/saaspec"
+	"go.temporal.io/server/common/testing/testcontext"
 )
 
 // ---------------------------------------------------------------------------------------------
@@ -38,27 +38,29 @@ var saaTraversalConfigs = []saaspec.Config{
 	{HasStartDelay: true, HasScheduleToClose: true},
 }
 
-// --- dispatch-delay traces -------------------------------------------------------------------
-//
-// Each trace checks the impl against the Dispatchability behavior Model() specifies (start_delay /
-// retry backoff) and the *Elapses events. A trace is an event sequence run once on one activity; at
-// every step the harness asserts the observed state and pollability against Model(), and a *Elapses
-// event is realized by waiting for the real timer. Traces rather than the breadth-first traversal
-// because each pending-delay step costs a real multi-second wait, and the traversal replays every
-// path from scratch (re-incurring every prefix wait). A trace pays each wait once.
-
-// The delay windows are long enough to outlast a valid negative long poll (> the long-poll
-// minimum), so "not dispatchable yet" is observable.
-const saaDispatchWindow = 5 * time.Second
-
-type saaDispatchTrace struct {
+// A trace is an event sequence run once on one fresh activity; the harness checks the observed state
+// against Model() after every event. Reach for a trace (rather than the graph traversal) when a step
+// needs a real wall-clock wait — a timeout firing or a start-delay/backoff window elapsing — because
+// the traversal replays each path from scratch and would re-incur every wait; a trace pays each wait
+// once. The timing knobs configure the activity and how long the harness waits; the trace is the
+// script. Writing a timeout's *Elapses event into the script is what makes the harness configure that
+// timeout short so it actually fires.
+type saaTrace struct {
 	name           string
-	cfg            saaspec.Config
-	startDelay     time.Duration
-	retryInterval  time.Duration
-	nextRetryDelay time.Duration // worker-supplied override of the policy backoff
 	trace          []saaspec.Event
+	cfg            saaspec.Config
+	startDelay     time.Duration // StartActivityExecution start_delay (also how long the harness waits for StartDelayElapses)
+	retryInterval  time.Duration // RetryPolicy interval; how long the harness waits for BackoffElapses
+	nextRetryDelay time.Duration // worker-supplied next_retry_delay override of the policy backoff
 }
+
+// saaDelayWindow is long enough to outlast a valid negative long poll (> the long-poll minimum), so
+// "not dispatchable yet" is observable during a start-delay or backoff window.
+const saaDelayWindow = 5 * time.Second
+
+// saaLongStartDelay keeps a first attempt in its start-delay window for the whole trace, so a short
+// timeout under test fires while the activity is still SCHEDULED and pending dispatch.
+const saaLongStartDelay = time.Hour
 
 var (
 	saaPoll      = saaspec.Event{Kind: saaspec.Poll}
@@ -67,121 +69,168 @@ var (
 	saaBOElapse  = saaspec.Event{Kind: saaspec.BackoffElapses}
 )
 
-var saaDispatchTraces = []saaDispatchTrace{
+var saaTraces = []saaTrace{
+	// --- start-delay window ---
 	// start_delay delays the first dispatch: a poll finds no task until the delay elapses.
 	{
-		name: "start-delay/first-dispatch", cfg: saaspec.Config{HasStartDelay: true}, startDelay: saaDispatchWindow,
+		name:  "start-delay/first-dispatch",
 		trace: []saaspec.Event{saaPoll, saaSDElapse, saaPoll},
+		cfg:   saaspec.Config{HasStartDelay: true}, startDelay: saaDelayWindow,
 	},
 	// pause during the start delay, then unpause: still delayed (poll finds nothing) until it elapses.
 	{
-		name: "start-delay/pause-then-unpause", cfg: saaspec.Config{HasStartDelay: true}, startDelay: saaDispatchWindow,
+		name:  "start-delay/pause-then-unpause",
 		trace: []saaspec.Event{{Kind: saaspec.Pause}, {Kind: saaspec.Unpause}, saaPoll, saaSDElapse, saaPoll},
+		cfg:   saaspec.Config{HasStartDelay: true}, startDelay: saaDelayWindow,
 	},
 	// reset during the start delay: still delayed (behaves like unpause).
 	{
-		name: "start-delay/reset", cfg: saaspec.Config{HasStartDelay: true}, startDelay: saaDispatchWindow,
+		name:  "start-delay/reset",
 		trace: []saaspec.Event{{Kind: saaspec.Reset}, saaPoll, saaSDElapse, saaPoll},
+		cfg:   saaspec.Config{HasStartDelay: true}, startDelay: saaDelayWindow,
 	},
 	// update start_delay to a long value during the delay window, then UpdateOptions(RestoreOriginal):
 	// the dispatch window must return to the original start_delay. If restore-original did not restore
 	// start_delay, the window would stay long and the final poll (after the original delay elapses)
 	// would find no task. This gives UpdateOptions(RestoreOriginal) genuine state-level coverage.
 	{
-		name: "start-delay/update-then-restore-original", cfg: saaspec.Config{HasStartDelay: true}, startDelay: saaDispatchWindow,
+		name: "start-delay/update-then-restore-original",
 		trace: []saaspec.Event{
 			{Kind: saaspec.UpdateOptions, SetsStartDelay: true},
 			{Kind: saaspec.UpdateOptions, RestoreOriginal: true},
 			saaPoll, saaSDElapse, saaPoll,
 		},
+		cfg: saaspec.Config{HasStartDelay: true}, startDelay: saaDelayWindow,
 	},
+
+	// --- retry backoff window ---
 	// a retry is delayed by the policy backoff: a poll finds no task until the backoff elapses.
 	{
-		name: "backoff/retry-dispatch", cfg: saaspec.Config{MaxAttempts: 3}, retryInterval: saaDispatchWindow,
+		name:  "backoff/retry-dispatch",
 		trace: []saaspec.Event{saaPoll, saaFailRetry, saaPoll, saaBOElapse, saaPoll},
+		cfg:   saaspec.Config{MaxAttempts: 3}, retryInterval: saaDelayWindow,
 	},
 	// a worker-supplied next_retry_delay overrides the (short, default) policy interval: the retry is
 	// delayed by the override. The policy backoff is ~200ms, so if the override were ignored the
 	// retry would dispatch during the negative poll and the trace would catch it.
 	{
-		name: "backoff/next-retry-delay-override", cfg: saaspec.Config{MaxAttempts: 3}, nextRetryDelay: saaDispatchWindow,
+		name:  "backoff/next-retry-delay-override",
 		trace: []saaspec.Event{saaPoll, saaFailRetry, saaPoll, saaBOElapse, saaPoll},
+		cfg:   saaspec.Config{MaxAttempts: 3}, nextRetryDelay: saaDelayWindow,
 	},
 	// pause during the backoff, then unpause: still delayed until the backoff elapses.
 	{
-		name: "backoff/pause-then-unpause", cfg: saaspec.Config{MaxAttempts: 3}, retryInterval: saaDispatchWindow,
+		name:  "backoff/pause-then-unpause",
 		trace: []saaspec.Event{saaPoll, saaFailRetry, {Kind: saaspec.Pause}, {Kind: saaspec.Unpause}, saaPoll, saaBOElapse, saaPoll},
+		cfg:   saaspec.Config{MaxAttempts: 3}, retryInterval: saaDelayWindow,
 	},
 	// pause/unpause during the backoff, then an unrelated options update: the pending backoff must
 	// survive the update and not re-dispatch early (regression guard for the unpause path clearing
 	// CurrentRetryInterval so a later re-dispatch loses the retry deadline).
 	{
-		name: "backoff/pause-unpause-then-update", cfg: saaspec.Config{MaxAttempts: 3}, retryInterval: saaDispatchWindow,
+		name:  "backoff/pause-unpause-then-update",
 		trace: []saaspec.Event{saaPoll, saaFailRetry, {Kind: saaspec.Pause}, {Kind: saaspec.Unpause}, {Kind: saaspec.UpdateOptions}, saaPoll, saaBOElapse, saaPoll},
+		cfg:   saaspec.Config{MaxAttempts: 3}, retryInterval: saaDelayWindow,
 	},
 	// a worker next_retry_delay override followed by an unrelated options update: the override must be
 	// preserved (not recalculated to the short policy interval), so the retry stays delayed. The policy
 	// backoff is ~200ms, so if the update dropped the override the retry would dispatch during the
 	// negative poll and the trace would catch it.
 	{
-		name: "backoff/next-retry-delay-override-then-update", cfg: saaspec.Config{MaxAttempts: 3}, nextRetryDelay: saaDispatchWindow,
+		name:  "backoff/next-retry-delay-override-then-update",
 		trace: []saaspec.Event{saaPoll, saaFailRetry, {Kind: saaspec.UpdateOptions}, saaPoll, saaBOElapse, saaPoll},
+		cfg:   saaspec.Config{MaxAttempts: 3}, nextRetryDelay: saaDelayWindow,
 	},
 	// reset during the backoff discards it: the reset attempt dispatches immediately.
 	{
-		name: "backoff/reset", cfg: saaspec.Config{MaxAttempts: 3}, retryInterval: saaDispatchWindow,
+		name:  "backoff/reset",
 		trace: []saaspec.Event{saaPoll, saaFailRetry, {Kind: saaspec.Reset}, saaPoll},
+		cfg:   saaspec.Config{MaxAttempts: 3}, retryInterval: saaDelayWindow,
 	},
-}
 
-// --- timeout traces --------------------------------------------------------------------------
-//
-// A timeout is modeled as an event (saaspec.ScheduleToCloseElapses, etc.), triggered by configuring
-// the matching timeout short and waiting; driveTrace checks the resulting state against Model().
-// Model must handle every timeout event, else the trace panics.
-
-// saaLongStartDelay keeps a first attempt in its start-delay window for the whole trace, so a short
-// timeout under test fires while the activity is still SCHEDULED and pending dispatch.
-const saaLongStartDelay = time.Hour
-
-// An saaTimeoutTrace specifies a sequence of events (involving timeouts and/or delay elapses) to be
-// tested.
-type saaTimeoutTrace struct {
-	name string
-	// The timeout under test. It's set to a short value, while all the others are long, and placed
-	// as the last event in the trace.
-	timeout    saaspec.EventKind
-	cfg        saaspec.Config
-	path       []saaspec.Event
-	startDelay time.Duration
-}
-
-// To read these: `timeout` is the timeout that fires first; `path` is the events leading up to it.
-var saaTimeoutTraces = []saaTimeoutTrace{
-	{name: "schedule-to-close/elapses-while-paused", timeout: saaspec.ScheduleToCloseElapses, path: []saaspec.Event{{Kind: saaspec.Pause}}, cfg: saaspec.Config{HasScheduleToClose: true}},
-	{name: "schedule-to-start/elapses-while-scheduled", timeout: saaspec.ScheduleToStartElapses, cfg: saaspec.Config{HasScheduleToStart: true}},
-	{name: "schedule-to-start/elapses-while-paused", timeout: saaspec.ScheduleToStartElapses, path: []saaspec.Event{{Kind: saaspec.Pause}}, cfg: saaspec.Config{HasScheduleToStart: true}},
-	{name: "start-to-close/elapses-while-started/retries-remain", timeout: saaspec.StartToCloseElapses, path: []saaspec.Event{{Kind: saaspec.Poll}}, cfg: saaspec.Config{}},
-	{name: "start-to-close/elapses-while-started/last-attempt", timeout: saaspec.StartToCloseElapses, path: []saaspec.Event{{Kind: saaspec.Poll}}, cfg: saaspec.Config{MaxAttempts: 1}},
+	// --- timeout firing ---
+	{
+		name:  "schedule-to-close/elapses-while-paused",
+		trace: []saaspec.Event{{Kind: saaspec.Pause}, {Kind: saaspec.ScheduleToCloseElapses}},
+		cfg:   saaspec.Config{HasScheduleToClose: true},
+	},
+	{
+		name:  "schedule-to-start/elapses-while-scheduled",
+		trace: []saaspec.Event{{Kind: saaspec.ScheduleToStartElapses}},
+		cfg:   saaspec.Config{HasScheduleToStart: true},
+	},
+	{
+		name:  "schedule-to-start/elapses-while-paused",
+		trace: []saaspec.Event{{Kind: saaspec.Pause}, {Kind: saaspec.ScheduleToStartElapses}},
+		cfg:   saaspec.Config{HasScheduleToStart: true},
+	},
+	{
+		name:  "start-to-close/elapses-while-started/retries-remain",
+		trace: []saaspec.Event{saaPoll, {Kind: saaspec.StartToCloseElapses}},
+		cfg:   saaspec.Config{},
+	},
+	{
+		name:  "start-to-close/elapses-while-started/last-attempt",
+		trace: []saaspec.Event{saaPoll, {Kind: saaspec.StartToCloseElapses}},
+		cfg:   saaspec.Config{MaxAttempts: 1},
+	},
 	// A worker that ignores a cancellation request must still time out: even with retries remaining,
 	// a per-attempt timeout in CANCEL_REQUESTED ends the activity as TimedOut (not a retry).
-	{name: "start-to-close/elapses-while-cancel-requested", timeout: saaspec.StartToCloseElapses, path: []saaspec.Event{{Kind: saaspec.Poll}, {Kind: saaspec.RequestCancel}}, cfg: saaspec.Config{}},
-	{name: "heartbeat/elapses-while-started/retries-remain", timeout: saaspec.HeartbeatElapses, path: []saaspec.Event{{Kind: saaspec.Poll}}, cfg: saaspec.Config{HasHeartbeat: true}},
-	{name: "heartbeat/elapses-while-started/last-attempt", timeout: saaspec.HeartbeatElapses, path: []saaspec.Event{{Kind: saaspec.Poll}}, cfg: saaspec.Config{HasHeartbeat: true, MaxAttempts: 1}},
-	// Dispatch-delay interactions
-	{name: "schedule-to-start/elapses-within-start-delay", timeout: saaspec.ScheduleToStartElapses, startDelay: saaLongStartDelay, cfg: saaspec.Config{HasStartDelay: true, HasScheduleToStart: true}},
-	{name: "schedule-to-close/elapses-within-start-delay", timeout: saaspec.ScheduleToCloseElapses, startDelay: saaLongStartDelay, cfg: saaspec.Config{HasStartDelay: true, HasScheduleToClose: true}},
+	{
+		name:  "start-to-close/elapses-while-cancel-requested",
+		trace: []saaspec.Event{saaPoll, {Kind: saaspec.RequestCancel}, {Kind: saaspec.StartToCloseElapses}},
+		cfg:   saaspec.Config{},
+	},
+	{
+		name:  "heartbeat/elapses-while-started/retries-remain",
+		trace: []saaspec.Event{saaPoll, {Kind: saaspec.HeartbeatElapses}},
+		cfg:   saaspec.Config{HasHeartbeat: true},
+	},
+	{
+		name:  "heartbeat/elapses-while-started/last-attempt",
+		trace: []saaspec.Event{saaPoll, {Kind: saaspec.HeartbeatElapses}},
+		cfg:   saaspec.Config{HasHeartbeat: true, MaxAttempts: 1},
+	},
+	// timeout while still in the start-delay window (activity SCHEDULED, first dispatch pending).
+	{
+		name:  "schedule-to-start/elapses-within-start-delay",
+		trace: []saaspec.Event{{Kind: saaspec.ScheduleToStartElapses}},
+		cfg:   saaspec.Config{HasStartDelay: true, HasScheduleToStart: true}, startDelay: saaLongStartDelay,
+	},
+	{
+		name:  "schedule-to-close/elapses-within-start-delay",
+		trace: []saaspec.Event{{Kind: saaspec.ScheduleToCloseElapses}},
+		cfg:   saaspec.Config{HasStartDelay: true, HasScheduleToClose: true}, startDelay: saaLongStartDelay,
+	},
 }
 
 // ---------------------------------------------------------------------------------------------
 // Test entry points
 // ---------------------------------------------------------------------------------------------
 
+// TestSpec runs the spec explorers as subtests, so `-run 'TestStandaloneActivityTestSuite/TestSpec'`
+// selects them all and each is addressable by name (e.g. .../TestSpec/Traces). Each subtest builds
+// its own env (fresh namespace) so activity ids do not collide across explorers.
 func (s *standaloneActivityTestSuite) TestSpec() {
+	// The explorers run back to back, so TestSpec's combined wall-clock far exceeds the default
+	// single-test budget. Raise the suite context deadline before the first newTestEnv fixes it at the
+	// default; a larger TEMPORAL_TEST_TIMEOUT (for deep walks) still wins. Each explorer additionally
+	// takes its own subtest-scoped context (see specRPCGraphTraversal).
+	testcontext.For(s.T(), testcontext.WithTimeout(saaSpecContextBudget()))
 	s.T().Run("RPCGraphTraversal", s.specRPCGraphTraversal)
 	s.T().Run("RandomWalk", s.specRandomWalk)
-	s.T().Run("DispatchDelayPaths", s.specDispatchDelayPaths)
-	s.T().Run("TimeoutPaths", s.specTimeoutPaths)
+	s.T().Run("Traces", s.specTraces)
+}
+
+// saaSpecContextBudget is TestSpec's overall context deadline. DefaultTimeout already reflects
+// TEMPORAL_TEST_TIMEOUT, so take the larger of it and a floor generous enough for the combined
+// explorers at their default depths.
+func saaSpecContextBudget() time.Duration {
+	const floor = 8 * time.Minute
+	if d := testcontext.DefaultTimeout(); d > floor {
+		return d
+	}
+	return floor
 }
 
 // specRPCGraphTraversal walks the transition graph that saaspec.Model() describes and verifies every
@@ -195,10 +244,13 @@ func (s *standaloneActivityTestSuite) TestSpec() {
 //
 // Model() is total over the RPC event alphabet; a cell it does not handle panics and fails the run.
 // Timeouts are configured long (hours) so none fires mid-scenario; retry backoff is short so retries
-// can be traversed. Timeout timing is checked by the timeout traces, not here.
+// can be traversed. Timeout timing is checked by the traces, not here.
 func (s *standaloneActivityTestSuite) specRPCGraphTraversal(t *testing.T) {
 	env := s.newTestEnv()
-	ctx := s.Context()
+	// testcontext.For(t), not s.Context(): the suite context is memoized once per suite test, so all
+	// TestSpec subtests would otherwise share a single 90s budget. Anchoring on the subtest t gives
+	// each explorer its own budget.
+	ctx := testcontext.For(t)
 
 	chasmCtx, err := env.GetTestCluster().Host().ChasmContext(ctx)
 	require.NoError(t, err)
@@ -231,7 +283,7 @@ func (s *standaloneActivityTestSuite) specRPCGraphTraversal(t *testing.T) {
 // -timeout. Set TEMPORAL_SAASPEC_NO_NEGATIVE_POLL=1 to skip the ~3s Paused negative poll.
 func (s *standaloneActivityTestSuite) specRandomWalk(t *testing.T) {
 	env := s.newTestEnv()
-	ctx := s.Context()
+	ctx := testcontext.For(t) // subtest-scoped budget; see specRPCGraphTraversal
 
 	chasmCtx, err := env.GetTestCluster().Host().ChasmContext(ctx)
 	require.NoError(t, err)
@@ -255,47 +307,30 @@ func (s *standaloneActivityTestSuite) specRandomWalk(t *testing.T) {
 	}
 }
 
-// specDispatchDelayPaths runs the delayed-dispatch traces (start_delay / retry backoff), each once on
-// one activity, paying each real multi-second wait a single time.
-func (s *standaloneActivityTestSuite) specDispatchDelayPaths(t *testing.T) {
+// specTraces runs the traces: each reaches its scenario on one fresh activity, paying every real
+// wall-clock wait (a start-delay/backoff window or a firing timeout) exactly once.
+func (s *standaloneActivityTestSuite) specTraces(t *testing.T) {
 	env := s.newTestEnv()
 
-	for i, tr := range saaDispatchTraces {
+	for i, tr := range saaTraces {
 		t.Run(tr.name, func(t *testing.T) {
-			// Fresh context per trace: each carries the default 90s deadline, so the multi-second
-			// waits do not accumulate against a single shared budget.
-			ctx := s.Context()
+			// A fresh context per trace, each with its own 90s deadline, so the multi-second waits do
+			// not accumulate against a single shared budget. testcontext.For(t) anchors on the subtest;
+			// s.Context() is memoized once per suite test and would be shared across every trace.
+			ctx := testcontext.For(t)
 			chasmCtx, err := env.GetTestCluster().Host().ChasmContext(ctx)
 			require.NoError(t, err)
 			h := &saaHarness{
 				env: env, ctx: ctx, chasmCtx: chasmCtx, nsID: env.NamespaceID().String(),
 				cfg: tr.cfg, cfgIdx: i,
 				startDelay: tr.startDelay, retryInterval: tr.retryInterval, nextRetryDelay: tr.nextRetryDelay,
+				// A timeout's *Elapses event in the script is the signal to configure that timeout short.
+				shortTimeout: saaTimeoutIn(tr.trace),
 				// "Dispatchable" must mean "dispatches promptly", so bound the positive poll below the
 				// delay window — that is how reset-discards (immediate) is told from still-delayed.
 				positivePollTimeout: saaNegativePollTimeout,
 			}
 			h.driveTrace(t, tr.trace)
-		})
-	}
-}
-
-// specTimeoutPaths runs the timeout traces: each reaches a source state via the RPC path, then fires
-// the timeout under test (configured short) and checks the resulting state against Model().
-func (s *standaloneActivityTestSuite) specTimeoutPaths(t *testing.T) {
-	env := s.newTestEnv()
-	ctx := s.Context()
-
-	chasmCtx, err := env.GetTestCluster().Host().ChasmContext(ctx)
-	require.NoError(t, err)
-
-	for i, p := range saaTimeoutTraces {
-		t.Run(p.name, func(t *testing.T) {
-			h := &saaHarness{
-				env: env, ctx: ctx, chasmCtx: chasmCtx, nsID: env.NamespaceID().String(),
-				cfg: p.cfg, cfgIdx: i, shortTimeout: p.timeout, startDelay: p.startDelay,
-			}
-			h.driveTrace(t, append(append([]saaspec.Event{}, p.path...), saaspec.Event{Kind: p.timeout}))
 		})
 	}
 }
