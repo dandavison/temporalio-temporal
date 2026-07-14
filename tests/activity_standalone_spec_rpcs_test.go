@@ -76,6 +76,12 @@ func (s *standaloneActivityTestSuite) TestSpecRPCGraphTraversal() {
 			cfg:      cfg,
 			cfgIdx:   i,
 		}
+		if cfg.HasStartDelay {
+			// Keep the first-dispatch window open for the whole traversal so the activity stays
+			// StartDelayPending (the model never leaves that state via an RPC event), letting the BFS
+			// cross the operator commands with the start-delay window.
+			h.startDelay = time.Hour
+		}
 		h.traverse(t)
 	}
 }
@@ -87,6 +93,12 @@ var saaTraversalConfigs = []saaspec.Config{
 	// (retryable failure with no retries left -> Failed) is reached at depth 2 rather than
 	// past the depth bound. See the completeness check.
 	{MaxAttempts: 1},
+	// Start-delay window: the activity stays StartDelayPending for the whole traversal (no RPC event
+	// leaves that state), so this crosses the operator commands (pause/unpause/reset/update/cancel/
+	// terminate) with the start-delay window and verifies via the per-Poll negative poll that none of
+	// them dispatches early. The second adds schedule-to-close so its window-invalidation is exercised.
+	{HasStartDelay: true},
+	{HasStartDelay: true, HasScheduleToClose: true},
 }
 
 type saaHarness struct {
@@ -609,6 +621,12 @@ type saaActor struct {
 }
 
 func (h *saaHarness) start(t require.TestingT) *saaActor {
+	// cfg.HasStartDelay tells the model to predict StartDelayPending; the server only enters that
+	// state if a real start_delay is configured. Guard against the decoupling so a misconfigured
+	// config fails loudly rather than as a confusing first-state mismatch.
+	if h.cfg.HasStartDelay && h.startDelay <= 0 {
+		require.Fail(t, "saaHarness misconfigured: cfg.HasStartDelay requires startDelay > 0")
+	}
 	h.counter++
 	id := fmt.Sprintf("saaexp-%d-%d", h.cfgIdx, h.counter)
 	resp, err := h.env.FrontendClient().StartActivityExecution(h.ctx, h.startRequest(id, id))

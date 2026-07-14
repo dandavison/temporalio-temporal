@@ -20,6 +20,7 @@ import (
 	"os"
 	"strconv"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/require"
 	"go.temporal.io/server/chasm/lib/activity/saaspec"
@@ -73,6 +74,12 @@ func (s *standaloneActivityTestSuite) TestSpecRandomWalk() {
 		h := &saaHarness{
 			env: env, ctx: ctx, chasmCtx: chasmCtx, nsID: env.NamespaceID().String(),
 			cfg: cfg, cfgIdx: i,
+		}
+		if cfg.HasStartDelay {
+			// Keep the first-dispatch window open for the whole walk so the activity stays
+			// StartDelayPending (no RPC event leaves it); the walk explores operator commands in the
+			// window and, unlike the BFS, re-polls post-operation states (catching early re-dispatch).
+			h.startDelay = time.Hour
 		}
 		// Independent, reproducible RNG stream per config.
 		h.randomWalk(t, rand.New(rand.NewSource(seed+int64(i))), steps)
