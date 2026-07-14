@@ -647,7 +647,6 @@ func (a *Activity) UpdateActivityExecutionOptions(
 		updateFields = util.ParseFieldMask(mask)
 	}
 
-	// start_delay updates are only valid while the activity is still in its delay window.
 	_, hasStartDelayInMask := updateFields["startDelay"]
 	if hasStartDelayInMask {
 		newDelay := frontendReq.GetActivityOptions().GetStartDelay()
@@ -660,8 +659,7 @@ func (a *Activity) UpdateActivityExecutionOptions(
 				return nil, serviceerror.NewInvalidArgument("start_delay is not enabled for this namespace")
 			}
 		}
-		if a.GetStatus() != activitypb.ACTIVITY_EXECUTION_STATUS_SCHEDULED ||
-			!a.firstDispatchTime().After(ctx.Now(a)) {
+		if !a.firstDispatchTime().After(ctx.Now(a)) {
 			return nil, serviceerror.NewFailedPrecondition(
 				"cannot update start_delay: activity is no longer in its delay window")
 		}
