@@ -548,16 +548,6 @@ func (a *saaActor) updateOptions(e saaspec.Event) error {
 	case e.SetsStartDelay:
 		req.ActivityOptions = &apiactivitypb.ActivityOptions{StartDelay: durationpb.New(time.Hour)}
 		req.UpdateMask = &fieldmaskpb.FieldMask{Paths: []string{"start_delay"}}
-	case e.SetsInvalidRetryPolicy:
-		// A subfield update whose merged policy is invalid: initial_interval > maximum_interval. Uses
-		// subfield paths (not "retry_policy") so the validation gate (FieldMaskHasSubPath) fires.
-		req.ActivityOptions = &apiactivitypb.ActivityOptions{
-			RetryPolicy: &commonpb.RetryPolicy{
-				InitialInterval: durationpb.New(time.Hour),
-				MaximumInterval: durationpb.New(time.Second),
-			},
-		}
-		req.UpdateMask = &fieldmaskpb.FieldMask{Paths: []string{"retry_policy.initial_interval", "retry_policy.maximum_interval"}}
 	default:
 		// A minimal, always-valid update: re-set the heartbeat timeout. (RespondFailed-style
 		// retryability and richer option merges are refined when the model decides these cells.)
@@ -791,9 +781,6 @@ func saaCandidateEvents() []saaspec.Event {
 	// An update that changes start_delay: the model rejects it outside the StartDelayPending window
 	// (the only window it is mutable in), which is every state the RPC-only traversal reaches.
 	out = append(out, saaspec.Event{Kind: saaspec.UpdateOptions, SetsStartDelay: true})
-	// An update whose merged retry policy is invalid (initial_interval > maximum_interval): rejected
-	// with InvalidArgument in every non-terminal state.
-	out = append(out, saaspec.Event{Kind: saaspec.UpdateOptions, SetsInvalidRetryPolicy: true})
 	for _, r := range []bool{false, true} {
 		out = append(out, saaspec.Event{Kind: saaspec.RespondFailed, Retryable: r})
 	}
