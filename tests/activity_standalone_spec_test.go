@@ -85,10 +85,10 @@ const saaDelayWindow = 5 * time.Second
 const saaLongStartDelay = time.Hour
 
 var (
-	saaPoll      = saaspec.Event{Kind: saaspec.Poll}
-	saaFailRetry = saaspec.Event{Kind: saaspec.RespondFailed, Retryable: true}
-	saaSDElapse  = saaspec.Event{Kind: saaspec.StartDelayElapses}
-	saaBOElapse  = saaspec.Event{Kind: saaspec.BackoffElapses}
+	saaPoll               = saaspec.Event{Kind: saaspec.Poll}
+	saaFailRetryably      = saaspec.Event{Kind: saaspec.RespondFailed, Retryable: true}
+	saaStartDelayElapse   = saaspec.Event{Kind: saaspec.StartDelayElapses}
+	saaBackoffDelayElapse = saaspec.Event{Kind: saaspec.BackoffElapses}
 )
 
 var saaTraces = []saaTrace{
@@ -96,19 +96,19 @@ var saaTraces = []saaTrace{
 	// start_delay delays the first dispatch: a poll finds no task until the delay elapses.
 	{
 		name:       "start-delay/first-dispatch",
-		trace:      []saaspec.Event{saaPoll, saaSDElapse, saaPoll},
+		trace:      []saaspec.Event{saaPoll, saaStartDelayElapse, saaPoll},
 		startDelay: saaDelayWindow,
 	},
 	// pause during the start delay, then unpause: still delayed (poll finds nothing) until it elapses.
 	{
 		name:       "start-delay/pause-then-unpause",
-		trace:      []saaspec.Event{{Kind: saaspec.Pause}, {Kind: saaspec.Unpause}, saaPoll, saaSDElapse, saaPoll},
+		trace:      []saaspec.Event{{Kind: saaspec.Pause}, {Kind: saaspec.Unpause}, saaPoll, saaStartDelayElapse, saaPoll},
 		startDelay: saaDelayWindow,
 	},
 	// reset during the start delay: still delayed (behaves like unpause).
 	{
 		name:       "start-delay/reset",
-		trace:      []saaspec.Event{{Kind: saaspec.Reset}, saaPoll, saaSDElapse, saaPoll},
+		trace:      []saaspec.Event{{Kind: saaspec.Reset}, saaPoll, saaStartDelayElapse, saaPoll},
 		startDelay: saaDelayWindow,
 	},
 	// update start_delay to a long value during the delay window, then UpdateOptions(RestoreOriginal):
@@ -120,7 +120,7 @@ var saaTraces = []saaTrace{
 		trace: []saaspec.Event{
 			{Kind: saaspec.UpdateOptions, SetsStartDelay: true},
 			{Kind: saaspec.UpdateOptions, RestoreOriginal: true},
-			saaPoll, saaSDElapse, saaPoll,
+			saaPoll, saaStartDelayElapse, saaPoll,
 		},
 		startDelay: saaDelayWindow,
 	},
@@ -129,7 +129,7 @@ var saaTraces = []saaTrace{
 	// a retry is delayed by the policy backoff: a poll finds no task until the backoff elapses.
 	{
 		name:          "backoff/retry-dispatch",
-		trace:         []saaspec.Event{saaPoll, saaFailRetry, saaPoll, saaBOElapse, saaPoll},
+		trace:         []saaspec.Event{saaPoll, saaFailRetryably, saaPoll, saaBackoffDelayElapse, saaPoll},
 		maxAttempts:   3,
 		retryInterval: saaDelayWindow,
 	},
@@ -138,14 +138,14 @@ var saaTraces = []saaTrace{
 	// retry would dispatch during the negative poll and the trace would catch it.
 	{
 		name:           "backoff/next-retry-delay-override",
-		trace:          []saaspec.Event{saaPoll, saaFailRetry, saaPoll, saaBOElapse, saaPoll},
+		trace:          []saaspec.Event{saaPoll, saaFailRetryably, saaPoll, saaBackoffDelayElapse, saaPoll},
 		maxAttempts:    3,
 		nextRetryDelay: saaDelayWindow,
 	},
 	// pause during the backoff, then unpause: still delayed until the backoff elapses.
 	{
 		name:          "backoff/pause-then-unpause",
-		trace:         []saaspec.Event{saaPoll, saaFailRetry, {Kind: saaspec.Pause}, {Kind: saaspec.Unpause}, saaPoll, saaBOElapse, saaPoll},
+		trace:         []saaspec.Event{saaPoll, saaFailRetryably, {Kind: saaspec.Pause}, {Kind: saaspec.Unpause}, saaPoll, saaBackoffDelayElapse, saaPoll},
 		maxAttempts:   3,
 		retryInterval: saaDelayWindow,
 	},
@@ -154,7 +154,7 @@ var saaTraces = []saaTrace{
 	// CurrentRetryInterval so a later re-dispatch loses the retry deadline).
 	{
 		name:          "backoff/pause-unpause-then-update",
-		trace:         []saaspec.Event{saaPoll, saaFailRetry, {Kind: saaspec.Pause}, {Kind: saaspec.Unpause}, {Kind: saaspec.UpdateOptions}, saaPoll, saaBOElapse, saaPoll},
+		trace:         []saaspec.Event{saaPoll, saaFailRetryably, {Kind: saaspec.Pause}, {Kind: saaspec.Unpause}, {Kind: saaspec.UpdateOptions}, saaPoll, saaBackoffDelayElapse, saaPoll},
 		maxAttempts:   3,
 		retryInterval: saaDelayWindow,
 	},
@@ -164,14 +164,14 @@ var saaTraces = []saaTrace{
 	// negative poll and the trace would catch it.
 	{
 		name:           "backoff/next-retry-delay-override-then-update",
-		trace:          []saaspec.Event{saaPoll, saaFailRetry, {Kind: saaspec.UpdateOptions}, saaPoll, saaBOElapse, saaPoll},
+		trace:          []saaspec.Event{saaPoll, saaFailRetryably, {Kind: saaspec.UpdateOptions}, saaPoll, saaBackoffDelayElapse, saaPoll},
 		maxAttempts:    3,
 		nextRetryDelay: saaDelayWindow,
 	},
 	// reset during the backoff discards it: the reset attempt dispatches immediately.
 	{
 		name:          "backoff/reset",
-		trace:         []saaspec.Event{saaPoll, saaFailRetry, {Kind: saaspec.Reset}, saaPoll},
+		trace:         []saaspec.Event{saaPoll, saaFailRetryably, {Kind: saaspec.Reset}, saaPoll},
 		maxAttempts:   3,
 		retryInterval: saaDelayWindow,
 	},
