@@ -304,11 +304,9 @@ func reset(cfg Config, s AbstractState, e Event) Outcome {
 // UpdateActivityExecutionOptions
 func updateOptions(cfg Config, s AbstractState, e Event) Outcome {
 	// TODO(dan): RestoreOriginal, field-mask merge. Does it re-dispatch when SCHEDULED?
-	// start_delay is mutable only while the activity is still SCHEDULED and in its first-dispatch
-	// window: the impl rejects otherwise, including once it is Paused in the window (you must unpause
-	// to change start_delay). TODO(dan): confirm rejecting a paused-in-window start_delay update is
-	// intended, or relax the impl.
-	if e.SetsStartDelay && (s.Status != Scheduled || s.Dispatchability != StartDelayPending) {
+	// start_delay is mutable while the first dispatch is still pending (StartDelayPending) — including
+	// while the activity is paused in the window, since UpdateOptions can change anything while paused.
+	if e.SetsStartDelay && s.Dispatchability != StartDelayPending {
 		return reject(s, FailedPrecondition)
 	}
 	switch s.Status {
