@@ -7,7 +7,8 @@ package tests
 // a real onebox server. From each reachable state it tries every event, replays the path from a
 // fresh activity, drives the event as a real RPC, reads the internal state back with
 // ReadComponent, and asserts:
-//   - the resulting internal state equals Model().Next exactly (all fields, both stamps);
+//   - the resulting internal state equals Model().Next exactly (all fields);
+//   - each stamp's change across the edge matches Model()'s AttemptTasksInvalidated / ScheduleToCloseTaskInvalidated;
 //   - the RPC's accept/reject outcome matches Model().Reject;
 //   - for a heartbeat, the response flags equal ExpectedHeartbeatFlags.
 // Model() is total over the RPC event alphabet; a cell it does not handle panics and fails the run.
@@ -212,7 +213,7 @@ func (h *saaHarness) checkCompleteness(t *testing.T, verifiedFine, skippedFine m
 		shown, suffix = shown[:30], fmt.Sprintf("\n  … and %d more", len(gaps)-30)
 	}
 	t.Logf("cfg %d: %d model-reachable cell(s) not exercised at depth<=%d (raise TEMPORAL_SAASPEC_MAX_DEPTH to reach deeper).\n"+
-		"  fingerprint = Status|count|scheduleToClose>0|resetKeepPaused|resetHeartbeats|resetRestoreOpts|firstStarted|dispatchSet|dispatch\n  %s%s",
+		"  fingerprint = Status|count|resetKeepPaused|resetHeartbeats|resetRestoreOpts|firstStarted|dispatchSet|dispatch\n  %s%s",
 		h.cfgIdx, len(gaps), saaMaxDepth(), strings.Join(shown, "\n  "), suffix)
 }
 
@@ -315,8 +316,24 @@ func (a *saaActor) verify(t require.TestingT, e saaspec.Event, cur saaspec.Abstr
 			t.Errorf("%s", a.stateFailure(e, cur.Status, obs, out.Next))
 		}
 		a.checkDescribe(t, out.Next)
+		a.checkTaskInvalidation(t, e, cur, out)
 	}
 	return ok
+}
+
+// checkTaskInvalidation compares whether each raw stamp changed across the edge under test against the
+// model's per-transition invalidation bools. observed() has already refreshed cur/prev for this edge.
+func (a *saaActor) checkTaskInvalidation(t require.TestingT, e saaspec.Event, cur saaspec.AbstractState, out saaspec.Outcome) {
+	gotAttempt := a.curStamp != a.prevStamp
+	gotSTC := a.curSTCStamp != a.prevSTCStamp
+	if gotAttempt != out.AttemptTasksInvalidated {
+		t.Errorf("%s: attempt-task invalidation disagrees — server %v, model %v\n%s",
+			a.edge(e, cur.Status), gotAttempt, out.AttemptTasksInvalidated, a.pathLine())
+	}
+	if gotSTC != out.ScheduleToCloseTaskInvalidated {
+		t.Errorf("%s: schedule-to-close-task invalidation disagrees — server %v, model %v\n%s",
+			a.edge(e, cur.Status), gotSTC, out.ScheduleToCloseTaskInvalidated, a.pathLine())
+	}
 }
 
 func (a *saaActor) applyPoll(cur saaspec.AbstractState, out saaspec.Outcome, final bool, t require.TestingT) saaApply {
@@ -356,10 +373,10 @@ func (a *saaActor) applyPoll(cur saaspec.AbstractState, out saaspec.Outcome, fin
 			}
 		}
 	case cur.Status == saaspec.Paused && !saaSkipNegativePoll():
-		// A PAUSED activity must not be dispatchable (Pause bumped the stamp, invalidating the pending
-		// task). The only status where a spurious dispatch is possible, so the only place we pay the
+		// A PAUSED activity must not be dispatchable (Pause invalidated the pending dispatch task).
+		// The only status where a spurious dispatch is possible, so the only place we pay the
 		// full long-poll wait; the timeout must exceed MinLongPollTimeout. TEMPORAL_SAASPEC_NO_NEGATIVE_POLL
-		// disables it — the state check below still confirms Paused/stamp/dispatch.
+		// disables it — the state check below still confirms Paused/dispatch.
 		if resp := a.pollForTask(t, saaNegativePollTimeout); resp != nil {
 			if final {
 				t.Errorf("%s: model expected no advance but a task WAS dispatched\n%s",
@@ -376,6 +393,7 @@ func (a *saaActor) applyPoll(cur saaspec.AbstractState, out saaspec.Outcome, fin
 			t.Errorf("%s", a.stateFailure(poll, cur.Status, obs, out.Next))
 		}
 		a.checkDescribe(t, out.Next)
+		a.checkTaskInvalidation(t, poll, cur, out)
 	}
 	if out.Next.SameObserved(obs) {
 		return saaVerified
@@ -396,6 +414,7 @@ func (a *saaActor) applyWallClock(t require.TestingT, e saaspec.Event, cur saasp
 			t.Errorf("%s", a.stateFailure(e, cur.Status, obs, out.Next))
 		}
 		a.checkDescribe(t, out.Next)
+		a.checkTaskInvalidation(t, e, cur, out)
 	}
 	if out.Next.SameObserved(obs) {
 		return saaVerified
@@ -569,6 +588,12 @@ type saaActor struct {
 	lastHeartbeat *workflowservice.RecordActivityTaskHeartbeatResponse
 	reqIDs        map[saaspec.EventKind]string
 	path          []saaspec.Event // events replayed to reach the edge under test, for failure reports
+
+	// Raw stamps read across the edge under test. observed() shifts cur->prev on each read, so after
+	// driving edge N, cur is the post-N value and prev the post-(N-1) value: their inequality is the
+	// stamp bump across edge N, compared to the model's Outcome bools (see checkTaskInvalidation).
+	prevStamp, curStamp       int32
+	prevSTCStamp, curSTCStamp int32
 }
 
 func (h *saaHarness) start(t require.TestingT) *saaActor {
@@ -649,6 +674,8 @@ func (a *saaActor) observed() (saaspec.AbstractState, error) {
 	if err != nil {
 		return saaspec.AbstractState{}, err
 	}
+	a.prevStamp, a.curStamp = a.curStamp, o.Stamp
+	a.prevSTCStamp, a.curSTCStamp = a.curSTCStamp, o.ScheduleToCloseStamp
 	return saaspec.Abstract(o), nil
 }
 
@@ -730,8 +757,8 @@ func saaNeedsToken(k saaspec.EventKind) bool {
 
 func saaFingerprint(s saaspec.AbstractState) string {
 	count := min(s.Count, 3)
-	return fmt.Sprintf("%v|%d|%v|%v|%v|%v|%v|%v|%v",
-		s.Status, count, s.ScheduleToCloseStamp > 0, s.ResetKeepPaused, s.ResetHeartbeats,
+	return fmt.Sprintf("%v|%d|%v|%v|%v|%v|%v|%v",
+		s.Status, count, s.ResetKeepPaused, s.ResetHeartbeats,
 		s.ResetRestoreOptions, s.FirstAttemptStarted, s.DispatchTimeSet, s.Dispatchability)
 }
 
