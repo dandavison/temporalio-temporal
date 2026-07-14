@@ -13,10 +13,7 @@ package saaspec
 
 // Initial is the state immediately after a successful StartActivityExecution.
 func Initial(cfg Config) AbstractState {
-	s := AbstractState{Status: Scheduled, Count: 1, Stamp: 1, DispatchTimeSet: true}
-	if cfg.HasScheduleToClose {
-		s.ScheduleToCloseStamp = 1 // bumped by TransitionScheduled when schedule-to-close is set
-	}
+	s := AbstractState{Status: Scheduled, Count: 1, DispatchTimeSet: true}
 	if cfg.HasStartDelay {
 		s.Dispatchability = StartDelayPending // first dispatch waits until schedule_time + start_delay
 	}
@@ -119,11 +116,10 @@ func respondFailed(cfg Config, s AbstractState, e Event) Outcome {
 				n.Status = Paused // pause takes effect on the retry
 			}
 			n.Count++
-			n.Stamp++ // invalidate last attempt's tasks
-		} else {
-			// no retry: terminal failure
-			n.Status = Failed
+			return Outcome{Next: n, StampBumped: true} // new attempt invalidates last attempt's tasks
 		}
+		// no retry: terminal failure
+		n.Status = Failed
 		return Outcome{Next: n}
 	case CancelRequested:
 		n := s
@@ -208,8 +204,7 @@ func pause(_ Config, s AbstractState, e Event) Outcome {
 	case Scheduled:
 		n := s
 		n.Status = Paused
-		n.Stamp++ // invalidate any pending dispatch task
-		return Outcome{Next: n}
+		return Outcome{Next: n, StampBumped: true} // invalidate any pending dispatch task
 	case Started:
 		n := s
 		n.Status = PauseRequested
@@ -239,12 +234,12 @@ func unpause(_ Config, s AbstractState, e Event) Outcome {
 	case Paused:
 		n := s
 		n.Status = Scheduled
-		n.Stamp++ // TODO(dan) double-check this is as it should be: we bump the stamp on Unpause, not on entry to Paused?
 		n.DispatchTimeSet = true
 		if e.ResetAttempts {
 			n.Count = 1
 		}
-		return Outcome{Next: n}
+		// TODO(dan) double-check this is as it should be: we bump the stamp on Unpause, not on entry to Paused?
+		return Outcome{Next: n, StampBumped: true}
 	case PauseRequested:
 		// TODO(dan): Unlike CancelRequested and ResetRequested, PauseRequested can be "undone" (by Unpause).
 		n := s
@@ -274,7 +269,6 @@ func reset(cfg Config, s AbstractState, e Event) Outcome {
 	case Scheduled, Paused:
 		n := s
 		n.Count = 1
-		n.Stamp++
 		// Reset discards a pending retry backoff (the reset attempt dispatches immediately) but keeps
 		// a pending start_delay.
 		if s.Dispatchability == BackoffPending {
@@ -286,10 +280,7 @@ func reset(cfg Config, s AbstractState, e Event) Outcome {
 			n.Status = Scheduled
 			n.DispatchTimeSet = true
 		}
-		if e.RestoreOriginal && cfg.HasScheduleToClose {
-			n.ScheduleToCloseStamp++
-		}
-		return Outcome{Next: n}
+		return Outcome{Next: n, StampBumped: true, ScheduleToCloseStampBumped: e.RestoreOriginal && cfg.HasScheduleToClose}
 	case Started, PauseRequested:
 		n := s
 		n.Status = ResetRequested
@@ -329,12 +320,7 @@ func updateOptions(cfg Config, s AbstractState, e Event) Outcome {
 	}
 	switch s.Status {
 	case Scheduled, Paused, Started, PauseRequested, CancelRequested, ResetRequested:
-		n := s
-		n.Stamp++
-		if cfg.HasScheduleToClose {
-			n.ScheduleToCloseStamp++
-		}
-		return Outcome{Next: n}
+		return Outcome{Next: s, StampBumped: true, ScheduleToCloseStampBumped: cfg.HasScheduleToClose}
 	default:
 		panic("SAA model does not handle UpdateOptions while in status " + s.Status.String())
 	}
@@ -449,10 +435,9 @@ func attemptTimedOut(cfg Config, s AbstractState) Outcome {
 			}
 			n.Dispatchability = BackoffPending
 			n.Count++
-			n.Stamp++ // invalidate last attempt's tasks
-		} else {
-			n.Status = TimedOut
+			return Outcome{Next: n, StampBumped: true} // new attempt invalidates last attempt's tasks
 		}
+		n.Status = TimedOut
 		return Outcome{Next: n}
 	case CancelRequested:
 		// Timeout -> TimedOut, not Canceled.
@@ -472,11 +457,7 @@ func attemptTimedOut(cfg Config, s AbstractState) Outcome {
 func applyDeferredReset(cfg Config, s AbstractState) Outcome {
 	n := s
 	n.Count = 1
-	n.Stamp++                        // invalidate last attempt's tasks
 	n.Dispatchability = Dispatchable // reset discards remaining backoff
-	if s.ResetRestoreOptions && cfg.HasScheduleToClose {
-		n.ScheduleToCloseStamp++
-	}
 	if s.ResetKeepPaused {
 		n.Status = Paused
 		n.DispatchTimeSet = false // no dispatch task while paused
@@ -484,5 +465,5 @@ func applyDeferredReset(cfg Config, s AbstractState) Outcome {
 		n.Status = Scheduled
 		n.DispatchTimeSet = true
 	}
-	return Outcome{Next: n}
+	return Outcome{Next: n, StampBumped: true, ScheduleToCloseStampBumped: s.ResetRestoreOptions && cfg.HasScheduleToClose}
 }

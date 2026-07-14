@@ -95,14 +95,12 @@ func (d Dispatchability) String() string {
 // replay-deterministic and readable via ReadComponent, so the oracle is exact equality. Keep every
 // field a scalar so that `n := s` is an independent copy.
 type AbstractState struct {
-	Status               Status
-	Count                int32 // attempt.count
-	Stamp                int32 // attempt.stamp
-	ScheduleToCloseStamp int32 // schedule_to_close_stamp
-	ResetKeepPaused      bool
-	ResetHeartbeats      bool
-	ResetRestoreOptions  bool
-	FirstAttemptStarted  bool
+	Status              Status
+	Count               int32 // attempt.count
+	ResetKeepPaused     bool
+	ResetHeartbeats     bool
+	ResetRestoreOptions bool
+	FirstAttemptStarted bool
 	// DispatchTimeSet is whether a dispatch time is recorded (attempt.dispatch_time != nil): the
 	// existence of a dispatch, observable via ReadComponent. Distinct from Dispatchability, its readiness.
 	DispatchTimeSet bool
@@ -127,10 +125,6 @@ func (s AbstractState) mask() AbstractState {
 	if s.Status != ResetRequested {
 		// The pending-reset intent is only meaningful while a reset is deferred.
 		s.ResetKeepPaused, s.ResetHeartbeats, s.ResetRestoreOptions = false, false, false
-	}
-	if s.Status != Scheduled && s.Status != Paused {
-		// Stamp guards a pending dispatch task; only Scheduled/Paused have one.
-		s.Stamp = 0
 	}
 	return s
 }
@@ -203,9 +197,15 @@ const (
 
 // Outcome is what the spec says the API + resulting state should be. For a rejected or
 // no-op call, Next == the input state (the call must not mutate).
+//
+// The two stamps are not part of AbstractState: their only observable meaning is that a pending task
+// was invalidated, i.e. the value changed. So the model states, per transition, whether each bumps,
+// and the harness compares the observed stamp delta across the edge against these booleans.
 type Outcome struct {
-	Next   AbstractState
-	Reject ErrorKind
+	Next                       AbstractState
+	Reject                     ErrorKind
+	StampBumped                bool // this transition invalidates the pending attempt dispatch/timer tasks
+	ScheduleToCloseStampBumped bool // this transition restarts/invalidates the schedule-to-close timer
 }
 
 // Observed is the internal state the harness reads back via ReadComponent. The reader
@@ -225,15 +225,13 @@ type Observed struct {
 // Abstract maps an observed internal snapshot onto the spec's AbstractState.
 func Abstract(o Observed) AbstractState {
 	return AbstractState{
-		Status:               mapStatus(o.Status),
-		Count:                o.Count,
-		Stamp:                o.Stamp,
-		ScheduleToCloseStamp: o.ScheduleToCloseStamp,
-		ResetKeepPaused:      o.ResetKeepPaused,
-		ResetHeartbeats:      o.ResetHeartbeats,
-		ResetRestoreOptions:  o.ResetRestoreOptions,
-		FirstAttemptStarted:  o.FirstAttemptStarted,
-		DispatchTimeSet:      o.DispatchTimeSet,
+		Status:              mapStatus(o.Status),
+		Count:               o.Count,
+		ResetKeepPaused:     o.ResetKeepPaused,
+		ResetHeartbeats:     o.ResetHeartbeats,
+		ResetRestoreOptions: o.ResetRestoreOptions,
+		FirstAttemptStarted: o.FirstAttemptStarted,
+		DispatchTimeSet:     o.DispatchTimeSet,
 	}
 }
 

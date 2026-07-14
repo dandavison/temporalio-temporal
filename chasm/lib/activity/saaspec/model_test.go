@@ -6,7 +6,7 @@ import "testing"
 
 func TestInitial(t *testing.T) {
 	got := Initial(Config{HasScheduleToClose: true})
-	want := AbstractState{Status: Scheduled, Count: 1, Stamp: 1, ScheduleToCloseStamp: 1, DispatchTimeSet: true}
+	want := AbstractState{Status: Scheduled, Count: 1, DispatchTimeSet: true}
 	if got != want {
 		t.Fatalf("Initial: got %+v want %+v", got, want)
 	}
@@ -21,8 +21,8 @@ func TestPollFromScheduledStarts(t *testing.T) {
 	if out.Next.Status != Started || !out.Next.FirstAttemptStarted {
 		t.Fatalf("Poll: got %+v", out.Next)
 	}
-	if out.Next.Stamp != s.Stamp {
-		t.Fatalf("Poll must not bump stamp: %d -> %d", s.Stamp, out.Next.Stamp)
+	if out.StampBumped {
+		t.Fatalf("Poll must not bump stamp")
 	}
 }
 
@@ -36,11 +36,11 @@ func TestPauseFromScheduledBumpsStamp(t *testing.T) {
 	if out.Next.Status != Paused {
 		t.Fatalf("want Paused got %v", out.Next.Status)
 	}
-	if out.Next.Stamp != s.Stamp+1 {
-		t.Fatalf("pause from scheduled must bump stamp: %d -> %d", s.Stamp, out.Next.Stamp)
+	if !out.StampBumped {
+		t.Fatalf("pause from scheduled must bump stamp")
 	}
-	if out.Next.ScheduleToCloseStamp != s.ScheduleToCloseStamp {
-		t.Fatalf("pause must not touch ScheduleToCloseStamp: %d -> %d", s.ScheduleToCloseStamp, out.Next.ScheduleToCloseStamp)
+	if out.ScheduleToCloseStampBumped {
+		t.Fatalf("pause must not touch schedule-to-close stamp")
 	}
 }
 
@@ -54,8 +54,8 @@ func TestPauseWhileStartedIsPauseRequested(t *testing.T) {
 	if out.Next.Status != PauseRequested {
 		t.Fatalf("want PauseRequested got %v", out.Next.Status)
 	}
-	if out.Next.Stamp != s.Stamp {
-		t.Fatalf("pause while started must NOT bump stamp: %d -> %d", s.Stamp, out.Next.Stamp)
+	if out.StampBumped {
+		t.Fatalf("pause while started must NOT bump stamp")
 	}
 }
 
