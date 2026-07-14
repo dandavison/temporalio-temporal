@@ -469,6 +469,12 @@ func (a *saaActor) checkDescribe(t require.TestingT, expected saaspec.AbstractSt
 			"  model expected: status=%v run=%v",
 			expected.Status, a.pathLine(), gotSt, gotRs, st, rs)
 	}
+	if gotAttempt := resp.GetInfo().GetAttempt(); gotAttempt != expected.Count {
+		t.Errorf("Describe attempt while in internal status %s does not match model expectation\n%s\n"+
+			"  server saw:     attempt=%d\n"+
+			"  model expected: attempt=%d",
+			expected.Status, a.pathLine(), gotAttempt, expected.Count)
+	}
 }
 
 // rpc performs the RPC for a non-Poll event and returns its error.
