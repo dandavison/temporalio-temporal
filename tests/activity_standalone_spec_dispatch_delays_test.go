@@ -54,6 +54,18 @@ var saaDispatchTraces = []saaDispatchTrace{
 		name: "start-delay/reset", cfg: saaspec.Config{HasStartDelay: true}, startDelay: saaDispatchWindow,
 		trace: []saaspec.Event{{Kind: saaspec.Reset}, saaPoll, saaSDElapse, saaPoll},
 	},
+	// update start_delay to a long value during the delay window, then UpdateOptions(RestoreOriginal):
+	// the dispatch window must return to the original start_delay. If restore-original did not restore
+	// start_delay, the window would stay long and the final poll (after the original delay elapses)
+	// would find no task. This gives UpdateOptions(RestoreOriginal) genuine state-level coverage.
+	{
+		name: "start-delay/update-then-restore-original", cfg: saaspec.Config{HasStartDelay: true}, startDelay: saaDispatchWindow,
+		trace: []saaspec.Event{
+			{Kind: saaspec.UpdateOptions, SetsStartDelay: true},
+			{Kind: saaspec.UpdateOptions, RestoreOriginal: true},
+			saaPoll, saaSDElapse, saaPoll,
+		},
+	},
 	// a retry is delayed by the policy backoff: a poll finds no task until the backoff elapses.
 	{
 		name: "backoff/retry-dispatch", cfg: saaspec.Config{MaxAttempts: 3}, retryInterval: saaDispatchWindow,
