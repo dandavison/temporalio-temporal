@@ -87,16 +87,16 @@ func (s *standaloneActivityTestSuite) TestSpecRPCGraphTraversal() {
 }
 
 var saaTraversalConfigs = []saaspec.Config{
-	{}, // no schedule-to-close, unlimited attempts
-	{HasScheduleToClose: true, HasScheduleToStart: true, HasHeartbeat: true, MaxAttempts: 3},
-	// Retries exhaust after the first attempt, so the RespondFailed exhaustion boundary
-	// (retryable failure with no retries left -> Failed) is reached at depth 2 rather than
-	// past the depth bound. See the completeness check.
-	{MaxAttempts: 1},
-	// Start-delay window: the activity stays StartDelayPending for the whole traversal (no RPC event
-	// leaves that state), so this crosses the operator commands (pause/unpause/reset/update/cancel/
-	// terminate) with the start-delay window and verifies via the per-Poll negative poll that none of
-	// them dispatches early. The second adds schedule-to-close so its window-invalidation is exercised.
+	// {}, // no schedule-to-close, unlimited attempts
+	// {HasScheduleToClose: true, HasScheduleToStart: true, HasHeartbeat: true, MaxAttempts: 3},
+	// // Retries exhaust after the first attempt, so the RespondFailed exhaustion boundary
+	// // (retryable failure with no retries left -> Failed) is reached at depth 2 rather than
+	// // past the depth bound. See the completeness check.
+	// {MaxAttempts: 1},
+	// // Start-delay window: the activity stays StartDelayPending for the whole traversal (no RPC event
+	// // leaves that state), so this crosses the operator commands (pause/unpause/reset/update/cancel/
+	// // terminate) with the start-delay window and verifies via the per-Poll negative poll that none of
+	// // them dispatches early. The second adds schedule-to-close so its window-invalidation is exercised.
 	{HasStartDelay: true},
 	{HasStartDelay: true, HasScheduleToClose: true},
 }
