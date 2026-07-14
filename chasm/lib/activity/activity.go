@@ -1384,12 +1384,6 @@ func (a *Activity) reissueRunningAttemptTimers(ctx chasm.MutableContext, attempt
 // pre-dispatch re-scheduling (unpause, reset, options update) honors any remaining start_delay.
 // Returns t unchanged if the first attempt has already started.
 func (a *Activity) dispatchTimeRespectingStartDelay(t time.Time) time.Time {
-	if a.GetFirstAttemptStartedTime() != nil {
-		return t
-	}
-	if dispatchTime := a.firstDispatchTime(); dispatchTime.After(t) {
-		return dispatchTime
-	}
 	return t
 }
 
