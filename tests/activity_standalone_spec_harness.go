@@ -90,13 +90,13 @@ type saaHarness struct {
 	// Start so the timeout traces can trigger it. The traversal leaves it at its zero value (Poll),
 	// so all timeouts are long and none fires during RPC traversal.
 	shortTimeout saaspec.EventKind
-	// The dispatch-delay paths set these; the RPC graph traversal leaves them zero.
+	// The traces set these; the RPC graph traversal leaves them zero.
 	startDelay     time.Duration // StartActivityExecutionRequest.StartDelay
 	retryInterval  time.Duration // RetryPolicy InitialInterval; 0 => the default short backoff
 	nextRetryDelay time.Duration // ApplicationFailureInfo.NextRetryDelay injected into RespondFailed
 	// positivePollTimeout bounds the "must dispatch" poll; 0 => 10s (the RPC traversal's generous
-	// default). The dispatch-delay traces set it just above the long-poll minimum so a Dispatchable
-	// state must dispatch promptly, not merely eventually.
+	// default). The traces set it just above the long-poll minimum so a Dispatchable state must
+	// dispatch promptly, not merely eventually.
 	positivePollTimeout time.Duration
 }
 
@@ -346,8 +346,8 @@ func (a *saaActor) applyPoll(cur saaspec.AbstractState, out saaspec.Outcome, fin
 	poll := saaspec.Event{Kind: saaspec.Poll}
 	switch {
 	case cur.Status == saaspec.Scheduled && out.Next.Status == saaspec.Started:
-		// Positive: a SCHEDULED+Dispatchable activity must be dispatched. The dispatch-delay traces
-		// shorten this deadline so "Dispatchable" means "dispatches promptly".
+		// Positive: a SCHEDULED+Dispatchable activity must be dispatched. The traces bound this
+		// deadline so "Dispatchable" means "dispatches promptly".
 		timeout := 10 * time.Second
 		if a.h.positivePollTimeout > 0 {
 			timeout = a.h.positivePollTimeout
@@ -457,10 +457,10 @@ func (h *saaHarness) dispatchDelay(d saaspec.Dispatchability) time.Duration {
 }
 
 // driveTrace runs one trace on a single fresh activity, asserting the observed state and pollability
-// against Model() at every step. Both the timeout traces and the dispatch-delay traces use it: every
-// event — RPC, poll, timeout firing, or dispatch-delay clock — is driven through apply and checked
-// against Model. (The traversal, by contrast, replays each path from a fresh activity so it can walk
-// the graph exhaustively; a trace pays each real wall-clock wait once.)
+// against Model() at every step. Every event — RPC, poll, timeout firing, or start-delay/backoff
+// window clock — is driven through apply and checked against Model. (The traversal, by contrast,
+// replays each path from a fresh activity so it can walk the graph exhaustively; a trace pays each
+// real wall-clock wait once.)
 func (h *saaHarness) driveTrace(t *testing.T, trace []saaspec.Event) {
 	a := h.start(t)
 	a.path = trace
@@ -631,7 +631,7 @@ func (h *saaHarness) startRequest(activityID, taskQueue string) *workflowservice
 		return long
 	}
 	// Retries dispatch after this interval. The default is short so the graph traversal can drive retry
-	// loops quickly; the dispatch-delay traces lengthen it to observe the backoff.
+	// loops quickly; the backoff traces lengthen it to observe the backoff.
 	interval := 200 * time.Millisecond
 	if h.retryInterval > 0 {
 		interval = h.retryInterval
@@ -866,7 +866,8 @@ func saaNeedsToken(k saaspec.EventKind) bool {
 }
 
 // saaIsWallClock reports whether an event fires on wall-clock time — the four timeouts and the two
-// dispatch-delay clocks — rather than synchronously like an RPC. apply drives these by waiting.
+// start-delay/backoff window clocks — rather than synchronously like an RPC. apply drives these by
+// waiting.
 func saaIsWallClock(k saaspec.EventKind) bool {
 	switch k {
 	case saaspec.ScheduleToStartElapses, saaspec.ScheduleToCloseElapses, saaspec.StartToCloseElapses,
@@ -875,6 +876,20 @@ func saaIsWallClock(k saaspec.EventKind) bool {
 	default:
 		return false
 	}
+}
+
+// saaTimeoutIn returns the timeout whose *Elapses event a trace fires (zero if none). A trace fires a
+// timeout by scripting its *Elapses event; that is the harness's signal to configure that timeout
+// short at Start so it actually elapses. Traces fire at most one timeout, as their final event.
+func saaTimeoutIn(trace []saaspec.Event) saaspec.EventKind {
+	for _, e := range trace {
+		switch e.Kind {
+		case saaspec.ScheduleToStartElapses, saaspec.ScheduleToCloseElapses,
+			saaspec.StartToCloseElapses, saaspec.HeartbeatElapses:
+			return e.Kind
+		}
+	}
+	return 0 // none; zero value (Poll) means no timeout is shortened, as in the graph traversal
 }
 
 // saaCarriesReqID reports whether an operator command carries a request id whose server-side
