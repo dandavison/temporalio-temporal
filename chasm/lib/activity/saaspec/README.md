@@ -97,6 +97,7 @@ TEMPORAL_TEST_TIMEOUT=12m TEMPORAL_SAASPEC_NO_NEGATIVE_POLL=1 TEMPORAL_SAASPEC_W
 Env vars:
 - `TEMPORAL_SAASPEC_WALK_STEPS=N` — steps per config (default 200, sized to fit a bare 90s run).
 - `TEMPORAL_SAASPEC_WALK_SEED=N` — RNG seed (default 1); set it to a failure's logged seed to reproduce.
+- `TEMPORAL_SAASPEC_VERBOSE=1` — log every step as `FromStatus --Event--> ToStatus` (needs `-v`).
 - `TEMPORAL_TEST_TIMEOUT` (with a matching `go test -timeout`) — the per-test context defaults to 90s;
   raise both for any run past a few hundred steps, else the walk fails on context exhaustion rather
   than a real bug.
