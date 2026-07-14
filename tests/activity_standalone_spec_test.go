@@ -52,20 +52,20 @@ type saaTrace struct {
 	name           string
 	trace          []saaspec.Event
 	maxAttempts    int32         // RetryPolicy MaximumAttempts (0 = unlimited); the rest of the Config is derived (see config)
-	startDelay     time.Duration // StartActivityExecution start_delay (also how long the harness waits for StartDelayElapses)
+	startDelayed   bool          // activity created with a start_delay; the window length is derived (see startDelay)
 	retryInterval  time.Duration // RetryPolicy interval; how long the harness waits for BackoffElapses
 	nextRetryDelay time.Duration // worker-supplied next_retry_delay override of the policy backoff
 }
 
 // config derives the model Config from the trace. Only MaxAttempts is a free parameter; everything
-// else is implied by what the trace uses — a start-delay window (startDelay > 0) or a timeout it fires
+// else is implied by what the trace uses — a start-delay window (startDelayed) or a timeout it fires
 // (that timeout's *Elapses event). This is exact because saaspec.Model reads only HasStartDelay,
 // HasScheduleToClose and MaxAttempts, and HasScheduleToStart/HasHeartbeat merely tell the harness
 // which timeouts to configure — which is precisely the set of timeouts the trace fires. (A future
 // trace that needs schedule-to-close configured without firing it — e.g. to check reset/restore
 // STC-task invalidation — would need an explicit field; none does today.)
 func (tr saaTrace) config() saaspec.Config {
-	cfg := saaspec.Config{MaxAttempts: tr.maxAttempts, HasStartDelay: tr.startDelay > 0}
+	cfg := saaspec.Config{MaxAttempts: tr.maxAttempts, HasStartDelay: tr.startDelayed}
 	for _, e := range tr.trace {
 		switch e.Kind {
 		case saaspec.ScheduleToStartElapses:
@@ -77,6 +77,22 @@ func (tr saaTrace) config() saaspec.Config {
 		}
 	}
 	return cfg
+}
+
+// startDelay is the activity's start_delay duration. It is short — a real wait the harness pays — when
+// the trace fires StartDelayElapses, and otherwise long enough to stay open for the whole trace (its
+// exact value only needs to outlast the trace). Zero when the trace is not start-delayed. Deriving it
+// means a trace can't pick the wrong window: a too-short one that closes mid-trace would flake.
+func (tr saaTrace) startDelay() time.Duration {
+	if !tr.startDelayed {
+		return 0
+	}
+	for _, e := range tr.trace {
+		if e.Kind == saaspec.StartDelayElapses {
+			return saaDelayWindow
+		}
+	}
+	return saaLongStartDelay
 }
 
 // saaDelayWindow is long enough to outlast a valid negative long poll (> the long-poll minimum), so
@@ -98,27 +114,27 @@ var saaTraces = []saaTrace{
 	// --- start-delay window ---
 	// start_delay delays the first dispatch: a poll finds no task until the delay elapses.
 	{
-		name:       "start-delay/first-dispatch",
-		trace:      []saaspec.Event{saaPoll, saaStartDelayElapse, saaPoll},
-		startDelay: saaDelayWindow,
+		name:         "start-delay/first-dispatch",
+		trace:        []saaspec.Event{saaPoll, saaStartDelayElapse, saaPoll},
+		startDelayed: true,
 	},
 	// pause during the start delay, then unpause: still delayed (poll finds nothing) until it elapses.
 	{
-		name:       "start-delay/pause-then-unpause",
-		trace:      []saaspec.Event{{Kind: saaspec.Pause}, {Kind: saaspec.Unpause}, saaPoll, saaStartDelayElapse, saaPoll},
-		startDelay: saaDelayWindow,
+		name:         "start-delay/pause-then-unpause",
+		trace:        []saaspec.Event{{Kind: saaspec.Pause}, {Kind: saaspec.Unpause}, saaPoll, saaStartDelayElapse, saaPoll},
+		startDelayed: true,
 	},
 	// reset during the start delay: still delayed (behaves like unpause).
 	{
-		name:       "start-delay/reset",
-		trace:      []saaspec.Event{{Kind: saaspec.Reset}, saaPoll, saaStartDelayElapse, saaPoll},
-		startDelay: saaDelayWindow,
+		name:         "start-delay/reset",
+		trace:        []saaspec.Event{{Kind: saaspec.Reset}, saaPoll, saaStartDelayElapse, saaPoll},
+		startDelayed: true,
 	},
 	// pause during the start delay, then update options changing start delay.
 	{
-		name:       "start-delay/update-while-paused",
-		trace:      []saaspec.Event{{Kind: saaspec.Pause}, {Kind: saaspec.UpdateOptions, SetsStartDelay: true}},
-		startDelay: saaLongStartDelay,
+		name:         "start-delay/update-while-paused",
+		trace:        []saaspec.Event{{Kind: saaspec.Pause}, {Kind: saaspec.UpdateOptions, SetsStartDelay: true}},
+		startDelayed: true,
 	},
 	// update start_delay to a long value during the delay window, then UpdateOptions(RestoreOriginal):
 	// the dispatch window must return to the original start_delay. If restore-original did not restore
@@ -131,7 +147,7 @@ var saaTraces = []saaTrace{
 			{Kind: saaspec.UpdateOptions, RestoreOriginal: true},
 			saaPoll, saaStartDelayElapse, saaPoll,
 		},
-		startDelay: saaDelayWindow,
+		startDelayed: true,
 	},
 
 	// --- retry backoff window ---
@@ -224,14 +240,14 @@ var saaTraces = []saaTrace{
 	},
 	// timeout while still in the start-delay window (activity SCHEDULED, first dispatch pending).
 	{
-		name:       "schedule-to-start/elapses-within-start-delay",
-		trace:      []saaspec.Event{{Kind: saaspec.ScheduleToStartElapses}},
-		startDelay: saaLongStartDelay,
+		name:         "schedule-to-start/elapses-within-start-delay",
+		trace:        []saaspec.Event{{Kind: saaspec.ScheduleToStartElapses}},
+		startDelayed: true,
 	},
 	{
-		name:       "schedule-to-close/elapses-within-start-delay",
-		trace:      []saaspec.Event{{Kind: saaspec.ScheduleToCloseElapses}},
-		startDelay: saaLongStartDelay,
+		name:         "schedule-to-close/elapses-within-start-delay",
+		trace:        []saaspec.Event{{Kind: saaspec.ScheduleToCloseElapses}},
+		startDelayed: true,
 	},
 }
 
@@ -340,7 +356,7 @@ func (s *standaloneActivityTestSuite) specTraces(t *testing.T) {
 			h := &saaHarness{
 				env: env, ctx: ctx, chasmCtx: chasmCtx, nsID: env.NamespaceID().String(),
 				cfg: tr.config(), cfgIdx: i,
-				startDelay: tr.startDelay, retryInterval: tr.retryInterval, nextRetryDelay: tr.nextRetryDelay,
+				startDelay: tr.startDelay(), retryInterval: tr.retryInterval, nextRetryDelay: tr.nextRetryDelay,
 				// A timeout's *Elapses event in the script is the signal to configure that timeout short.
 				shortTimeout: saaTimeoutIn(tr.trace),
 				// "Dispatchable" must mean "dispatches promptly", so bound the positive poll below the
