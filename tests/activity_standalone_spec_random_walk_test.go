@@ -15,6 +15,7 @@ package tests
 // go test -timeout. Set TEMPORAL_SAASPEC_NO_NEGATIVE_POLL=1 to skip the ~3s Paused negative poll.
 
 import (
+	"fmt"
 	"math/rand"
 	"os"
 	"strconv"
@@ -42,6 +43,21 @@ func saaWalkSeed() int64 {
 	return 1 // deterministic default; override for a different walk
 }
 
+func saaVerbose() bool { return os.Getenv("TEMPORAL_SAASPEC_VERBOSE") != "" }
+
+// saaStepDesc renders one walk step as "FromStatus --Event--> ToStatus", annotated with the reject
+// kind or a no-token skip.
+func saaStepDesc(cur saaspec.AbstractState, e saaspec.Event, out saaspec.Outcome, res saaApply) string {
+	desc := fmt.Sprintf("%s --%s--> %s", cur.Status, saaEventLabel(e), out.Next.Status)
+	switch {
+	case res == saaSkippedNoToken:
+		desc += "  [skipped: no token]"
+	case out.Reject != saaspec.NoError:
+		desc += "  [" + saaRejectKindName(out.Reject) + "]"
+	}
+	return desc
+}
+
 func (s *standaloneActivityTestSuite) TestSpecRandomWalk() {
 	env := s.newTestEnv()
 	t := s.T()
@@ -67,6 +83,7 @@ func (s *standaloneActivityTestSuite) TestSpecRandomWalk() {
 // Model(); on reaching a terminal state (or after a divergence) it starts a fresh activity and keeps
 // going until the step budget is spent. It reports the distinct states (by fingerprint) it covered.
 func (h *saaHarness) randomWalk(t *testing.T, rng *rand.Rand, maxSteps int) {
+	verbose := saaVerbose()
 	seen := map[string]bool{}
 	walks := 0
 
@@ -74,6 +91,9 @@ func (h *saaHarness) randomWalk(t *testing.T, rng *rand.Rand, maxSteps int) {
 	var trace []saaspec.Event // events driven since the last (re)start, so a divergence prints its path
 	seen[saaFingerprint(cur)] = true
 	walks++
+	if verbose {
+		t.Logf("cfg %d walk %d: start %s", h.cfgIdx, walks, cur.Status)
+	}
 
 	for step := 0; step < maxSteps; step++ {
 		if cur.Status.Terminal() {
@@ -81,13 +101,20 @@ func (h *saaHarness) randomWalk(t *testing.T, rng *rand.Rand, maxSteps int) {
 			trace = nil
 			seen[saaFingerprint(cur)] = true
 			walks++
+			if verbose {
+				t.Logf("cfg %d walk %d: start %s (restart after terminal)", h.cfgIdx, walks, cur.Status)
+			}
 			continue
 		}
 		e := h.pickWalkEvent(rng, a, cur)
 		trace = append(trace, e)
 		a.path = trace
 		out := saaspec.Model(h.cfg, cur, e)
-		switch a.apply(t, e, cur, out, true) {
+		res := a.apply(t, e, cur, out, true)
+		if verbose {
+			t.Logf("cfg %d walk %d step %d: %s", h.cfgIdx, walks, step, saaStepDesc(cur, e, out, res))
+		}
+		switch res {
 		case saaVerified:
 			cur = out.Next
 			seen[saaFingerprint(cur)] = true
