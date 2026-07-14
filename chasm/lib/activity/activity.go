@@ -853,8 +853,7 @@ func (a *Activity) handleCancellationRequested(ctx chasm.MutableContext, request
 	// SCHEDULED and PAUSED activities have no active worker token so cancel immediately.
 	// STARTED and CANCEL_REQUESTED activities wait for the worker to respond.
 	originalStatus := a.GetStatus()
-	isCancelImmediately := originalStatus == activitypb.ACTIVITY_EXECUTION_STATUS_SCHEDULED ||
-		originalStatus == activitypb.ACTIVITY_EXECUTION_STATUS_PAUSED
+	isCancelImmediately := false
 
 	if err := TransitionCancelRequested.Apply(a, ctx, req); err != nil {
 		return nil, err
