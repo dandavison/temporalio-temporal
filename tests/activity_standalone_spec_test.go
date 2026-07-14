@@ -48,10 +48,32 @@ var saaTraversalConfigs = []saaspec.Config{
 type saaTrace struct {
 	name           string
 	trace          []saaspec.Event
-	cfg            saaspec.Config
+	maxAttempts    int32         // RetryPolicy MaximumAttempts (0 = unlimited); the rest of the Config is derived (see config)
 	startDelay     time.Duration // StartActivityExecution start_delay (also how long the harness waits for StartDelayElapses)
 	retryInterval  time.Duration // RetryPolicy interval; how long the harness waits for BackoffElapses
 	nextRetryDelay time.Duration // worker-supplied next_retry_delay override of the policy backoff
+}
+
+// config derives the model Config from the trace. Only MaxAttempts is a free parameter; everything
+// else is implied by what the trace uses — a start-delay window (startDelay > 0) or a timeout it fires
+// (that timeout's *Elapses event). This is exact because saaspec.Model reads only HasStartDelay,
+// HasScheduleToClose and MaxAttempts, and HasScheduleToStart/HasHeartbeat merely tell the harness
+// which timeouts to configure — which is precisely the set of timeouts the trace fires. (A future
+// trace that needs schedule-to-close configured without firing it — e.g. to check reset/restore
+// STC-task invalidation — would need an explicit field; none does today.)
+func (tr saaTrace) config() saaspec.Config {
+	cfg := saaspec.Config{MaxAttempts: tr.maxAttempts, HasStartDelay: tr.startDelay > 0}
+	for _, e := range tr.trace {
+		switch e.Kind {
+		case saaspec.ScheduleToStartElapses:
+			cfg.HasScheduleToStart = true
+		case saaspec.ScheduleToCloseElapses:
+			cfg.HasScheduleToClose = true
+		case saaspec.HeartbeatElapses:
+			cfg.HasHeartbeat = true
+		}
+	}
+	return cfg
 }
 
 // saaDelayWindow is long enough to outlast a valid negative long poll (> the long-poll minimum), so
@@ -73,21 +95,21 @@ var saaTraces = []saaTrace{
 	// --- start-delay window ---
 	// start_delay delays the first dispatch: a poll finds no task until the delay elapses.
 	{
-		name:  "start-delay/first-dispatch",
-		trace: []saaspec.Event{saaPoll, saaSDElapse, saaPoll},
-		cfg:   saaspec.Config{HasStartDelay: true}, startDelay: saaDelayWindow,
+		name:       "start-delay/first-dispatch",
+		trace:      []saaspec.Event{saaPoll, saaSDElapse, saaPoll},
+		startDelay: saaDelayWindow,
 	},
 	// pause during the start delay, then unpause: still delayed (poll finds nothing) until it elapses.
 	{
-		name:  "start-delay/pause-then-unpause",
-		trace: []saaspec.Event{{Kind: saaspec.Pause}, {Kind: saaspec.Unpause}, saaPoll, saaSDElapse, saaPoll},
-		cfg:   saaspec.Config{HasStartDelay: true}, startDelay: saaDelayWindow,
+		name:       "start-delay/pause-then-unpause",
+		trace:      []saaspec.Event{{Kind: saaspec.Pause}, {Kind: saaspec.Unpause}, saaPoll, saaSDElapse, saaPoll},
+		startDelay: saaDelayWindow,
 	},
 	// reset during the start delay: still delayed (behaves like unpause).
 	{
-		name:  "start-delay/reset",
-		trace: []saaspec.Event{{Kind: saaspec.Reset}, saaPoll, saaSDElapse, saaPoll},
-		cfg:   saaspec.Config{HasStartDelay: true}, startDelay: saaDelayWindow,
+		name:       "start-delay/reset",
+		trace:      []saaspec.Event{{Kind: saaspec.Reset}, saaPoll, saaSDElapse, saaPoll},
+		startDelay: saaDelayWindow,
 	},
 	// update start_delay to a long value during the delay window, then UpdateOptions(RestoreOriginal):
 	// the dispatch window must return to the original start_delay. If restore-original did not restore
@@ -100,107 +122,107 @@ var saaTraces = []saaTrace{
 			{Kind: saaspec.UpdateOptions, RestoreOriginal: true},
 			saaPoll, saaSDElapse, saaPoll,
 		},
-		cfg: saaspec.Config{HasStartDelay: true}, startDelay: saaDelayWindow,
+		startDelay: saaDelayWindow,
 	},
 
 	// --- retry backoff window ---
 	// a retry is delayed by the policy backoff: a poll finds no task until the backoff elapses.
 	{
-		name:  "backoff/retry-dispatch",
-		trace: []saaspec.Event{saaPoll, saaFailRetry, saaPoll, saaBOElapse, saaPoll},
-		cfg:   saaspec.Config{MaxAttempts: 3}, retryInterval: saaDelayWindow,
+		name:          "backoff/retry-dispatch",
+		trace:         []saaspec.Event{saaPoll, saaFailRetry, saaPoll, saaBOElapse, saaPoll},
+		maxAttempts:   3,
+		retryInterval: saaDelayWindow,
 	},
 	// a worker-supplied next_retry_delay overrides the (short, default) policy interval: the retry is
 	// delayed by the override. The policy backoff is ~200ms, so if the override were ignored the
 	// retry would dispatch during the negative poll and the trace would catch it.
 	{
-		name:  "backoff/next-retry-delay-override",
-		trace: []saaspec.Event{saaPoll, saaFailRetry, saaPoll, saaBOElapse, saaPoll},
-		cfg:   saaspec.Config{MaxAttempts: 3}, nextRetryDelay: saaDelayWindow,
+		name:           "backoff/next-retry-delay-override",
+		trace:          []saaspec.Event{saaPoll, saaFailRetry, saaPoll, saaBOElapse, saaPoll},
+		maxAttempts:    3,
+		nextRetryDelay: saaDelayWindow,
 	},
 	// pause during the backoff, then unpause: still delayed until the backoff elapses.
 	{
-		name:  "backoff/pause-then-unpause",
-		trace: []saaspec.Event{saaPoll, saaFailRetry, {Kind: saaspec.Pause}, {Kind: saaspec.Unpause}, saaPoll, saaBOElapse, saaPoll},
-		cfg:   saaspec.Config{MaxAttempts: 3}, retryInterval: saaDelayWindow,
+		name:          "backoff/pause-then-unpause",
+		trace:         []saaspec.Event{saaPoll, saaFailRetry, {Kind: saaspec.Pause}, {Kind: saaspec.Unpause}, saaPoll, saaBOElapse, saaPoll},
+		maxAttempts:   3,
+		retryInterval: saaDelayWindow,
 	},
 	// pause/unpause during the backoff, then an unrelated options update: the pending backoff must
 	// survive the update and not re-dispatch early (regression guard for the unpause path clearing
 	// CurrentRetryInterval so a later re-dispatch loses the retry deadline).
 	{
-		name:  "backoff/pause-unpause-then-update",
-		trace: []saaspec.Event{saaPoll, saaFailRetry, {Kind: saaspec.Pause}, {Kind: saaspec.Unpause}, {Kind: saaspec.UpdateOptions}, saaPoll, saaBOElapse, saaPoll},
-		cfg:   saaspec.Config{MaxAttempts: 3}, retryInterval: saaDelayWindow,
+		name:          "backoff/pause-unpause-then-update",
+		trace:         []saaspec.Event{saaPoll, saaFailRetry, {Kind: saaspec.Pause}, {Kind: saaspec.Unpause}, {Kind: saaspec.UpdateOptions}, saaPoll, saaBOElapse, saaPoll},
+		maxAttempts:   3,
+		retryInterval: saaDelayWindow,
 	},
 	// a worker next_retry_delay override followed by an unrelated options update: the override must be
 	// preserved (not recalculated to the short policy interval), so the retry stays delayed. The policy
 	// backoff is ~200ms, so if the update dropped the override the retry would dispatch during the
 	// negative poll and the trace would catch it.
 	{
-		name:  "backoff/next-retry-delay-override-then-update",
-		trace: []saaspec.Event{saaPoll, saaFailRetry, {Kind: saaspec.UpdateOptions}, saaPoll, saaBOElapse, saaPoll},
-		cfg:   saaspec.Config{MaxAttempts: 3}, nextRetryDelay: saaDelayWindow,
+		name:           "backoff/next-retry-delay-override-then-update",
+		trace:          []saaspec.Event{saaPoll, saaFailRetry, {Kind: saaspec.UpdateOptions}, saaPoll, saaBOElapse, saaPoll},
+		maxAttempts:    3,
+		nextRetryDelay: saaDelayWindow,
 	},
 	// reset during the backoff discards it: the reset attempt dispatches immediately.
 	{
-		name:  "backoff/reset",
-		trace: []saaspec.Event{saaPoll, saaFailRetry, {Kind: saaspec.Reset}, saaPoll},
-		cfg:   saaspec.Config{MaxAttempts: 3}, retryInterval: saaDelayWindow,
+		name:          "backoff/reset",
+		trace:         []saaspec.Event{saaPoll, saaFailRetry, {Kind: saaspec.Reset}, saaPoll},
+		maxAttempts:   3,
+		retryInterval: saaDelayWindow,
 	},
 
 	// --- timeout firing ---
 	{
 		name:  "schedule-to-close/elapses-while-paused",
 		trace: []saaspec.Event{{Kind: saaspec.Pause}, {Kind: saaspec.ScheduleToCloseElapses}},
-		cfg:   saaspec.Config{HasScheduleToClose: true},
 	},
 	{
 		name:  "schedule-to-start/elapses-while-scheduled",
 		trace: []saaspec.Event{{Kind: saaspec.ScheduleToStartElapses}},
-		cfg:   saaspec.Config{HasScheduleToStart: true},
 	},
 	{
 		name:  "schedule-to-start/elapses-while-paused",
 		trace: []saaspec.Event{{Kind: saaspec.Pause}, {Kind: saaspec.ScheduleToStartElapses}},
-		cfg:   saaspec.Config{HasScheduleToStart: true},
 	},
 	{
 		name:  "start-to-close/elapses-while-started/retries-remain",
 		trace: []saaspec.Event{saaPoll, {Kind: saaspec.StartToCloseElapses}},
-		cfg:   saaspec.Config{},
 	},
 	{
-		name:  "start-to-close/elapses-while-started/last-attempt",
-		trace: []saaspec.Event{saaPoll, {Kind: saaspec.StartToCloseElapses}},
-		cfg:   saaspec.Config{MaxAttempts: 1},
+		name:        "start-to-close/elapses-while-started/last-attempt",
+		trace:       []saaspec.Event{saaPoll, {Kind: saaspec.StartToCloseElapses}},
+		maxAttempts: 1,
 	},
 	// A worker that ignores a cancellation request must still time out: even with retries remaining,
 	// a per-attempt timeout in CANCEL_REQUESTED ends the activity as TimedOut (not a retry).
 	{
 		name:  "start-to-close/elapses-while-cancel-requested",
 		trace: []saaspec.Event{saaPoll, {Kind: saaspec.RequestCancel}, {Kind: saaspec.StartToCloseElapses}},
-		cfg:   saaspec.Config{},
 	},
 	{
 		name:  "heartbeat/elapses-while-started/retries-remain",
 		trace: []saaspec.Event{saaPoll, {Kind: saaspec.HeartbeatElapses}},
-		cfg:   saaspec.Config{HasHeartbeat: true},
 	},
 	{
-		name:  "heartbeat/elapses-while-started/last-attempt",
-		trace: []saaspec.Event{saaPoll, {Kind: saaspec.HeartbeatElapses}},
-		cfg:   saaspec.Config{HasHeartbeat: true, MaxAttempts: 1},
+		name:        "heartbeat/elapses-while-started/last-attempt",
+		trace:       []saaspec.Event{saaPoll, {Kind: saaspec.HeartbeatElapses}},
+		maxAttempts: 1,
 	},
 	// timeout while still in the start-delay window (activity SCHEDULED, first dispatch pending).
 	{
-		name:  "schedule-to-start/elapses-within-start-delay",
-		trace: []saaspec.Event{{Kind: saaspec.ScheduleToStartElapses}},
-		cfg:   saaspec.Config{HasStartDelay: true, HasScheduleToStart: true}, startDelay: saaLongStartDelay,
+		name:       "schedule-to-start/elapses-within-start-delay",
+		trace:      []saaspec.Event{{Kind: saaspec.ScheduleToStartElapses}},
+		startDelay: saaLongStartDelay,
 	},
 	{
-		name:  "schedule-to-close/elapses-within-start-delay",
-		trace: []saaspec.Event{{Kind: saaspec.ScheduleToCloseElapses}},
-		cfg:   saaspec.Config{HasStartDelay: true, HasScheduleToClose: true}, startDelay: saaLongStartDelay,
+		name:       "schedule-to-close/elapses-within-start-delay",
+		trace:      []saaspec.Event{{Kind: saaspec.ScheduleToCloseElapses}},
+		startDelay: saaLongStartDelay,
 	},
 }
 
@@ -322,7 +344,7 @@ func (s *standaloneActivityTestSuite) specTraces(t *testing.T) {
 			require.NoError(t, err)
 			h := &saaHarness{
 				env: env, ctx: ctx, chasmCtx: chasmCtx, nsID: env.NamespaceID().String(),
-				cfg: tr.cfg, cfgIdx: i,
+				cfg: tr.config(), cfgIdx: i,
 				startDelay: tr.startDelay, retryInterval: tr.retryInterval, nextRetryDelay: tr.nextRetryDelay,
 				// A timeout's *Elapses event in the script is the signal to configure that timeout short.
 				shortTimeout: saaTimeoutIn(tr.trace),
