@@ -137,7 +137,7 @@ func (h *scheduleToCloseTimeoutTaskHandler) Validate(
 	}
 	// Stamp check: discard tasks from before the most recent ScheduleToCloseTimeoutTask was
 	// scheduled (e.g. after a schedule-to-close extension or a disable+re-enable cycle).
-	if task.GetStamp() != activity.GetScheduleToCloseStamp() {
+	if task.GetStamp() != 0 && task.GetStamp() != activity.GetScheduleToCloseStamp() {
 		return false, nil
 	}
 	return true, nil
