@@ -114,6 +114,12 @@ var saaTraces = []saaTrace{
 		trace:      []saaspec.Event{{Kind: saaspec.Reset}, saaPoll, saaStartDelayElapse, saaPoll},
 		startDelay: saaDelayWindow,
 	},
+	// pause during the start delay, then update options changing start delay.
+	{
+		name:       "start-delay/update-while-paused",
+		trace:      []saaspec.Event{{Kind: saaspec.Pause}, {Kind: saaspec.UpdateOptions, SetsStartDelay: true}},
+		startDelay: saaLongStartDelay,
+	},
 	// update start_delay to a long value during the delay window, then UpdateOptions(RestoreOriginal):
 	// the dispatch window must return to the original start_delay. If restore-original did not restore
 	// start_delay, the window would stay long and the final poll (after the original delay elapses)
