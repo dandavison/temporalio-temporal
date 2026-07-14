@@ -92,8 +92,7 @@ func (h *scheduleToStartTimeoutTaskHandler) Validate(
 	_ chasm.TaskAttributes,
 	task *activitypb.ScheduleToStartTimeoutTask,
 ) (bool, error) {
-	return (activity.Status == activitypb.ACTIVITY_EXECUTION_STATUS_SCHEDULED &&
-		task.Stamp == activity.LastAttempt.Get(ctx).GetStamp()), nil
+	return false, nil
 }
 
 func (h *scheduleToStartTimeoutTaskHandler) Execute(
