@@ -647,9 +647,6 @@ func (a *Activity) UpdateActivityExecutionOptions(
 		updateFields = util.ParseFieldMask(mask)
 	}
 
-	// start_delay updates are only valid while the first dispatch is still pending. That window
-	// covers both SCHEDULED and PAUSED (UpdateOptions can change anything while paused); once the
-	// activity has been dispatched (or the window has elapsed), start_delay is no longer meaningful.
 	_, hasStartDelayInMask := updateFields["startDelay"]
 	if hasStartDelayInMask {
 		newDelay := frontendReq.GetActivityOptions().GetStartDelay()
@@ -662,11 +659,7 @@ func (a *Activity) UpdateActivityExecutionOptions(
 				return nil, serviceerror.NewInvalidArgument("start_delay is not enabled for this namespace")
 			}
 		}
-		status := a.GetStatus()
-		inDelayWindow := (status == activitypb.ACTIVITY_EXECUTION_STATUS_SCHEDULED ||
-			status == activitypb.ACTIVITY_EXECUTION_STATUS_PAUSED) &&
-			a.firstDispatchTime().After(ctx.Now(a))
-		if !inDelayWindow {
+		if !a.firstDispatchTime().After(ctx.Now(a)) {
 			return nil, serviceerror.NewFailedPrecondition(
 				"cannot update start_delay: activity is no longer in its delay window")
 		}
