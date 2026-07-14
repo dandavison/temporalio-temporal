@@ -51,7 +51,6 @@ import (
 	commonnexus "go.temporal.io/server/common/nexus"
 	"go.temporal.io/server/common/nexus/nexusrpc"
 	"go.temporal.io/server/common/payload"
-	"go.temporal.io/server/common/retrypolicy"
 	serviceerrors "go.temporal.io/server/common/serviceerror"
 	"go.temporal.io/server/common/tqid"
 	"go.temporal.io/server/common/util"
@@ -794,12 +793,6 @@ func (a *Activity) mergeActivityOptions(
 
 	if err := activityoptions.MergeActivityOptions(ao, common.CloneProto(req.GetActivityOptions()), updateFields); err != nil {
 		return err
-	}
-
-	if util.FieldMaskHasSubPath(updateFields, "retryPolicy") {
-		if err := retrypolicy.Validate(ao.GetRetryPolicy()); err != nil {
-			return err
-		}
 	}
 
 	// Re-normalize timeouts after the update so that relationships like
