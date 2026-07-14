@@ -1006,13 +1006,6 @@ func (a *Activity) unpauseDispatchTime(ctx chasm.MutableContext, event unpauseEv
 		unpauseTime = unpauseTime.Add(time.Duration(rand.Int63n(int64(jitter)))) //nolint:gosec
 	}
 	dispatchTime := a.dispatchTimeRespectingStartDelay(unpauseTime)
-	var retryDispatchTime *timestamppb.Timestamp
-	if !event.req.GetResetAttempts() {
-		retryDispatchTime = dispatchTimeForRetry(a.LastAttempt.Get(ctx))
-	}
-	if retryDispatchTime != nil && retryDispatchTime.AsTime().After(dispatchTime) {
-		return retryDispatchTime.AsTime()
-	}
 	return dispatchTime
 }
 
