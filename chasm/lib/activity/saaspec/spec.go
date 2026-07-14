@@ -112,12 +112,27 @@ type AbstractState struct {
 	Dispatchability Dispatchability
 }
 
-// SameObserved reports whether two states agree on every ReadComponent-readable field, excluding the
-// latent Dispatchability.
+// SameObserved reports whether two states agree on every ReadComponent-readable field that is live in
+// the expected status. It excludes the latent Dispatchability, and additionally drops any field that
+// is not observable-meaningful in the status (see mask), so the oracle never asserts mechanism state
+// where nobody observes it.
 func (s AbstractState) SameObserved(o AbstractState) bool {
+	return s.mask() == o.mask()
+}
+
+// mask zeroes fields that are not observable-meaningful in status s.Status, so the oracle only
+// compares each field where it is live. Dispatchability is always latent (verified by polling).
+func (s AbstractState) mask() AbstractState {
 	s.Dispatchability = Dispatchable
-	o.Dispatchability = Dispatchable
-	return s == o
+	if s.Status != ResetRequested {
+		// The pending-reset intent is only meaningful while a reset is deferred.
+		s.ResetKeepPaused, s.ResetHeartbeats, s.ResetRestoreOptions = false, false, false
+	}
+	if s.Status != Scheduled && s.Status != Paused {
+		// Stamp guards a pending dispatch task; only Scheduled/Paused have one.
+		s.Stamp = 0
+	}
+	return s
 }
 
 // Config captures the start-time options that change transition behavior.

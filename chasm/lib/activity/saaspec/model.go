@@ -30,6 +30,9 @@ func Model(cfg Config, s AbstractState, e Event) Outcome {
 	if s.Status == Unspecified {
 		panic("unreachable: no event is driven from the pre-creation zero value")
 	}
+	if s.Status.Terminal() {
+		return terminalOutcome(s, e)
+	}
 	switch e.Kind {
 	case Poll:
 		return poll(cfg, s, e)
@@ -89,14 +92,10 @@ func poll(_ Config, s AbstractState, _ Event) Outcome {
 
 // Worker RespondActivityTaskCompleted with task token completes an in-progress attempt.
 func respondCompleted(_ Config, s AbstractState, _ Event) Outcome {
-	if s.Status.Terminal() {
-		return reject(s, NotFound) // task token invalid
-	}
 	switch s.Status {
 	case Started, PauseRequested, CancelRequested, ResetRequested:
 		n := s
 		n.Status = Completed
-		n.ResetHeartbeats = false
 		return Outcome{Next: n}
 	case Scheduled, Paused:
 		return reject(s, NotFound)
@@ -108,9 +107,6 @@ func respondCompleted(_ Config, s AbstractState, _ Event) Outcome {
 // Worker RespondActivityTaskFailed with task token fails an in-progress attempt
 func respondFailed(cfg Config, s AbstractState, e Event) Outcome {
 	retriesRemaining := cfg.MaxAttempts == 0 || s.Count < cfg.MaxAttempts
-	if s.Status.Terminal() {
-		return reject(s, NotFound) // task token invalid
-	}
 	switch s.Status {
 	case ResetRequested:
 		return applyDeferredReset(cfg, s)
@@ -127,13 +123,11 @@ func respondFailed(cfg Config, s AbstractState, e Event) Outcome {
 		} else {
 			// no retry: terminal failure
 			n.Status = Failed
-			n.ResetHeartbeats = false
 		}
 		return Outcome{Next: n}
 	case CancelRequested:
 		n := s
 		n.Status = Failed
-		n.ResetHeartbeats = false
 		return Outcome{Next: n}
 	case Scheduled, Paused:
 		return reject(s, NotFound) // task token invalid
@@ -144,9 +138,6 @@ func respondFailed(cfg Config, s AbstractState, e Event) Outcome {
 
 // RequestCancelActivityExecution requests cancellation of an activity.
 func requestCancel(_ Config, s AbstractState, e Event) Outcome {
-	if s.Status.Terminal() {
-		return reject(s, FailedPrecondition)
-	}
 	switch s.Status {
 	case Scheduled, Paused:
 		n := s
@@ -170,14 +161,10 @@ func requestCancel(_ Config, s AbstractState, e Event) Outcome {
 // Worker RespondActivityTaskCanceled with task token cancels an in-progress attempt for which
 // cancellation has been requested.
 func respondCanceled(_ Config, s AbstractState, _ Event) Outcome {
-	if s.Status.Terminal() {
-		return reject(s, NotFound) // task token invalid
-	}
 	switch s.Status {
 	case CancelRequested:
 		n := s
 		n.Status = Canceled
-		n.ResetHeartbeats = false
 		return Outcome{Next: n}
 	case Scheduled, Paused:
 		return reject(s, NotFound) // task token invalid
@@ -188,22 +175,13 @@ func respondCanceled(_ Config, s AbstractState, _ Event) Outcome {
 	}
 }
 
-// TerminateActivityExecution from any non-terminal status -> Terminated; idempotent on repeat
-// request id.
-func terminate(_ Config, s AbstractState, e Event) Outcome {
-	if s.Status.Terminal() {
-		if s.Status == Terminated && e.SameRequestID {
-			// Idempotent only from Terminated
-			return noop(s)
-		}
-		// Other terminals (Completed/Failed/Canceled/TimedOut), or Terminated with a different id
-		return reject(s, FailedPrecondition)
-	}
+// TerminateActivityExecution from any non-terminal status -> Terminated. Terminal-status handling,
+// including idempotent repeat by request id, lives in terminalOutcome.
+func terminate(_ Config, s AbstractState, _ Event) Outcome {
 	switch s.Status {
 	case Scheduled, Paused, Started, PauseRequested, CancelRequested, ResetRequested:
 		n := s
 		n.Status = Terminated
-		n.ResetHeartbeats = false
 		return Outcome{Next: n}
 	default:
 		panic("SAA model does not handle Terminate while in status " + s.Status.String())
@@ -214,9 +192,6 @@ func terminate(_ Config, s AbstractState, e Event) Outcome {
 func heartbeat(_ Config, s AbstractState, _ Event) Outcome {
 	// See ExpectedHeartbeatFlags in responses.go for the spec related to heartbeat response flags
 	// (CancelRequested / ActivityPaused / ActivityReset).
-	if s.Status.Terminal() {
-		return reject(s, NotFound) // task token invalid
-	}
 	switch s.Status {
 	case Started, PauseRequested, CancelRequested, ResetRequested:
 		return noop(s)
@@ -229,9 +204,6 @@ func heartbeat(_ Config, s AbstractState, _ Event) Outcome {
 
 // PauseActivityExecution
 func pause(_ Config, s AbstractState, e Event) Outcome {
-	if s.Status.Terminal() {
-		return reject(s, FailedPrecondition)
-	}
 	switch s.Status {
 	case Scheduled:
 		n := s
@@ -263,9 +235,6 @@ func pause(_ Config, s AbstractState, e Event) Outcome {
 
 // UnpauseActivityExecution
 func unpause(_ Config, s AbstractState, e Event) Outcome {
-	if s.Status.Terminal() {
-		return reject(s, FailedPrecondition)
-	}
 	switch s.Status {
 	case Paused:
 		n := s
@@ -301,9 +270,6 @@ func unpause(_ Config, s AbstractState, e Event) Outcome {
 // ResetActivityExecution makes the activity behave as if starting its first attempt, except the
 // schedule-to-close timer keeps running. Applied only once any current attempt has ended.
 func reset(cfg Config, s AbstractState, e Event) Outcome {
-	if s.Status.Terminal() {
-		return reject(s, FailedPrecondition)
-	}
 	switch s.Status {
 	case Scheduled, Paused:
 		n := s
@@ -351,9 +317,6 @@ func reset(cfg Config, s AbstractState, e Event) Outcome {
 // UpdateActivityExecutionOptions
 func updateOptions(cfg Config, s AbstractState, e Event) Outcome {
 	// TODO(dan): RestoreOriginal, field-mask merge. Does it re-dispatch when SCHEDULED?
-	if s.Status.Terminal() {
-		return reject(s, FailedPrecondition)
-	}
 	// An update whose merged retry policy is invalid is rejected before any state change. A
 	// single-attempt policy (MaxAttempts == 1) disables retries, so the server skips retry-interval
 	// validation entirely and the update is accepted like any other.
@@ -406,12 +369,11 @@ func scheduleToStartElapses(_ Config, s AbstractState, _ Event) Outcome {
 // (schedule_time + start_delay), so it does not run during a start_delay, and — unlike a workflow
 // activity — is not suspended while paused.
 func scheduleToCloseElapses(_ Config, s AbstractState, _ Event) Outcome {
-	if s.Dispatchability == StartDelayPending || s.Status.Terminal() {
+	if s.Dispatchability == StartDelayPending {
 		return noop(s)
 	}
 	n := s
 	n.Status = TimedOut
-	n.ResetHeartbeats = false
 	return Outcome{Next: n}
 }
 
@@ -449,11 +411,31 @@ func backoffElapses(_ Config, s AbstractState, _ Event) Outcome {
 
 // helpers
 
+// terminalOutcome is the response to any event once the activity has reached a terminal status.
+// Worker RPCs see a stale task token (NotFound); operator commands fail the precondition; timeout
+// and dispatch-delay events are stale no-ops; Terminate is idempotent success only from Terminated
+// with the same request id, else FailedPrecondition.
+func terminalOutcome(s AbstractState, e Event) Outcome {
+	switch e.Kind {
+	case Heartbeat, RespondCompleted, RespondFailed, RespondCanceled:
+		return reject(s, NotFound) // stale task token
+	case RequestCancel, Pause, Unpause, Reset, UpdateOptions:
+		return reject(s, FailedPrecondition)
+	case Terminate:
+		if s.Status == Terminated && e.SameRequestID {
+			return noop(s) // idempotent only from Terminated
+		}
+		return reject(s, FailedPrecondition)
+	case Poll, ScheduleToStartElapses, ScheduleToCloseElapses, StartToCloseElapses,
+		HeartbeatElapses, StartDelayElapses, BackoffElapses:
+		return noop(s) // no running attempt or dispatch; the event is stale
+	default:
+		panic("saaspec: unhandled event kind in terminalOutcome")
+	}
+}
+
 // attemptTimedOut is a shared per-attempt timeout: retry if attempts remain, else TimedOut
 func attemptTimedOut(cfg Config, s AbstractState) Outcome {
-	if s.Status.Terminal() {
-		return noop(s) // already closed; the timer is stale
-	}
 	switch s.Status {
 	case ResetRequested:
 		return applyDeferredReset(cfg, s)
@@ -470,14 +452,12 @@ func attemptTimedOut(cfg Config, s AbstractState) Outcome {
 			n.Stamp++ // invalidate last attempt's tasks
 		} else {
 			n.Status = TimedOut
-			n.ResetHeartbeats = false
 		}
 		return Outcome{Next: n}
 	case CancelRequested:
 		// Timeout -> TimedOut, not Canceled.
 		n := s
 		n.Status = TimedOut
-		n.ResetHeartbeats = false
 		return Outcome{Next: n}
 	case Scheduled, Paused:
 		// TODO(dan): should this be impossible?
@@ -504,8 +484,5 @@ func applyDeferredReset(cfg Config, s AbstractState) Outcome {
 		n.Status = Scheduled
 		n.DispatchTimeSet = true
 	}
-	n.ResetKeepPaused = false
-	n.ResetRestoreOptions = false
-	n.ResetHeartbeats = false
 	return Outcome{Next: n}
 }
