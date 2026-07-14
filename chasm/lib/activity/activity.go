@@ -1583,7 +1583,7 @@ func (a *Activity) buildActivityExecutionInfo(ctx chasm.Context) *apiactivitypb.
 	info := &apiactivitypb.ActivityExecutionInfo{
 		ActivityId:              key.BusinessID,
 		ActivityType:            a.GetActivityType(),
-		Attempt:                 attempt.GetCount(),
+		Attempt:                 1,
 		CanceledReason:          a.CancelState.GetReason(),
 		CloseTime:               closeTime,
 		CurrentRetryInterval:    attempt.GetCurrentRetryInterval(),
