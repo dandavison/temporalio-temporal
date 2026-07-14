@@ -761,16 +761,10 @@ func (a *Activity) shouldRecalculateCurrentRetryInterval(
 		return false
 	}
 
-	if !restoreOriginal {
-		if !util.FieldMaskHasPathOrSubPath(updateFields, "retryPolicy") {
-			return false
-		}
-	}
-
-	// CurrentRetryInterval stores either policy-derived backoff or worker-provided NextRetryDelay overrides.
-	// Only recalculate intervals that match the old policy value; different values are treated as explicit
-	// worker overrides.
-	return currentRetryInterval.AsDuration() == policyRetryIntervalBeforeUpdate
+	_ = restoreOriginal
+	_ = updateFields
+	_ = policyRetryIntervalBeforeUpdate
+	return true
 }
 
 // mergeActivityOptions applies the field mask from the request to the activity state.
