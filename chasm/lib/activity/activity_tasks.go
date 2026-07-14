@@ -131,6 +131,9 @@ func (h *scheduleToCloseTimeoutTaskHandler) Validate(
 	if !TransitionTimedOut.Possible(activity) {
 		return false, nil
 	}
+	if activity.Status == activitypb.ACTIVITY_EXECUTION_STATUS_STARTED {
+		return false, nil
+	}
 	// If schedule-to-close was disabled via an options update, discard this task.
 	if activity.GetScheduleToCloseTimeout().AsDuration() <= 0 {
 		return false, nil
