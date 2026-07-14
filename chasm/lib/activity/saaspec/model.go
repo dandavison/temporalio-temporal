@@ -8,8 +8,12 @@
 // 3. A dispatch delay (start delay, retry backoff)
 //
 // The functions accept the current activity state, and information about the event, and return the
-// activity state after the event's consequences.
+// activity state after the event's consequences. The bottom of the file specifies the other half of
+// the contract: the values the server returns to a caller in a given state (projections of
+// AbstractState) rather than the resulting state.
 package saaspec
+
+import enumspb "go.temporal.io/api/enums/v1"
 
 // Initial is the state immediately after a successful StartActivityExecution.
 func Initial(cfg Config) AbstractState {
@@ -186,7 +190,7 @@ func terminate(_ Config, s AbstractState, _ Event) Outcome {
 
 // RecordActivityTaskHeartbeat
 func heartbeat(_ Config, s AbstractState, _ Event) Outcome {
-	// See ExpectedHeartbeatFlags in responses.go for the spec related to heartbeat response flags
+	// See ExpectedHeartbeatFlags below for the spec related to heartbeat response flags
 	// (CancelRequested / ActivityPaused / ActivityReset).
 	switch s.Status {
 	case Started, PauseRequested, CancelRequested, ResetRequested:
@@ -452,4 +456,76 @@ func applyDeferredReset(cfg Config, s AbstractState) Outcome {
 		n.DispatchTimeSet = true
 	}
 	return Outcome{Next: n, AttemptTasksInvalidated: true, ScheduleToCloseTaskInvalidated: s.ResetRestoreOptions && cfg.HasScheduleToClose}
+}
+
+// --- returned values ---
+//
+// Spec for values the server returns to a caller (not persisted state).
+
+type HeartbeatFlags struct {
+	CancelRequested bool
+	ActivityPaused  bool
+	ActivityReset   bool
+}
+
+func ExpectedHeartbeatFlags(s AbstractState) HeartbeatFlags {
+	switch s.Status {
+	case Started:
+		return HeartbeatFlags{
+			ActivityPaused:  false,
+			ActivityReset:   false,
+			CancelRequested: false,
+		}
+	case CancelRequested:
+		return HeartbeatFlags{
+			ActivityPaused:  false,
+			ActivityReset:   false,
+			CancelRequested: true,
+		}
+	case ResetRequested:
+		return HeartbeatFlags{
+			ActivityPaused:  s.ResetKeepPaused, // TODO(dan): the implementation currently sets both flags; but is this a confusing message to the worker?
+			ActivityReset:   true,
+			CancelRequested: false,
+		}
+	case PauseRequested:
+		// TODO(dan): our code honors a reset request while in PauseRequested; just want to
+		// double-check that's intentional. If so need to decide on spec for heartbeat flags.
+		return HeartbeatFlags{
+			ActivityPaused:  true,
+			ActivityReset:   false,
+			CancelRequested: false,
+		}
+	default:
+		panic("ExpectedHeartbeatFlags: not a token-valid status: " + s.Status.String())
+	}
+}
+
+func ExpectedDescribe(s AbstractState) (enumspb.ActivityExecutionStatus, enumspb.PendingActivityState) {
+	switch s.Status {
+	case Scheduled:
+		return enumspb.ACTIVITY_EXECUTION_STATUS_RUNNING, enumspb.PENDING_ACTIVITY_STATE_SCHEDULED
+	case Started:
+		return enumspb.ACTIVITY_EXECUTION_STATUS_RUNNING, enumspb.PENDING_ACTIVITY_STATE_STARTED
+	case Completed:
+		return enumspb.ACTIVITY_EXECUTION_STATUS_COMPLETED, enumspb.PENDING_ACTIVITY_STATE_UNSPECIFIED
+	case Failed:
+		return enumspb.ACTIVITY_EXECUTION_STATUS_FAILED, enumspb.PENDING_ACTIVITY_STATE_UNSPECIFIED
+	case CancelRequested:
+		return enumspb.ACTIVITY_EXECUTION_STATUS_RUNNING, enumspb.PENDING_ACTIVITY_STATE_CANCEL_REQUESTED
+	case Canceled:
+		return enumspb.ACTIVITY_EXECUTION_STATUS_CANCELED, enumspb.PENDING_ACTIVITY_STATE_UNSPECIFIED
+	case Terminated:
+		return enumspb.ACTIVITY_EXECUTION_STATUS_TERMINATED, enumspb.PENDING_ACTIVITY_STATE_UNSPECIFIED
+	case TimedOut:
+		return enumspb.ACTIVITY_EXECUTION_STATUS_TIMED_OUT, enumspb.PENDING_ACTIVITY_STATE_UNSPECIFIED
+	case PauseRequested:
+		return enumspb.ACTIVITY_EXECUTION_STATUS_RUNNING, enumspb.PENDING_ACTIVITY_STATE_PAUSE_REQUESTED
+	case Paused:
+		return enumspb.ACTIVITY_EXECUTION_STATUS_RUNNING, enumspb.PENDING_ACTIVITY_STATE_PAUSED
+	case ResetRequested:
+		return enumspb.ACTIVITY_EXECUTION_STATUS_RUNNING, enumspb.PENDING_ACTIVITY_STATE_STARTED
+	default:
+		panic("Unexpected status: " + s.Status.String())
+	}
 }
