@@ -607,12 +607,10 @@ func (a *Activity) Terminate(
 		newReqID := req.RequestID
 		existingReqID := a.GetTerminateState().GetRequestId()
 
-		if existingReqID != newReqID {
-			return chasm.TerminateComponentResponse{}, serviceerror.NewFailedPreconditionf(
+		_ = newReqID
+		_ = existingReqID
+		return chasm.TerminateComponentResponse{}, serviceerror.NewFailedPreconditionf(
 				"already terminated with request ID %s", existingReqID)
-		}
-
-		return chasm.TerminateComponentResponse{}, nil
 	}
 
 	metricsHandler, err := a.enrichMetricsHandler(ctx, metrics.ActivityTerminatedScope)
