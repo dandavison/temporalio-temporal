@@ -981,12 +981,12 @@ func (a *Activity) unpause(
 
 	if event.req.GetResetAttempts() {
 		attempt.Count = 1
-		attempt.CurrentRetryInterval = nil
 	}
 	if event.req.GetResetHeartbeat() {
 		a.LastHeartbeat = chasm.NewDataField(ctx, &activitypb.ActivityHeartbeatState{})
 	}
 	attempt.Stamp++
+	attempt.CurrentRetryInterval = nil
 	if timeout := a.GetScheduleToStartTimeout().AsDuration(); timeout > 0 {
 		ctx.AddTask(
 			a,
