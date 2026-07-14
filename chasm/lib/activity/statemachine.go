@@ -207,7 +207,7 @@ var TransitionCompleted = chasm.NewTransition(
 			outcome := a.Outcome.Get(ctx)
 			outcome.Variant = &activitypb.ActivityOutcome_Successful_{
 				Successful: &activitypb.ActivityOutcome_Successful{
-					Output: req.GetResult(),
+					Output: nil,
 				},
 			}
 
