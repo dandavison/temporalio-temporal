@@ -18,9 +18,12 @@ import (
 	"go.temporal.io/server/common/testing/testcontext"
 )
 
-// ---------------------------------------------------------------------------------------------
-// Configs and traces (edit these)
-// ---------------------------------------------------------------------------------------------
+func (s *standaloneActivityTestSuite) TestSpec() {
+	testcontext.For(s.T(), testcontext.WithTimeout(saaSpecContextBudget()))
+	s.T().Run("RPCGraphTraversal", s.specRPCGraphTraversal)
+	s.T().Run("RandomWalk", s.specRandomWalk)
+	s.T().Run("Traces", s.specTraces)
+}
 
 // saaTraversalConfigs are the activity configurations the graph traversal and random walk explore.
 var saaTraversalConfigs = []saaspec.Config{
@@ -229,20 +232,6 @@ var saaTraces = []saaTrace{
 // ---------------------------------------------------------------------------------------------
 // Test entry points
 // ---------------------------------------------------------------------------------------------
-
-// TestSpec runs the spec explorers as subtests, so `-run 'TestStandaloneActivityTestSuite/TestSpec'`
-// selects them all and each is addressable by name (e.g. .../TestSpec/Traces). Each subtest builds
-// its own env (fresh namespace) so activity ids do not collide across explorers.
-func (s *standaloneActivityTestSuite) TestSpec() {
-	// The explorers run back to back, so TestSpec's combined wall-clock far exceeds the default
-	// single-test budget. Raise the suite context deadline before the first newTestEnv fixes it at the
-	// default; a larger TEMPORAL_TEST_TIMEOUT (for deep walks) still wins. Each explorer additionally
-	// takes its own subtest-scoped context (see specRPCGraphTraversal).
-	testcontext.For(s.T(), testcontext.WithTimeout(saaSpecContextBudget()))
-	s.T().Run("RPCGraphTraversal", s.specRPCGraphTraversal)
-	s.T().Run("RandomWalk", s.specRandomWalk)
-	s.T().Run("Traces", s.specTraces)
-}
 
 // saaSpecContextBudget is TestSpec's overall context deadline. DefaultTimeout already reflects
 // TEMPORAL_TEST_TIMEOUT, so take the larger of it and a floor generous enough for the combined
