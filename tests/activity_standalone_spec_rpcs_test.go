@@ -701,6 +701,14 @@ func (a *saaActor) pollForTask(t require.TestingT, timeout time.Duration) *workf
 		if a.h.ctx.Err() != nil {
 			return nil
 		}
+		if deadline, ok := a.h.ctx.Deadline(); ok && time.Until(deadline) < common.MinLongPollTimeout {
+			// The test context is nearly spent, so the poll's derived deadline fell below the server's
+			// long-poll floor. This is a budget problem, not a harness bug: the run outgrew its window.
+			t.Errorf("saaHarness: test context budget exhausted before the poll could run (%.1fs left, need >= %s). "+
+				"Raise TEMPORAL_TEST_TIMEOUT and `go test -timeout`, or lower TEMPORAL_SAASPEC_MAX_DEPTH / TEMPORAL_SAASPEC_WALK_STEPS.\n  %v",
+				time.Until(deadline).Seconds(), common.MinLongPollTimeout, err)
+			return nil
+		}
 		t.Errorf("saaHarness harness bug: PollActivityTaskQueue did not complete cleanly (server rejected the poll, "+
 			"or the deadline fired before matching answered): %v\n"+
 			"  the poll timeout must be >= MinLongPollTimeout (2s); only an empty response with a nil error means \"no task\"", err)

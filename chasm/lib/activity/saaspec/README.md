@@ -78,6 +78,30 @@ Scenarios (drop `/$scenario` to run all): `start-delay/first-dispatch`,
 `start-delay/pause-then-unpause`, `start-delay/reset`, `backoff/retry-dispatch`,
 `backoff/next-retry-delay-override`, `backoff/pause-then-unpause`, `backoff/reset`.
 
+## Random walk (onebox, forward-only exploration)
+
+Where the RPC graph traversal is exhaustive but depth-bounded (it replays every path from a fresh
+activity, so cost caps the depth), the random walk drives **one activity forward** through randomly
+chosen events — no replay, no backtracking, no dedup — checking every step against `Model` via the
+same `apply`. It reaches deep, long interaction sequences the bounded traversal never visits, at
+~one RPC per step, trading exhaustive coverage for depth: no completeness guarantee, but it wanders
+far, and it is how the deep bugs get found. The walk is deterministic in its seed (logged), so any
+failure replays exactly, and a divergence prints the event path that produced it.
+
+```bash
+TEMPORAL_TEST_TIMEOUT=12m TEMPORAL_SAASPEC_NO_NEGATIVE_POLL=1 TEMPORAL_SAASPEC_WALK_STEPS=2000 \
+  go test -tags test_dep -timeout 14m -count=1 -v \
+  -run 'TestStandaloneActivityTestSuite/TestSpecRandomWalk' ./tests/
+```
+
+Env vars:
+- `TEMPORAL_SAASPEC_WALK_STEPS=N` — steps per config (default 200, sized to fit a bare 90s run).
+- `TEMPORAL_SAASPEC_WALK_SEED=N` — RNG seed (default 1); set it to a failure's logged seed to reproduce.
+- `TEMPORAL_TEST_TIMEOUT` (with a matching `go test -timeout`) — the per-test context defaults to 90s;
+  raise both for any run past a few hundred steps, else the walk fails on context exhaustion rather
+  than a real bug.
+- `TEMPORAL_SAASPEC_NO_NEGATIVE_POLL=1` — skip the ~3s Paused negative poll; recommended for long walks.
+
 ## Known gaps
 
 Deliberately fails, listing verification work and spec decisions not yet resolved.
