@@ -12,38 +12,43 @@ var fullCfg = saaspec.Config{
 	MaxAttempts: 3,
 }
 
-// explorerEvents mirrors the events the interactive explorer drives per operation.
-var explorerEvents = map[string]saaspec.Event{
-	"pause":               {Kind: saaspec.Pause},
-	"unpause (if paused)": {Kind: saaspec.Unpause},
-	"update start_delay":  {Kind: saaspec.UpdateOptions, SetsStartDelay: true},
-	"cancel":              {Kind: saaspec.RequestCancel},
-	"reset":               {Kind: saaspec.Reset},
-	"terminate":           {Kind: saaspec.Terminate},
-}
-
 // The interactive explorer styles each operation up-front by whether the spec permits it on the
-// current state. That styling must agree with what the spec actually does to that state: a cell shown
-// "not permitted" must be one the spec rejects, and an accepted operation must not be shown
-// not-permitted. (Reproduces the bug where unpause was styled not-permitted while the activity was
-// Paused, even though the spec accepts it.)
+// current state (via LiveOps/ClassifyLive). That styling must agree with what the spec actually does
+// to that state: a cell shown "not permitted" must be one the spec rejects, and an accepted operation
+// must not be shown not-permitted.
 func TestExplorerOpStylingMatchesSpec(t *testing.T) {
-	var sawPausedUnpause bool
 	for _, s := range Reachable(fullCfg) {
-		for _, op := range Ops {
-			ev := explorerEvents[op.Name]
-			styledNotPermitted := op.Classify(fullCfg, s).Category == NotPermitted
-			specRejects := saaspec.Model(fullCfg, s, ev).Reject != saaspec.NoError
+		for _, op := range LiveOps {
+			styledNotPermitted := ClassifyLive(fullCfg, s, op.Event).Category == NotPermitted
+			specRejects := saaspec.Model(fullCfg, s, op.Event).Reject != saaspec.NoError
 			if styledNotPermitted != specRejects {
 				t.Errorf("op %q at %s/%s: styled not-permitted=%v, but spec rejects=%v",
 					op.Name, s.Status, s.Dispatchability, styledNotPermitted, specRejects)
 			}
-			if ev.Kind == saaspec.Unpause && (s.Status == saaspec.Paused || s.Status == saaspec.PauseRequested) {
-				sawPausedUnpause = true
-			}
 		}
 	}
-	if !sawPausedUnpause {
+}
+
+// unpause must be offered as available whenever the activity is actually paused — that is the whole
+// point of a concrete, current-state explorer (the diagram/prose Ops classifier, by contrast, treats
+// unpause hypothetically and reports it not-permitted on an already-paused state).
+func TestExplorerUnpauseAvailableWhilePaused(t *testing.T) {
+	unpause := saaspec.Event{Kind: saaspec.Unpause}
+	var saw bool
+	for _, s := range Reachable(fullCfg) {
+		if s.Status != saaspec.Paused && s.Status != saaspec.PauseRequested {
+			continue
+		}
+		saw = true
+		if ClassifyLive(fullCfg, s, unpause).Category == NotPermitted {
+			t.Errorf("unpause styled not-permitted at %s/%s", s.Status, s.Dispatchability)
+		}
+		if out := saaspec.Model(fullCfg, s, unpause); out.Reject != saaspec.NoError || out.Next == s {
+			t.Errorf("expected unpause to be accepted with a state change at %s/%s, got reject=%v next=%+v",
+				s.Status, s.Dispatchability, out.Reject, out.Next)
+		}
+	}
+	if !saw {
 		t.Fatal("no Paused/PauseRequested state reached; test would be vacuous")
 	}
 }

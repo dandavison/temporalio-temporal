@@ -46,6 +46,50 @@ var Ops = []Op{
 	{"terminate", classifyTerminate},
 }
 
+// LiveOp is an operator action classified against a concrete current state, paired with the event it
+// drives. It is the interactive explorer's model — the activity really is in state s — as opposed to
+// the phase-hypothetical Ops the diagram and prose tabulate.
+type LiveOp struct {
+	Name  string
+	Event saaspec.Event
+}
+
+// LiveOps are the operator actions the interactive explorer offers, in display order. Each is
+// classified by ClassifyLive on the actual current state, so unpause is correctly available when the
+// activity is really Paused/PauseRequested (Ops instead asks the hypothetical "if this phase were
+// paused…", which is what the phase tables want but is wrong for a concrete state).
+var LiveOps = []LiveOp{
+	{"pause", saaspec.Event{Kind: saaspec.Pause}},
+	{"unpause", saaspec.Event{Kind: saaspec.Unpause}},
+	{"update start_delay", saaspec.Event{Kind: saaspec.UpdateOptions, SetsStartDelay: true}},
+	{"cancel", saaspec.Event{Kind: saaspec.RequestCancel}},
+	{"reset", saaspec.Event{Kind: saaspec.Reset}},
+	{"terminate", saaspec.Event{Kind: saaspec.Terminate}},
+}
+
+// ClassifyLive categorizes what an operation does when invoked on the concrete current state, from a
+// single evaluation of the spec: the spec rejects it (NotPermitted); it only records intent that
+// resolves at the next attempt boundary (Deferred, a *Requested status); or it takes effect now
+// (Immediate, including an accepted idempotent no-op). Because category and the reported transition
+// come from the same outcome, the explorer's up-front styling cannot contradict what the spec does.
+func ClassifyLive(cfg saaspec.Config, s saaspec.AbstractState, ev saaspec.Event) Cell {
+	out := saaspec.Model(cfg, s, ev)
+	switch {
+	case out.Reject != saaspec.NoError:
+		return notPermitted()
+	case out.Next == s:
+		return Cell{"accepted; no-op here", Immediate}
+	case isRequest(out.Next.Status):
+		return Cell{"resolves at attempt boundary", Deferred}
+	default:
+		return Cell{"takes effect now", Immediate}
+	}
+}
+
+func isRequest(st saaspec.Status) bool {
+	return st == saaspec.PauseRequested || st == saaspec.CancelRequested || st == saaspec.ResetRequested
+}
+
 func classifyPause(cfg saaspec.Config, s saaspec.AbstractState) Cell {
 	out := saaspec.Model(cfg, s, saaspec.Event{Kind: saaspec.Pause})
 	if out.Reject != saaspec.NoError {

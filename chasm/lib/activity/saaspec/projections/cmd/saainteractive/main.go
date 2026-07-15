@@ -132,17 +132,6 @@ var cfg = saaspec.Config{
 	MaxAttempts: 3,
 }
 
-// opEvents pairs each classified operation with the event driven to compute its transition target.
-// The category/label come from lifecycle.Classify; the Next state comes from Model.
-var opEvents = map[string]saaspec.Event{
-	"pause":               {Kind: saaspec.Pause},
-	"unpause (if paused)": {Kind: saaspec.Unpause},
-	"update start_delay":  {Kind: saaspec.UpdateOptions, SetsStartDelay: true},
-	"cancel":              {Kind: saaspec.RequestCancel},
-	"reset":               {Kind: saaspec.Reset},
-	"terminate":           {Kind: saaspec.Terminate},
-}
-
 type labeledEvent struct {
 	kind  saaspec.EventKind
 	label string
@@ -214,9 +203,9 @@ func buildState(i int, s saaspec.AbstractState, idOf func(saaspec.AbstractState)
 		DescribeStatus:  ds.String(),
 		DescribePending: dp.String(),
 	}
-	for _, op := range lifecycle.Ops {
-		cell := op.Classify(cfg, s)
-		out := saaspec.Model(cfg, s, opEvents[op.Name])
+	for _, op := range lifecycle.LiveOps {
+		cell := lifecycle.ClassifyLive(cfg, s, op.Event)
+		out := saaspec.Model(cfg, s, op.Event)
 		v.Ops = append(v.Ops, opView{
 			Name:     op.Name,
 			Label:    cell.Label,
