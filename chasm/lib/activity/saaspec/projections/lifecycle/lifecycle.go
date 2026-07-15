@@ -76,13 +76,13 @@ func ClassifyLive(cfg saaspec.Config, s saaspec.AbstractState, ev saaspec.Event)
 	out := saaspec.Model(cfg, s, ev)
 	switch {
 	case out.Reject != saaspec.NoError:
-		return notPermitted()
+		return Cell{"would be rejected", NotPermitted}
 	case out.Next == s:
-		return Cell{"accepted; no-op here", Immediate}
+		return Cell{"would be accepted but a no-op", Immediate}
 	case isRequest(out.Next.Status):
-		return Cell{"resolves at attempt boundary", Deferred}
+		return Cell{"would be accepted", Deferred}
 	default:
-		return Cell{"takes effect now", Immediate}
+		return Cell{"would be accepted", Immediate}
 	}
 }
 
