@@ -22,6 +22,21 @@ file.
 | `saatimelines` | a TypeScript data module | the canvas-commons per-trace timelines animation |
 | `saainteractive` | a JS/JSON data table | the interactive explorer page |
 
+## Preview locally
+
+One command builds the self-contained projections into a temp dir and prints an `index.html` to
+open (needs only Go, plus `d2` for a fresh diagram — it falls back to the committed `lifecycle.svg`
+otherwise):
+
+```bash
+open "$(make -s saa-projections-preview)"
+```
+
+It covers the diagram, the docs prose, and the interactive explorer; the two canvas-commons
+animations need the framework checkout to render, so the gallery links out to the live site for
+those. The static page shells it assembles live in [`pages/`](pages/); the generators fill in the
+spec-derived data.
+
 ## Committed in-repo artifacts
 
 Two artifacts are checked in and verified in CI; regenerate them with `make`:
@@ -62,14 +77,14 @@ cp chasm/lib/activity/saaspec/projections/activity-operations.generated.md "$SIT
 
 ```bash
 mkdir -p $SITE/explorer
-go run "./chasm/lib/activity/saaspec/projections/cmd/saainteractive" -o "$SITE/explorer/spec-data.js" -json "$SITE/explorer/spec-data.json"
+go run ./chasm/lib/activity/saaspec/projections/cmd/saainteractive -o "$SITE/explorer/spec-data.js" -json "$SITE/explorer/spec-data.json"
 ```
 
 ### `state-machine/` — canvas-commons state-graph animation (`saa.tsx`)
 
 ```bash
 mkdir -p $SITE/state-machine
-go run "./chasm/lib/activity/saaspec/projections/cmd/saaanim" -o "$CC/packages/template/src/scenes/saaspec-data.ts"
+go run ./chasm/lib/activity/saaspec/projections/cmd/saaanim -o "$CC/packages/template/src/scenes/saaspec-data.ts"
 ( cd "$CC" && pnpm template:build \
   && node "$CAP" --project-dir packages/template --all --scale 1 --encode saa.mp4 )
 cp "$CC/saa.mp4" "$SITE/state-machine/saa.mp4"
@@ -83,7 +98,7 @@ Register the timelines scene in `packages/template/src/project.ts` (swap `saa` f
 before building, then:
 
 ```bash
-go run "./chasm/lib/activity/saaspec/projections/cmd/saatimelines" -o "$CC/packages/template/src/scenes/saa-timelines-data.ts"
+go run ./chasm/lib/activity/saaspec/projections/cmd/saatimelines -o "$CC/packages/template/src/scenes/saa-timelines-data.ts"
 ( cd "$CC" && pnpm template:build \
   && node "$CAP" --project-dir packages/template --fractions 0,0.2,0.4,0.6,0.8,1 )
 # copy the stills in as the per-trace frame-*.png the page references

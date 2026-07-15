@@ -774,3 +774,8 @@ saa-lifecycle-diagram:
 saa-activity-operations-doc:
 	@go run ./chasm/lib/activity/saaspec/projections/cmd/saaprose > chasm/lib/activity/saaspec/projections/activity-operations.generated.md && echo "wrote activity-operations.generated.md"
 .PHONY: saa-activity-operations-doc
+
+# Build the locally-renderable SAA projections into a temp dir; prints the gallery's index.html path.
+saa-projections-preview:
+	@bash ./chasm/lib/activity/saaspec/projections/preview.sh
+.PHONY: saa-projections-preview
