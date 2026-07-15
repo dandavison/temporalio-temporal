@@ -761,3 +761,11 @@ ensure-no-changes:
 	@printf $(COLOR) "========================================================================"
 	@git status --porcelain
 	@test -z "`git status --porcelain`" || (printf $(COLOR) "========================================================================"; printf $(RED) "Above files are not regenerated properly. Regenerate them and try again."; git diff HEAD ; exit 1)
+
+# Regenerate the standalone-activity lifecycle diagram from saaspec.Model (no LLM involvement).
+saa-lifecycle-diagram:
+	@go run ./chasm/lib/activity/saaspec/internal/lifecyclediagram > chasm/lib/activity/saaspec/lifecycle.d2
+	@command -v d2 >/dev/null 2>&1 \
+		&& d2 chasm/lib/activity/saaspec/lifecycle.d2 chasm/lib/activity/saaspec/lifecycle.svg && echo "wrote lifecycle.d2 + lifecycle.svg" \
+		|| echo "wrote lifecycle.d2 (install d2 to render lifecycle.svg)"
+.PHONY: saa-lifecycle-diagram
