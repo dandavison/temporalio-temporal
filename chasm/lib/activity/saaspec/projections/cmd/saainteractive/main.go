@@ -4,8 +4,8 @@
 // Like saaanim, it encodes no product behavior of its own: every reachable state, per-operation
 // classification, transition target, attempt-boundary outcome, and timer anchor is obtained by
 // executing saaspec.Model / Initial / ExpectedDescribe and the shared spec-derived view-model in
-// ../../lifecycle. The web page performs only presentation, timeline geometry, and lookups into the
-// table emitted here; it contains no behavior rules.
+// ../../lifecycle. The page shell (pages/explorer.html) performs only presentation, timeline
+// geometry, and lookups into the table emitted here; it contains no behavior rules.
 //
 // Output is a plain JS file assigning a global (so the page loads over file:// without fetch/CORS),
 // and, optionally, the same payload as raw JSON.
