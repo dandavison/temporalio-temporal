@@ -407,10 +407,8 @@ func (a *saaActor) applyPoll(cur saaspec.AbstractState, out saaspec.Outcome, fin
 	return saaMismatch
 }
 
-// applyWallClock drives a wall-clock event (a timeout or a dispatch-delay clock) by waiting for it to
-// elapse on the server, then asserting the observed state equals Model.Next. A firing timeout changes
-// status; a stale timeout/elapse changes nothing; a live elapse changes only the latent Dispatchability
-// (excluded from SameObserved), which a later Poll confirms.
+// applyWallClock sleeps until a wall-clock event (a timeout or a dispatch-delay clock) time
+// elapses, then asserts the observed state equals Model.Next.
 func (a *saaActor) applyWallClock(t require.TestingT, e saaspec.Event, cur saaspec.AbstractState, out saaspec.Outcome, final bool) saaApply {
 	time.Sleep(a.h.eventClock(e, cur) + saaWallClockSettle)
 	obs, err := a.observed()
