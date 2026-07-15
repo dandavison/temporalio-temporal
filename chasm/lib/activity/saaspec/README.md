@@ -119,3 +119,33 @@ fails by design.)
 ```bash
 go test -tags test_dep -run 'TestStandaloneActivityTestSuite/TestSpec' -count=1 -v ./tests/
 ```
+
+## Projections
+
+`Model` also drives read-only *projections* — spec-derived artifacts for humans. Each is a thin
+renderer over the shared view-model in `lifecycle/`; none encodes product behavior or touches the
+implementation, so none can drift from the spec. Live versions: https://dandavison.github.io/etc/saa/
+
+Regenerate the committed artifacts (`lifecycle.d2` / `lifecycle.svg`, `activity-operations.generated.md`):
+
+```bash
+make saa-lifecycle-diagram         # d2 table of lifecycle phase × operation (renders .svg if d2 installed)
+make saa-activity-operations-doc   # Markdown operation-by-phase table for the docs site
+```
+
+Each generator can also be run directly (all print to stdout; `-o` writes a file):
+
+```bash
+# Diagram (d2) and docs prose (Markdown):
+go run ./chasm/lib/activity/saaspec/cmd/saadiagram    # -> d2 source
+go run ./chasm/lib/activity/saaspec/cmd/saaprose      # -> Markdown
+
+# Animations: emit a data module consumed by the canvas-commons scene, then build/render there.
+go run ./chasm/lib/activity/saaspec/cmd/saaanim      -o <scene>/src/scenes/saaspec-data.ts    # state graph + traces
+go run ./chasm/lib/activity/saaspec/cmd/saatimelines -o <scene>/src/scenes/saatimelines-data.ts # per-trace timelines
+
+# Interactive page: emit the precomputed table it looks up, then open the HTML.
+go run ./chasm/lib/activity/saaspec/cmd/saainteractive -o etc/saa/spec-data.js -json etc/saa/spec-data.json
+```
+
+The lifecycle diagram is also viewable inline: [`lifecycle.svg`](lifecycle.svg).
