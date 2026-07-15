@@ -59,8 +59,6 @@
   .to-Completed,.to-Paused,.to-Scheduled { color:#7fe0a6; }
   .to-Failed,.to-TimedOut,.to-Canceled,.to-Terminated { color:#f0a0a0; }
   .to-noop { color:var(--muted); font-style:italic; }
-  .legend { display:flex; gap:14px; flex-wrap:wrap; font-size:12px; color:var(--muted); margin-top:8px; }
-  .swatch { display:inline-block; width:11px; height:11px; border-radius:3px; vertical-align:middle; margin-right:4px; }
   .note { color:var(--muted); font-size:12px; margin-top:8px; }
   code { background:#0b0d13; padding:1px 5px; border-radius:4px; color:#cdd6f4; }
 </style>
@@ -90,30 +88,16 @@
     <div class="card">
       <h2>Operations — what the spec allows here</h2>
       <div id="ops"></div>
-      <div class="legend">
-        <span><span class="swatch" style="background:var(--imm)"></span>immediate</span>
-        <span><span class="swatch" style="background:var(--def)"></span>deferred to attempt boundary</span>
-        <span><span class="swatch" style="background:var(--no)"></span>rejected</span>
-      </div>
     </div>
 
     <div class="card">
       <h2>Worker events</h2>
       <div id="workerEvents"></div>
-      <div class="legend">
-        <span><span class="swatch" style="background:var(--imm)"></span>causes a transition</span>
-        <span><span class="swatch" style="background:#333"></span>impossible</span>
-        <span><span class="swatch" style="background:var(--no)"></span>rejected</span>
-      </div>
     </div>
 
     <div class="card">
       <h2>Advance time</h2>
       <div id="timeEvents"></div>
-      <div class="legend">
-        <span><span class="swatch" style="background:var(--imm)"></span>causes a transition</span>
-        <span><span class="swatch" style="background:#333"></span>impossible</span>
-      </div>
     </div>
   </div>
 
@@ -142,8 +126,29 @@ const states = S.states;
 // presentation-only durations (units on the time axis). Behavior is never derived from these.
 const DUR = { startToStart:3, startToClose:12, attempt:8, axisMax:24 };
 let cur = S.initialWithDelay;
+let now = 0; // current-time cursor on the axis (presentation geometry only)
 
 const $ = id => document.getElementById(id);
+
+// where on the axis a given event fires — pure geometry, so the current-time cursor lands on the
+// deadline/marker that caused the transition (e.g. schedule-to-close elapses -> its deadline).
+function eventTime(label){
+  const fd = +$('sd').value; // first dispatch = schedule_time + start_delay
+  switch(label){
+    case 'start delay elapses':
+    case 'worker poll':                   return fd;
+    case 'schedule-to-start elapses':     return fd + DUR.startToStart;
+    case 'schedule-to-close elapses':     return fd + DUR.startToClose;
+    case 'start-to-close elapses':
+    case 'heartbeat elapses':
+    case 'retry backoff elapses':         return fd + DUR.attempt;
+    case 'RespondCompleted':
+    case 'RespondFailed (retryable)':
+    case 'RespondFailed (non-retryable)':
+    case 'RespondCanceled':               return fd + DUR.attempt/2;
+    default:                              return null;
+  }
+}
 function statusColor(st){
   if (['Completed'].includes(st)) return '#2f9e5e';
   if (['Failed','TimedOut','Canceled','Terminated'].includes(st)) return '#a05060';
@@ -181,17 +186,12 @@ function drawTimeline(){
   // schedule-to-start / schedule-to-close deadlines (anchors per spec)
   els += deadline(x(s2s), 'schedule-to-start deadline', timers['schedule-to-start']);
   els += deadline(x(s2c), 'schedule-to-close deadline', timers['schedule-to-close']);
-  // current-time pointer: a bold white arrow below the timeline, pointing up at the current instant
-  const c = states[cur];
-  let ph = null;
-  if(c.status==='Scheduled' && c.dispatchability==='StartDelayPending') ph = sd/2;
-  else if(c.status==='Scheduled') ph = fd; // dispatchable / backoff: at/after first dispatch
-  else if(c.status==='Started'||c.status==='PauseRequested'||c.status==='CancelRequested'||c.status==='ResetRequested') ph = fd+DUR.attempt/2;
-  else if(c.terminal) ph = fd+DUR.attempt;
-  if(ph!==null){
-    const px=x(ph);
-    els += `<polygon points="${px-11},173 ${px},151 ${px+11},173" fill="#ffffff" stroke="#0f1117" stroke-width="1.5"/>`;
-  }
+  // dim the past: a low-opacity overlay from schedule up to the current time
+  if(now>0) els += `<rect x="${x(0)}" y="18" width="${x(now)-x(0)}" height="136" fill="#0f1117" fill-opacity="0.62"/>`;
+  // current time: a short upward arrow at the axis, continuing as a thin white line above it
+  const px=x(now);
+  els += `<line x1="${px}" y1="20" x2="${px}" y2="150" stroke="#ffffff" stroke-width="1.5"/>`;
+  els += `<polygon points="${px-7},166 ${px},150 ${px+7},166" fill="#ffffff"/>`;
   svg.innerHTML = els;
   $('anchorNote').innerHTML = `spec-derived anchors: schedule-to-start = <b>${timers['schedule-to-start']}</b>, schedule-to-close = <b>${timers['schedule-to-close']}</b>. Dragging the delay shifts everything anchored at first dispatch by the same amount.`;
 }
@@ -242,7 +242,7 @@ function render(){
     else if(e.noop){ b.classList.add('evt-impossible'); b.disabled=true; target='impossible'; }
     else { b.classList.add('evt-go'); target='→ '+states[e.next].status + (states[e.next].count!==c.count?` (attempt ${states[e.next].count})`:''); }
     b.innerHTML = `<span class="k">${e.label}</span><span class="r">${target}</span><small>${e.effect}</small>`;
-    if(!b.disabled) b.onclick=()=>{ cur=e.next; draw(); };
+    if(!b.disabled) b.onclick=()=>{ const t=eventTime(e.label); if(t!==null) now=Math.max(now,t); cur=e.next; draw(); };
     (e.lane==='worker'?workerEl:timeEl).appendChild(b);
   }
   drawGrid();
@@ -281,10 +281,10 @@ $('sd').oninput = ()=>{
   $('sdVal').textContent = v===0 ? 'none' : v+' units';
   // start_delay 0 vs >0 is the only spec-behavior change; pick the matching spec initial state
   // ONLY when the activity is still at its start (so we don't stomp mid-exploration).
-  if(cur===S.initialWithDelay || cur===S.initialNoDelay) cur = v===0 ? S.initialNoDelay : S.initialWithDelay;
+  if(cur===S.initialWithDelay || cur===S.initialNoDelay){ cur = v===0 ? S.initialNoDelay : S.initialWithDelay; now=0; }
   draw();
 };
-$('restart').onclick = ()=>{ cur = (+$('sd').value===0)?S.initialNoDelay:S.initialWithDelay; draw(); };
+$('restart').onclick = ()=>{ cur = (+$('sd').value===0)?S.initialNoDelay:S.initialWithDelay; now=0; draw(); };
 draw();
 
 // Autopilot for deterministic screenshots: #sd=7&do=start delay elapses|worker poll|@pause
