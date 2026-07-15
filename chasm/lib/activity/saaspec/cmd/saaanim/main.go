@@ -1,9 +1,10 @@
 // Command saaanim derives an animation-data module from the SAA behavior spec.
 //
 // It encodes no product behavior of its own: every status, edge, rejection, and trace step is
-// obtained by executing saaspec.Model / Initial / ExpectedDescribe / ExpectedHeartbeatFlags. The
-// only inputs it authors are the choice of configs and the event sequences to drive (the analog of
-// the test harness's directed traces); what each event *does* comes entirely from the spec.
+// obtained by executing saaspec.Model / Initial / ExpectedDescribe / ExpectedHeartbeatFlags, via the
+// shared spec-derived view-model in ../../lifecycle. The only inputs it authors are the choice of
+// configs and the event sequences to drive (the analog of the test harness's directed traces); what
+// each event *does* comes entirely from the spec.
 //
 // Output is a TypeScript module consumed by the canvas-commons scene.
 package main
@@ -16,6 +17,7 @@ import (
 	"sort"
 
 	"go.temporal.io/server/chasm/lib/activity/saaspec"
+	"go.temporal.io/server/chasm/lib/activity/saaspec/lifecycle"
 )
 
 func main() {
@@ -121,133 +123,108 @@ var allStatuses = []saaspec.Status{
 	saaspec.PauseRequested, saaspec.Paused, saaspec.ResetRequested,
 }
 
-type labeledEvent struct {
-	label string
-	ev    saaspec.Event
-}
-
-// diagramEvents is the event alphabet driven at every reachable state during BFS. Flag variants that
-// change the outcome are listed separately so the graph shows both branches.
-var diagramEvents = []labeledEvent{
-	{"Poll", e(saaspec.Poll)},
-	{"Heartbeat", e(saaspec.Heartbeat)},
-	{"RespondCompleted", e(saaspec.RespondCompleted)},
-	{"RespondFailed(retryable)", saaspec.Event{Kind: saaspec.RespondFailed, Retryable: true}},
-	{"RespondFailed(non-retryable)", saaspec.Event{Kind: saaspec.RespondFailed}},
-	{"RespondCanceled", e(saaspec.RespondCanceled)},
-	{"RequestCancel", e(saaspec.RequestCancel)},
-	{"Terminate", e(saaspec.Terminate)},
-	{"Pause", e(saaspec.Pause)},
-	{"Unpause", e(saaspec.Unpause)},
-	{"Reset", e(saaspec.Reset)},
-	{"Reset(keepPaused)", saaspec.Event{Kind: saaspec.Reset, KeepPaused: true}},
-	{"UpdateOptions", e(saaspec.UpdateOptions)},
-	{"ScheduleToStartElapses", e(saaspec.ScheduleToStartElapses)},
-	{"ScheduleToCloseElapses", e(saaspec.ScheduleToCloseElapses)},
-	{"StartToCloseElapses", e(saaspec.StartToCloseElapses)},
-	{"HeartbeatElapses", e(saaspec.HeartbeatElapses)},
-	{"StartDelayElapses", e(saaspec.StartDelayElapses)},
-	{"BackoffElapses", e(saaspec.BackoffElapses)},
-}
-
 func e(k saaspec.EventKind) saaspec.Event { return saaspec.Event{Kind: k} }
+
+func le(label string, ev saaspec.Event) lifecycle.LabeledEvent {
+	return lifecycle.LabeledEvent{Label: label, Event: ev}
+}
 
 // traceSpecs are directed stories. Each names a config and a sequence of events; the resulting state
 // after each event is computed by Model, never asserted here.
 var traceSpecs = []struct {
 	name   string
 	cfg    saaspec.Config
-	events []labeledEvent
+	events []lifecycle.LabeledEvent
 }{
 	{
 		"Happy path",
 		saaspec.Config{MaxAttempts: 1},
-		[]labeledEvent{{"Poll", e(saaspec.Poll)}, {"RespondCompleted", e(saaspec.RespondCompleted)}},
+		[]lifecycle.LabeledEvent{le("Poll", e(saaspec.Poll)), le("RespondCompleted", e(saaspec.RespondCompleted))},
 	},
 	{
 		"Start delay defers the first dispatch",
 		saaspec.Config{HasStartDelay: true, MaxAttempts: 1},
-		[]labeledEvent{
-			{"Poll", e(saaspec.Poll)}, // no task yet: dispatch still pending
-			{"StartDelayElapses", e(saaspec.StartDelayElapses)},
-			{"Poll", e(saaspec.Poll)},
-			{"RespondCompleted", e(saaspec.RespondCompleted)},
+		[]lifecycle.LabeledEvent{
+			le("Poll", e(saaspec.Poll)), // no task yet: dispatch still pending
+			le("StartDelayElapses", e(saaspec.StartDelayElapses)),
+			le("Poll", e(saaspec.Poll)),
+			le("RespondCompleted", e(saaspec.RespondCompleted)),
 		},
 	},
 	{
 		"Retryable failure, then success",
 		saaspec.Config{MaxAttempts: 3},
-		[]labeledEvent{
-			{"Poll", e(saaspec.Poll)},
-			{"RespondFailed(retryable)", saaspec.Event{Kind: saaspec.RespondFailed, Retryable: true}},
-			{"BackoffElapses", e(saaspec.BackoffElapses)},
-			{"Poll", e(saaspec.Poll)},
-			{"RespondCompleted", e(saaspec.RespondCompleted)},
+		[]lifecycle.LabeledEvent{
+			le("Poll", e(saaspec.Poll)),
+			le("RespondFailed(retryable)", saaspec.Event{Kind: saaspec.RespondFailed, Retryable: true}),
+			le("BackoffElapses", e(saaspec.BackoffElapses)),
+			le("Poll", e(saaspec.Poll)),
+			le("RespondCompleted", e(saaspec.RespondCompleted)),
 		},
 	},
 	{
 		"Retries exhausted",
 		saaspec.Config{MaxAttempts: 2},
-		[]labeledEvent{
-			{"Poll", e(saaspec.Poll)},
-			{"RespondFailed(retryable)", saaspec.Event{Kind: saaspec.RespondFailed, Retryable: true}},
-			{"BackoffElapses", e(saaspec.BackoffElapses)},
-			{"Poll", e(saaspec.Poll)},
-			{"RespondFailed(retryable)", saaspec.Event{Kind: saaspec.RespondFailed, Retryable: true}},
+		[]lifecycle.LabeledEvent{
+			le("Poll", e(saaspec.Poll)),
+			le("RespondFailed(retryable)", saaspec.Event{Kind: saaspec.RespondFailed, Retryable: true}),
+			le("BackoffElapses", e(saaspec.BackoffElapses)),
+			le("Poll", e(saaspec.Poll)),
+			le("RespondFailed(retryable)", saaspec.Event{Kind: saaspec.RespondFailed, Retryable: true}),
 		},
 	},
 	{
 		"Pause while scheduled, then unpause",
 		saaspec.Config{MaxAttempts: 1},
-		[]labeledEvent{
-			{"Pause", e(saaspec.Pause)},
-			{"Unpause", e(saaspec.Unpause)},
-			{"Poll", e(saaspec.Poll)},
-			{"RespondCompleted", e(saaspec.RespondCompleted)},
+		[]lifecycle.LabeledEvent{
+			le("Pause", e(saaspec.Pause)),
+			le("Unpause", e(saaspec.Unpause)),
+			le("Poll", e(saaspec.Poll)),
+			le("RespondCompleted", e(saaspec.RespondCompleted)),
 		},
 	},
 	{
 		"Pause takes effect on the retry",
 		saaspec.Config{MaxAttempts: 3},
-		[]labeledEvent{
-			{"Poll", e(saaspec.Poll)},
-			{"Pause", e(saaspec.Pause)},
-			{"RespondFailed(retryable)", saaspec.Event{Kind: saaspec.RespondFailed, Retryable: true}},
-			{"Unpause", e(saaspec.Unpause)},
+		[]lifecycle.LabeledEvent{
+			le("Poll", e(saaspec.Poll)),
+			le("Pause", e(saaspec.Pause)),
+			le("RespondFailed(retryable)", saaspec.Event{Kind: saaspec.RespondFailed, Retryable: true}),
+			le("Unpause", e(saaspec.Unpause)),
 		},
 	},
 	{
 		"Cancel a running attempt",
 		saaspec.Config{MaxAttempts: 1},
-		[]labeledEvent{
-			{"Poll", e(saaspec.Poll)},
-			{"RequestCancel", e(saaspec.RequestCancel)},
-			{"RespondCanceled", e(saaspec.RespondCanceled)},
+		[]lifecycle.LabeledEvent{
+			le("Poll", e(saaspec.Poll)),
+			le("RequestCancel", e(saaspec.RequestCancel)),
+			le("RespondCanceled", e(saaspec.RespondCanceled)),
 		},
 	},
 	{
 		"Reset applies when the attempt ends",
 		saaspec.Config{MaxAttempts: 3},
-		[]labeledEvent{
-			{"Poll", e(saaspec.Poll)},
-			{"Reset", e(saaspec.Reset)},
-			{"RespondFailed(retryable)", saaspec.Event{Kind: saaspec.RespondFailed, Retryable: true}},
+		[]lifecycle.LabeledEvent{
+			le("Poll", e(saaspec.Poll)),
+			le("Reset", e(saaspec.Reset)),
+			le("RespondFailed(retryable)", saaspec.Event{Kind: saaspec.RespondFailed, Retryable: true}),
 		},
 	},
 	{
 		"Start-to-close timeout retries",
 		saaspec.Config{MaxAttempts: 3},
-		[]labeledEvent{
-			{"Poll", e(saaspec.Poll)},
-			{"StartToCloseElapses", e(saaspec.StartToCloseElapses)},
+		[]lifecycle.LabeledEvent{
+			le("Poll", e(saaspec.Poll)),
+			le("StartToCloseElapses", e(saaspec.StartToCloseElapses)),
 		},
 	},
 	{
 		"Terminate",
 		saaspec.Config{MaxAttempts: 1},
-		[]labeledEvent{
-			{"Poll", e(saaspec.Poll)},
-			{"Terminate", e(saaspec.Terminate)},
+		[]lifecycle.LabeledEvent{
+			le("Poll", e(saaspec.Poll)),
+			le("Terminate", e(saaspec.Terminate)),
 		},
 	},
 }
@@ -293,19 +270,18 @@ func heartbeatFlagsFor(st saaspec.Status) (*heartbeatFlags, bool) {
 }
 
 func buildEdges() []edge {
-	reached := bfs(diagramCfg)
 	seen := map[edge]bool{}
 	var edges []edge
-	for _, s := range reached {
-		for _, le := range diagramEvents {
-			out := saaspec.Model(diagramCfg, s, le.ev)
+	for _, s := range lifecycle.Reachable(diagramCfg) {
+		for _, le := range lifecycle.Alphabet {
+			out := saaspec.Model(diagramCfg, s, le.Event)
 			if out.Reject != saaspec.NoError || out.Next.Status == s.Status {
 				continue // status-preserving (rejections/no-ops) are shown elsewhere
 			}
 			ed := edge{
 				From:                       s.Status.String(),
 				To:                         out.Next.Status.String(),
-				Event:                      le.label,
+				Event:                      le.Label,
 				InvalidatesAttemptTasks:    out.AttemptTasksInvalidated,
 				InvalidatesScheduleToClose: out.ScheduleToCloseTaskInvalidated,
 			}
@@ -329,16 +305,15 @@ func buildEdges() []edge {
 }
 
 func buildRejections() []rejection {
-	reached := bfs(diagramCfg)
 	seen := map[rejection]bool{}
 	var rej []rejection
-	for _, s := range reached {
-		for _, le := range diagramEvents {
-			out := saaspec.Model(diagramCfg, s, le.ev)
+	for _, s := range lifecycle.Reachable(diagramCfg) {
+		for _, le := range lifecycle.Alphabet {
+			out := saaspec.Model(diagramCfg, s, le.Event)
 			if out.Reject == saaspec.NoError {
 				continue
 			}
-			r := rejection{Status: s.Status.String(), Event: le.label, Error: errorName(out.Reject)}
+			r := rejection{Status: s.Status.String(), Event: le.Label, Error: lifecycle.ErrorName(out.Reject)}
 			if !seen[r] {
 				seen[r] = true
 				rej = append(rej, r)
@@ -360,8 +335,8 @@ func buildTraces() []trace {
 		s := saaspec.Initial(ts.cfg)
 		steps := []traceStep{stepFrom("(start)", saaspec.Outcome{Next: s})}
 		for _, le := range ts.events {
-			o := saaspec.Model(ts.cfg, s, le.ev)
-			steps = append(steps, stepFrom(le.label, o))
+			o := saaspec.Model(ts.cfg, s, le.Event)
+			steps = append(steps, stepFrom(le.Label, o))
 			s = o.Next
 		}
 		out = append(out, trace{Name: ts.name, Cfg: cfgView(ts.cfg), Steps: steps})
@@ -372,7 +347,7 @@ func buildTraces() []trace {
 func stepFrom(label string, o saaspec.Outcome) traceStep {
 	return traceStep{
 		Event:                      label,
-		Error:                      errorName(o.Reject),
+		Error:                      lifecycle.ErrorName(o.Reject),
 		Status:                     o.Next.Status.String(),
 		Count:                      o.Next.Count,
 		Dispatchability:            o.Next.Dispatchability.String(),
@@ -381,45 +356,8 @@ func stepFrom(label string, o saaspec.Outcome) traceStep {
 	}
 }
 
-// bfs returns every non-terminal and terminal AbstractState reachable from Initial(cfg) under the
-// diagram event alphabet.
-func bfs(cfg saaspec.Config) []saaspec.AbstractState {
-	start := saaspec.Initial(cfg)
-	seen := map[saaspec.AbstractState]bool{start: true}
-	queue := []saaspec.AbstractState{start}
-	var order []saaspec.AbstractState
-	for len(queue) > 0 {
-		s := queue[0]
-		queue = queue[1:]
-		order = append(order, s)
-		for _, le := range diagramEvents {
-			n := saaspec.Model(cfg, s, le.ev).Next
-			if !seen[n] {
-				seen[n] = true
-				queue = append(queue, n)
-			}
-		}
-	}
-	return order
-}
-
 func cfgView(c saaspec.Config) configView {
 	return configView{c.HasScheduleToClose, c.HasScheduleToStart, c.HasHeartbeat, c.HasStartDelay, c.MaxAttempts}
-}
-
-func errorName(k saaspec.ErrorKind) string {
-	switch k {
-	case saaspec.NoError:
-		return ""
-	case saaspec.FailedPrecondition:
-		return "FailedPrecondition"
-	case saaspec.NotFound:
-		return "NotFound"
-	case saaspec.InvalidArgument:
-		return "InvalidArgument"
-	default:
-		return "Error(?)"
-	}
 }
 
 const header = `// AUTO-GENERATED by saaanim from saaspec.Model — do not edit.

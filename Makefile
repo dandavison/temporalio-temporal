@@ -764,7 +764,7 @@ ensure-no-changes:
 
 # Regenerate the standalone-activity lifecycle diagram from saaspec.Model (no LLM involvement).
 saa-lifecycle-diagram:
-	@go run ./chasm/lib/activity/saaspec/internal/lifecyclediagram > chasm/lib/activity/saaspec/lifecycle.d2
+	@go run ./chasm/lib/activity/saaspec/cmd/saadiagram > chasm/lib/activity/saaspec/lifecycle.d2
 	@command -v d2 >/dev/null 2>&1 \
 		&& d2 chasm/lib/activity/saaspec/lifecycle.d2 chasm/lib/activity/saaspec/lifecycle.svg && echo "wrote lifecycle.d2 + lifecycle.svg" \
 		|| echo "wrote lifecycle.d2 (install d2 to render lifecycle.svg)"
