@@ -769,3 +769,8 @@ saa-lifecycle-diagram:
 		&& d2 chasm/lib/activity/saaspec/lifecycle.d2 chasm/lib/activity/saaspec/lifecycle.svg && echo "wrote lifecycle.d2 + lifecycle.svg" \
 		|| echo "wrote lifecycle.d2 (install d2 to render lifecycle.svg)"
 .PHONY: saa-lifecycle-diagram
+
+# Regenerate the Activity-operations doc section from saaspec.Model (splices into the docs repo).
+saa-activity-operations-doc:
+	@go run ./chasm/lib/activity/saaspec/cmd/saaprose > chasm/lib/activity/saaspec/activity-operations.generated.md && echo "wrote activity-operations.generated.md"
+.PHONY: saa-activity-operations-doc
