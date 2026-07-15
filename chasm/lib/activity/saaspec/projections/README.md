@@ -38,10 +38,9 @@ The gallery lives in the **`dandavison/etc`** repo under `saa/` (that repo owns 
 assets; the commands below rebuild the assets. They reference two external checkouts:
 
 ```bash
-SITE=/path/to/dandavison-etc/saa                       # the gh-pages content
+SITE=/tmp/saa                                          # the gh-pages content
 CC=/path/to/canvas-commons                             # animation framework checkout
 CAP=~/.claude/skills/canvas-commons-animations/scripts/capture-frames.mjs
-GEN=./chasm/lib/activity/saaspec/projections/cmd       # run from the temporal repo root
 ```
 
 ### `diagram/` — lifecycle d2 table
@@ -62,13 +61,15 @@ cp chasm/lib/activity/saaspec/projections/activity-operations.generated.md "$SIT
 ### `explorer/` — interactive page (static; looks up the precomputed table)
 
 ```bash
-go run "$GEN/saainteractive" -o "$SITE/explorer/spec-data.js" -json "$SITE/explorer/spec-data.json"
+mkdir $SITE/explorer
+go run "chasm/lib/activity/saaspec/projections/cmd/saainteractive" -o "$SITE/explorer/spec-data.js" -json "$SITE/explorer/spec-data.json"
 ```
 
 ### `state-machine/` — canvas-commons state-graph animation (`saa.tsx`)
 
 ```bash
-go run "$GEN/saaanim" -o "$CC/packages/template/src/scenes/saaspec-data.ts"
+mkdir $SITE/state-machine
+go run "chasm/lib/activity/saaspec/projections/cmd/saaanim" -o "$CC/packages/template/src/scenes/saaspec-data.ts"
 ( cd "$CC" && pnpm template:build \
   && node "$CAP" --project-dir packages/template --all --scale 1 --encode saa.mp4 )
 cp "$CC/saa.mp4" "$SITE/state-machine/saa.mp4"
@@ -82,7 +83,7 @@ Register the timelines scene in `packages/template/src/project.ts` (swap `saa` f
 before building, then:
 
 ```bash
-go run "$GEN/saatimelines" -o "$CC/packages/template/src/scenes/saa-timelines-data.ts"
+go run "chasm/lib/activity/saaspec/projections/cmd/saatimelines" -o "$CC/packages/template/src/scenes/saa-timelines-data.ts"
 ( cd "$CC" && pnpm template:build \
   && node "$CAP" --project-dir packages/template --fractions 0,0.2,0.4,0.6,0.8,1 )
 # copy the stills in as the per-trace frame-*.png the page references
