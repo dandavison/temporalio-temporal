@@ -12,7 +12,7 @@ import (
 	"strings"
 
 	"go.temporal.io/server/chasm/lib/activity/saaspec"
-	"go.temporal.io/server/chasm/lib/activity/saaspec/lifecycle"
+	"go.temporal.io/server/chasm/lib/activity/saaspec/projections/lifecycle"
 )
 
 // matrixCfg gives the behavior matrix a start_delay (so the start-delay phase appears) and unlimited

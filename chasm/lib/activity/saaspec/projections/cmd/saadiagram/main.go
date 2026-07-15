@@ -9,7 +9,7 @@ import (
 	"strings"
 
 	"go.temporal.io/server/chasm/lib/activity/saaspec"
-	"go.temporal.io/server/chasm/lib/activity/saaspec/lifecycle"
+	"go.temporal.io/server/chasm/lib/activity/saaspec/projections/lifecycle"
 )
 
 // cfg: a start_delay on the first attempt (so the start-delay phase appears) and unlimited retries,

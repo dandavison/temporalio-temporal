@@ -17,7 +17,7 @@ import (
 	"sort"
 
 	"go.temporal.io/server/chasm/lib/activity/saaspec"
-	"go.temporal.io/server/chasm/lib/activity/saaspec/lifecycle"
+	"go.temporal.io/server/chasm/lib/activity/saaspec/projections/lifecycle"
 )
 
 func main() {
