@@ -119,3 +119,10 @@ fails by design.)
 ```bash
 go test -tags test_dep -run 'TestStandaloneActivityTestSuite/TestSpec' -count=1 -v ./tests/
 ```
+
+## Projections
+
+`Model` also drives read-only *projections* — spec-derived artifacts for humans (a lifecycle
+diagram, docs prose, animations, an interactive page). They live in [`projections/`](projections/),
+cleanly separated from the spec machinery above; see [`projections/README.md`](projections/README.md)
+for what they are and how to regenerate them. Live versions: https://dandavison.github.io/etc/saa/

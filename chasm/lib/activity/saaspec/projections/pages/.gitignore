@@ -1,0 +1,2 @@
+# These page shells are tracked source (the repo root ignores *.html).
+!*.html

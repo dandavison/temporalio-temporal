@@ -761,3 +761,21 @@ ensure-no-changes:
 	@printf $(COLOR) "========================================================================"
 	@git status --porcelain
 	@test -z "`git status --porcelain`" || (printf $(COLOR) "========================================================================"; printf $(RED) "Above files are not regenerated properly. Regenerate them and try again."; git diff HEAD ; exit 1)
+
+# Regenerate the standalone-activity lifecycle diagram from saaspec.Model (no LLM involvement).
+saa-lifecycle-diagram:
+	@go run ./chasm/lib/activity/saaspec/projections/cmd/saadiagram > chasm/lib/activity/saaspec/projections/lifecycle.d2
+	@command -v d2 >/dev/null 2>&1 \
+		&& d2 chasm/lib/activity/saaspec/projections/lifecycle.d2 chasm/lib/activity/saaspec/projections/lifecycle.svg && echo "wrote lifecycle.d2 + lifecycle.svg" \
+		|| echo "wrote lifecycle.d2 (install d2 to render lifecycle.svg)"
+.PHONY: saa-lifecycle-diagram
+
+# Regenerate the Activity-operations doc section from saaspec.Model (splices into the docs repo).
+saa-activity-operations-doc:
+	@go run ./chasm/lib/activity/saaspec/projections/cmd/saaprose > chasm/lib/activity/saaspec/projections/activity-operations.generated.md && echo "wrote activity-operations.generated.md"
+.PHONY: saa-activity-operations-doc
+
+# Build the locally-renderable SAA projections into a temp dir; prints the gallery's index.html path.
+saa-projections-preview:
+	@bash ./chasm/lib/activity/saaspec/projections/preview.sh
+.PHONY: saa-projections-preview
