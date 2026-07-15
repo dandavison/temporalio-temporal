@@ -70,6 +70,7 @@ type eventView struct {
 	Kind   string `json:"kind"`
 	Label  string `json:"label"`
 	Group  string `json:"group"` // dispatch | attemptEnd
+	Lane   string `json:"lane"`  // worker | time
 	Next   int    `json:"next"`
 	Reject string `json:"reject"`
 	Noop   bool   `json:"noop"`
@@ -221,6 +222,7 @@ func buildState(i int, s saaspec.AbstractState, idOf func(saaspec.AbstractState)
 			Kind:   le.label,
 			Label:  le.label,
 			Group:  le.group,
+			Lane:   laneOf(le.kind),
 			Next:   idOf(out.Next),
 			Reject: lifecycle.ErrorName(out.Reject),
 			Noop:   out.Reject == saaspec.NoError && out.Next == s,
@@ -298,6 +300,17 @@ func categoryName(c lifecycle.Category) string {
 		return "Deferred"
 	default:
 		return "NotPermitted"
+	}
+}
+
+// laneOf splits events by provenance for the two-lane UI: worker RPCs (poll / respond / heartbeat)
+// versus the passage of time (any *Elapses timer firing).
+func laneOf(k saaspec.EventKind) string {
+	switch k {
+	case saaspec.Poll, saaspec.RespondCompleted, saaspec.RespondFailed, saaspec.RespondCanceled, saaspec.Heartbeat:
+		return "worker"
+	default:
+		return "time"
 	}
 }
 
