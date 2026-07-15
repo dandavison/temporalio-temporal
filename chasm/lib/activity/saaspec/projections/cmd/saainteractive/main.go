@@ -69,8 +69,8 @@ type opView struct {
 type eventView struct {
 	Kind   string `json:"kind"`
 	Label  string `json:"label"`
-	Group  string `json:"group"` // dispatch | attemptEnd
-	Lane   string `json:"lane"`  // worker | time
+	Effect string `json:"effect"` // what the event would cause (e.g. "would cause attempt end")
+	Lane   string `json:"lane"`   // worker | time
 	Next   int    `json:"next"`
 	Reject string `json:"reject"`
 	Noop   bool   `json:"noop"`
@@ -136,25 +136,24 @@ var cfg = saaspec.Config{
 type labeledEvent struct {
 	kind  saaspec.EventKind
 	label string
-	group string
 	event saaspec.Event
 }
 
 var dispatchEvents = []labeledEvent{
-	{saaspec.StartDelayElapses, "start delay elapses", "dispatch", saaspec.Event{Kind: saaspec.StartDelayElapses}},
-	{saaspec.BackoffElapses, "retry backoff elapses", "dispatch", saaspec.Event{Kind: saaspec.BackoffElapses}},
-	{saaspec.Poll, "worker poll (dispatch)", "dispatch", saaspec.Event{Kind: saaspec.Poll}},
-	{saaspec.ScheduleToStartElapses, "schedule-to-start elapses", "dispatch", saaspec.Event{Kind: saaspec.ScheduleToStartElapses}},
-	{saaspec.ScheduleToCloseElapses, "schedule-to-close elapses", "dispatch", saaspec.Event{Kind: saaspec.ScheduleToCloseElapses}},
+	{saaspec.StartDelayElapses, "start delay elapses", saaspec.Event{Kind: saaspec.StartDelayElapses}},
+	{saaspec.BackoffElapses, "retry backoff elapses", saaspec.Event{Kind: saaspec.BackoffElapses}},
+	{saaspec.Poll, "worker poll", saaspec.Event{Kind: saaspec.Poll}},
+	{saaspec.ScheduleToStartElapses, "schedule-to-start elapses", saaspec.Event{Kind: saaspec.ScheduleToStartElapses}},
+	{saaspec.ScheduleToCloseElapses, "schedule-to-close elapses", saaspec.Event{Kind: saaspec.ScheduleToCloseElapses}},
 }
 
 var attemptEndEvents = []labeledEvent{
-	{saaspec.RespondCompleted, "RespondCompleted", "attemptEnd", saaspec.Event{Kind: saaspec.RespondCompleted}},
-	{saaspec.RespondFailed, "RespondFailed (retryable)", "attemptEnd", saaspec.Event{Kind: saaspec.RespondFailed, Retryable: true}},
-	{saaspec.RespondFailed, "RespondFailed (non-retryable)", "attemptEnd", saaspec.Event{Kind: saaspec.RespondFailed}},
-	{saaspec.RespondCanceled, "RespondCanceled", "attemptEnd", saaspec.Event{Kind: saaspec.RespondCanceled}},
-	{saaspec.StartToCloseElapses, "start-to-close elapses", "attemptEnd", saaspec.Event{Kind: saaspec.StartToCloseElapses}},
-	{saaspec.HeartbeatElapses, "heartbeat elapses", "attemptEnd", saaspec.Event{Kind: saaspec.HeartbeatElapses}},
+	{saaspec.RespondCompleted, "RespondCompleted", saaspec.Event{Kind: saaspec.RespondCompleted}},
+	{saaspec.RespondFailed, "RespondFailed (retryable)", saaspec.Event{Kind: saaspec.RespondFailed, Retryable: true}},
+	{saaspec.RespondFailed, "RespondFailed (non-retryable)", saaspec.Event{Kind: saaspec.RespondFailed}},
+	{saaspec.RespondCanceled, "RespondCanceled", saaspec.Event{Kind: saaspec.RespondCanceled}},
+	{saaspec.StartToCloseElapses, "start-to-close elapses", saaspec.Event{Kind: saaspec.StartToCloseElapses}},
+	{saaspec.HeartbeatElapses, "heartbeat elapses", saaspec.Event{Kind: saaspec.HeartbeatElapses}},
 }
 
 // --- construction ---
@@ -221,7 +220,7 @@ func buildState(i int, s saaspec.AbstractState, idOf func(saaspec.AbstractState)
 		v.Events = append(v.Events, eventView{
 			Kind:   le.label,
 			Label:  le.label,
-			Group:  le.group,
+			Effect: effectOf(le.kind),
 			Lane:   laneOf(le.kind),
 			Next:   idOf(out.Next),
 			Reject: lifecycle.ErrorName(out.Reject),
@@ -311,6 +310,25 @@ func laneOf(k saaspec.EventKind) string {
 		return "worker"
 	default:
 		return "time"
+	}
+}
+
+// effectOf phrases what an event would cause, for the page's explanation line. It names the event's
+// role; what it actually does in a given state comes from Model (a poll starts the attempt only when
+// the task is dispatchable, a *Elapses fires only when its timer is running, etc.).
+func effectOf(k saaspec.EventKind) string {
+	switch k {
+	case saaspec.Poll:
+		return "would start the attempt"
+	case saaspec.RespondCompleted, saaspec.RespondFailed, saaspec.RespondCanceled,
+		saaspec.StartToCloseElapses, saaspec.HeartbeatElapses:
+		return "would cause attempt end"
+	case saaspec.StartDelayElapses, saaspec.BackoffElapses:
+		return "would cause dispatch"
+	case saaspec.ScheduleToStartElapses, saaspec.ScheduleToCloseElapses:
+		return "would cause a timeout"
+	default:
+		return ""
 	}
 }
 
