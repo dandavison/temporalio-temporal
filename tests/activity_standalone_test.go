@@ -8561,7 +8561,8 @@ func (s *standaloneActivityTestSuite) TestUpdateActivityExecutionOptions() {
 			ActivityId: activityID,
 			RunId:      startResp.RunId,
 			ActivityOptions: &activitypb.ActivityOptions{
-				ScheduleToCloseTimeout: durationpb.New(1 * time.Second),
+				ScheduleToCloseTimeout: durationpb.New(0 * time.Second),
+				StartToCloseTimeout:    durationpb.New(0 * time.Second),
 			},
 			UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"schedule_to_close_timeout"}},
 		})
