@@ -8319,6 +8319,61 @@ func (s *standaloneActivityTestSuite) TestUpdateActivityExecutionOptions() {
 		require.EqualValues(t, 2, pollResp2.Attempt)
 	})
 
+	t.Run("UpdateStartedActivityKeepsOriginalTaskTokenUsable", func(t *testing.T) {
+		ctx, cancel := context.WithTimeout(t.Context(), 30*time.Second)
+		defer cancel()
+
+		activityID := testcore.RandomizeStr(t.Name())
+		taskQueue := testcore.RandomizeStr(t.Name())
+
+		startResp, err := env.FrontendClient().StartActivityExecution(ctx, &workflowservice.StartActivityExecutionRequest{
+			Namespace:           env.Namespace().String(),
+			ActivityId:          activityID,
+			ActivityType:        &commonpb.ActivityType{Name: "test-activity"},
+			TaskQueue:           &taskqueuepb.TaskQueue{Name: taskQueue},
+			StartToCloseTimeout: durationpb.New(30 * time.Minute),
+			HeartbeatTimeout:    durationpb.New(30 * time.Minute),
+		})
+		require.NoError(t, err)
+
+		pollResp, err := env.FrontendClient().PollActivityTaskQueue(ctx, &workflowservice.PollActivityTaskQueueRequest{
+			Namespace: env.Namespace().String(),
+			TaskQueue: &taskqueuepb.TaskQueue{Name: taskQueue, Kind: enumspb.TASK_QUEUE_KIND_NORMAL},
+		})
+		require.NoError(t, err)
+		require.EqualValues(t, 1, pollResp.Attempt)
+
+		token, err := tasktoken.NewSerializer().Deserialize(pollResp.GetTaskToken())
+		require.NoError(t, err)
+		require.NotZero(t, token.GetActivityAttemptStamp())
+
+		_, err = env.FrontendClient().UpdateActivityExecutionOptions(ctx, &workflowservice.UpdateActivityExecutionOptionsRequest{
+			Namespace:  env.Namespace().String(),
+			ActivityId: activityID,
+			RunId:      startResp.GetRunId(),
+			ActivityOptions: &activitypb.ActivityOptions{
+				HeartbeatTimeout: durationpb.New(20 * time.Minute),
+			},
+			UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"heartbeat_timeout"}},
+		})
+		require.NoError(t, err)
+
+		_, err = env.FrontendClient().RecordActivityTaskHeartbeat(ctx, &workflowservice.RecordActivityTaskHeartbeatRequest{
+			Namespace: env.Namespace().String(),
+			TaskToken: pollResp.GetTaskToken(),
+			Identity:  defaultIdentity,
+		})
+		require.NoError(t, err)
+
+		_, err = env.FrontendClient().RespondActivityTaskCompleted(ctx, &workflowservice.RespondActivityTaskCompletedRequest{
+			Namespace: env.Namespace().String(),
+			TaskToken: pollResp.GetTaskToken(),
+			Result:    defaultResult,
+			Identity:  defaultIdentity,
+		})
+		require.NoError(t, err)
+	})
+
 	t.Run("NilRetryPolicyOnStartUsesDefaultRetryPolicy", func(t *testing.T) {
 		ctx, cancel := context.WithTimeout(t.Context(), 30*time.Second)
 		defer cancel()
@@ -12178,6 +12233,64 @@ func (s *standaloneActivityTestSuite) TestResetActivityExecution() {
 			Identity:  defaultIdentity,
 		})
 		require.NoError(t, err)
+	})
+
+	t.Run("TokenFromBeforeResetCannotCompleteResetAttempt", func(t *testing.T) {
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cancel()
+
+		activityID := testcore.RandomizeStr(t.Name())
+		retryPolicy := &commonpb.RetryPolicy{
+			InitialInterval:    durationpb.New(time.Minute),
+			BackoffCoefficient: 1.0,
+		}
+		startResp, pollResp1, taskQueue := startAndPollActivity(ctx, t, activityID, retryPolicy)
+		require.EqualValues(t, 1, pollResp1.Attempt)
+
+		originalToken, err := tasktoken.NewSerializer().Deserialize(pollResp1.GetTaskToken())
+		require.NoError(t, err)
+		require.NotZero(t, originalToken.GetActivityAttemptStamp())
+
+		failAttemptRetryably(ctx, t, pollResp1.TaskToken, 0)
+
+		await.Require(ctx, t, func(c *await.T) {
+			desc, err := env.FrontendClient().DescribeActivityExecution(c.Context(), &workflowservice.DescribeActivityExecutionRequest{
+				Namespace:  env.Namespace().String(),
+				ActivityId: activityID,
+				RunId:      startResp.GetRunId(),
+			})
+			require.NoError(c, err)
+			require.Equal(c, enumspb.PENDING_ACTIVITY_STATE_SCHEDULED, desc.GetInfo().GetRunState())
+			require.EqualValues(c, 2, desc.GetInfo().GetAttempt())
+		}, 5*time.Second, 200*time.Millisecond)
+
+		resetActivity(ctx, t, activityID, startResp.GetRunId())
+
+		pollResp2 := pollActivity(ctx, t, taskQueue)
+		require.EqualValues(t, 1, pollResp2.Attempt)
+
+		resetToken, err := tasktoken.NewSerializer().Deserialize(pollResp2.GetTaskToken())
+		require.NoError(t, err)
+		require.NotZero(t, resetToken.GetActivityAttemptStamp())
+		require.NotEqual(t, originalToken.GetActivityAttemptStamp(), resetToken.GetActivityAttemptStamp())
+
+		_, err = env.FrontendClient().RecordActivityTaskHeartbeat(ctx, &workflowservice.RecordActivityTaskHeartbeatRequest{
+			Namespace: env.Namespace().String(),
+			TaskToken: pollResp1.TaskToken,
+			Identity:  defaultIdentity,
+		})
+		var notFoundErr *serviceerror.NotFound
+		require.ErrorAs(t, err, &notFoundErr)
+
+		_, err = env.FrontendClient().RespondActivityTaskCompleted(ctx, &workflowservice.RespondActivityTaskCompletedRequest{
+			Namespace: env.Namespace().String(),
+			TaskToken: pollResp1.TaskToken,
+			Result:    defaultResult,
+			Identity:  defaultIdentity,
+		})
+		require.ErrorAs(t, err, &notFoundErr)
+
+		completeAttempt(ctx, t, pollResp2.TaskToken)
 	})
 
 	t.Run("WhileRunning", func(t *testing.T) {
