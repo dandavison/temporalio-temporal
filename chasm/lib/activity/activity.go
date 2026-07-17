@@ -703,6 +703,7 @@ func (a *Activity) UpdateActivityExecutionOptions(
 		attempt.CurrentRetryInterval = durationpb.New(newInterval)
 	}
 
+	// handle Update
 	// Recreate the ScheduleToClose task at the (possibly updated) deadline.
 	a.reissueScheduleToClose(ctx)
 
@@ -1401,6 +1402,7 @@ func (a *Activity) dispatchTimeRespectingStartDelay(t time.Time) time.Time {
 	return t
 }
 
+// reissueScheduleToClose
 // reissueScheduleToClose bumps the ScheduleToCloseStamp and re-emits the ScheduleToClose timeout task
 // at the current deadline.
 func (a *Activity) reissueScheduleToClose(ctx chasm.MutableContext) {
