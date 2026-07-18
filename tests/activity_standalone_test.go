@@ -21,6 +21,7 @@ import (
 	"go.temporal.io/api/workflowservice/v1"
 	"go.temporal.io/sdk/temporal"
 	"go.temporal.io/server/chasm/lib/activity"
+	"go.temporal.io/server/chasm/lib/activity/model"
 	"go.temporal.io/server/chasm/lib/callback"
 	"go.temporal.io/server/common"
 	"go.temporal.io/server/common/dynamicconfig"
@@ -36,7 +37,6 @@ import (
 	"go.temporal.io/server/common/testing/await"
 	"go.temporal.io/server/common/testing/parallelsuite"
 	"go.temporal.io/server/common/testing/protorequire"
-	"go.temporal.io/server/common/testing/testcontext"
 	"go.temporal.io/server/tests/testcore"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/metadata"
@@ -14234,48 +14234,26 @@ func (s *standaloneActivityTestSuite) TestResetActivityExecution() {
 	})
 }
 
-// TestActivityTraces drives a collection of scripted scenarios (saaTraces) — start-delay windows,
-// retry backoff, and the four activity timeouts — each on a fresh activity, then asserts the
-// resulting internal state read back via ReadComponent. It shows how the driver (saaHarness.drive)
-// and the structured state reader express a functional test concisely: reach a nontrivial state with
-// a few DSL events, then assert. Each scenario carries its own expected final state (wantFinal); the
-// scenarios and driver live in activity_standalone_utils.go.
-func (s *standaloneActivityTestSuite) TestActivityTraces() {
-	// The traces pay real wall-clock waits, so the whole group runs a few minutes. Raise the parent
-	// test's context budget before anything else creates it at the default (per-subtest budgets, set
-	// by testcontext.For(t) below, stay at the default).
-	budget := 8 * time.Minute
-	if d := testcontext.DefaultTimeout(); d > budget {
-		budget = d
-	}
-	testcontext.For(s.T(), testcontext.WithTimeout(budget))
-
+// TestStartDelay_Declarative re-expresses TestStartDelay's scenarios using the SAA driver
+// (activity_standalone_utils.go): each subtest scripts the activity's lifecycle — start, advance,
+// observe — instead of hand-rolling the frontend RPCs, and asserts the internal state read back via
+// ReadComponent. Behaviorally equivalent to TestStartDelay.
+func (s *standaloneActivityTestSuite) TestStartDelay_Declarative() {
 	env := s.newTestEnv()
 	t := s.T()
-	for i, tr := range saaTraces {
-		t.Run(tr.name, func(t *testing.T) {
-			// A fresh context per trace, each with its own deadline, so the multi-second waits do not
-			// accumulate against a single shared budget. testcontext.For(t) anchors on the subtest;
-			// s.Context() is memoized once per suite test and would be shared across every trace.
-			ctx := testcontext.For(t)
-			chasmCtx, err := env.GetTestCluster().Host().ChasmContext(ctx)
-			require.NoError(t, err)
-			h := &saaHarness{
-				env: env, ctx: ctx, chasmCtx: chasmCtx, nsID: env.NamespaceID().String(),
-				cfg: tr.config(), cfgIdx: i,
-				startDelay: tr.startDelay(), retryInterval: tr.retryInterval, nextRetryDelay: tr.nextRetryDelay,
-				// A timeout's *Elapses event in the script is the signal to configure that timeout short.
-				shortTimeout: saaTimeoutIn(tr.trace),
-				// "Dispatchable" must mean "dispatches promptly", so bound the positive poll below the
-				// delay window — that is how a reset that discards a backoff (immediate) is told from
-				// still-delayed.
-				positivePollTimeout: saaNegativePollTimeout,
-			}
-			a := h.drive(t, tr.trace)
-			got, err := a.observed()
-			require.NoError(t, err)
-			require.Truef(t, tr.wantFinal.SameObserved(got),
-				"trace %q final state:\n  want %+v\n  got  %+v", tr.name, tr.wantFinal, got)
-		})
-	}
+
+	t.Run("Dispatch", func(t *testing.T) {
+		// 5s start delay: long enough to observe "not dispatched yet" via a negative long poll.
+		h := newSaaHarness(t, env, s.Context())
+		a := h.start(t, model.Config{HasStartDelay: true})
+
+		// Throughout the start delay the activity stays SCHEDULED and dispatches no task.
+		a.requireObserved(t, model.AbstractState{Status: model.Scheduled, Count: 1, DispatchTimeSet: true})
+		a.requireNoDispatch(t)
+
+		// Once the delay elapses the task dispatches, scheduled at schedule_time + start_delay.
+		task := a.requireDispatch(t)
+		require.Equal(t, task.GetScheduledTime().AsTime().Add(h.startDelay),
+			task.GetCurrentAttemptScheduledTime().AsTime())
+	})
 }
