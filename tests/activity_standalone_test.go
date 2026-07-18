@@ -14421,3 +14421,55 @@ func (s *standaloneActivityTestSuite) TestTimeout_Declarative() {
 		})
 	})
 }
+
+// TestServerFailureRejectedByFrontend confirms why bug B2's ServerFailure path is not worker-reachable:
+// the frontend rejects any RespondActivityTaskFailed whose failure is not an ApplicationFailure
+// (workflow_handler.go), so a worker cannot submit a ServerFailure and HandleFailed's non-Application
+// branch (chasm/lib/activity/activity.go) is unreachable via the worker RPC — the divergence from a
+// workflow activity's isRetryable exists only for server-internally-generated failures.
+func (s *standaloneActivityTestSuite) TestServerFailureRejectedByFrontend() {
+	testcontext.For(s.T(), testcontext.WithTimeout(saaTraceBudget()))
+	env := s.newTestEnv()
+	t := s.T()
+
+	// Declarative prefix: start with retries remaining and dispatch attempt 1.
+	hd := s.runTrace(t, env, saaTrace{trace: []model.Event{saaPoll}, maxAttempts: 3})
+
+	// Manual: attempt to fail the attempt with a ServerFailure rather than an ApplicationFailure.
+	_, err := env.FrontendClient().RespondActivityTaskFailed(testcontext.For(t), &workflowservice.RespondActivityTaskFailedRequest{
+		Namespace: env.Namespace().String(),
+		TaskToken: hd.token,
+		Identity:  "worker",
+		Failure: &failurepb.Failure{
+			Message:     "server failure",
+			FailureInfo: &failurepb.Failure_ServerFailureInfo{ServerFailureInfo: &failurepb.ServerFailureInfo{NonRetryable: false}},
+		},
+	})
+	require.ErrorContains(t, err, "Failure must have ApplicationFailureInfo")
+}
+
+// TestTimeoutNonRetryable_Repro reproduces bug B2: the timeout retry handlers
+// (chasm/lib/activity/activity_tasks.go) reschedule unconditionally, never consulting the retry
+// policy's NonRetryableErrorTypes. A workflow activity denies a StartToClose/Heartbeat timeout retry
+// when that type is listed (service/history/workflow/retry.go isRetryable), so a StartToClose timeout
+// on an activity whose policy marks StartToClose non-retryable must fail terminally rather than
+// retry. This asserts the correct (workflow) behavior, so it fails while the bug is present.
+func (s *standaloneActivityTestSuite) TestTimeoutNonRetryable_Repro() {
+	testcontext.For(s.T(), testcontext.WithTimeout(saaTraceBudget()))
+	env := s.newTestEnv()
+	t := s.T()
+
+	// Declarative prefix: start with retries remaining, dispatch attempt 1, let its StartToClose
+	// timeout elapse — with StartToClose marked non-retryable in the policy.
+	hd := s.runTrace(t, env, saaTrace{
+		trace:                []model.Event{saaPoll, {Kind: model.StartToCloseElapses}},
+		maxAttempts:          3,
+		nonRetryableTimeouts: []model.EventKind{model.StartToCloseElapses},
+	})
+
+	// A non-retryable timeout must fail the activity terminally, not reschedule it.
+	st, err := hd.observed()
+	require.NoError(t, err)
+	require.Equalf(t, model.TimedOut, st.Status,
+		"a StartToClose timeout marked non-retryable must fail the activity, not retry it (got %s)", st.Status)
+}
