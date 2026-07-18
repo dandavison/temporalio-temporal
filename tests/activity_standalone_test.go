@@ -14245,26 +14245,28 @@ func saaTraceBudget() time.Duration {
 	return floor
 }
 
-// runTrace drives one declared trace on its own harness (a unique activity-id namespace via idBase),
-// making no behavioral assertions — see saaHarness.driveTrace. This is deliberately not yet a good
-// functional test: it only drives the trace. Later steps will add the manual and model-derived
-// assertions a caller makes after reaching the state.
+// runTrace runs one declared trace as its own subtest, named by tr.name (so the name is written
+// once), on a fresh harness with a unique activity-id namespace. It makes no behavioral assertions —
+// see saaHarness.driveTrace; it only drives the trace. Later steps will add the manual and
+// model-derived assertions a caller makes after reaching the state.
 func (s *standaloneActivityTestSuite) runTrace(t *testing.T, env *standaloneActivityEnv, tr saaTrace) {
-	ctx := testcontext.For(t)
-	chasmCtx, err := env.GetTestCluster().Host().ChasmContext(ctx)
-	require.NoError(t, err)
-	h := &saaHarness{
-		env: env, ctx: ctx, chasmCtx: chasmCtx, nsID: env.NamespaceID().String(),
-		idBase:     testcore.RandomizeStr(tr.name),
-		cfg:        tr.config(),
-		startDelay: tr.startDelay(), retryInterval: tr.retryInterval, nextRetryDelay: tr.nextRetryDelay,
-		// A timeout's *Elapses event in the script is the signal to configure that timeout short.
-		shortTimeout: saaTimeoutIn(tr.trace),
-		// "Dispatchable" must mean "dispatches promptly", so bound the positive poll below the delay
-		// window — that is how a reset that discards a backoff (immediate) is told from still-delayed.
-		positivePollTimeout: saaNegativePollTimeout,
-	}
-	h.driveTrace(t, tr.trace)
+	t.Run(tr.name, func(t *testing.T) {
+		ctx := testcontext.For(t)
+		chasmCtx, err := env.GetTestCluster().Host().ChasmContext(ctx)
+		require.NoError(t, err)
+		h := &saaHarness{
+			env: env, ctx: ctx, chasmCtx: chasmCtx, nsID: env.NamespaceID().String(),
+			idBase:     testcore.RandomizeStr(tr.name),
+			cfg:        tr.config(),
+			startDelay: tr.startDelay(), retryInterval: tr.retryInterval, nextRetryDelay: tr.nextRetryDelay,
+			// A timeout's *Elapses event in the script is the signal to configure that timeout short.
+			shortTimeout: saaTimeoutIn(tr.trace),
+			// "Dispatchable" must mean "dispatches promptly", so bound the positive poll below the delay
+			// window — that is how a reset that discards a backoff (immediate) is told from still-delayed.
+			positivePollTimeout: saaNegativePollTimeout,
+		}
+		h.driveTrace(t, tr.trace)
+	})
 }
 
 // TestStartDelay_Declarative drives the start-delay scenarios, each an explicitly named subtest with
@@ -14438,6 +14440,19 @@ func (s *standaloneActivityTestSuite) TestTimeout_Declarative() {
 		s.runTrace(t, env, saaTrace{
 			name:         "schedule-to-close/elapses-within-start-delay",
 			trace:        []model.Event{{Kind: model.ScheduleToCloseElapses}},
+			startDelayed: true,
+		})
+	})
+}
+
+func (s *standaloneActivityTestSuite) TestUnpause_Declarative() {
+	testcontext.For(s.T(), testcontext.WithTimeout(saaTraceBudget()))
+	env := s.newTestEnv()
+	t := s.T()
+
+	t.Run("unpause/while-started-honors-reset-attempts", func(t *testing.T) {
+		s.runTrace(t, env, saaTrace{
+			trace:        []model.Event{saaPoll, {Kind: model.Pause}, {Kind: model.Unpause, ResetAttempts: true}},
 			startDelayed: true,
 		})
 	})
