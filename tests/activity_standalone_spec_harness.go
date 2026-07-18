@@ -551,7 +551,7 @@ func (a *saaActor) rpc(e saaspec.Event) error {
 	case saaspec.Reset:
 		_, err := fc.ResetActivityExecution(a.h.ctx, &workflowservice.ResetActivityExecutionRequest{
 			Namespace: ns, ActivityId: a.activityID, RunId: a.runID, Identity: "op",
-			KeepPaused: e.KeepPaused, RestoreOriginalOptions: e.RestoreOriginal, ResetHeartbeat: e.ResetHeartbeat,
+			KeepPaused: e.KeepPaused, RestoreOriginalOptions: e.RestoreOriginal,
 		})
 		return err
 	case saaspec.UpdateOptions:
@@ -846,7 +846,6 @@ func saaReadObserved(chasmCtx context.Context, nsID, activityID, runID string) (
 			Stamp:                attempt.GetStamp(),
 			ScheduleToCloseStamp: act.GetScheduleToCloseStamp(),
 			ResetKeepPaused:      act.GetResetKeepPaused(),
-			ResetHeartbeats:      act.GetResetHeartbeats(),
 			ResetRestoreOptions:  act.GetResetRestoreOptions(),
 			FirstAttemptStarted:  act.GetFirstAttemptStartedTime() != nil,
 			DispatchTimeSet:      attempt.GetDispatchTime() != nil,

@@ -289,7 +289,6 @@ func reset(cfg Config, s AbstractState, e Event) Outcome {
 		n := s
 		n.Status = ResetRequested
 		n.ResetKeepPaused = s.Status == PauseRequested && e.KeepPaused // Reset during PauseRequested honors KeepPaused
-		n.ResetHeartbeats = e.ResetHeartbeat
 		n.ResetRestoreOptions = e.RestoreOriginal
 		// Current attempt stays live; do not invalidate its tasks.
 		return Outcome{Next: n}

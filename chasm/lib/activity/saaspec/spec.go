@@ -176,7 +176,7 @@ type Event struct {
 	Retryable       bool // RespondFailed: the failure is retryable. Whether it actually retries also depends on cfg.MaxAttempts and s.Count.
 	KeepPaused      bool // Reset
 	RestoreOriginal bool // Reset / UpdateOptions
-	ResetHeartbeat  bool // Reset / Unpause
+	ResetHeartbeat  bool // Unpause
 	ResetAttempts   bool // Unpause
 	SameRequestID   bool // Pause / Terminate / RequestCancel: repeat of the previous op's request id
 	SetsStartDelay  bool // UpdateOptions: the update changes start_delay
