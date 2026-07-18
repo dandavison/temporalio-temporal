@@ -303,10 +303,15 @@ func reset(cfg Config, s AbstractState, e Event) Outcome {
 // UpdateActivityExecutionOptions
 func updateOptions(cfg Config, s AbstractState, e Event) Outcome {
 	// TODO(dan): RestoreOriginal, field-mask merge. Does it re-dispatch when SCHEDULED?
-	// start_delay is mutable only while the first dispatch is still pending
-	if e.SetsStartDelay && s.Dispatchability != StartDelayPending {
+
+	// start_delay is mutable while the first dispatch hasn't happened yet: either still within the
+	// start-delay window, or paused before the first attempt started.
+	startDelayMutable := s.Dispatchability == StartDelayPending ||
+		(s.Status == Paused && !s.FirstAttemptStarted)
+	if e.SetsStartDelay && !startDelayMutable {
 		return reject(s, FailedPrecondition)
 	}
+
 	switch s.Status {
 	case Scheduled, Paused, Started, PauseRequested, CancelRequested, ResetRequested:
 		return Outcome{Next: s, AttemptTasksInvalidated: true, ScheduleToCloseTaskInvalidated: cfg.HasScheduleToClose}
