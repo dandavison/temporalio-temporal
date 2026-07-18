@@ -38,6 +38,9 @@ type saaHarness struct {
 	cfg      model.Config
 	cfgIdx   int
 	counter  int
+	// idBase, when set, is the activity-id prefix — a unique namespace per driven trace so subtests
+	// don't collide. Empty falls back to a cfgIdx-based prefix.
+	idBase string
 	// shortTimeout, when set to one of the four timeout *Elapses kinds, makes that timeout short at
 	// Start so a trace can trigger it. Left at its zero value (Poll), all timeouts are long.
 	shortTimeout model.EventKind
@@ -71,12 +74,13 @@ type saaActor struct {
 	token      []byte
 }
 
-// drive runs a trace on a fresh activity, realizing each event against the server, and returns the
-// actor at the reached state for the caller to make assertions on. It is model-free: it advances the
-// activity but asserts nothing about intended behavior. A trace is a sequence of valid transitions, so
-// each RPC must succeed; a poll captures the dispatched task's token when one is available; and a
-// wall-clock event is realized by waiting out its configured window.
-func (h *saaHarness) drive(t require.TestingT, trace []model.Event) *saaActor {
+// driveTrace runs a trace on a fresh activity, realizing each event against the server, and returns
+// the actor at the reached state. It is model-free and makes no behavioral assertions — it just
+// advances the activity; the caller then asserts whatever it likes. A trace is a sequence of valid
+// transitions, so each RPC must succeed (a drive-integrity check, not a behavioral one); a poll
+// captures the dispatched task's token when one is available; a wall-clock event is realized by
+// waiting out its configured window.
+func (h *saaHarness) driveTrace(t require.TestingT, trace []model.Event) *saaActor {
 	a := h.start(t)
 	for _, e := range trace {
 		switch {
@@ -105,7 +109,11 @@ func (h *saaHarness) start(t require.TestingT) *saaActor {
 		require.Fail(t, "saaHarness misconfigured: cfg.HasStartDelay requires startDelay > 0")
 	}
 	h.counter++
-	id := fmt.Sprintf("saaexp-%d-%d", h.cfgIdx, h.counter)
+	base := h.idBase
+	if base == "" {
+		base = fmt.Sprintf("saaexp-%d", h.cfgIdx)
+	}
+	id := fmt.Sprintf("%s-%d", base, h.counter)
 	resp, err := h.env.FrontendClient().StartActivityExecution(h.ctx, h.startRequest(id, id))
 	require.NoError(t, err)
 	return &saaActor{h: h, activityID: id, taskQueue: id, runID: resp.RunId}
@@ -377,11 +385,10 @@ func saaFailure(retryable bool, nextRetryDelay time.Duration) *failurepb.Failure
 type saaTrace struct {
 	name           string
 	trace          []model.Event
-	wantFinal      model.AbstractState // expected final observed state after the whole trace is driven
-	maxAttempts    int32               // RetryPolicy MaximumAttempts (0 = unlimited); the rest of the Config is derived (see config)
-	startDelayed   bool                // activity created with a start_delay; the window length is derived (see startDelay)
-	retryInterval  time.Duration       // RetryPolicy interval; how long the driver waits for BackoffElapses
-	nextRetryDelay time.Duration       // worker-supplied next_retry_delay override of the policy backoff
+	maxAttempts    int32         // RetryPolicy MaximumAttempts (0 = unlimited); the rest of the Config is derived (see config)
+	startDelayed   bool          // activity created with a start_delay; the window length is derived (see startDelay)
+	retryInterval  time.Duration // RetryPolicy interval; how long the driver waits for BackoffElapses
+	nextRetryDelay time.Duration // worker-supplied next_retry_delay override of the policy backoff
 }
 
 // config derives the model Config from the trace. Only MaxAttempts is a free parameter; everything
@@ -432,165 +439,3 @@ var (
 	saaStartDelayElapse   = model.Event{Kind: model.StartDelayElapses}
 	saaBackoffDelayElapse = model.Event{Kind: model.BackoffElapses}
 )
-
-// started is a convenience for the common final state of a trace that ends with a dispatched attempt.
-func started(count int32) model.AbstractState {
-	return model.AbstractState{Status: model.Started, Count: count, FirstAttemptStarted: true, DispatchTimeSet: true}
-}
-
-var saaTraces = []saaTrace{
-	// --- start-delay window ---
-	// start_delay delays the first dispatch: a poll finds no task until the delay elapses.
-	{
-		name:         "start-delay/first-dispatch",
-		trace:        []model.Event{saaPoll, saaStartDelayElapse, saaPoll},
-		startDelayed: true,
-		wantFinal:    started(1),
-	},
-	// pause during the start delay, then unpause: still delayed (poll finds nothing) until it elapses.
-	{
-		name:         "start-delay/pause-then-unpause",
-		trace:        []model.Event{{Kind: model.Pause}, {Kind: model.Unpause}, saaPoll, saaStartDelayElapse, saaPoll},
-		startDelayed: true,
-		wantFinal:    started(1),
-	},
-	// reset during the start delay: still delayed (behaves like unpause).
-	{
-		name:         "start-delay/reset",
-		trace:        []model.Event{{Kind: model.Reset}, saaPoll, saaStartDelayElapse, saaPoll},
-		startDelayed: true,
-		wantFinal:    started(1),
-	},
-	// pause during the start delay, then update options changing start delay.
-	{
-		name:         "start-delay/update-while-paused",
-		trace:        []model.Event{{Kind: model.Pause}, {Kind: model.UpdateOptions, SetsStartDelay: true}},
-		startDelayed: true,
-		wantFinal:    model.AbstractState{Status: model.Paused, Count: 1, DispatchTimeSet: true},
-	},
-	// update start_delay to a long value during the delay window, then UpdateOptions(RestoreOriginal):
-	// the dispatch window must return to the original start_delay, so the final poll (after the original
-	// delay elapses) finds the task.
-	{
-		name: "start-delay/update-then-restore-original",
-		trace: []model.Event{
-			{Kind: model.UpdateOptions, SetsStartDelay: true},
-			{Kind: model.UpdateOptions, RestoreOriginal: true},
-			saaPoll, saaStartDelayElapse, saaPoll,
-		},
-		startDelayed: true,
-		wantFinal:    started(1),
-	},
-
-	// --- retry backoff window ---
-	// a retry is delayed by the policy backoff: a poll finds no task until the backoff elapses.
-	{
-		name:          "backoff/retry-dispatch",
-		trace:         []model.Event{saaPoll, saaFailRetryably, saaPoll, saaBackoffDelayElapse, saaPoll},
-		maxAttempts:   3,
-		retryInterval: saaDelayWindow,
-		wantFinal:     started(2),
-	},
-	// a worker-supplied next_retry_delay overrides the (short, default) policy interval: the retry is
-	// delayed by the override.
-	{
-		name:           "backoff/next-retry-delay-override",
-		trace:          []model.Event{saaPoll, saaFailRetryably, saaPoll, saaBackoffDelayElapse, saaPoll},
-		maxAttempts:    3,
-		nextRetryDelay: saaDelayWindow,
-		wantFinal:      started(2),
-	},
-	// pause during the backoff, then unpause: still delayed until the backoff elapses.
-	{
-		name:          "backoff/pause-then-unpause",
-		trace:         []model.Event{saaPoll, saaFailRetryably, {Kind: model.Pause}, {Kind: model.Unpause}, saaPoll, saaBackoffDelayElapse, saaPoll},
-		maxAttempts:   3,
-		retryInterval: saaDelayWindow,
-		wantFinal:     started(2),
-	},
-	// pause/unpause during the backoff, then an unrelated options update: the pending backoff must
-	// survive the update and not re-dispatch early.
-	{
-		name:          "backoff/pause-unpause-then-update",
-		trace:         []model.Event{saaPoll, saaFailRetryably, {Kind: model.Pause}, {Kind: model.Unpause}, {Kind: model.UpdateOptions}, saaPoll, saaBackoffDelayElapse, saaPoll},
-		maxAttempts:   3,
-		retryInterval: saaDelayWindow,
-		wantFinal:     started(2),
-	},
-	// a worker next_retry_delay override followed by an unrelated options update: the override must be
-	// preserved (not recalculated to the short policy interval), so the retry stays delayed.
-	{
-		name:           "backoff/next-retry-delay-override-then-update",
-		trace:          []model.Event{saaPoll, saaFailRetryably, {Kind: model.UpdateOptions}, saaPoll, saaBackoffDelayElapse, saaPoll},
-		maxAttempts:    3,
-		nextRetryDelay: saaDelayWindow,
-		wantFinal:      started(2),
-	},
-	// reset during the backoff discards it: the reset attempt dispatches immediately.
-	{
-		name:          "backoff/reset",
-		trace:         []model.Event{saaPoll, saaFailRetryably, {Kind: model.Reset}, saaPoll},
-		maxAttempts:   3,
-		retryInterval: saaDelayWindow,
-		wantFinal:     started(1),
-	},
-
-	// --- timeout firing ---
-	{
-		name:      "schedule-to-close/elapses-while-paused",
-		trace:     []model.Event{{Kind: model.Pause}, {Kind: model.ScheduleToCloseElapses}},
-		wantFinal: model.AbstractState{Status: model.TimedOut, Count: 1, DispatchTimeSet: true},
-	},
-	{
-		name:      "schedule-to-start/elapses-while-scheduled",
-		trace:     []model.Event{{Kind: model.ScheduleToStartElapses}},
-		wantFinal: model.AbstractState{Status: model.TimedOut, Count: 1, DispatchTimeSet: true},
-	},
-	{
-		name:      "schedule-to-start/elapses-while-paused",
-		trace:     []model.Event{{Kind: model.Pause}, {Kind: model.ScheduleToStartElapses}},
-		wantFinal: model.AbstractState{Status: model.Paused, Count: 1, DispatchTimeSet: true},
-	},
-	{
-		name:      "start-to-close/elapses-while-started/retries-remain",
-		trace:     []model.Event{saaPoll, {Kind: model.StartToCloseElapses}},
-		wantFinal: model.AbstractState{Status: model.Scheduled, Count: 2, FirstAttemptStarted: true, DispatchTimeSet: true},
-	},
-	{
-		name:        "start-to-close/elapses-while-started/last-attempt",
-		trace:       []model.Event{saaPoll, {Kind: model.StartToCloseElapses}},
-		maxAttempts: 1,
-		wantFinal:   model.AbstractState{Status: model.TimedOut, Count: 1, FirstAttemptStarted: true, DispatchTimeSet: true},
-	},
-	// A worker that ignores a cancellation request must still time out: even with retries remaining, a
-	// per-attempt timeout in CANCEL_REQUESTED ends the activity as TimedOut (not a retry).
-	{
-		name:      "start-to-close/elapses-while-cancel-requested",
-		trace:     []model.Event{saaPoll, {Kind: model.RequestCancel}, {Kind: model.StartToCloseElapses}},
-		wantFinal: model.AbstractState{Status: model.TimedOut, Count: 1, FirstAttemptStarted: true, DispatchTimeSet: true},
-	},
-	{
-		name:      "heartbeat/elapses-while-started/retries-remain",
-		trace:     []model.Event{saaPoll, {Kind: model.HeartbeatElapses}},
-		wantFinal: model.AbstractState{Status: model.Scheduled, Count: 2, FirstAttemptStarted: true, DispatchTimeSet: true},
-	},
-	{
-		name:        "heartbeat/elapses-while-started/last-attempt",
-		trace:       []model.Event{saaPoll, {Kind: model.HeartbeatElapses}},
-		maxAttempts: 1,
-		wantFinal:   model.AbstractState{Status: model.TimedOut, Count: 1, FirstAttemptStarted: true, DispatchTimeSet: true},
-	},
-	// timeout while still in the start-delay window (activity SCHEDULED, first dispatch pending).
-	{
-		name:         "schedule-to-start/elapses-within-start-delay",
-		trace:        []model.Event{{Kind: model.ScheduleToStartElapses}},
-		startDelayed: true,
-		wantFinal:    model.AbstractState{Status: model.Scheduled, Count: 1, DispatchTimeSet: true},
-	},
-	{
-		name:         "schedule-to-close/elapses-within-start-delay",
-		trace:        []model.Event{{Kind: model.ScheduleToCloseElapses}},
-		startDelayed: true,
-		wantFinal:    model.AbstractState{Status: model.Scheduled, Count: 1, DispatchTimeSet: true},
-	},
-}
