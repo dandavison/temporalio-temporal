@@ -21,6 +21,7 @@ import (
 	"go.temporal.io/api/workflowservice/v1"
 	"go.temporal.io/sdk/temporal"
 	"go.temporal.io/server/chasm/lib/activity"
+	"go.temporal.io/server/chasm/lib/activity/model"
 	"go.temporal.io/server/chasm/lib/callback"
 	"go.temporal.io/server/common"
 	"go.temporal.io/server/common/dynamicconfig"
@@ -36,6 +37,7 @@ import (
 	"go.temporal.io/server/common/testing/await"
 	"go.temporal.io/server/common/testing/parallelsuite"
 	"go.temporal.io/server/common/testing/protorequire"
+	"go.temporal.io/server/common/testing/testcontext"
 	"go.temporal.io/server/tests/testcore"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/metadata"
@@ -14230,5 +14232,213 @@ func (s *standaloneActivityTestSuite) TestResetActivityExecution() {
 			Identity:  defaultIdentity,
 		})
 		require.NoError(t, err)
+	})
+}
+
+// saaTraceBudget raises the parent test's context budget: the declarative trace subtests pay real
+// wall-clock waits, so a group can run a few minutes past the default per-test timeout.
+func saaTraceBudget() time.Duration {
+	const floor = 8 * time.Minute
+	if d := testcontext.DefaultTimeout(); d > floor {
+		return d
+	}
+	return floor
+}
+
+// runTrace drives one declared trace on its own harness (a unique activity-id namespace via idBase),
+// making no behavioral assertions — see saaHarness.driveTrace. This is deliberately not yet a good
+// functional test: it only drives the trace. Later steps will add the manual and model-derived
+// assertions a caller makes after reaching the state.
+func (s *standaloneActivityTestSuite) runTrace(t *testing.T, env *standaloneActivityEnv, tr saaTrace) {
+	ctx := testcontext.For(t)
+	chasmCtx, err := env.GetTestCluster().Host().ChasmContext(ctx)
+	require.NoError(t, err)
+	h := &saaHarness{
+		env: env, ctx: ctx, chasmCtx: chasmCtx, nsID: env.NamespaceID().String(),
+		idBase:     testcore.RandomizeStr(tr.name),
+		cfg:        tr.config(),
+		startDelay: tr.startDelay(), retryInterval: tr.retryInterval, nextRetryDelay: tr.nextRetryDelay,
+		// A timeout's *Elapses event in the script is the signal to configure that timeout short.
+		shortTimeout: saaTimeoutIn(tr.trace),
+		// "Dispatchable" must mean "dispatches promptly", so bound the positive poll below the delay
+		// window — that is how a reset that discards a backoff (immediate) is told from still-delayed.
+		positivePollTimeout: saaNegativePollTimeout,
+	}
+	h.driveTrace(t, tr.trace)
+}
+
+// TestStartDelay_Declarative drives the start-delay scenarios, each an explicitly named subtest with
+// its trace declared inline. It only drives (no assertions yet); see runTrace / driveTrace.
+func (s *standaloneActivityTestSuite) TestStartDelay_Declarative() {
+	testcontext.For(s.T(), testcontext.WithTimeout(saaTraceBudget()))
+	env := s.newTestEnv()
+	t := s.T()
+
+	t.Run("start-delay/first-dispatch", func(t *testing.T) {
+		s.runTrace(t, env, saaTrace{
+			name:         "start-delay/first-dispatch",
+			trace:        []model.Event{saaPoll, saaStartDelayElapse, saaPoll},
+			startDelayed: true,
+		})
+	})
+	t.Run("start-delay/pause-then-unpause", func(t *testing.T) {
+		s.runTrace(t, env, saaTrace{
+			name:         "start-delay/pause-then-unpause",
+			trace:        []model.Event{{Kind: model.Pause}, {Kind: model.Unpause}, saaPoll, saaStartDelayElapse, saaPoll},
+			startDelayed: true,
+		})
+	})
+	t.Run("start-delay/reset", func(t *testing.T) {
+		s.runTrace(t, env, saaTrace{
+			name:         "start-delay/reset",
+			trace:        []model.Event{{Kind: model.Reset}, saaPoll, saaStartDelayElapse, saaPoll},
+			startDelayed: true,
+		})
+	})
+	t.Run("start-delay/update-while-paused", func(t *testing.T) {
+		s.runTrace(t, env, saaTrace{
+			name:         "start-delay/update-while-paused",
+			trace:        []model.Event{{Kind: model.Pause}, {Kind: model.UpdateOptions, SetsStartDelay: true}},
+			startDelayed: true,
+		})
+	})
+	t.Run("start-delay/update-then-restore-original", func(t *testing.T) {
+		s.runTrace(t, env, saaTrace{
+			name: "start-delay/update-then-restore-original",
+			trace: []model.Event{
+				{Kind: model.UpdateOptions, SetsStartDelay: true},
+				{Kind: model.UpdateOptions, RestoreOriginal: true},
+				saaPoll, saaStartDelayElapse, saaPoll,
+			},
+			startDelayed: true,
+		})
+	})
+}
+
+// TestBackoff_Declarative drives the retry-backoff scenarios (drive only; no assertions yet).
+func (s *standaloneActivityTestSuite) TestBackoff_Declarative() {
+	testcontext.For(s.T(), testcontext.WithTimeout(saaTraceBudget()))
+	env := s.newTestEnv()
+	t := s.T()
+
+	t.Run("backoff/retry-dispatch", func(t *testing.T) {
+		s.runTrace(t, env, saaTrace{
+			name:          "backoff/retry-dispatch",
+			trace:         []model.Event{saaPoll, saaFailRetryably, saaPoll, saaBackoffDelayElapse, saaPoll},
+			maxAttempts:   3,
+			retryInterval: saaDelayWindow,
+		})
+	})
+	t.Run("backoff/next-retry-delay-override", func(t *testing.T) {
+		s.runTrace(t, env, saaTrace{
+			name:           "backoff/next-retry-delay-override",
+			trace:          []model.Event{saaPoll, saaFailRetryably, saaPoll, saaBackoffDelayElapse, saaPoll},
+			maxAttempts:    3,
+			nextRetryDelay: saaDelayWindow,
+		})
+	})
+	t.Run("backoff/pause-then-unpause", func(t *testing.T) {
+		s.runTrace(t, env, saaTrace{
+			name:          "backoff/pause-then-unpause",
+			trace:         []model.Event{saaPoll, saaFailRetryably, {Kind: model.Pause}, {Kind: model.Unpause}, saaPoll, saaBackoffDelayElapse, saaPoll},
+			maxAttempts:   3,
+			retryInterval: saaDelayWindow,
+		})
+	})
+	t.Run("backoff/pause-unpause-then-update", func(t *testing.T) {
+		s.runTrace(t, env, saaTrace{
+			name:          "backoff/pause-unpause-then-update",
+			trace:         []model.Event{saaPoll, saaFailRetryably, {Kind: model.Pause}, {Kind: model.Unpause}, {Kind: model.UpdateOptions}, saaPoll, saaBackoffDelayElapse, saaPoll},
+			maxAttempts:   3,
+			retryInterval: saaDelayWindow,
+		})
+	})
+	t.Run("backoff/next-retry-delay-override-then-update", func(t *testing.T) {
+		s.runTrace(t, env, saaTrace{
+			name:           "backoff/next-retry-delay-override-then-update",
+			trace:          []model.Event{saaPoll, saaFailRetryably, {Kind: model.UpdateOptions}, saaPoll, saaBackoffDelayElapse, saaPoll},
+			maxAttempts:    3,
+			nextRetryDelay: saaDelayWindow,
+		})
+	})
+	t.Run("backoff/reset", func(t *testing.T) {
+		s.runTrace(t, env, saaTrace{
+			name:          "backoff/reset",
+			trace:         []model.Event{saaPoll, saaFailRetryably, {Kind: model.Reset}, saaPoll},
+			maxAttempts:   3,
+			retryInterval: saaDelayWindow,
+		})
+	})
+}
+
+// TestTimeout_Declarative drives the four activity-timeout scenarios (drive only; no assertions yet).
+func (s *standaloneActivityTestSuite) TestTimeout_Declarative() {
+	testcontext.For(s.T(), testcontext.WithTimeout(saaTraceBudget()))
+	env := s.newTestEnv()
+	t := s.T()
+
+	t.Run("schedule-to-close/elapses-while-paused", func(t *testing.T) {
+		s.runTrace(t, env, saaTrace{
+			name:  "schedule-to-close/elapses-while-paused",
+			trace: []model.Event{{Kind: model.Pause}, {Kind: model.ScheduleToCloseElapses}},
+		})
+	})
+	t.Run("schedule-to-start/elapses-while-scheduled", func(t *testing.T) {
+		s.runTrace(t, env, saaTrace{
+			name:  "schedule-to-start/elapses-while-scheduled",
+			trace: []model.Event{{Kind: model.ScheduleToStartElapses}},
+		})
+	})
+	t.Run("schedule-to-start/elapses-while-paused", func(t *testing.T) {
+		s.runTrace(t, env, saaTrace{
+			name:  "schedule-to-start/elapses-while-paused",
+			trace: []model.Event{{Kind: model.Pause}, {Kind: model.ScheduleToStartElapses}},
+		})
+	})
+	t.Run("start-to-close/elapses-while-started/retries-remain", func(t *testing.T) {
+		s.runTrace(t, env, saaTrace{
+			name:  "start-to-close/elapses-while-started/retries-remain",
+			trace: []model.Event{saaPoll, {Kind: model.StartToCloseElapses}},
+		})
+	})
+	t.Run("start-to-close/elapses-while-started/last-attempt", func(t *testing.T) {
+		s.runTrace(t, env, saaTrace{
+			name:        "start-to-close/elapses-while-started/last-attempt",
+			trace:       []model.Event{saaPoll, {Kind: model.StartToCloseElapses}},
+			maxAttempts: 1,
+		})
+	})
+	t.Run("start-to-close/elapses-while-cancel-requested", func(t *testing.T) {
+		s.runTrace(t, env, saaTrace{
+			name:  "start-to-close/elapses-while-cancel-requested",
+			trace: []model.Event{saaPoll, {Kind: model.RequestCancel}, {Kind: model.StartToCloseElapses}},
+		})
+	})
+	t.Run("heartbeat/elapses-while-started/retries-remain", func(t *testing.T) {
+		s.runTrace(t, env, saaTrace{
+			name:  "heartbeat/elapses-while-started/retries-remain",
+			trace: []model.Event{saaPoll, {Kind: model.HeartbeatElapses}},
+		})
+	})
+	t.Run("heartbeat/elapses-while-started/last-attempt", func(t *testing.T) {
+		s.runTrace(t, env, saaTrace{
+			name:        "heartbeat/elapses-while-started/last-attempt",
+			trace:       []model.Event{saaPoll, {Kind: model.HeartbeatElapses}},
+			maxAttempts: 1,
+		})
+	})
+	t.Run("schedule-to-start/elapses-within-start-delay", func(t *testing.T) {
+		s.runTrace(t, env, saaTrace{
+			name:         "schedule-to-start/elapses-within-start-delay",
+			trace:        []model.Event{{Kind: model.ScheduleToStartElapses}},
+			startDelayed: true,
+		})
+	})
+	t.Run("schedule-to-close/elapses-within-start-delay", func(t *testing.T) {
+		s.runTrace(t, env, saaTrace{
+			name:         "schedule-to-close/elapses-within-start-delay",
+			trace:        []model.Event{{Kind: model.ScheduleToCloseElapses}},
+			startDelayed: true,
+		})
 	})
 }
