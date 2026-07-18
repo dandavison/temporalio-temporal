@@ -559,6 +559,7 @@ func (a *Activity) HandleFailed(
 	}
 	failure := event.Request.GetFailedRequest().GetFailure()
 
+	// SAA isRetryable
 	appFailure := failure.GetApplicationFailureInfo()
 	isRetryable := appFailure != nil &&
 		!appFailure.GetNonRetryable() &&

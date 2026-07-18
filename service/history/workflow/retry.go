@@ -112,6 +112,7 @@ func nextBackoffInterval(
 	return interval, enumspb.RETRY_STATE_IN_PROGRESS
 }
 
+// WFA isRetryable
 func isRetryable(failure *failurepb.Failure, nonRetryableTypes []string) bool {
 	if failure == nil {
 		return true
@@ -134,6 +135,7 @@ func isRetryable(failure *failurepb.Failure, nonRetryableTypes []string) bool {
 		return false
 	}
 
+	// is this reachable on activity failure?
 	if failure.GetServerFailureInfo() != nil {
 		return !failure.GetServerFailureInfo().GetNonRetryable()
 	}
