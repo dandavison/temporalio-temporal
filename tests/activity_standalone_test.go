@@ -14246,10 +14246,10 @@ func saaTraceBudget() time.Duration {
 }
 
 // runTrace drives one declared trace on its own harness (a unique activity-id namespace via idBase),
-// making no behavioral assertions — see saaHarness.driveTrace. This is deliberately not yet a good
-// functional test: it only drives the trace. Later steps will add the manual and model-derived
-// assertions a caller makes after reaching the state.
-func (s *standaloneActivityTestSuite) runTrace(t *testing.T, env *standaloneActivityEnv, tr saaTrace) {
+// making no behavioral assertions — see saaHarness.driveTrace — and returns a handle to the activity
+// at the reached state so the caller can issue further RPCs and assert on the outcome. Later steps
+// will add model-derived assertions during the drive itself.
+func (s *standaloneActivityTestSuite) runTrace(t *testing.T, env *standaloneActivityEnv, tr saaTrace) *saaHandle {
 	ctx := testcontext.For(t)
 	chasmCtx, err := env.GetTestCluster().Host().ChasmContext(ctx)
 	require.NoError(t, err)
@@ -14264,7 +14264,7 @@ func (s *standaloneActivityTestSuite) runTrace(t *testing.T, env *standaloneActi
 		// window — that is how a reset that discards a backoff (immediate) is told from still-delayed.
 		positivePollTimeout: saaNegativePollTimeout,
 	}
-	h.driveTrace(t, tr.trace)
+	return h.driveTrace(t, tr.trace)
 }
 
 // TestStartDelay_Declarative drives the start-delay scenarios, each an explicitly named subtest with

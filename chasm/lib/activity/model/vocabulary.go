@@ -146,6 +146,10 @@ type Config struct {
 	HasHeartbeat       bool
 	HasStartDelay      bool
 	MaxAttempts        int32 // 0 = unlimited
+	// NonRetryableTimeouts are the timeout *Elapses kinds the retry policy marks non-retryable
+	// (RetryPolicy.NonRetryableErrorTypes with the TemporalTimeout: prefix). A timeout in this set
+	// fails the activity terminally instead of retrying; only StartToClose and Heartbeat are honored.
+	NonRetryableTimeouts []EventKind
 }
 
 // EventKind enumerates the events the model covers.

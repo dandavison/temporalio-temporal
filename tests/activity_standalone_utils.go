@@ -24,6 +24,7 @@ import (
 	"go.temporal.io/server/chasm/lib/activity"
 	"go.temporal.io/server/chasm/lib/activity/model"
 	"go.temporal.io/server/common"
+	"go.temporal.io/server/common/retrypolicy"
 	"google.golang.org/protobuf/types/known/durationpb"
 	"google.golang.org/protobuf/types/known/fieldmaskpb"
 )
@@ -65,8 +66,10 @@ const saaWallClockSettle = 2 * time.Second
 // check vacuous). A genuine empty long poll blocks for roughly this long.
 const saaNegativePollTimeout = common.MinLongPollTimeout + time.Second
 
-// saaActor is one activity instance.
-type saaActor struct {
+// saaHandle is a handle to one activity instance: the token last dispatched to it plus the ids
+// needed to address it, so a caller that has driven it to a state can issue further RPCs and read
+// its state back.
+type saaHandle struct {
 	h          *saaHarness
 	activityID string
 	taskQueue  string
@@ -75,13 +78,13 @@ type saaActor struct {
 }
 
 // driveTrace runs a trace on a fresh activity, realizing each event against the server, and returns
-// the actor at the reached state. It is model-free and makes no behavioral assertions — it just
+// a handle to it at the reached state. It is model-free and makes no behavioral assertions — it just
 // advances the activity; the caller then asserts whatever it likes. A trace is a sequence of valid
 // transitions, so each RPC must succeed (a drive-integrity check, not a behavioral one); a poll
 // captures the dispatched task's token when one is available; a wall-clock event is realized by
 // waiting out its configured window.
-func (h *saaHarness) driveTrace(t require.TestingT, trace []model.Event) *saaActor {
-	a := h.start(t)
+func (h *saaHarness) driveTrace(t require.TestingT, trace []model.Event) *saaHandle {
+	hd := h.start(t)
 	for _, e := range trace {
 		switch {
 		case e.Kind == model.Poll:
@@ -89,19 +92,19 @@ func (h *saaHarness) driveTrace(t require.TestingT, trace []model.Event) *saaAct
 			if h.positivePollTimeout > 0 {
 				timeout = h.positivePollTimeout
 			}
-			if resp := a.pollForTask(t, timeout); resp != nil {
-				a.token = resp.GetTaskToken()
+			if resp := hd.pollForTask(t, timeout); resp != nil {
+				hd.token = resp.GetTaskToken()
 			}
 		case saaIsWallClock(e.Kind):
 			time.Sleep(h.eventClock(e) + saaWallClockSettle)
 		default:
-			require.NoError(t, a.rpc(e))
+			require.NoError(t, hd.rpc(e))
 		}
 	}
-	return a
+	return hd
 }
 
-func (h *saaHarness) start(t require.TestingT) *saaActor {
+func (h *saaHarness) start(t require.TestingT) *saaHandle {
 	// cfg.HasStartDelay tells the model to predict StartDelayPending; the server only enters that state
 	// if a real start_delay is configured. Guard against the decoupling so a misconfigured harness fails
 	// loudly rather than as a confusing first-state mismatch.
@@ -116,7 +119,7 @@ func (h *saaHarness) start(t require.TestingT) *saaActor {
 	id := fmt.Sprintf("%s-%d", base, h.counter)
 	resp, err := h.env.FrontendClient().StartActivityExecution(h.ctx, h.startRequest(id, id))
 	require.NoError(t, err)
-	return &saaActor{h: h, activityID: id, taskQueue: id, runID: resp.RunId}
+	return &saaHandle{h: h, activityID: id, taskQueue: id, runID: resp.RunId}
 }
 
 func (h *saaHarness) startRequest(activityID, taskQueue string) *workflowservice.StartActivityExecutionRequest {
@@ -143,10 +146,11 @@ func (h *saaHarness) startRequest(activityID, taskQueue string) *workflowservice
 		TaskQueue:           &taskqueuepb.TaskQueue{Name: taskQueue},
 		StartToCloseTimeout: dur(model.StartToCloseElapses),
 		RetryPolicy: &commonpb.RetryPolicy{
-			InitialInterval:    durationpb.New(interval),
-			BackoffCoefficient: 1.0,
-			MaximumInterval:    durationpb.New(interval),
-			MaximumAttempts:    h.cfg.MaxAttempts,
+			InitialInterval:        durationpb.New(interval),
+			BackoffCoefficient:     1.0,
+			MaximumInterval:        durationpb.New(interval),
+			MaximumAttempts:        h.cfg.MaxAttempts,
+			NonRetryableErrorTypes: saaNonRetryableErrorTypes(h.cfg.NonRetryableTimeouts),
 		},
 		RequestId: uuid.NewString(),
 	}
@@ -166,7 +170,7 @@ func (h *saaHarness) startRequest(activityID, taskQueue string) *workflowservice
 }
 
 // observed reads the activity's internal state back via ReadComponent, as the model's AbstractState.
-func (a *saaActor) observed() (model.AbstractState, error) {
+func (a *saaHandle) observed() (model.AbstractState, error) {
 	o, err := saaReadObserved(a.h.chasmCtx, a.h.nsID, a.activityID, a.runID)
 	if err != nil {
 		return model.AbstractState{}, err
@@ -175,7 +179,7 @@ func (a *saaActor) observed() (model.AbstractState, error) {
 }
 
 // rpc performs the RPC for a non-Poll, non-wall-clock event and returns its error.
-func (a *saaActor) rpc(e model.Event) error {
+func (a *saaHandle) rpc(e model.Event) error {
 	fc := a.h.env.FrontendClient()
 	ns := a.h.env.Namespace().String()
 	switch e.Kind {
@@ -234,7 +238,7 @@ func (a *saaActor) rpc(e model.Event) error {
 	}
 }
 
-func (a *saaActor) updateOptions(e model.Event) error {
+func (a *saaHandle) updateOptions(e model.Event) error {
 	req := &workflowservice.UpdateActivityExecutionOptionsRequest{
 		Namespace: a.h.env.Namespace().String(), ActivityId: a.activityID, RunId: a.runID, Identity: "op",
 	}
@@ -253,7 +257,7 @@ func (a *saaActor) updateOptions(e model.Event) error {
 	return err
 }
 
-func (a *saaActor) pollForTask(t require.TestingT, timeout time.Duration) *workflowservice.PollActivityTaskQueueResponse {
+func (a *saaHandle) pollForTask(t require.TestingT, timeout time.Duration) *workflowservice.PollActivityTaskQueueResponse {
 	ctx, cancel := context.WithTimeout(a.h.ctx, timeout)
 	defer cancel()
 	resp, err := a.h.env.FrontendClient().PollActivityTaskQueue(ctx, &workflowservice.PollActivityTaskQueueRequest{
@@ -364,6 +368,34 @@ func saaTimeoutIn(trace []model.Event) model.EventKind {
 	return 0 // none; zero value (Poll) means no timeout is shortened
 }
 
+// saaNonRetryableErrorTypes renders the model's abstract non-retryable timeout kinds as the
+// RetryPolicy.NonRetryableErrorTypes wire strings (TemporalTimeout:<TIMEOUT_TYPE>).
+func saaNonRetryableErrorTypes(timeouts []model.EventKind) []string {
+	if len(timeouts) == 0 {
+		return nil
+	}
+	types := make([]string, 0, len(timeouts))
+	for _, k := range timeouts {
+		types = append(types, retrypolicy.TimeoutFailureTypePrefix+saaTimeoutType(k).String())
+	}
+	return types
+}
+
+func saaTimeoutType(k model.EventKind) enumspb.TimeoutType {
+	switch k {
+	case model.ScheduleToStartElapses:
+		return enumspb.TIMEOUT_TYPE_SCHEDULE_TO_START
+	case model.ScheduleToCloseElapses:
+		return enumspb.TIMEOUT_TYPE_SCHEDULE_TO_CLOSE
+	case model.StartToCloseElapses:
+		return enumspb.TIMEOUT_TYPE_START_TO_CLOSE
+	case model.HeartbeatElapses:
+		return enumspb.TIMEOUT_TYPE_HEARTBEAT
+	default:
+		return enumspb.TIMEOUT_TYPE_UNSPECIFIED
+	}
+}
+
 func saaFailure(retryable bool, nextRetryDelay time.Duration) *failurepb.Failure {
 	info := &failurepb.ApplicationFailureInfo{Type: "drive", NonRetryable: !retryable}
 	if nextRetryDelay > 0 {
@@ -383,11 +415,12 @@ func saaFailure(retryable bool, nextRetryDelay time.Duration) *failurepb.Failure
 // *Elapses event into the script is what makes the harness configure that timeout short so it fires.
 
 type saaTrace struct {
-	trace          []model.Event
-	maxAttempts    int32         // RetryPolicy MaximumAttempts (0 = unlimited); the rest of the Config is derived (see config)
-	startDelayed   bool          // activity created with a start_delay; the window length is derived (see startDelay)
-	retryInterval  time.Duration // RetryPolicy interval; how long the driver waits for BackoffElapses
-	nextRetryDelay time.Duration // worker-supplied next_retry_delay override of the policy backoff
+	trace                []model.Event
+	maxAttempts          int32             // RetryPolicy MaximumAttempts (0 = unlimited); the rest of the Config is derived (see config)
+	startDelayed         bool              // activity created with a start_delay; the window length is derived (see startDelay)
+	retryInterval        time.Duration     // RetryPolicy interval; how long the driver waits for BackoffElapses
+	nextRetryDelay       time.Duration     // worker-supplied next_retry_delay override of the policy backoff
+	nonRetryableTimeouts []model.EventKind // timeout *Elapses kinds the RetryPolicy marks non-retryable
 }
 
 // config derives the model Config from the trace. Only MaxAttempts is a free parameter; everything
@@ -395,7 +428,7 @@ type saaTrace struct {
 // (that timeout's *Elapses event). HasScheduleToStart/HasHeartbeat merely tell the harness which
 // timeouts to configure — precisely the set of timeouts the trace fires.
 func (tr saaTrace) config() model.Config {
-	cfg := model.Config{MaxAttempts: tr.maxAttempts, HasStartDelay: tr.startDelayed}
+	cfg := model.Config{MaxAttempts: tr.maxAttempts, HasStartDelay: tr.startDelayed, NonRetryableTimeouts: tr.nonRetryableTimeouts}
 	for _, e := range tr.trace {
 		switch e.Kind {
 		case model.ScheduleToStartElapses:
