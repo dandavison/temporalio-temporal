@@ -21,6 +21,7 @@ import (
 	"go.temporal.io/api/workflowservice/v1"
 	"go.temporal.io/sdk/temporal"
 	"go.temporal.io/server/chasm/lib/activity"
+	"go.temporal.io/server/chasm/lib/activity/model"
 	"go.temporal.io/server/chasm/lib/callback"
 	"go.temporal.io/server/common"
 	"go.temporal.io/server/common/dynamicconfig"
@@ -14252,30 +14253,35 @@ func (s *standaloneActivityTestSuite) TestActivityTraces() {
 
 	env := s.newTestEnv()
 	t := s.T()
-	for i, tr := range saaTraces {
-		t.Run(tr.name, func(t *testing.T) {
-			// A fresh context per trace, each with its own deadline, so the multi-second waits do not
-			// accumulate against a single shared budget. testcontext.For(t) anchors on the subtest;
-			// s.Context() is memoized once per suite test and would be shared across every trace.
-			ctx := testcontext.For(t)
-			chasmCtx, err := env.GetTestCluster().Host().ChasmContext(ctx)
-			require.NoError(t, err)
-			h := &saaHarness{
-				env: env, ctx: ctx, chasmCtx: chasmCtx, nsID: env.NamespaceID().String(),
-				cfg: tr.config(), cfgIdx: i,
-				startDelay: tr.startDelay(), retryInterval: tr.retryInterval, nextRetryDelay: tr.nextRetryDelay,
-				// A timeout's *Elapses event in the script is the signal to configure that timeout short.
-				shortTimeout: saaTimeoutIn(tr.trace),
-				// "Dispatchable" must mean "dispatches promptly", so bound the positive poll below the
-				// delay window — that is how a reset that discards a backoff (immediate) is told from
-				// still-delayed.
-				positivePollTimeout: saaNegativePollTimeout,
-			}
-			a := h.drive(t, tr.trace)
-			got, err := a.observed()
-			require.NoError(t, err)
-			require.Truef(t, tr.wantFinal.SameObserved(got),
-				"trace %q final state:\n  want %+v\n  got  %+v", tr.name, tr.wantFinal, got)
-		})
-	}
+
+	t.Run("start-delay/first-dispatch", func(t *testing.T) {
+		trace := saaTrace{
+			name:         "start-delay/first-dispatch",
+			trace:        []model.Event{saaPoll, saaStartDelayElapse, saaPoll},
+			startDelayed: true,
+			wantFinal:    started(1),
+		}
+		// A fresh context per trace, each with its own deadline, so the multi-second waits do not
+		// accumulate against a single shared budget. testcontext.For(t) anchors on the subtest;
+		// s.Context() is memoized once per suite test and would be shared across every trace.
+		ctx := testcontext.For(t)
+		chasmCtx, err := env.GetTestCluster().Host().ChasmContext(ctx)
+		require.NoError(t, err)
+		h := &saaHarness{
+			env: env, ctx: ctx, chasmCtx: chasmCtx, nsID: env.NamespaceID().String(),
+			cfg: trace.config(), cfgIdx: i,
+			startDelay: trace.startDelay(), retryInterval: trace.retryInterval, nextRetryDelay: trace.nextRetryDelay,
+			// A timeout's *Elapses event in the script is the signal to configure that timeout short.
+			shortTimeout: saaTimeoutIn(trace.trace),
+			// "Dispatchable" must mean "dispatches promptly", so bound the positive poll below the
+			// delay window — that is how a reset that discards a backoff (immediate) is told from
+			// still-delayed.
+			positivePollTimeout: saaNegativePollTimeout,
+		}
+		a := h.drive(t, trace.trace)
+		got, err := a.observed()
+		require.NoError(t, err)
+		require.Truef(t, trace.wantFinal.SameObserved(got),
+			"trace %q final state:\n  want %+v\n  got  %+v", trace.name, trace.wantFinal, got)
+	})
 }
