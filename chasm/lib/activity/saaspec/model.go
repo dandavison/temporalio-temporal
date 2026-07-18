@@ -488,13 +488,11 @@ func ExpectedHeartbeatFlags(s AbstractState) HeartbeatFlags {
 		}
 	case ResetRequested:
 		return HeartbeatFlags{
-			ActivityPaused:  s.ResetKeepPaused, // TODO(dan): the implementation currently sets both flags; but is this a confusing message to the worker?
+			ActivityPaused:  false,
 			ActivityReset:   true,
 			CancelRequested: false,
 		}
 	case PauseRequested:
-		// TODO(dan): our code honors a reset request while in PauseRequested; just want to
-		// double-check that's intentional. If so need to decide on spec for heartbeat flags.
 		return HeartbeatFlags{
 			ActivityPaused:  true,
 			ActivityReset:   false,
