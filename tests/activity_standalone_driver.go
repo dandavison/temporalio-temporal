@@ -24,6 +24,7 @@ import (
 	"go.temporal.io/server/common/testing/testcontext"
 	"go.temporal.io/server/tests/testcore"
 	"google.golang.org/protobuf/types/known/durationpb"
+	"google.golang.org/protobuf/types/known/fieldmaskpb"
 )
 
 // --- the activity under test -----------------------------------------------------------------
@@ -87,6 +88,18 @@ func (c activityConfig) window(e model.Event) time.Duration {
 	}
 }
 
+// modelConfig is the model's view of the activity: which options are configured at all. Deriving it
+// means the two cannot disagree.
+func (c activityConfig) modelConfig() model.Config {
+	return model.Config{
+		MaxAttempts:        c.MaxAttempts,
+		HasStartDelay:      c.StartDelay > 0,
+		HasScheduleToClose: c.ScheduleToClose > 0,
+		HasScheduleToStart: c.ScheduleToStart > 0,
+		HasHeartbeat:       c.Heartbeat > 0,
+	}
+}
+
 // --- driver --------------------------------------------------------------------------------
 
 type saaDriver struct {
@@ -125,6 +138,10 @@ const activityDriverWallClockSettle = 2 * time.Second
 
 // activityDriverPollInterval is the gap between reads when polling for a wall-clock event's effect.
 const activityDriverPollInterval = 100 * time.Millisecond
+
+// saaPollTimeout is a poll timeout above common.MinLongPollTimeout, the floor below which the frontend
+// rejects the poll rather than reaching matching.
+const saaPollTimeout = common.MinLongPollTimeout + time.Second
 
 // saaHandle is a handle to one activity instance: the ids that address it, plus the token last
 // dispatched to it.
@@ -319,6 +336,30 @@ func (a *saaHandle) terminal(t require.TestingT) activityTerminalProjection {
 	}
 }
 
+// terminalCause is the failure the terminal outcome chains as its Cause, empty if there is none.
+func (a *saaHandle) terminalCause(t require.TestingT) failureCause {
+	cause := a.describe(t).GetOutcome().GetFailure().GetCause()
+	return failureCause{Type: saaFailureType(cause), Message: cause.GetMessage()}
+}
+
+// heartbeatDetails is the last heartbeat checkpoint, as the first payload's raw bytes.
+func (a *saaHandle) heartbeatDetails(t require.TestingT) []byte {
+	return firstPayloadData(a.describe(t).GetInfo().GetHeartbeatDetails())
+}
+
+// activityHeartbeatDetails is the checkpoint payload both drivers send with a Heartbeat event.
+var activityHeartbeatDetails = &commonpb.Payloads{Payloads: []*commonpb.Payload{{
+	Metadata: map[string][]byte{"encoding": []byte("json/plain")},
+	Data:     []byte(`"hb"`),
+}}}
+
+func firstPayloadData(p *commonpb.Payloads) []byte {
+	if ps := p.GetPayloads(); len(ps) > 0 {
+		return ps[0].GetData()
+	}
+	return nil
+}
+
 // saaFailureType is the application failure Type, the TimeoutType string, or "" for neither.
 func saaFailureType(f *failurepb.Failure) string {
 	if app := f.GetApplicationFailureInfo(); app != nil {
@@ -344,19 +385,91 @@ func (a *saaHandle) rpc(e model.Event) error {
 	fc := a.d.env.FrontendClient()
 	ns := a.d.env.Namespace().String()
 	switch e.Type {
+	case model.HeartbeatType:
+		resp, err := fc.RecordActivityTaskHeartbeat(a.d.ctx, &workflowservice.RecordActivityTaskHeartbeatRequest{
+			Namespace: ns, TaskToken: a.token, Details: activityHeartbeatDetails,
+		})
+		a.lastHeartbeat = resp
+		return err
+	case model.RespondCompletedType:
+		_, err := fc.RespondActivityTaskCompleted(a.d.ctx, &workflowservice.RespondActivityTaskCompletedRequest{
+			Namespace: ns, TaskToken: a.token, Identity: "worker",
+		})
+		return err
 	case model.RespondFailedType:
 		_, err := fc.RespondActivityTaskFailed(a.d.ctx, &workflowservice.RespondActivityTaskFailedRequest{
 			Namespace: ns, TaskToken: a.token, Identity: "worker", Failure: activityFailure(e.Retryable, a.d.cfg.NextRetryDelay),
 		})
 		return err
-	case model.PauseType:
-		_, err := fc.PauseActivityExecution(a.d.ctx, &workflowservice.PauseActivityExecutionRequest{
-			Namespace: ns, ActivityId: a.activityID, RunId: a.runID, Identity: "op", Reason: "drive", RequestId: uuid.NewString(),
+	case model.RespondCanceledType:
+		_, err := fc.RespondActivityTaskCanceled(a.d.ctx, &workflowservice.RespondActivityTaskCanceledRequest{
+			Namespace: ns, TaskToken: a.token, Identity: "worker",
 		})
 		return err
+	case model.RequestCancelType:
+		_, err := fc.RequestCancelActivityExecution(a.d.ctx, &workflowservice.RequestCancelActivityExecutionRequest{
+			Namespace: ns, ActivityId: a.activityID, RunId: a.runID, Identity: "op", Reason: "drive", RequestId: a.reqID(e),
+		})
+		return err
+	case model.TerminateType:
+		_, err := fc.TerminateActivityExecution(a.d.ctx, &workflowservice.TerminateActivityExecutionRequest{
+			Namespace: ns, ActivityId: a.activityID, RunId: a.runID, Identity: "op", Reason: "drive", RequestId: a.reqID(e),
+		})
+		return err
+	case model.PauseType:
+		_, err := fc.PauseActivityExecution(a.d.ctx, &workflowservice.PauseActivityExecutionRequest{
+			Namespace: ns, ActivityId: a.activityID, RunId: a.runID, Identity: "op", Reason: "drive", RequestId: a.reqID(e),
+		})
+		return err
+	case model.UnpauseType:
+		_, err := fc.UnpauseActivityExecution(a.d.ctx, &workflowservice.UnpauseActivityExecutionRequest{
+			Namespace: ns, ActivityId: a.activityID, RunId: a.runID, Identity: "op",
+			ResetAttempts: e.ResetAttempts, ResetHeartbeat: e.ResetHeartbeat,
+		})
+		return err
+	case model.ResetType:
+		_, err := fc.ResetActivityExecution(a.d.ctx, &workflowservice.ResetActivityExecutionRequest{
+			Namespace: ns, ActivityId: a.activityID, RunId: a.runID, Identity: "op",
+			KeepPaused: e.KeepPaused, RestoreOriginalOptions: e.RestoreOriginal,
+		})
+		return err
+	case model.UpdateOptionsType:
+		return a.updateOptions(e)
 	default:
 		return fmt.Errorf("saaDriver: unhandled event type %v", e.Type)
 	}
+}
+
+func (a *saaHandle) updateOptions(e model.Event) error {
+	req := &workflowservice.UpdateActivityExecutionOptionsRequest{
+		Namespace: a.d.env.Namespace().String(), ActivityId: a.activityID, RunId: a.runID, Identity: "op",
+	}
+	switch {
+	case e.RestoreOriginal:
+		req.RestoreOriginal = true
+	case e.SetsStartDelay:
+		req.ActivityOptions = &apiactivitypb.ActivityOptions{StartDelay: durationpb.New(time.Hour)}
+		req.UpdateMask = &fieldmaskpb.FieldMask{Paths: []string{"start_delay"}}
+	default:
+		// A minimal, always-valid update: re-set the heartbeat timeout.
+		req.ActivityOptions = &apiactivitypb.ActivityOptions{HeartbeatTimeout: durationpb.New(time.Hour)}
+		req.UpdateMask = &fieldmaskpb.FieldMask{Paths: []string{"heartbeat_timeout"}}
+	}
+	_, err := a.d.env.FrontendClient().UpdateActivityExecutionOptions(a.d.ctx, req)
+	return err
+}
+
+// reqID is the request id for an operator command: the id that established the current state for that
+// command type if the event is a SameRequestID replay, else a fresh one. It is recorded as lastReqID.
+func (a *saaHandle) reqID(e model.Event) string {
+	id := uuid.NewString()
+	if e.SameRequestID {
+		if est, ok := a.establishedReqID[e.Type]; ok {
+			id = est
+		}
+	}
+	a.lastReqID = id
+	return id
 }
 
 func (a *saaHandle) pollForTask(t require.TestingT, timeout time.Duration) *workflowservice.PollActivityTaskQueueResponse {
