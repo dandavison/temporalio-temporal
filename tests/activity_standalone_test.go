@@ -1768,15 +1768,14 @@ func (s *standaloneActivityTestSuite) TestFail() {
 		require.Equal(t, "token does not match namespace", invalidArgErr.Message)
 	})
 
-	t.Run("ServerFailureRejectedByFrontend", func(t *testing.T) {
+	t.Run("WorkerMustSendApplicationFailure", func(t *testing.T) {
 		env := s.newTestEnv()
-		// Declarative prefix: start with retries remaining and dispatch attempt 1.
-		hd := s.runTrace(t, env, saaTrace{trace: []model.Event{saaPoll}, maxAttempts: 3})
-
-		// Manual: attempt to fail the attempt with a ServerFailure rather than an ApplicationFailure.
+		// Make an SAA with an attempt in progress
+		a := s.runTrace(t, env, saaTrace{trace: []model.Event{saaPoll}, maxAttempts: 3})
+		// Worker sends an invalid failure
 		_, err := env.FrontendClient().RespondActivityTaskFailed(testcontext.For(t), &workflowservice.RespondActivityTaskFailedRequest{
 			Namespace: env.Namespace().String(),
-			TaskToken: hd.token,
+			TaskToken: a.token,
 			Identity:  "worker",
 			Failure: &failurepb.Failure{
 				Message:     "server failure",
@@ -1786,21 +1785,36 @@ func (s *standaloneActivityTestSuite) TestFail() {
 		require.ErrorContains(t, err, "Failure must have ApplicationFailureInfo")
 	})
 
-	t.Run("TimeoutNonRetryable_Repro", func(t *testing.T) {
+	// StartToClose timeout can be marked non-retryable.
+	t.Run("StartToCloseTimeoutCanBeMarkedNonRetryable", func(t *testing.T) {
 		env := s.newTestEnv()
-		// Declarative prefix: start with retries remaining, dispatch attempt 1, let its StartToClose
-		// timeout elapse — with StartToClose marked non-retryable in the policy.
-		hd := s.runTrace(t, env, saaTrace{
+
+		// Start attempt, then fail non-retryably
+		a := s.runTrace(t, env, saaTrace{
 			trace:                []model.Event{saaPoll, {Kind: model.StartToCloseElapses}},
 			maxAttempts:          3,
 			nonRetryableTimeouts: []model.EventKind{model.StartToCloseElapses},
 		})
-
-		// A non-retryable timeout must fail the activity terminally, not reschedule it.
-		st, err := hd.observed()
+		st, err := a.observed()
 		require.NoError(t, err)
 		require.Equalf(t, model.TimedOut, st.Status,
 			"a StartToClose timeout marked non-retryable must fail the activity, not retry it (got %s)", st.Status)
+	})
+
+	// Heartbeat timeout can be marked non-retryable.
+	t.Run("HeartbeatTimeoutCanBeMarkedNonRetryable", func(t *testing.T) {
+		env := s.newTestEnv()
+
+		// Start attempt, then fail non-retryably
+		a := s.runTrace(t, env, saaTrace{
+			trace:                []model.Event{saaPoll, {Kind: model.HeartbeatElapses}},
+			maxAttempts:          3,
+			nonRetryableTimeouts: []model.EventKind{model.HeartbeatElapses},
+		})
+		st, err := a.observed()
+		require.NoError(t, err)
+		require.Equalf(t, model.TimedOut, st.Status,
+			"a Heartbeat timeout marked non-retryable must fail the activity, not retry it (got %s)", st.Status)
 	})
 }
 
