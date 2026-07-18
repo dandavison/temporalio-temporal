@@ -21,6 +21,7 @@ import (
 	"go.temporal.io/api/workflowservice/v1"
 	"go.temporal.io/sdk/temporal"
 	"go.temporal.io/server/chasm/lib/activity"
+	"go.temporal.io/server/chasm/lib/activity/model"
 	"go.temporal.io/server/chasm/lib/callback"
 	"go.temporal.io/server/common"
 	"go.temporal.io/server/common/dynamicconfig"
@@ -116,6 +117,11 @@ func (s *standaloneActivityTestSuite) newTestEnv(opts ...testcore.TestOption) *s
 	cluster.OverrideDynamicConfig(s.T(), dynamicconfig.EnableChasm, nsValues(true))
 	cluster.OverrideDynamicConfig(s.T(), activity.Enabled, nsValues(true))
 	cluster.OverrideDynamicConfig(s.T(), activity.EnableCallbacks, nsValues(true))
+	// The RPC graph traversal and random walk (TestSpec) replay hundreds of activities, each on its
+	// own task queue; with the default 4 partitions the burst of task-queue creation trips matching's
+	// rate/persistence limiters. Collapse each task queue to a single partition.
+	cluster.OverrideDynamicConfig(s.T(), dynamicconfig.MatchingNumTaskqueueReadPartitions, nsValues(1))
+	cluster.OverrideDynamicConfig(s.T(), dynamicconfig.MatchingNumTaskqueueWritePartitions, nsValues(1))
 	return env
 }
 
@@ -14235,11 +14241,11 @@ func (s *standaloneActivityTestSuite) TestResetActivityExecution() {
 }
 
 // TestActivityTraces drives a collection of scripted scenarios (saaTraces) — start-delay windows,
-// retry backoff, and the four activity timeouts — each on a fresh activity, then asserts the
-// resulting internal state read back via ReadComponent. It shows how the driver (saaHarness.drive)
-// and the structured state reader express a functional test concisely: reach a nontrivial state with
-// a few DSL events, then assert. Each scenario carries its own expected final state (wantFinal); the
-// scenarios and driver live in activity_standalone_utils.go.
+// retry backoff, and the four activity timeouts — each on a fresh activity, checking the observed
+// state against the model (model.Transition) at every step via driveTrace. These scenarios exist to
+// exercise the wall-clock behaviors the RPC graph traversal can't reach (timeouts firing, dispatch
+// delays elapsing), paying each real wait once. The scenarios live in activity_standalone_utils.go;
+// the model-checking engine is in activity_standalone_spec_harness.go.
 func (s *standaloneActivityTestSuite) TestActivityTraces() {
 	// The traces pay real wall-clock waits, so the whole group runs a few minutes. Raise the parent
 	// test's context budget before anything else creates it at the default (per-subtest budgets, set
@@ -14271,11 +14277,29 @@ func (s *standaloneActivityTestSuite) TestActivityTraces() {
 				// still-delayed.
 				positivePollTimeout: saaNegativePollTimeout,
 			}
-			a := h.drive(t, tr.trace)
-			got, err := a.observed()
-			require.NoError(t, err)
-			require.Truef(t, tr.wantFinal.SameObserved(got),
-				"trace %q final state:\n  want %+v\n  got  %+v", tr.name, tr.wantFinal, got)
+			h.driveTrace(t, tr.trace)
 		})
 	}
+}
+
+// TestActivityDriveToState demonstrates the model-free driver's intended use: reach a state with a
+// few DSL events via drive(), then make ordinary assertions. Where TestActivityTraces checks the
+// state against the model at every step, this drives without asserting and then asserts details the
+// model does not track (the last worker identity and last-started time).
+func (s *standaloneActivityTestSuite) TestActivityDriveToState() {
+	env := s.newTestEnv()
+	t := s.T()
+	ctx := testcontext.For(t)
+	chasmCtx, err := env.GetTestCluster().Host().ChasmContext(ctx)
+	require.NoError(t, err)
+	h := &saaHarness{env: env, ctx: ctx, chasmCtx: chasmCtx, nsID: env.NamespaceID().String()}
+
+	a := h.drive(t, []model.Event{{Kind: model.Poll}}) // a worker poll advances the activity to STARTED
+
+	resp, err := env.FrontendClient().DescribeActivityExecution(ctx, &workflowservice.DescribeActivityExecutionRequest{
+		Namespace: env.Namespace().String(), ActivityId: a.activityID, RunId: a.runID,
+	})
+	require.NoError(t, err)
+	require.Equal(t, "worker", resp.GetInfo().GetLastWorkerIdentity())
+	require.NotNil(t, resp.GetInfo().GetLastStartedTime())
 }
