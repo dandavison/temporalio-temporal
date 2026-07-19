@@ -3633,6 +3633,86 @@ func (s *standaloneActivityTestSuite) TestScheduleToStartTimeout() {
 		"expected ScheduleToStartTimeout but is %s", describeResp.GetOutcome().GetFailure().GetTimeoutFailureInfo().GetTimeoutType())
 }
 
+// TestDescribeRetrySchedulingMetadata reproduces the defect where DescribeActivityExecution reports
+// NextAttemptScheduleTime and CurrentRetryInterval straight from the persisted last-attempt fields,
+// with no gating on the activity's status or on wall-clock time. Each subtest drives the activity to
+// one lifecycle state and asserts the intended (contract-compliant, WFA-aligned) value of both fields
+// at that state, so a subtest fails while the bug is present. The fields should be derived from
+// current state + time + policy:
+//   - NextAttemptScheduleTime: the awaiting attempt's pending dispatch time while it is still in the
+//     future (schedule_time+start_delay for the first attempt, complete_time+interval for a retry);
+//     null once that time has passed, once running, and while paused/cancel-requested.
+//   - CurrentRetryInterval: while running, the next interval (or null if no retry remains); while
+//     backing off, the current interval; null when the attempt is not a retry.
+//
+// The retry policy uses the default coefficient of 1.0, so every retry interval equals saaDelayWindow.
+func (s *standaloneActivityTestSuite) TestDescribeRetrySchedulingMetadata() {
+	testcontext.For(s.T(), testcontext.WithTimeout(saaTraceBudget()))
+	env := s.newTestEnv()
+	t := s.T()
+
+	describeAt := func(t *testing.T, tr saaTrace) *workflowservice.DescribeActivityExecutionResponse {
+		desc, err := s.runTrace(t, env, tr).describe()
+		require.NoError(t, err)
+		return desc
+	}
+
+	// First attempt within its start delay: the dispatch is pending in the future, and this is not a
+	// retry.
+	t.Run("StartDelayPending", func(t *testing.T) {
+		info := describeAt(t, saaTrace{trace: []model.Event{}, startDelayed: true}).GetInfo()
+		require.Equal(t, enumspb.PENDING_ACTIVITY_STATE_SCHEDULED, info.GetRunState())
+		require.Equal(t, info.GetExecutionTime().AsTime(), info.GetNextAttemptScheduleTime().AsTime(),
+			"during a start delay, NextAttemptScheduleTime is the pending dispatch time (schedule+delay)")
+		require.Nil(t, info.GetCurrentRetryInterval(),
+			"CurrentRetryInterval is null on the first attempt, which is not a retry (got %s)",
+			info.GetCurrentRetryInterval().AsDuration())
+	})
+
+	// First attempt running: no pending next dispatch; the next interval applies if it fails.
+	t.Run("FirstAttemptRunning", func(t *testing.T) {
+		info := describeAt(t, saaTrace{trace: []model.Event{saaPoll}, maxAttempts: 3, retryInterval: saaDelayWindow}).GetInfo()
+		require.Equal(t, enumspb.PENDING_ACTIVITY_STATE_STARTED, info.GetRunState())
+		require.Nil(t, info.GetNextAttemptScheduleTime(),
+			"NextAttemptScheduleTime is null while running (got %s)", info.GetNextAttemptScheduleTime().AsTime())
+		require.Equal(t, saaDelayWindow, info.GetCurrentRetryInterval().AsDuration(),
+			"while running with a retry permitted, CurrentRetryInterval is the next interval")
+	})
+
+	// Backing off before the retry dispatches: the next dispatch is in the future. Correct today; this
+	// is a regression guard, not a repro.
+	t.Run("BackingOffBeforeRetry", func(t *testing.T) {
+		info := describeAt(t, saaTrace{trace: []model.Event{saaPoll, saaFailRetryably}, maxAttempts: 3, retryInterval: saaDelayWindow}).GetInfo()
+		require.Equal(t, enumspb.PENDING_ACTIVITY_STATE_SCHEDULED, info.GetRunState())
+		require.True(t, info.GetNextAttemptScheduleTime().AsTime().After(time.Now()),
+			"while backing off, NextAttemptScheduleTime is the future retry dispatch time")
+		require.Equal(t, saaDelayWindow, info.GetCurrentRetryInterval().AsDuration(),
+			"while backing off, CurrentRetryInterval is the current interval")
+	})
+
+	// Retry attempt running with a further retry permitted.
+	t.Run("RetryAttemptRunning", func(t *testing.T) {
+		info := describeAt(t, saaTrace{trace: []model.Event{saaPoll, saaFailRetryably, saaBackoffDelayElapse, saaPoll}, maxAttempts: 3, retryInterval: saaDelayWindow}).GetInfo()
+		require.EqualValues(t, 2, info.GetAttempt())
+		require.Equal(t, enumspb.PENDING_ACTIVITY_STATE_STARTED, info.GetRunState())
+		require.Nil(t, info.GetNextAttemptScheduleTime(),
+			"NextAttemptScheduleTime is null while running (got %s)", info.GetNextAttemptScheduleTime().AsTime())
+		require.Equal(t, saaDelayWindow, info.GetCurrentRetryInterval().AsDuration(),
+			"while running with a retry permitted, CurrentRetryInterval is the next interval")
+	})
+
+	// Final attempt running with no retry remaining.
+	t.Run("FinalAttemptRunning", func(t *testing.T) {
+		info := describeAt(t, saaTrace{trace: []model.Event{saaPoll, saaFailRetryably, saaBackoffDelayElapse, saaPoll}, maxAttempts: 2, retryInterval: saaDelayWindow}).GetInfo()
+		require.EqualValues(t, 2, info.GetAttempt())
+		require.Equal(t, enumspb.PENDING_ACTIVITY_STATE_STARTED, info.GetRunState())
+		require.Nil(t, info.GetNextAttemptScheduleTime(),
+			"NextAttemptScheduleTime is null while running (got %s)", info.GetNextAttemptScheduleTime().AsTime())
+		require.Nil(t, info.GetCurrentRetryInterval(),
+			"CurrentRetryInterval is null when no retry remains (got %s)", info.GetCurrentRetryInterval().AsDuration())
+	})
+}
+
 func (s *standaloneActivityTestSuite) TestDescribeActivityExecution() {
 	s.Run("NoWait", func(s *standaloneActivityTestSuite) {
 		t := s.T()
