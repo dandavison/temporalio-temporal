@@ -12,6 +12,7 @@ import (
 	"go.temporal.io/server/api/historyservice/v1"
 	"go.temporal.io/server/chasm"
 	"go.temporal.io/server/chasm/lib/activity/gen/activitypb/v1"
+	"go.temporal.io/server/common"
 	"go.temporal.io/server/common/headers"
 	"go.temporal.io/server/common/metrics"
 	"google.golang.org/protobuf/types/known/timestamppb"
@@ -358,6 +359,7 @@ var TransitionCanceled = chasm.NewTransition(
 type timeoutEvent struct {
 	metricsHandler metrics.Handler
 	timeoutType    enumspb.TimeoutType
+	retryState     enumspb.RetryState
 	fromStatus     activitypb.ActivityExecutionStatus
 }
 
@@ -376,26 +378,44 @@ var TransitionTimedOut = chasm.NewTransition(
 		timeoutType := event.timeoutType
 
 		return a.StoreOrSelf(ctx).RecordCompleted(ctx, func(ctx chasm.MutableContext) error {
+			// Read before recordFailedAttempt below overwrites it: the terminal timeout chains the
+			// failure that drove the retries as its Cause, matching workflow activities.
+			priorFailure := a.priorAttemptFailure(ctx)
 			var err error
 			switch timeoutType {
 			case enumspb.TIMEOUT_TYPE_SCHEDULE_TO_START,
 				enumspb.TIMEOUT_TYPE_SCHEDULE_TO_CLOSE:
-				err = a.recordScheduleToStartOrCloseTimeoutFailure(ctx, timeoutType)
+				err = a.recordScheduleToStartOrCloseTimeoutFailure(
+					ctx,
+					timeoutType,
+					fmt.Sprintf(common.FailureReasonActivityTimeout, timeoutType.String()),
+					priorFailure,
+				)
 			case enumspb.TIMEOUT_TYPE_START_TO_CLOSE:
 				failure := createStartToCloseTimeoutFailure()
 				failure.GetTimeoutFailureInfo().LastHeartbeatDetails = a.lastHeartbeatDetails(ctx)
-				failure.Cause = a.priorAttemptFailure(ctx)
+				failure.Cause = priorFailure
 				err = a.recordFailedAttempt(ctx, 0, activitypb.ACTIVITY_RETRY_INTERVAL_SOURCE_UNSPECIFIED, failure, ctx.Now(a), true)
 			case enumspb.TIMEOUT_TYPE_HEARTBEAT:
 				failure := createHeartbeatTimeoutFailure()
 				failure.GetTimeoutFailureInfo().LastHeartbeatDetails = a.lastHeartbeatDetails(ctx)
-				failure.Cause = a.priorAttemptFailure(ctx)
+				failure.Cause = priorFailure
 				err = a.recordFailedAttempt(ctx, 0, activitypb.ACTIVITY_RETRY_INTERVAL_SOURCE_UNSPECIFIED, failure, ctx.Now(a), true)
 			default:
 				err = fmt.Errorf("unhandled activity timeout: %v", timeoutType)
 			}
 			if err != nil {
 				return err
+			}
+			if event.retryState == enumspb.RETRY_STATE_TIMEOUT {
+				if err := a.recordScheduleToStartOrCloseTimeoutFailure(
+					ctx,
+					enumspb.TIMEOUT_TYPE_SCHEDULE_TO_CLOSE,
+					common.FailureReasonActivityRetryScheduleToCloseTimeout,
+					priorFailure,
+				); err != nil {
+					return err
+				}
 			}
 
 			a.emitOnTimedOutMetrics(ctx, event.metricsHandler, timeoutType, event.fromStatus)

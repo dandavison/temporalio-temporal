@@ -187,12 +187,7 @@ func (h *startToCloseTimeoutTaskHandler) Execute(
 	_ chasm.TaskAttributes,
 	_ *activitypb.StartToCloseTimeoutTask,
 ) error {
-	rescheduled, err := activity.tryReschedule(
-		ctx,
-		activity.timeoutRetryable(enumspb.TIMEOUT_TYPE_START_TO_CLOSE),
-		0,
-		createStartToCloseTimeoutFailure(),
-	)
+	retryState, err := activity.tryReschedule(ctx, true, 0, createStartToCloseTimeoutFailure())
 	if err != nil {
 		return err
 	}
@@ -202,7 +197,7 @@ func (h *startToCloseTimeoutTaskHandler) Execute(
 		return err
 	}
 
-	if rescheduled {
+	if retryState == enumspb.RETRY_STATE_IN_PROGRESS {
 		activity.emitOnAttemptTimedOutMetrics(ctx, metricsHandler, enumspb.TIMEOUT_TYPE_START_TO_CLOSE)
 
 		return nil
@@ -210,6 +205,7 @@ func (h *startToCloseTimeoutTaskHandler) Execute(
 
 	return TransitionTimedOut.Apply(activity, ctx, timeoutEvent{
 		timeoutType:    enumspb.TIMEOUT_TYPE_START_TO_CLOSE,
+		retryState:     retryState,
 		metricsHandler: metricsHandler,
 		fromStatus:     activity.GetStatus(),
 	})
@@ -270,12 +266,7 @@ func (h *heartbeatTimeoutTaskHandler) Execute(
 	_ chasm.TaskAttributes,
 	_ *activitypb.HeartbeatTimeoutTask,
 ) error {
-	rescheduled, err := activity.tryReschedule(
-		ctx,
-		activity.timeoutRetryable(enumspb.TIMEOUT_TYPE_HEARTBEAT),
-		0,
-		createHeartbeatTimeoutFailure(),
-	)
+	retryState, err := activity.tryReschedule(ctx, true, 0, createHeartbeatTimeoutFailure())
 	if err != nil {
 		return err
 	}
@@ -285,13 +276,14 @@ func (h *heartbeatTimeoutTaskHandler) Execute(
 		return err
 	}
 
-	if rescheduled {
+	if retryState == enumspb.RETRY_STATE_IN_PROGRESS {
 		activity.emitOnAttemptTimedOutMetrics(ctx, metricsHandler, enumspb.TIMEOUT_TYPE_HEARTBEAT)
 		return nil
 	}
 
 	return TransitionTimedOut.Apply(activity, ctx, timeoutEvent{
 		timeoutType:    enumspb.TIMEOUT_TYPE_HEARTBEAT,
+		retryState:     retryState,
 		metricsHandler: metricsHandler,
 		fromStatus:     activity.GetStatus(),
 	})

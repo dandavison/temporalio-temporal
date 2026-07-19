@@ -16,22 +16,8 @@
 // The main Activity struct has a.ScheduleTime which is the schedule time of the first
 // attempt; i.e. the time at which the activity was created. This is never changed.
 //
-
-// The naming situation is not perfectly clean:
-//
-// next_attempt_schedule_time
-// --------------------------
-
-// WFA pending activity has always returned a field named next_attempt_schedule_time, and SAA does
-// also. In this field, "schedule_time" actually refers to dispatch_time. Specifically,
-// next_attempt_schedule_time is the dispatch_time of the attempt that is currently being waited
-// for. It is null when paused or when an attempt is in progress, since in those states the dispatch
-// time of a future attempt is unknown: we do not even know if there will be a next attempt.
-//
-// For WFA, next_attempt_schedule_time is null prior to the first attempt since start delay is not
-// supported, hence the activity is due to be dispatched to Matching as soon as the activity is
-// created. But for SAA, if there's a start delay, then next_attempt_schedule_time is the
-// dispatch_time (non-null).
+// The naming situation is not perfectly clean. See e.g. the comment below on
+// nextAttemptDispatchTime (which is called next_attempt_schedule_time in the public API).
 
 package activity
 
@@ -371,6 +357,43 @@ func dispatchTimeForRetry(attempt *activitypb.ActivityAttemptState) *timestamppb
 	return nil
 }
 
+// nextAttemptDispatchTime is the dispatch_time of the attempt that is currently being waited for.
+// It is null when the dispatch time has passed, in terminal states, and when paused or when an
+// attempt is in progress, since in those states the dispatch time of a future attempt is unknown:
+// we do not even know if there will be a next attempt.
+//
+// In the public Describe API response of SAA and WFA, this has the name next_attempt_schedule_time.
+// In that field name, the term "schedule_time" is actually a dispatch time; specifically, the
+// dispatch time defined by this method.
+//
+// For WFA, next_attempt_schedule_time is null prior to the first attempt since start delay is not
+// supported, hence the activity is due to be dispatched to Matching as soon as the activity is
+// created. But for SAA, if there's a start delay, then next_attempt_schedule_time is the
+// dispatch_time (non-null).
+func (a *Activity) nextAttemptDispatchTime(ctx chasm.Context, attempt *activitypb.ActivityAttemptState) *timestamppb.Timestamp {
+	if a.hasAttemptInProgress() || a.isPaused() || a.isTerminal() {
+		return nil
+	}
+	if t := a.dispatchTimeForAttempt(attempt); t != nil {
+		if t.AsTime().After(ctx.Now(a)) {
+			return t
+		}
+	}
+	return nil
+}
+
+// currentRetryInterval is the retry interval if the activity is currently waiting for a retry; nil otherwise.
+func (a *Activity) currentRetryInterval(ctx chasm.Context, attempt *activitypb.ActivityAttemptState) *durationpb.Duration {
+	if a.GetStatus() == activitypb.ACTIVITY_EXECUTION_STATUS_SCHEDULED {
+		if t := a.dispatchTimeForAttempt(attempt); t != nil {
+			if t.AsTime().After(ctx.Now(a)) {
+				return attempt.GetCurrentRetryInterval()
+			}
+		}
+	}
+	return nil
+}
+
 // RecordCompleted applies the provided function to record activity completion.
 // For standalone activities, it also triggers any registered completion callbacks.
 func (a *Activity) RecordCompleted(ctx chasm.MutableContext, applyFn func(ctx chasm.MutableContext) error) error {
@@ -581,11 +604,11 @@ func (a *Activity) HandleFailed(
 		!appFailure.GetNonRetryable() &&
 		!slices.Contains(a.GetRetryPolicy().GetNonRetryableErrorTypes(), appFailure.GetType())
 
-	rescheduled, err := a.tryReschedule(ctx, isRetryable, appFailure.GetNextRetryDelay().AsDuration(), failure)
+	retryState, err := a.tryReschedule(ctx, isRetryable, appFailure.GetNextRetryDelay().AsDuration(), failure)
 	if err != nil {
 		return nil, err
 	}
-	if rescheduled {
+	if retryState == enumspb.RETRY_STATE_IN_PROGRESS {
 		a.emitOnAttemptFailedMetrics(ctx, metricsHandler)
 
 		return &historyservice.RespondActivityTaskFailedResponse{}, nil
@@ -1222,12 +1245,17 @@ func (a *Activity) resetImmediately(
 	return &activitypb.ResetActivityExecutionResponse{}, nil
 }
 
-// recordScheduleToStartOrCloseTimeoutFailure records schedule-to-start or schedule-to-close timeouts. Such timeouts are not retried so we
-// set the outcome failure directly and leave the attempt failure as is.
-func (a *Activity) recordScheduleToStartOrCloseTimeoutFailure(ctx chasm.MutableContext, timeoutType enumspb.TimeoutType) error {
+// recordScheduleToStartOrCloseTimeoutFailure records schedule-to-start or schedule-to-close timeout outcomes. Such
+// timeouts are not retried, so we set the outcome failure directly and leave the attempt failure as is.
+func (a *Activity) recordScheduleToStartOrCloseTimeoutFailure(
+	ctx chasm.MutableContext,
+	timeoutType enumspb.TimeoutType,
+	message string,
+	cause *failurepb.Failure,
+) error {
 	failure := &failurepb.Failure{
-		Message: fmt.Sprintf(common.FailureReasonActivityTimeout, timeoutType.String()),
-		Cause:   a.priorAttemptFailure(ctx),
+		Message: message,
+		Cause:   cause,
 		FailureInfo: &failurepb.Failure_TimeoutFailureInfo{
 			TimeoutFailureInfo: &failurepb.TimeoutFailureInfo{
 				TimeoutType:          timeoutType,
@@ -1243,6 +1271,14 @@ func (a *Activity) recordScheduleToStartOrCloseTimeoutFailure(ctx chasm.MutableC
 	}
 
 	return nil
+}
+
+// priorAttemptFailure returns the failure recorded for the most recent attempt, or nil if none. A
+// terminal timeout chains it as its Cause so the error that drove the retries survives to the client,
+// matching workflow activities (mutable_state_impl.go AddActivityTaskTimedOutEvent, which sets
+// timeoutFailure.Cause = ai.RetryLastFailure).
+func (a *Activity) priorAttemptFailure(ctx chasm.Context) *failurepb.Failure {
+	return a.LastAttempt.Get(ctx).GetLastFailureDetails().GetFailure()
 }
 
 // applyFailedAttempt mutates activity state when a worker yields with retries remaining.
@@ -1282,28 +1318,24 @@ func (a *Activity) recordFailedAttempt(
 	return nil
 }
 
-// priorAttemptFailure returns the failure recorded for the most recent attempt, or nil if none. A
-// terminal timeout chains it as its Cause so the error that drove the retries survives to the client,
-// matching workflow activities (mutable_state_impl.go AddActivityTaskTimedOutEvent).
-func (a *Activity) priorAttemptFailure(ctx chasm.Context) *failurepb.Failure {
-	return a.LastAttempt.Get(ctx).GetLastFailureDetails().GetFailure()
-}
-
-// tryReschedule attempts to reschedule the activity for retry. Returns true if rescheduled, false
-// if retry is not possible. It handles the cases of pause and reset requests that were received
-// while the last attempt was in progress. failureRetryable reports whether the failure itself
-// permits a retry (timeouts always do; RespondActivityTaskFailed depends on the failure).
+// tryReschedule attempts to reschedule the activity for retry. It handles the cases of pause and
+// reset requests that were received while the last attempt was in progress. failureRetryable
+// reports whether the failure itself permits a retry (timeouts always do; RespondActivityTaskFailed
+// depends on the failure).
 func (a *Activity) tryReschedule(
 	ctx chasm.MutableContext,
 	failureRetryable bool,
 	overridingRetryInterval time.Duration,
 	failure *failurepb.Failure,
-) (bool, error) {
-	shouldRetry, retryInterval := a.shouldRetry(ctx, overridingRetryInterval)
+) (enumspb.RetryState, error) {
+	retryState, retryInterval := a.shouldRetry(ctx, overridingRetryInterval)
+	if !failureRetryable {
+		retryState = enumspb.RETRY_STATE_NON_RETRYABLE_FAILURE
+	}
 	resetRequested := a.GetStatus() == activitypb.ACTIVITY_EXECUTION_STATUS_RESET_REQUESTED
 	// A pending reset request is always honored, regardless of retryability or the should retry result.
-	if !resetRequested && !(failureRetryable && shouldRetry) { //nolint:staticcheck // QF1001: DeMorgan rearrangement would not be an improvement
-		return false, nil
+	if !resetRequested && retryState != enumspb.RETRY_STATE_IN_PROGRESS {
+		return retryState, nil
 	}
 	retryIntervalSource := activitypb.ACTIVITY_RETRY_INTERVAL_SOURCE_RETRY_POLICY
 	if overridingRetryInterval > 0 {
@@ -1312,40 +1344,35 @@ func (a *Activity) tryReschedule(
 	event := rescheduleEvent{retryInterval: retryInterval, retryIntervalSource: retryIntervalSource, failure: failure}
 	switch a.GetStatus() {
 	case activitypb.ACTIVITY_EXECUTION_STATUS_PAUSE_REQUESTED:
-		return true, TransitionAttemptFailedWhilePauseRequested.Apply(a, ctx, event)
+		return enumspb.RETRY_STATE_IN_PROGRESS, TransitionAttemptFailedWhilePauseRequested.Apply(a, ctx, event)
 	case activitypb.ACTIVITY_EXECUTION_STATUS_RESET_REQUESTED:
 		if a.ResetKeepPaused {
-			return true, TransitionResetAttemptFailedToPaused.Apply(a, ctx, event)
+			return enumspb.RETRY_STATE_IN_PROGRESS, TransitionResetAttemptFailedToPaused.Apply(a, ctx, event)
 		}
-		return true, TransitionResetAttemptFailedToScheduled.Apply(a, ctx, event)
+		return enumspb.RETRY_STATE_IN_PROGRESS, TransitionResetAttemptFailedToScheduled.Apply(a, ctx, event)
 	default:
-		return true, TransitionRescheduled.Apply(a, ctx, event)
+		return enumspb.RETRY_STATE_IN_PROGRESS, TransitionRescheduled.Apply(a, ctx, event)
 	}
 }
 
-func (a *Activity) shouldRetry(ctx chasm.Context, overridingRetryInterval time.Duration) (bool, time.Duration) {
+func (a *Activity) shouldRetry(ctx chasm.Context, overridingRetryInterval time.Duration) (enumspb.RetryState, time.Duration) {
 	if !TransitionRescheduled.Possible(a) &&
 		!TransitionAttemptFailedWhilePauseRequested.Possible(a) &&
 		!TransitionResetAttemptFailedToScheduled.Possible(a) &&
 		!TransitionResetAttemptFailedToPaused.Possible(a) {
-		return false, 0
+		return enumspb.RETRY_STATE_UNSPECIFIED, 0
 	}
 	attempt := a.LastAttempt.Get(ctx)
 	retryPolicy := a.RetryPolicy
-
-	enoughAttempts := retryPolicy.GetMaximumAttempts() == 0 || attempt.GetCount() < retryPolicy.GetMaximumAttempts()
 	enoughTime, retryInterval := a.hasEnoughTimeForRetry(ctx, overridingRetryInterval)
-	return enoughAttempts && enoughTime, retryInterval
-}
 
-// timeoutRetryable reports whether a StartToClose or Heartbeat timeout may be retried under the retry
-// policy. Mirrors the workflow-activity rule (service/history/workflow/retry.go isRetryable): such a
-// timeout is retryable unless its TemporalTimeout: type is listed in NonRetryableErrorTypes.
-func (a *Activity) timeoutRetryable(timeoutType enumspb.TimeoutType) bool {
-	return !slices.Contains(
-		a.GetRetryPolicy().GetNonRetryableErrorTypes(),
-		retrypolicy.TimeoutFailureTypePrefix+timeoutType.String(),
-	)
+	if retryPolicy.GetMaximumAttempts() > 0 && attempt.GetCount() >= retryPolicy.GetMaximumAttempts() {
+		return enumspb.RETRY_STATE_MAXIMUM_ATTEMPTS_REACHED, retryInterval
+	}
+	if !enoughTime {
+		return enumspb.RETRY_STATE_TIMEOUT, retryInterval
+	}
+	return enumspb.RETRY_STATE_IN_PROGRESS, retryInterval
 }
 
 // hasEnoughTimeForRetry checks if there is enough time left in the schedule-to-close timeout. If sufficient time
@@ -1695,7 +1722,7 @@ func (a *Activity) buildActivityExecutionInfo(
 		Attempt:                 attempt.GetCount(),
 		CanceledReason:          a.CancelState.GetReason(),
 		CloseTime:               closeTime,
-		CurrentRetryInterval:    attempt.GetCurrentRetryInterval(),
+		CurrentRetryInterval:    a.currentRetryInterval(ctx, attempt),
 		ExecutionDuration:       executionDuration,
 		ExecutionTime:           timestamppb.New(a.firstDispatchTime()),
 		ExpirationTime:          expirationTime,
@@ -1709,7 +1736,7 @@ func (a *Activity) buildActivityExecutionInfo(
 		LastWorkerIdentity:      attempt.GetLastWorkerIdentity(),
 		SdkName:                 attempt.GetSdkName(),
 		SdkVersion:              attempt.GetSdkVersion(),
-		NextAttemptScheduleTime: dispatchTimeForRetry(attempt),
+		NextAttemptScheduleTime: a.nextAttemptDispatchTime(ctx, attempt),
 		Priority:                a.GetPriority(),
 		RetryPolicy:             a.GetRetryPolicy(),
 		RunId:                   key.RunID,
