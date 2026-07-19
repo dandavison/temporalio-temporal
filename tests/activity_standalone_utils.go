@@ -83,24 +83,31 @@ type saaHandle struct {
 // captures the dispatched task's token when one is available; a wall-clock event is realized by
 // waiting out its configured window.
 func (h *saaHarness) driveTrace(t require.TestingT, trace []model.Event) *saaHandle {
-	hd := h.start(t)
+	a := h.start(t)
 	for _, e := range trace {
-		switch {
-		case e.Kind == model.Poll:
-			timeout := 10 * time.Second
-			if h.positivePollTimeout > 0 {
-				timeout = h.positivePollTimeout
-			}
-			if resp := hd.pollForTask(t, timeout); resp != nil {
-				hd.token = resp.GetTaskToken()
-			}
-		case saaIsWallClock(e.Kind):
-			time.Sleep(h.eventClock(e) + saaWallClockSettle)
-		default:
-			require.NoError(t, hd.rpc(e))
-		}
+		a.driveEvent(t, e)
 	}
-	return hd
+	return a
+}
+
+// driveEvent advances the activity by one event: a poll captures the dispatched token, a wall-clock
+// event is waited out, any other event is its RPC (which must succeed). It makes no model check.
+func (a *saaHandle) driveEvent(t require.TestingT, e model.Event) {
+	h := a.h
+	switch {
+	case e.Kind == model.Poll:
+		timeout := 10 * time.Second
+		if h.positivePollTimeout > 0 {
+			timeout = h.positivePollTimeout
+		}
+		if resp := a.pollForTask(t, timeout); resp != nil {
+			a.token = resp.GetTaskToken()
+		}
+	case saaIsWallClock(e.Kind):
+		time.Sleep(h.eventClock(e) + saaWallClockSettle)
+	default:
+		require.NoError(t, a.rpc(e))
+	}
 }
 
 func (h *saaHarness) start(t require.TestingT) *saaHandle {
@@ -171,12 +178,15 @@ func (h *saaHarness) startRequest(activityID, taskQueue string) *workflowservice
 }
 
 // describe returns the activity's public DescribeActivityExecution response — the surface a functional
-// test asserts on (status, attempt, retry interval, outcome).
+// test asserts on (status, attempt, retry interval, outcome). The optional details (outcome, last
+// failure) are requested so a caller can assert on a closed activity's result or failure.
 func (a *saaHandle) describe() (*workflowservice.DescribeActivityExecutionResponse, error) {
 	return a.h.env.FrontendClient().DescribeActivityExecution(a.h.ctx, &workflowservice.DescribeActivityExecutionRequest{
-		Namespace:  a.h.env.Namespace().String(),
-		ActivityId: a.activityID,
-		RunId:      a.runID,
+		Namespace:          a.h.env.Namespace().String(),
+		ActivityId:         a.activityID,
+		RunId:              a.runID,
+		IncludeOutcome:     true,
+		IncludeLastFailure: true,
 	})
 }
 
