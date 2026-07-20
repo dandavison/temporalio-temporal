@@ -36,7 +36,6 @@ import (
 	"go.temporal.io/server/common/testing/await"
 	"go.temporal.io/server/common/testing/parallelsuite"
 	"go.temporal.io/server/common/testing/protorequire"
-	"go.temporal.io/server/common/testing/testcontext"
 	"go.temporal.io/server/tests/testcore"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/metadata"
@@ -117,23 +116,6 @@ func (s *standaloneActivityTestSuite) newTestEnv(opts ...testcore.TestOption) *s
 	cluster.OverrideDynamicConfig(s.T(), activity.Enabled, nsValues(true))
 	cluster.OverrideDynamicConfig(s.T(), activity.EnableCallbacks, nsValues(true))
 	return env
-}
-
-// driveTrace runs a trace (a sequence of events) for a fresh activity, realizing each event against
-// the server, returning a handle to it at the reached state.
-func (s *standaloneActivityTestSuite) driveTrace(t *testing.T, env *standaloneActivityEnv, tr saaTrace) *saaHandle {
-	ctx := testcontext.For(t)
-	h := &saaHarness{
-		env: env.TestEnv, ctx: ctx,
-		idBase:        testcore.RandomizeStr(t.Name()),
-		cfg:           tr.config(),
-		startDelay:    tr.startDelay(),
-		retryInterval: tr.retryInterval,
-		// "Dispatchable" must mean "dispatches promptly", so bound the positive poll just above the
-		// long-poll minimum — that is how a queued retry is told from one still in backoff.
-		positivePollTimeout: saaPollTimeout,
-	}
-	return h.driveTrace(t, tr.trace)
 }
 
 func (s *standaloneActivityTestSuite) TestIDReusePolicy() {
