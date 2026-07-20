@@ -18,13 +18,19 @@ import (
 	"go.temporal.io/api/workflowservice/v1"
 	"go.temporal.io/server/chasm/lib/activity/model"
 	"go.temporal.io/server/common"
+	"go.temporal.io/server/common/payloads"
+	"go.temporal.io/server/tests/testcore"
 	"google.golang.org/protobuf/types/known/durationpb"
 )
+
+// saaInput is the activity input every driven activity is started with. Defined here (not in a
+// _test.go file) so this driver builds as part of the non-test package.
+var saaInput = payloads.EncodeString("Input")
 
 // --- driver --------------------------------------------------------------------------------
 
 type saaHarness struct {
-	env     *standaloneActivityEnv
+	env     *testcore.TestEnv
 	ctx     context.Context
 	cfg     model.Config
 	counter int
@@ -100,7 +106,7 @@ func (h *saaHarness) startRequest(activityID, taskQueue string) *workflowservice
 		ActivityId:          activityID,
 		ActivityType:        h.env.Tv().ActivityType(),
 		Identity:            "worker",
-		Input:               defaultInput,
+		Input:               saaInput,
 		TaskQueue:           &taskqueuepb.TaskQueue{Name: taskQueue},
 		StartToCloseTimeout: durationpb.New(time.Hour),
 		RetryPolicy: &commonpb.RetryPolicy{

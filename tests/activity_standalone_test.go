@@ -14389,7 +14389,7 @@ func saaTraceBudget() time.Duration {
 func (s *standaloneActivityTestSuite) driveTrace(t *testing.T, env *standaloneActivityEnv, tr saaTrace) *saaHandle {
 	ctx := testcontext.For(t)
 	h := &saaHarness{
-		env: env, ctx: ctx,
+		env: env.TestEnv, ctx: ctx,
 		idBase:        testcore.RandomizeStr(t.Name()),
 		cfg:           tr.config(),
 		startDelay:    tr.startDelay(),
