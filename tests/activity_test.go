@@ -373,50 +373,49 @@ func (s *ActivityClientTestSuite) Test_ActivityTimeouts() {
 	s.Equal("Not enough time to schedule next retry before activity ScheduleToClose timeout, giving up retrying (type: ScheduleToClose)", timeoutErr.Error())
 }
 
-// TestStartToCloseTimeout_{WorkflowActivity,StandaloneActivity} port a slice of Test_ActivityTimeouts
-// above: a started attempt exceeds its StartToClose timeout and, with no retries left, the activity
-// ends TIMED_OUT. Both must reach the same terminal status AND the same TimeoutType. WFA is the oracle.
+// TestActivityStartToCloseTimeout ports a slice of Test_ActivityTimeouts above: a started attempt
+// exceeds its StartToClose timeout and, with no retries left, the activity ends TIMED_OUT. Both
+// subtests must reach the same terminal status AND the same TimeoutType. WorkflowActivity is the
+// oracle.
 //
 // Fidelity vs the original: covered — terminal status and the StartToClose TimeoutType (the semantic
 // contract). Not covered: the other three timeout types (each is an additional scenario, not more
 // fidelity here) and the failure *message* (SAA carries a proto message; WFA's SDK TimeoutError
 // formats its own, so the strings differ by construction, not by behavior — the TimeoutType is the
 // stable cross-surface discriminant).
-func (s *standaloneActivityTestSuite) TestStartToCloseTimeout_WorkflowActivity() {
+func (s *standaloneActivityTestSuite) TestActivityStartToCloseTimeout() {
 	env := s.newTestEnv()
-	t := s.T()
 	trace := []model.Event{saaPoll, {Kind: model.StartToCloseElapses}}
-	h := &wfaHarness{env: env, ctx: testcontext.For(t), maxAttempts: 1, shortTimeout: saaTimeoutIn(trace)}
-	require.Equal(t, activityTerminalProjection{Status: enumspb.ACTIVITY_EXECUTION_STATUS_TIMED_OUT, FailureType: enumspb.TIMEOUT_TYPE_START_TO_CLOSE.String()}, h.driveTrace(t, trace).terminal(t))
+	want := activityTerminalProjection{Status: enumspb.ACTIVITY_EXECUTION_STATUS_TIMED_OUT, FailureType: enumspb.TIMEOUT_TYPE_START_TO_CLOSE.String()}
+
+	s.T().Run("WorkflowActivity", func(t *testing.T) {
+		h := &wfaHarness{env: env, ctx: testcontext.For(t), maxAttempts: 1, shortTimeout: saaTimeoutIn(trace)}
+		require.Equal(t, want, h.driveTrace(t, trace).terminal(t))
+	})
+	s.T().Run("StandaloneActivity", func(t *testing.T) {
+		h := &saaHarness{env: env, ctx: testcontext.For(t), idBase: testcore.RandomizeStr(t.Name()), cfg: model.Config{MaxAttempts: 1}, shortTimeout: saaTimeoutIn(trace)}
+		require.Equal(t, want, h.driveTrace(t, trace).terminal(t))
+	})
 }
 
-func (s *standaloneActivityTestSuite) TestStartToCloseTimeout_StandaloneActivity() {
-	env := s.newTestEnv()
-	t := s.T()
-	trace := []model.Event{saaPoll, {Kind: model.StartToCloseElapses}}
-	h := &saaHarness{env: env, ctx: testcontext.For(t), idBase: testcore.RandomizeStr(t.Name()), cfg: model.Config{MaxAttempts: 1}, shortTimeout: saaTimeoutIn(trace)}
-	require.Equal(t, activityTerminalProjection{Status: enumspb.ACTIVITY_EXECUTION_STATUS_TIMED_OUT, FailureType: enumspb.TIMEOUT_TYPE_START_TO_CLOSE.String()}, h.driveTrace(t, trace).terminal(t))
-}
-
-// TestScheduleToCloseTimeout_{WorkflowActivity,StandaloneActivity} port the schedule-to-close slice of
-// Test_ActivityTimeouts (fired-during-run): the activity is started, then its ScheduleToClose deadline
-// elapses while it runs, so it ends TIMED_OUT with the ScheduleToClose TimeoutType. Both must reach the
-// same status and type. (A never-started activity that hits the deadline times out as ScheduleToStart
+// TestScheduleToCloseTimeout ports the schedule-to-close slice of Test_ActivityTimeouts
+// (fired-during-run): the activity is started, then its ScheduleToClose deadline elapses while it
+// runs, so it ends TIMED_OUT with the ScheduleToClose TimeoutType. Both subtests must reach the same
+// status and type. (A never-started activity that hits the deadline times out as ScheduleToStart
 // instead — on both surfaces — which is why the port polls first.)
-func (s *standaloneActivityTestSuite) TestScheduleToCloseTimeout_WorkflowActivity() {
+func (s *standaloneActivityTestSuite) TestScheduleToCloseTimeout() {
 	env := s.newTestEnv()
-	t := s.T()
 	trace := []model.Event{saaPoll, {Kind: model.ScheduleToCloseElapses}}
-	h := &wfaHarness{env: env, ctx: testcontext.For(t), maxAttempts: 1, shortTimeout: saaTimeoutIn(trace)}
-	require.Equal(t, activityTerminalProjection{Status: enumspb.ACTIVITY_EXECUTION_STATUS_TIMED_OUT, FailureType: enumspb.TIMEOUT_TYPE_SCHEDULE_TO_CLOSE.String()}, h.driveTrace(t, trace).terminal(t))
-}
+	want := activityTerminalProjection{Status: enumspb.ACTIVITY_EXECUTION_STATUS_TIMED_OUT, FailureType: enumspb.TIMEOUT_TYPE_SCHEDULE_TO_CLOSE.String()}
 
-func (s *standaloneActivityTestSuite) TestScheduleToCloseTimeout_StandaloneActivity() {
-	env := s.newTestEnv()
-	t := s.T()
-	trace := []model.Event{saaPoll, {Kind: model.ScheduleToCloseElapses}}
-	h := &saaHarness{env: env, ctx: testcontext.For(t), idBase: testcore.RandomizeStr(t.Name()), cfg: model.Config{MaxAttempts: 1, HasScheduleToClose: true}, shortTimeout: saaTimeoutIn(trace)}
-	require.Equal(t, activityTerminalProjection{Status: enumspb.ACTIVITY_EXECUTION_STATUS_TIMED_OUT, FailureType: enumspb.TIMEOUT_TYPE_SCHEDULE_TO_CLOSE.String()}, h.driveTrace(t, trace).terminal(t))
+	s.T().Run("WorkflowActivity", func(t *testing.T) {
+		h := &wfaHarness{env: env, ctx: testcontext.For(t), maxAttempts: 1, shortTimeout: saaTimeoutIn(trace)}
+		require.Equal(t, want, h.driveTrace(t, trace).terminal(t))
+	})
+	s.T().Run("StandaloneActivity", func(t *testing.T) {
+		h := &saaHarness{env: env, ctx: testcontext.For(t), idBase: testcore.RandomizeStr(t.Name()), cfg: model.Config{MaxAttempts: 1, HasScheduleToClose: true}, shortTimeout: saaTimeoutIn(trace)}
+		require.Equal(t, want, h.driveTrace(t, trace).terminal(t))
+	})
 }
 
 func (s *ActivityTestSuite) TestActivityHeartBeatWorkflow_Success() {
@@ -551,32 +550,31 @@ func (s *ActivityTestSuite) TestActivityHeartBeatWorkflow_Success() {
  11 WorkflowExecutionCompleted`, events)
 }
 
-// TestActivityHeartBeat_{WorkflowActivity,StandaloneActivity} port the core of
-// TestActivityHeartBeatWorkflow_Success above: a worker polls the activity and heartbeats a checkpoint
-// payload; the checkpoint round-trips (readable while running); then the worker completes it and the
-// activity ends COMPLETED. WFA is the oracle; both must observe the same heartbeat detail and the same
-// terminal status. (The original also asserts the exact workflow history-event shape, which is not part
-// of the shared contract.)
+// TestActivityHeartBeat ports the core of TestActivityHeartBeatWorkflow_Success above: a worker polls
+// the activity and heartbeats a checkpoint payload; the checkpoint round-trips (readable while
+// running); then the worker completes it and the activity ends COMPLETED. WorkflowActivity is the
+// oracle; both subtests must observe the same heartbeat detail and the same terminal status. (The
+// original also asserts the exact workflow history-event shape, which is not part of the shared
+// contract.)
 var heartbeatWant = []byte(`"hb"`) // == saaHeartbeatDetails
 
-func (s *standaloneActivityTestSuite) TestActivityHeartBeat_WorkflowActivity() {
+func (s *standaloneActivityTestSuite) TestActivityHeartBeat() {
 	env := s.newTestEnv()
-	t := s.T()
-	h := &wfaHarness{env: env, ctx: testcontext.For(t), maxAttempts: 3, retryInterval: 2 * time.Second}
-	a := h.driveTrace(t, []model.Event{saaPoll, {Kind: model.Heartbeat}})
-	require.Equal(t, heartbeatWant, a.heartbeatDetails(t))
-	a.driveEvent(t, model.Event{Kind: model.RespondCompleted})
-	require.Equal(t, activityTerminalProjection{Status: enumspb.ACTIVITY_EXECUTION_STATUS_COMPLETED}, a.terminal(t))
-}
 
-func (s *standaloneActivityTestSuite) TestActivityHeartBeat_StandaloneActivity() {
-	env := s.newTestEnv()
-	t := s.T()
-	h := &saaHarness{env: env, ctx: testcontext.For(t), idBase: testcore.RandomizeStr(t.Name()), cfg: model.Config{MaxAttempts: 3}, retryInterval: 2 * time.Second}
-	a := h.driveTrace(t, []model.Event{saaPoll, {Kind: model.Heartbeat}})
-	require.Equal(t, heartbeatWant, a.heartbeatDetails(t))
-	a.driveEvent(t, model.Event{Kind: model.RespondCompleted})
-	require.Equal(t, activityTerminalProjection{Status: enumspb.ACTIVITY_EXECUTION_STATUS_COMPLETED}, a.terminal(t))
+	s.T().Run("WorkflowActivity", func(t *testing.T) {
+		h := &wfaHarness{env: env, ctx: testcontext.For(t), maxAttempts: 3, retryInterval: 2 * time.Second}
+		a := h.driveTrace(t, []model.Event{saaPoll, {Kind: model.Heartbeat}})
+		require.Equal(t, heartbeatWant, a.heartbeatDetails(t))
+		a.driveEvent(t, model.Event{Kind: model.RespondCompleted})
+		require.Equal(t, activityTerminalProjection{Status: enumspb.ACTIVITY_EXECUTION_STATUS_COMPLETED}, a.terminal(t))
+	})
+	s.T().Run("StandaloneActivity", func(t *testing.T) {
+		h := &saaHarness{env: env, ctx: testcontext.For(t), idBase: testcore.RandomizeStr(t.Name()), cfg: model.Config{MaxAttempts: 3}, retryInterval: 2 * time.Second}
+		a := h.driveTrace(t, []model.Event{saaPoll, {Kind: model.Heartbeat}})
+		require.Equal(t, heartbeatWant, a.heartbeatDetails(t))
+		a.driveEvent(t, model.Event{Kind: model.RespondCompleted})
+		require.Equal(t, activityTerminalProjection{Status: enumspb.ACTIVITY_EXECUTION_STATUS_COMPLETED}, a.terminal(t))
+	})
 }
 
 func (s *ActivityTestSuite) TestActivityRetry() {
@@ -774,29 +772,28 @@ func (s *ActivityTestSuite) TestActivityRetry() {
 	s.True(workflowComplete)
 }
 
-// TestActivityRetry_{WorkflowActivity,StandaloneActivity} port the core of TestActivityRetry above to
-// the equivalence framework: an attempt fails retryably, the backoff elapses, the next attempt fails
-// non-retryably, and the activity ends FAILED with the application failure type. Both must reach the
-// same terminal status AND the same failure type. WFA is the oracle.
+// TestActivityRetry ports the core of TestActivityRetry (functional test) above to the equivalence
+// framework: an attempt fails retryably, the backoff elapses, the next attempt fails non-retryably, and
+// the activity ends FAILED with the application failure type. Both subtests must reach the same
+// terminal status AND the same failure type. WorkflowActivity is the oracle.
 //
 // Fidelity vs the original: covered — the retryable-then-non-retryable -> FAILED path and the terminal
 // application failure type. Not covered: the original's second activity (a schedule-to-start timeout on
 // a no-worker queue — a separate scenario) and its assertions on workflow history-event shape, which is
 // not part of the shared cross-surface contract.
-func (s *standaloneActivityTestSuite) TestActivityRetry_WorkflowActivity() {
+func (s *standaloneActivityTestSuite) TestActivityRetry() {
 	env := s.newTestEnv()
-	t := s.T()
 	trace := []model.Event{saaPoll, saaFailRetryably, saaBackoffDelayElapse, saaPoll, saaFailNonRetryably}
-	h := &wfaHarness{env: env, ctx: testcontext.For(t), maxAttempts: 3, retryInterval: 2 * time.Second}
-	require.Equal(t, activityTerminalProjection{Status: enumspb.ACTIVITY_EXECUTION_STATUS_FAILED, FailureType: "drive"}, h.driveTrace(t, trace).terminal(t))
-}
+	want := activityTerminalProjection{Status: enumspb.ACTIVITY_EXECUTION_STATUS_FAILED, FailureType: "drive"}
 
-func (s *standaloneActivityTestSuite) TestActivityRetry_StandaloneActivity() {
-	env := s.newTestEnv()
-	t := s.T()
-	trace := []model.Event{saaPoll, saaFailRetryably, saaBackoffDelayElapse, saaPoll, saaFailNonRetryably}
-	h := &saaHarness{env: env, ctx: testcontext.For(t), idBase: testcore.RandomizeStr(t.Name()), cfg: model.Config{MaxAttempts: 3}, retryInterval: 2 * time.Second}
-	require.Equal(t, activityTerminalProjection{Status: enumspb.ACTIVITY_EXECUTION_STATUS_FAILED, FailureType: "drive"}, h.driveTrace(t, trace).terminal(t))
+	s.T().Run("WorkflowActivity", func(t *testing.T) {
+		h := &wfaHarness{env: env, ctx: testcontext.For(t), maxAttempts: 3, retryInterval: 2 * time.Second}
+		require.Equal(t, want, h.driveTrace(t, trace).terminal(t))
+	})
+	s.T().Run("StandaloneActivity", func(t *testing.T) {
+		h := &saaHarness{env: env, ctx: testcontext.For(t), idBase: testcore.RandomizeStr(t.Name()), cfg: model.Config{MaxAttempts: 3}, retryInterval: 2 * time.Second}
+		require.Equal(t, want, h.driveTrace(t, trace).terminal(t))
+	})
 }
 
 func (s *ActivityTestSuite) TestActivityRetry_Infinite() {
@@ -1006,24 +1003,22 @@ func (s *ActivityTestSuite) TestActivityHeartBeatWorkflow_Timeout() {
 	s.True(workflowComplete)
 }
 
-// TestHeartbeatTimeout_{WorkflowActivity,StandaloneActivity} port the core of
-// TestActivityHeartBeatWorkflow_Timeout above: a started attempt heartbeats nothing within its
-// HeartbeatTimeout and, with no retries left, the activity ends TIMED_OUT with the Heartbeat
-// TimeoutType. Both must reach the same status and type.
-func (s *standaloneActivityTestSuite) TestHeartbeatTimeout_WorkflowActivity() {
+// TestHeartbeatTimeout ports the core of TestActivityHeartBeatWorkflow_Timeout above: a started attempt
+// heartbeats nothing within its HeartbeatTimeout and, with no retries left, the activity ends TIMED_OUT
+// with the Heartbeat TimeoutType. Both subtests must reach the same status and type.
+func (s *standaloneActivityTestSuite) TestHeartbeatTimeout() {
 	env := s.newTestEnv()
-	t := s.T()
 	trace := []model.Event{saaPoll, {Kind: model.HeartbeatElapses}}
-	h := &wfaHarness{env: env, ctx: testcontext.For(t), maxAttempts: 1, shortTimeout: saaTimeoutIn(trace)}
-	require.Equal(t, activityTerminalProjection{Status: enumspb.ACTIVITY_EXECUTION_STATUS_TIMED_OUT, FailureType: enumspb.TIMEOUT_TYPE_HEARTBEAT.String()}, h.driveTrace(t, trace).terminal(t))
-}
+	want := activityTerminalProjection{Status: enumspb.ACTIVITY_EXECUTION_STATUS_TIMED_OUT, FailureType: enumspb.TIMEOUT_TYPE_HEARTBEAT.String()}
 
-func (s *standaloneActivityTestSuite) TestHeartbeatTimeout_StandaloneActivity() {
-	env := s.newTestEnv()
-	t := s.T()
-	trace := []model.Event{saaPoll, {Kind: model.HeartbeatElapses}}
-	h := &saaHarness{env: env, ctx: testcontext.For(t), idBase: testcore.RandomizeStr(t.Name()), cfg: model.Config{MaxAttempts: 1, HasHeartbeat: true}, shortTimeout: saaTimeoutIn(trace)}
-	require.Equal(t, activityTerminalProjection{Status: enumspb.ACTIVITY_EXECUTION_STATUS_TIMED_OUT, FailureType: enumspb.TIMEOUT_TYPE_HEARTBEAT.String()}, h.driveTrace(t, trace).terminal(t))
+	s.T().Run("WorkflowActivity", func(t *testing.T) {
+		h := &wfaHarness{env: env, ctx: testcontext.For(t), maxAttempts: 1, shortTimeout: saaTimeoutIn(trace)}
+		require.Equal(t, want, h.driveTrace(t, trace).terminal(t))
+	})
+	s.T().Run("StandaloneActivity", func(t *testing.T) {
+		h := &saaHarness{env: env, ctx: testcontext.For(t), idBase: testcore.RandomizeStr(t.Name()), cfg: model.Config{MaxAttempts: 1, HasHeartbeat: true}, shortTimeout: saaTimeoutIn(trace)}
+		require.Equal(t, want, h.driveTrace(t, trace).terminal(t))
+	})
 }
 
 func (s *ActivityTestSuite) TestTryActivityCancellationFromWorkflow() {
@@ -1176,30 +1171,28 @@ func (s *ActivityTestSuite) TestTryActivityCancellationFromWorkflow() {
 	env.Logger.Info("Activity cancelled.", tag.WorkflowRunID(we.RunId))
 }
 
-// TestActivityCancel_{WorkflowActivity,StandaloneActivity} port the core of
-// TestTryActivityCancellationFromWorkflow above: a running activity is cancel-requested, the worker
-// acknowledges (RespondActivityTaskCanceled), and the activity ends CANCELED. WFA is the oracle; both
-// must reach CANCELED. The RequestCancel event realizes differently per surface — SAA's direct
-// RequestCancelActivityExecution RPC vs WFA's workflow-driven cancel (signal -> RequestCancelActivity)
-// — which is exactly the driver's job to hide.
+// TestActivityCancel ports the core of TestTryActivityCancellationFromWorkflow above: a running
+// activity is cancel-requested, the worker acknowledges (RespondActivityTaskCanceled), and the activity
+// ends CANCELED. WorkflowActivity is the oracle; both subtests must reach CANCELED. The RequestCancel
+// event realizes differently per surface — SAA's direct RequestCancelActivityExecution RPC vs WFA's
+// workflow-driven cancel (signal -> RequestCancelActivity) — which is exactly the driver's job to hide.
 //
 // Fidelity vs the original: covered — the cancel-then-acknowledge -> CANCELED path. Not covered: the
 // original also asserts the workflow observed the cancellation (workflow-level, not the activity's
 // cross-surface contract).
-func (s *standaloneActivityTestSuite) TestActivityCancel_WorkflowActivity() {
+func (s *standaloneActivityTestSuite) TestActivityCancel() {
 	env := s.newTestEnv()
-	t := s.T()
 	trace := []model.Event{saaPoll, {Kind: model.RequestCancel}, {Kind: model.RespondCanceled}}
-	h := &wfaHarness{env: env, ctx: testcontext.For(t), maxAttempts: 1}
-	require.Equal(t, activityTerminalProjection{Status: enumspb.ACTIVITY_EXECUTION_STATUS_CANCELED}, h.driveTrace(t, trace).terminal(t))
-}
+	want := activityTerminalProjection{Status: enumspb.ACTIVITY_EXECUTION_STATUS_CANCELED}
 
-func (s *standaloneActivityTestSuite) TestActivityCancel_StandaloneActivity() {
-	env := s.newTestEnv()
-	t := s.T()
-	trace := []model.Event{saaPoll, {Kind: model.RequestCancel}, {Kind: model.RespondCanceled}}
-	h := &saaHarness{env: env, ctx: testcontext.For(t), idBase: testcore.RandomizeStr(t.Name()), cfg: model.Config{MaxAttempts: 1}}
-	require.Equal(t, activityTerminalProjection{Status: enumspb.ACTIVITY_EXECUTION_STATUS_CANCELED}, h.driveTrace(t, trace).terminal(t))
+	s.T().Run("WorkflowActivity", func(t *testing.T) {
+		h := &wfaHarness{env: env, ctx: testcontext.For(t), maxAttempts: 1}
+		require.Equal(t, want, h.driveTrace(t, trace).terminal(t))
+	})
+	s.T().Run("StandaloneActivity", func(t *testing.T) {
+		h := &saaHarness{env: env, ctx: testcontext.For(t), idBase: testcore.RandomizeStr(t.Name()), cfg: model.Config{MaxAttempts: 1}}
+		require.Equal(t, want, h.driveTrace(t, trace).terminal(t))
+	})
 }
 
 func (s *ActivityTestSuite) TestActivityCancellationNotStarted() {
@@ -1706,13 +1699,14 @@ func (s *ActivityClientTestSuite) TestActivity_AttemptsExceeded() {
 
 // --- CHASM-activity (SAA) vs workflow-activity (WFA) equivalence ----------------------------
 //
-// For each behavior at the intersection of the two products, a WFA test drives the trace with the
-// workflow-activity driver (activity_utils.go) and the SAA test immediately below drives the same
-// trace with the standalone-activity driver (activity_standalone_utils.go). Both assert the same
-// expected public activity info (activityInfoProjection). WFA is the oracle: the WFA test passing
-// blesses the expectation, and the SAA test passing proves the CHASM activity matches it. These live
-// on standaloneActivityTestSuite because its env enables the standalone activity (WFA needs nothing
-// special); driving both in one SAA-enabled env is why they sit here rather than on ActivityTestSuite.
+// For each behavior at the intersection of the two products, a test drives the same trace through both
+// drivers as subtests: "WorkflowActivity" uses the workflow-activity driver (activity_utils.go) and
+// "StandaloneActivity" uses the standalone-activity driver (activity_standalone_utils.go). Both assert
+// the same expected public activity info (activityInfoProjection). WFA is the oracle: the
+// WorkflowActivity subtest passing blesses the expectation, and the StandaloneActivity subtest passing
+// proves the CHASM activity matches it. These live on standaloneActivityTestSuite because its env
+// enables the standalone activity (WFA needs nothing special); driving both in one SAA-enabled env is
+// why they sit here rather than on ActivityTestSuite.
 
 // retryAfterFail: attempt 1 fails retryably, the backoff elapses, attempt 2 starts. The activity is
 // then running its second attempt — no pending retry — so there is no current retry interval and no
@@ -1727,18 +1721,17 @@ var (
 	}
 )
 
-func (s *standaloneActivityTestSuite) TestRetryAfterFail_WorkflowActivity() {
+func (s *standaloneActivityTestSuite) TestRetryAfterFail() {
 	env := s.newTestEnv()
-	t := s.T()
-	h := &wfaHarness{env: env, ctx: testcontext.For(t), maxAttempts: 3, retryInterval: 2 * time.Second}
-	require.Equal(t, retryAfterFailWant, h.driveTrace(t, retryAfterFailTrace).projection(t))
-}
 
-func (s *standaloneActivityTestSuite) TestRetryAfterFail_StandaloneActivity() {
-	env := s.newTestEnv()
-	t := s.T()
-	h := &saaHarness{env: env, ctx: testcontext.For(t), idBase: testcore.RandomizeStr(t.Name()), cfg: model.Config{MaxAttempts: 3}, retryInterval: 2 * time.Second}
-	require.Equal(t, retryAfterFailWant, h.driveTrace(t, retryAfterFailTrace).projection(t))
+	s.T().Run("WorkflowActivity", func(t *testing.T) {
+		h := &wfaHarness{env: env, ctx: testcontext.For(t), maxAttempts: 3, retryInterval: 2 * time.Second}
+		require.Equal(t, retryAfterFailWant, h.driveTrace(t, retryAfterFailTrace).projection(t))
+	})
+	s.T().Run("StandaloneActivity", func(t *testing.T) {
+		h := &saaHarness{env: env, ctx: testcontext.For(t), idBase: testcore.RandomizeStr(t.Name()), cfg: model.Config{MaxAttempts: 3}, retryInterval: 2 * time.Second}
+		require.Equal(t, retryAfterFailWant, h.driveTrace(t, retryAfterFailTrace).projection(t))
+	})
 }
 
 // backingOff: attempt 1 fails retryably, and we observe during the backoff window (before it elapses,
@@ -1756,18 +1749,17 @@ var (
 	}
 )
 
-func (s *standaloneActivityTestSuite) TestBackingOff_WorkflowActivity() {
+func (s *standaloneActivityTestSuite) TestBackingOff() {
 	env := s.newTestEnv()
-	t := s.T()
-	h := &wfaHarness{env: env, ctx: testcontext.For(t), maxAttempts: 3, retryInterval: backingOffInterval}
-	require.Equal(t, backingOffWant, h.driveTrace(t, backingOffTrace).projection(t))
-}
 
-func (s *standaloneActivityTestSuite) TestBackingOff_StandaloneActivity() {
-	env := s.newTestEnv()
-	t := s.T()
-	h := &saaHarness{env: env, ctx: testcontext.For(t), idBase: testcore.RandomizeStr(t.Name()), cfg: model.Config{MaxAttempts: 3}, retryInterval: backingOffInterval}
-	require.Equal(t, backingOffWant, h.driveTrace(t, backingOffTrace).projection(t))
+	s.T().Run("WorkflowActivity", func(t *testing.T) {
+		h := &wfaHarness{env: env, ctx: testcontext.For(t), maxAttempts: 3, retryInterval: backingOffInterval}
+		require.Equal(t, backingOffWant, h.driveTrace(t, backingOffTrace).projection(t))
+	})
+	s.T().Run("StandaloneActivity", func(t *testing.T) {
+		h := &saaHarness{env: env, ctx: testcontext.For(t), idBase: testcore.RandomizeStr(t.Name()), cfg: model.Config{MaxAttempts: 3}, retryInterval: backingOffInterval}
+		require.Equal(t, backingOffWant, h.driveTrace(t, backingOffTrace).projection(t))
+	})
 }
 
 // nextRetryDelayOverride: the worker fails with a next_retry_delay that overrides the policy backoff
@@ -1785,18 +1777,17 @@ var (
 	}
 )
 
-func (s *standaloneActivityTestSuite) TestNextRetryDelayOverride_WorkflowActivity() {
+func (s *standaloneActivityTestSuite) TestNextRetryDelayOverride() {
 	env := s.newTestEnv()
-	t := s.T()
-	h := &wfaHarness{env: env, ctx: testcontext.For(t), maxAttempts: 3, retryInterval: 5 * time.Second, nextRetryDelay: nextRetryDelayOverride}
-	require.Equal(t, nextRetryDelayWant, h.driveTrace(t, nextRetryDelayTrace).projection(t))
-}
 
-func (s *standaloneActivityTestSuite) TestNextRetryDelayOverride_StandaloneActivity() {
-	env := s.newTestEnv()
-	t := s.T()
-	h := &saaHarness{env: env, ctx: testcontext.For(t), idBase: testcore.RandomizeStr(t.Name()), cfg: model.Config{MaxAttempts: 3}, retryInterval: 5 * time.Second, nextRetryDelay: nextRetryDelayOverride}
-	require.Equal(t, nextRetryDelayWant, h.driveTrace(t, nextRetryDelayTrace).projection(t))
+	s.T().Run("WorkflowActivity", func(t *testing.T) {
+		h := &wfaHarness{env: env, ctx: testcontext.For(t), maxAttempts: 3, retryInterval: 5 * time.Second, nextRetryDelay: nextRetryDelayOverride}
+		require.Equal(t, nextRetryDelayWant, h.driveTrace(t, nextRetryDelayTrace).projection(t))
+	})
+	s.T().Run("StandaloneActivity", func(t *testing.T) {
+		h := &saaHarness{env: env, ctx: testcontext.For(t), idBase: testcore.RandomizeStr(t.Name()), cfg: model.Config{MaxAttempts: 3}, retryInterval: 5 * time.Second, nextRetryDelay: nextRetryDelayOverride}
+		require.Equal(t, nextRetryDelayWant, h.driveTrace(t, nextRetryDelayTrace).projection(t))
+	})
 }
 
 // firstAttemptStarted: a worker polls the first attempt, which is now running. No attempt has failed,
@@ -1812,18 +1803,17 @@ var (
 	}
 )
 
-func (s *standaloneActivityTestSuite) TestFirstAttemptStarted_WorkflowActivity() {
+func (s *standaloneActivityTestSuite) TestFirstAttemptStarted() {
 	env := s.newTestEnv()
-	t := s.T()
-	h := &wfaHarness{env: env, ctx: testcontext.For(t), maxAttempts: 3, retryInterval: 2 * time.Second}
-	require.Equal(t, firstAttemptStartedWant, h.driveTrace(t, firstAttemptStartedTrace).projection(t))
-}
 
-func (s *standaloneActivityTestSuite) TestFirstAttemptStarted_StandaloneActivity() {
-	env := s.newTestEnv()
-	t := s.T()
-	h := &saaHarness{env: env, ctx: testcontext.For(t), idBase: testcore.RandomizeStr(t.Name()), cfg: model.Config{MaxAttempts: 3}, retryInterval: 2 * time.Second}
-	require.Equal(t, firstAttemptStartedWant, h.driveTrace(t, firstAttemptStartedTrace).projection(t))
+	s.T().Run("WorkflowActivity", func(t *testing.T) {
+		h := &wfaHarness{env: env, ctx: testcontext.For(t), maxAttempts: 3, retryInterval: 2 * time.Second}
+		require.Equal(t, firstAttemptStartedWant, h.driveTrace(t, firstAttemptStartedTrace).projection(t))
+	})
+	s.T().Run("StandaloneActivity", func(t *testing.T) {
+		h := &saaHarness{env: env, ctx: testcontext.For(t), idBase: testcore.RandomizeStr(t.Name()), cfg: model.Config{MaxAttempts: 3}, retryInterval: 2 * time.Second}
+		require.Equal(t, firstAttemptStartedWant, h.driveTrace(t, firstAttemptStartedTrace).projection(t))
+	})
 }
 
 // TestDescribeNextAttemptScheduleTimeAndCurrentRetryInterval sweeps NextAttemptScheduleTime and
