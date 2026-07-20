@@ -244,11 +244,8 @@ func projectSAA(i *apiactivitypb.ActivityExecutionInfo) activityInfoProjection {
 	return activityInfoProjection{
 		State:                  i.GetRunState(),
 		Attempt:                i.GetAttempt(),
-		CurrentRetryInterval:   i.GetCurrentRetryInterval().AsDuration(),
+		CurrentRetryInterval:   i.GetCurrentRetryInterval().AsDuration().Round(time.Second),
 		NextAttemptScheduleSet: i.GetNextAttemptScheduleTime() != nil,
-		LastAttemptCompleteSet: i.GetLastAttemptCompleteTime() != nil,
-		LastStartedSet:         i.GetLastStartedTime() != nil,
-		LastWorkerIdentity:     i.GetLastWorkerIdentity(),
 	}
 }
 

@@ -30,30 +30,31 @@ import (
 
 // --- shared observable projection ----------------------------------------------------------
 //
-// activityInfoProjection is the subset of the public activity info that both surfaces expose — SAA's
+// activityInfoProjection is the retry-scheduling contract both surfaces expose — SAA's
 // ActivityExecutionInfo (see projectSAA in activity_standalone_utils.go) and WFA's PendingActivityInfo
-// (see projectWFA) — and that users depend on. It is the contract SAA GA locks and must match WFA.
-// Timestamps whose absolute value differs across two independent runs are compared by set-ness, not
-// value; durations (config-derived) are compared by value.
+// (see projectWFA) — and that users depend on. It is the part of the contract SAA GA locks and must
+// match WFA. CurrentRetryInterval is rounded to the second: WFA derives it by subtracting two stored
+// timestamps (a few µs of noise) while SAA stores it exactly, so an unrounded compare would flag a
+// non-divergence. NextAttemptScheduleTime is compared by set-ness, not value (its absolute wall-clock
+// value differs across two independent runs).
+//
+// The last-* timestamps (last started / last completed / last worker) are intentionally left out:
+// their cross-surface semantics differ in ways that are separate open questions — e.g. during a
+// backoff WFA reports LastStartedTime nil (reset on reschedule) where SAA keeps the prior attempt's —
+// not part of this clean first-cut equivalence check.
 type activityInfoProjection struct {
 	State                  enumspb.PendingActivityState
 	Attempt                int32
-	CurrentRetryInterval   time.Duration // 0 when unset
+	CurrentRetryInterval   time.Duration // rounded to the second (see above)
 	NextAttemptScheduleSet bool          // NextAttemptScheduleTime != nil
-	LastAttemptCompleteSet bool
-	LastStartedSet         bool
-	LastWorkerIdentity     string
 }
 
 func projectWFA(p *workflowpb.PendingActivityInfo) activityInfoProjection {
 	return activityInfoProjection{
 		State:                  p.GetState(),
 		Attempt:                p.GetAttempt(),
-		CurrentRetryInterval:   p.GetCurrentRetryInterval().AsDuration(),
+		CurrentRetryInterval:   p.GetCurrentRetryInterval().AsDuration().Round(time.Second),
 		NextAttemptScheduleSet: p.GetNextAttemptScheduleTime() != nil,
-		LastAttemptCompleteSet: p.GetLastAttemptCompleteTime() != nil,
-		LastStartedSet:         p.GetLastStartedTime() != nil,
-		LastWorkerIdentity:     p.GetLastWorkerIdentity(),
 	}
 }
 

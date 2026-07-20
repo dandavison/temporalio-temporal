@@ -1579,9 +1579,6 @@ var (
 		Attempt:                2,
 		CurrentRetryInterval:   0,
 		NextAttemptScheduleSet: false,
-		LastAttemptCompleteSet: true,
-		LastStartedSet:         true,
-		LastWorkerIdentity:     "worker",
 	}
 )
 
@@ -1597,4 +1594,33 @@ func (s *standaloneActivityTestSuite) TestRetryAfterFail_StandaloneActivity() {
 	t := s.T()
 	h := &saaHarness{env: env, ctx: testcontext.For(t), idBase: testcore.RandomizeStr(t.Name()), cfg: model.Config{MaxAttempts: 3}, retryInterval: 2 * time.Second}
 	require.Equal(t, retryAfterFailWant, h.driveTrace(t, retryAfterFailTrace).projection(t))
+}
+
+// backingOff: attempt 1 fails retryably, and we observe during the backoff window (before it elapses,
+// so the next dispatch is still in the future). The retry is genuinely pending, so both the current
+// retry interval and the next-attempt schedule time are populated — the case where C5 says the two
+// products agree. The long interval keeps the window open across the describe. Expected fully green.
+var (
+	backingOffInterval = 30 * time.Second
+	backingOffTrace    = []model.Event{saaPoll, saaFailRetryably}
+	backingOffWant     = activityInfoProjection{
+		State:                  enumspb.PENDING_ACTIVITY_STATE_SCHEDULED,
+		Attempt:                2,
+		CurrentRetryInterval:   backingOffInterval,
+		NextAttemptScheduleSet: true,
+	}
+)
+
+func (s *standaloneActivityTestSuite) TestBackingOff_WorkflowActivity() {
+	env := s.newTestEnv()
+	t := s.T()
+	h := &wfaHarness{env: env, ctx: testcontext.For(t), maxAttempts: 3, retryInterval: backingOffInterval}
+	require.Equal(t, backingOffWant, h.driveTrace(t, backingOffTrace).projection(t))
+}
+
+func (s *standaloneActivityTestSuite) TestBackingOff_StandaloneActivity() {
+	env := s.newTestEnv()
+	t := s.T()
+	h := &saaHarness{env: env, ctx: testcontext.For(t), idBase: testcore.RandomizeStr(t.Name()), cfg: model.Config{MaxAttempts: 3}, retryInterval: backingOffInterval}
+	require.Equal(t, backingOffWant, h.driveTrace(t, backingOffTrace).projection(t))
 }
