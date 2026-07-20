@@ -21,6 +21,7 @@ import (
 	"go.temporal.io/api/workflowservice/v1"
 	"go.temporal.io/sdk/temporal"
 	"go.temporal.io/server/chasm/lib/activity"
+	"go.temporal.io/server/chasm/lib/activity/model"
 	"go.temporal.io/server/chasm/lib/callback"
 	"go.temporal.io/server/common"
 	"go.temporal.io/server/common/dynamicconfig"
@@ -36,6 +37,7 @@ import (
 	"go.temporal.io/server/common/testing/await"
 	"go.temporal.io/server/common/testing/parallelsuite"
 	"go.temporal.io/server/common/testing/protorequire"
+	"go.temporal.io/server/common/testing/testcontext"
 	"go.temporal.io/server/tests/testcore"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/metadata"
@@ -3533,6 +3535,168 @@ func (s *standaloneActivityTestSuite) TestScheduleToStartTimeout() {
 	require.NotNil(t, describeResp.GetInfo().GetCloseTime())
 	require.Equal(t, enumspb.TIMEOUT_TYPE_SCHEDULE_TO_START, describeResp.GetOutcome().GetFailure().GetTimeoutFailureInfo().GetTimeoutType(),
 		"expected ScheduleToStartTimeout but is %s", describeResp.GetOutcome().GetFailure().GetTimeoutFailureInfo().GetTimeoutType())
+}
+
+// TestDescribeNextAttemptScheduleTimeAndCurrentRetryInterval
+//   - NextAttemptScheduleTime: the awaiting attempt's pending dispatch time while it is still in the
+//     future (schedule_time+start_delay for the first attempt, complete_time+interval for a retry);
+//     null once that time has passed, once running, and while paused/cancel-requested.
+//   - CurrentRetryInterval: while running, the next interval (or null if no retry remains); while
+//     backing off, the current interval; null when the attempt is not a retry.
+func (s *standaloneActivityTestSuite) TestDescribeNextAttemptScheduleTimeAndCurrentRetryInterval() {
+	testcontext.For(s.T(), testcontext.WithTimeout(saaTraceBudget()))
+	env := s.newTestEnv()
+	t := s.T()
+
+	// First attempt within its start delay: the dispatch is pending in the future, and this is not a retry.
+	t.Run("StartDelayPending", func(t *testing.T) {
+		desc, err := s.driveTrace(t, env, saaTrace{trace: []model.Event{}, startDelayed: true}).describe()
+		require.NoError(t, err)
+		info := desc.GetInfo()
+
+		t.Run("NextAttemptScheduleTime", func(t *testing.T) {
+			require.Equal(t, enumspb.PENDING_ACTIVITY_STATE_SCHEDULED, info.GetRunState())
+			require.Equal(t, info.GetExecutionTime().AsTime(), info.GetNextAttemptScheduleTime().AsTime(),
+				"during a start delay, NextAttemptScheduleTime is the pending dispatch time (schedule+delay)")
+		})
+
+		t.Run("CurrentRetryInterval", func(t *testing.T) {
+			require.Nil(t, info.GetCurrentRetryInterval(),
+				"CurrentRetryInterval is null on the first attempt, which is not a retry (got %s)",
+				info.GetCurrentRetryInterval().AsDuration())
+		})
+	})
+
+	// First attempt running: no pending next dispatch; the next interval applies if it fails.
+	t.Run("FirstAttemptRunning", func(t *testing.T) {
+		desc, err := s.driveTrace(t, env, saaTrace{trace: []model.Event{saaPoll}, maxAttempts: 3, retryInterval: saaDelayWindow}).describe()
+		require.NoError(t, err)
+		info := desc.GetInfo()
+
+		t.Run("NextAttemptScheduleTime", func(t *testing.T) {
+			require.Equal(t, enumspb.PENDING_ACTIVITY_STATE_STARTED, info.GetRunState())
+			require.Nil(t, info.GetNextAttemptScheduleTime(),
+				"NextAttemptScheduleTime is null while running (got %s)", info.GetNextAttemptScheduleTime().AsTime())
+		})
+
+		t.Run("CurrentRetryInterval", func(t *testing.T) {
+			require.Equal(t, saaDelayWindow, info.GetCurrentRetryInterval().AsDuration(),
+				"while running with a retry permitted, CurrentRetryInterval is the next interval")
+		})
+	})
+
+	// Backing off before the retry dispatches: the next dispatch is in the future. Correct today; this is a regression guard, not a repro.
+	t.Run("BackingOffBeforeRetry", func(t *testing.T) {
+		desc, err := s.driveTrace(t, env, saaTrace{trace: []model.Event{saaPoll, saaFailRetryably}, maxAttempts: 3, retryInterval: saaDelayWindow}).describe()
+		require.NoError(t, err)
+		info := desc.GetInfo()
+
+		t.Run("NextAttemptScheduleTime", func(t *testing.T) {
+			require.Equal(t, enumspb.PENDING_ACTIVITY_STATE_SCHEDULED, info.GetRunState())
+			require.True(t, info.GetNextAttemptScheduleTime().AsTime().After(time.Now()),
+				"while backing off, NextAttemptScheduleTime is the future retry dispatch time")
+		})
+
+		t.Run("CurrentRetryInterval", func(t *testing.T) {
+			require.Equal(t, saaDelayWindow, info.GetCurrentRetryInterval().AsDuration(),
+				"while backing off, CurrentRetryInterval is the current interval")
+		})
+	})
+
+	// Retry dispatched to Matching but not yet picked up: the dispatch time has passed, so there is no
+	// pending future dispatch to report.
+	t.Run("RetryQueuedNotStarted", func(t *testing.T) {
+		desc, err := s.driveTrace(t, env, saaTrace{
+			trace:         []model.Event{saaPoll, saaFailRetryably, saaBackoffDelayElapse},
+			maxAttempts:   3,
+			retryInterval: saaDelayWindow,
+		}).describe()
+		require.NoError(t, err)
+		info := desc.GetInfo()
+
+		t.Run("NextAttemptScheduleTime", func(t *testing.T) {
+			require.EqualValues(t, 2, info.GetAttempt())
+			require.Equal(t, enumspb.PENDING_ACTIVITY_STATE_SCHEDULED, info.GetRunState())
+			require.Nil(t, info.GetNextAttemptScheduleTime(),
+				"NextAttemptScheduleTime is null once the dispatch time has passed (task queued, not yet started) (got %s)",
+				info.GetNextAttemptScheduleTime().AsTime())
+		})
+
+		t.Run("CurrentRetryInterval", func(t *testing.T) {
+			require.Equal(t, saaDelayWindow, info.GetCurrentRetryInterval().AsDuration(),
+				"while queued for a retry, CurrentRetryInterval is the retry interval")
+		})
+	})
+
+	// Retry attempt running with a further retry permitted.
+	t.Run("RetryAttemptRunning", func(t *testing.T) {
+		desc, err := s.driveTrace(t, env, saaTrace{
+			trace:         []model.Event{saaPoll, saaFailRetryably, saaBackoffDelayElapse, saaPoll},
+			maxAttempts:   3,
+			retryInterval: saaDelayWindow,
+		}).describe()
+		require.NoError(t, err)
+		info := desc.GetInfo()
+
+		t.Run("NextAttemptScheduleTime", func(t *testing.T) {
+			require.EqualValues(t, 2, info.GetAttempt())
+			require.Equal(t, enumspb.PENDING_ACTIVITY_STATE_STARTED, info.GetRunState())
+			require.Nil(t, info.GetNextAttemptScheduleTime(),
+				"NextAttemptScheduleTime is null while running (got %s)", info.GetNextAttemptScheduleTime().AsTime())
+		})
+
+		t.Run("CurrentRetryInterval", func(t *testing.T) {
+			require.Equal(t, saaDelayWindow, info.GetCurrentRetryInterval().AsDuration(),
+				"while running with a retry permitted, CurrentRetryInterval is the next interval")
+		})
+	})
+
+	// Final attempt running with no retry remaining.
+	t.Run("FinalAttemptRunning", func(t *testing.T) {
+		desc, err := s.driveTrace(t, env, saaTrace{
+			trace:         []model.Event{saaPoll, saaFailRetryably, saaBackoffDelayElapse, saaPoll},
+			maxAttempts:   2,
+			retryInterval: saaDelayWindow,
+		}).describe()
+		require.NoError(t, err)
+		info := desc.GetInfo()
+
+		t.Run("NextAttemptScheduleTime", func(t *testing.T) {
+			require.EqualValues(t, 2, info.GetAttempt())
+			require.Equal(t, enumspb.PENDING_ACTIVITY_STATE_STARTED, info.GetRunState())
+			require.Nil(t, info.GetNextAttemptScheduleTime(),
+				"NextAttemptScheduleTime is null while running (got %s)", info.GetNextAttemptScheduleTime().AsTime())
+		})
+
+		t.Run("CurrentRetryInterval", func(t *testing.T) {
+			require.Nil(t, info.GetCurrentRetryInterval(),
+				"CurrentRetryInterval is null when no retry remains (got %s)", info.GetCurrentRetryInterval().AsDuration())
+		})
+	})
+
+	// Terminal (completed after a retry): no attempt is pending or running, so both fields are null.
+	t.Run("Completed", func(t *testing.T) {
+		desc, err := s.driveTrace(t, env, saaTrace{
+			trace:         []model.Event{saaPoll, saaFailRetryably, saaBackoffDelayElapse, saaPoll, {Kind: model.RespondCompleted}},
+			maxAttempts:   3,
+			retryInterval: saaDelayWindow,
+		}).describe()
+		require.NoError(t, err)
+		info := desc.GetInfo()
+
+		t.Run("NextAttemptScheduleTime", func(t *testing.T) {
+			require.Equal(t, enumspb.ACTIVITY_EXECUTION_STATUS_COMPLETED, info.GetStatus())
+			require.Nil(t, info.GetNextAttemptScheduleTime(),
+				"NextAttemptScheduleTime is null in a terminal state (got %s)",
+				info.GetNextAttemptScheduleTime().AsTime())
+		})
+
+		t.Run("CurrentRetryInterval", func(t *testing.T) {
+			require.Nil(t, info.GetCurrentRetryInterval(),
+				"CurrentRetryInterval is null in a terminal state (got %s)",
+				info.GetCurrentRetryInterval().AsDuration())
+		})
+	})
 }
 
 func (s *standaloneActivityTestSuite) TestDescribeActivityExecution() {
@@ -14232,3 +14396,36 @@ func (s *standaloneActivityTestSuite) TestResetActivityExecution() {
 		require.NoError(t, err)
 	})
 }
+
+// saaTraceBudget raises the parent test's context budget: the declarative trace subtests pay real
+// wall-clock waits, so a group can run a few minutes past the default per-test timeout.
+func saaTraceBudget() time.Duration {
+	const floor = 8 * time.Minute
+	if d := testcontext.DefaultTimeout(); d > floor {
+		return d
+	}
+	return floor
+}
+
+// driveTrace drives one declared trace on its own harness (a unique activity-id namespace via idBase),
+// making no behavioral assertions — see saaHarness.driveTrace — and returns a handle to the activity
+// at the reached state so the caller can issue further RPCs and assert on the outcome. Later steps
+// will add model-derived assertions during the drive itself.
+func (s *standaloneActivityTestSuite) driveTrace(t *testing.T, env *standaloneActivityEnv, tr saaTrace) *saaHandle {
+	ctx := testcontext.For(t)
+	h := &saaHarness{
+		env: env, ctx: ctx,
+		idBase:     testcore.RandomizeStr(t.Name()),
+		cfg:        tr.config(),
+		startDelay: tr.startDelay(), retryInterval: tr.retryInterval, nextRetryDelay: tr.nextRetryDelay,
+		// A timeout's *Elapses event in the script is the signal to configure that timeout short.
+		shortTimeout: saaTimeoutIn(tr.trace),
+		// "Dispatchable" must mean "dispatches promptly", so bound the positive poll below the delay
+		// window — that is how a reset that discards a backoff (immediate) is told from still-delayed.
+		positivePollTimeout: saaNegativePollTimeout,
+		customizeStart:      tr.customizeStart,
+	}
+	return h.driveTrace(t, tr.trace)
+}
+
+// TestStartDelay_Declarative drives the start-delay scenarios, each an explicitly named subtest with
