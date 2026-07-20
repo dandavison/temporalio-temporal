@@ -357,26 +357,29 @@ func dispatchTimeForRetry(attempt *activitypb.ActivityAttemptState) *timestamppb
 	return nil
 }
 
-// nextAttemptDispatchTime returns what is known in the public API as next_attempt_schedule_time.
+// nextAttemptDispatchTime is the dispatch_time of the attempt that is currently being waited for.
+// It is null when the dispatch time has passed, in terminal states, and when paused or when an
+// attempt is in progress, since in those states the dispatch time of a future attempt is unknown:
+// we do not even know if there will be a next attempt.
 //
-// WFA pending activity has always returned a field named next_attempt_schedule_time, and SAA does
-// also. In this field name, the term "schedule_time" actually refers to dispatch_time.
-// Specifically, next_attempt_schedule_time is the dispatch_time of the attempt that is currently
-// being waited for. It is null when paused or when an attempt is in progress, since in those states
-// the dispatch time of a future attempt is unknown: we do not even know if there will be a next
-// attempt.
+// In the public Describe API response of SAA and WFA, this has the name next_attempt_schedule_time.
+// In that field name, the term "schedule_time" is actually a dispatch time; specifically, the
+// dispatch time defined by this method.
 //
 // For WFA, next_attempt_schedule_time is null prior to the first attempt since start delay is not
 // supported, hence the activity is due to be dispatched to Matching as soon as the activity is
 // created. But for SAA, if there's a start delay, then next_attempt_schedule_time is the
 // dispatch_time (non-null).
-func (a *Activity) nextAttemptDispatchTime(attempt *activitypb.ActivityAttemptState) *timestamppb.Timestamp {
-	switch {
-	case a.hasAttemptInProgress() || a.isPaused():
+func (a *Activity) nextAttemptDispatchTime(ctx chasm.Context, attempt *activitypb.ActivityAttemptState) *timestamppb.Timestamp {
+	if a.hasAttemptInProgress() || a.isPaused() || a.isTerminal() {
 		return nil
-	default:
-		return a.dispatchTimeForAttempt(attempt)
 	}
+	if t := a.dispatchTimeForAttempt(attempt); t != nil {
+		if t.AsTime().After(ctx.Now(a)) {
+			return t
+		}
+	}
+	return nil
 }
 
 // RecordCompleted applies the provided function to record activity completion.
@@ -1678,7 +1681,7 @@ func (a *Activity) buildActivityExecutionInfo(
 		LastWorkerIdentity:      attempt.GetLastWorkerIdentity(),
 		SdkName:                 attempt.GetSdkName(),
 		SdkVersion:              attempt.GetSdkVersion(),
-		NextAttemptScheduleTime: a.nextAttemptDispatchTime(attempt),
+		NextAttemptScheduleTime: a.nextAttemptDispatchTime(ctx, attempt),
 		Priority:                a.GetPriority(),
 		RetryPolicy:             a.GetRetryPolicy(),
 		RunId:                   key.RunID,
