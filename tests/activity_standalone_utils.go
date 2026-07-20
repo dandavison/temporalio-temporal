@@ -83,9 +83,7 @@ func (a *saaHandle) driveEvent(t require.TestingT, e model.Event) {
 		if h.positivePollTimeout > 0 {
 			timeout = h.positivePollTimeout
 		}
-		if resp := a.pollForTask(t, timeout); resp != nil {
-			a.token = resp.GetTaskToken()
-		}
+		a.token = a.pollForTask(t, timeout).GetTaskToken()
 	case model.BackoffElapses:
 		time.Sleep(h.retryInterval + saaWallClockSettle)
 	default:
@@ -170,30 +168,17 @@ func (a *saaHandle) pollForTask(t require.TestingT, timeout time.Duration) *work
 	// Matching signals "waited, found nothing" with an empty response and a nil error, so a genuine
 	// no-task result never surfaces as an error.
 	if err != nil {
-		// The poll did not complete cleanly.
-		if a.h.ctx.Err() != nil {
-			return nil
-		}
 		if deadline, ok := a.h.ctx.Deadline(); ok && time.Until(deadline) < common.MinLongPollTimeout {
-			t.Errorf(
-				"saaHarness error: test context budget exhausted before the poll could run.\n"+
-					"  Time left: %.1fs (need >= %s)\n"+
-					"  Suggestion: Raise TEMPORAL_TEST_TIMEOUT or use `go test -timeout`.\n"+
-					"  Error: %v",
+			require.FailNowf(t, "saaHarness: test context budget exhausted before the poll could run",
+				"time left: %.1fs (need >= %s); raise TEMPORAL_TEST_TIMEOUT or use `go test -timeout`. error: %v",
 				time.Until(deadline).Seconds(), common.MinLongPollTimeout, err)
-			return nil
 		}
-		t.Errorf(
-			"saaHarness internal error: PollActivityTaskQueue did not complete cleanly.\n"+
-				"  Cause: server rejected the poll, or the deadline fired before matching answered.\n"+
-				"  Error: %v",
-			err)
-		return nil
+		require.FailNowf(t, "saaHarness: PollActivityTaskQueue did not complete cleanly",
+			"the server rejected the poll, or the deadline fired before matching answered. error: %v", err)
 	}
-	// Empty response with a nil error means "waited, no task available".
-	if resp.GetActivityId() == "" {
-		return nil
-	}
+	// An empty response with a nil error means "waited, no task available"; a scripted Poll always
+	// expects one, so fail here rather than proceed with a stale token.
+	require.NotEmptyf(t, resp.GetActivityId(), "%s within %s (still in backoff / start-delay, already started, or terminal)", saaPollNoTaskMsg, timeout)
 	return resp
 }
 
