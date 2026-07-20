@@ -505,6 +505,29 @@ func (s *ActivityTestSuite) TestActivityHeartBeatWorkflow_Success() {
  11 WorkflowExecutionCompleted`, events)
 }
 
+// TestActivityHeartBeat_{WorkflowActivity,StandaloneActivity} port the core of
+// TestActivityHeartBeatWorkflow_Success above: a worker polls the activity, heartbeats, then completes
+// it, and the activity ends COMPLETED. WFA is the oracle; both must reach the same terminal status.
+//
+// Fidelity vs the original: the original asserts the exact workflow history-event shape and carries a
+// heartbeat progress payload; here we assert the terminal status (the shared contract). Heartbeat
+// detail payloads are not yet part of the projection.
+func (s *standaloneActivityTestSuite) TestActivityHeartBeat_WorkflowActivity() {
+	env := s.newTestEnv()
+	t := s.T()
+	trace := []model.Event{saaPoll, {Kind: model.Heartbeat}, {Kind: model.RespondCompleted}}
+	h := &wfaHarness{env: env, ctx: testcontext.For(t), maxAttempts: 3, retryInterval: 2 * time.Second}
+	require.Equal(t, enumspb.ACTIVITY_EXECUTION_STATUS_COMPLETED, h.driveTrace(t, trace).terminalStatus(t))
+}
+
+func (s *standaloneActivityTestSuite) TestActivityHeartBeat_StandaloneActivity() {
+	env := s.newTestEnv()
+	t := s.T()
+	trace := []model.Event{saaPoll, {Kind: model.Heartbeat}, {Kind: model.RespondCompleted}}
+	h := &saaHarness{env: env, ctx: testcontext.For(t), idBase: testcore.RandomizeStr(t.Name()), cfg: model.Config{MaxAttempts: 3}, retryInterval: 2 * time.Second}
+	require.Equal(t, enumspb.ACTIVITY_EXECUTION_STATUS_COMPLETED, h.driveTrace(t, trace).terminalStatus(t))
+}
+
 func (s *ActivityTestSuite) TestActivityRetry() {
 	env := testcore.NewEnv(s.T())
 	tv := env.Tv()
