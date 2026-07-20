@@ -3617,13 +3617,13 @@ func (s *standaloneActivityTestSuite) TestDescribeNextAttemptScheduleTimeAndCurr
 
 	// Retry dispatched to Matching but not yet picked up.
 	t.Run("RetryQueuedNotStarted", func(t *testing.T) {
-		info := s.driveTrace(t, env, saaTrace{
-			trace:         []model.Event{saaPoll, saaFailRetryably, saaBackoffDelayElapse},
-			maxAttempts:   3,
-			retryInterval: saaDelayWindow,
-		}).describe(t).GetInfo()
 
 		t.Run("NextAttemptScheduleTime", func(t *testing.T) {
+			info := s.driveTrace(t, env, saaTrace{
+				trace:         []model.Event{saaPoll, saaFailRetryably, saaBackoffDelayElapse},
+				maxAttempts:   3,
+				retryInterval: saaDelayWindow,
+			}).describe(t).GetInfo()
 			require.EqualValues(t, 2, info.GetAttempt())
 			require.Equal(t, enumspb.PENDING_ACTIVITY_STATE_SCHEDULED, info.GetRunState())
 			require.Nil(t, info.GetNextAttemptScheduleTime())
@@ -3662,6 +3662,11 @@ func (s *standaloneActivityTestSuite) TestDescribeNextAttemptScheduleTimeAndCurr
 		}).describe(t).GetInfo()
 
 		t.Run("NextAttemptScheduleTime", func(t *testing.T) {
+			info := s.driveTrace(t, env, saaTrace{
+				trace:         []model.Event{saaPoll, saaFailRetryably, saaBackoffDelayElapse, saaPoll},
+				maxAttempts:   2,
+				retryInterval: saaDelayWindow,
+			}).describe(t).GetInfo()
 			require.EqualValues(t, 2, info.GetAttempt())
 			require.Equal(t, enumspb.PENDING_ACTIVITY_STATE_STARTED, info.GetRunState())
 			require.Nil(t, info.GetNextAttemptScheduleTime())
