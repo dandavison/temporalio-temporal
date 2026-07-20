@@ -3538,7 +3538,6 @@ func (s *standaloneActivityTestSuite) TestScheduleToStartTimeout() {
 }
 
 func (s *standaloneActivityTestSuite) TestDescribeNextAttemptScheduleTimeAndCurrentRetryInterval() {
-	testcontext.For(s.T(), testcontext.WithTimeout(saaTraceBudget()))
 	env := s.newTestEnv()
 	t := s.T()
 
@@ -14372,16 +14371,6 @@ func (s *standaloneActivityTestSuite) TestResetActivityExecution() {
 	})
 }
 
-// saaTraceBudget raises the parent test's context budget: the declarative trace subtests pay real
-// wall-clock waits, so a group can run a few minutes past the default per-test timeout.
-func saaTraceBudget() time.Duration {
-	const floor = 8 * time.Minute
-	if d := testcontext.DefaultTimeout(); d > floor {
-		return d
-	}
-	return floor
-}
-
 // driveTrace drives one declared trace on its own harness (a unique activity-id namespace via idBase),
 // making no behavioral assertions — see saaHarness.driveTrace — and returns a handle to the activity
 // at the reached state so the caller can issue further RPCs and assert on the outcome. Later steps
@@ -14436,7 +14425,6 @@ func driveRecording(h *saaHarness, trace []model.Event) (messages []string) {
 // surface a confusing error from a later RPC. Here the second Poll runs while the activity is still
 // in a (deliberately hour-long) retry backoff, so no task can be dispatched to it.
 func (s *standaloneActivityTestSuite) TestDriveTrace_PollFindingNoTask_FailsAtThePoll() {
-	testcontext.For(s.T(), testcontext.WithTimeout(saaTraceBudget()))
 	env := s.newTestEnv()
 	t := s.T()
 
