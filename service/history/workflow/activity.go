@@ -113,6 +113,7 @@ func GetPendingActivityInfo(
 
 	p.State = GetActivityState(ai)
 
+	// WFA calculations
 	p.LastAttemptCompleteTime = ai.LastAttemptCompleteTime
 	if !ai.HasRetryPolicy {
 		p.NextAttemptScheduleTime = nil
