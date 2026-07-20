@@ -529,26 +529,31 @@ func (s *ActivityTestSuite) TestActivityHeartBeatWorkflow_Success() {
 }
 
 // TestActivityHeartBeat_{WorkflowActivity,StandaloneActivity} port the core of
-// TestActivityHeartBeatWorkflow_Success above: a worker polls the activity, heartbeats, then completes
-// it, and the activity ends COMPLETED. WFA is the oracle; both must reach the same terminal status.
-//
-// Fidelity vs the original: the original asserts the exact workflow history-event shape and carries a
-// heartbeat progress payload; here we assert the terminal status (the shared contract). Heartbeat
-// detail payloads are not yet part of the projection.
+// TestActivityHeartBeatWorkflow_Success above: a worker polls the activity and heartbeats a checkpoint
+// payload; the checkpoint round-trips (readable while running); then the worker completes it and the
+// activity ends COMPLETED. WFA is the oracle; both must observe the same heartbeat detail and the same
+// terminal status. (The original also asserts the exact workflow history-event shape, which is not part
+// of the shared contract.)
+var heartbeatWant = []byte(`"hb"`) // == saaHeartbeatDetails
+
 func (s *standaloneActivityTestSuite) TestActivityHeartBeat_WorkflowActivity() {
 	env := s.newTestEnv()
 	t := s.T()
-	trace := []model.Event{saaPoll, {Kind: model.Heartbeat}, {Kind: model.RespondCompleted}}
 	h := &wfaHarness{env: env, ctx: testcontext.For(t), maxAttempts: 3, retryInterval: 2 * time.Second}
-	require.Equal(t, activityTerminalProjection{Status: enumspb.ACTIVITY_EXECUTION_STATUS_COMPLETED}, h.driveTrace(t, trace).terminal(t))
+	a := h.driveTrace(t, []model.Event{saaPoll, {Kind: model.Heartbeat}})
+	require.Equal(t, heartbeatWant, a.heartbeatDetails(t))
+	a.applyEvent(t, model.Event{Kind: model.RespondCompleted})
+	require.Equal(t, activityTerminalProjection{Status: enumspb.ACTIVITY_EXECUTION_STATUS_COMPLETED}, a.terminal(t))
 }
 
 func (s *standaloneActivityTestSuite) TestActivityHeartBeat_StandaloneActivity() {
 	env := s.newTestEnv()
 	t := s.T()
-	trace := []model.Event{saaPoll, {Kind: model.Heartbeat}, {Kind: model.RespondCompleted}}
 	h := &saaHarness{env: env, ctx: testcontext.For(t), idBase: testcore.RandomizeStr(t.Name()), cfg: model.Config{MaxAttempts: 3}, retryInterval: 2 * time.Second}
-	require.Equal(t, activityTerminalProjection{Status: enumspb.ACTIVITY_EXECUTION_STATUS_COMPLETED}, h.driveTrace(t, trace).terminal(t))
+	a := h.driveTrace(t, []model.Event{saaPoll, {Kind: model.Heartbeat}})
+	require.Equal(t, heartbeatWant, a.heartbeatDetails(t))
+	a.applyEvent(t, model.Event{Kind: model.RespondCompleted})
+	require.Equal(t, activityTerminalProjection{Status: enumspb.ACTIVITY_EXECUTION_STATUS_COMPLETED}, a.terminal(t))
 }
 
 func (s *ActivityTestSuite) TestActivityRetry() {

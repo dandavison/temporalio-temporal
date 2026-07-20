@@ -224,11 +224,12 @@ func (h *saaHarness) startRequest(activityID, taskQueue string) *workflowservice
 // failure) are requested so a caller can assert on a closed activity's result or failure.
 func (a *saaHandle) describe() (*workflowservice.DescribeActivityExecutionResponse, error) {
 	return a.h.env.FrontendClient().DescribeActivityExecution(a.h.ctx, &workflowservice.DescribeActivityExecutionRequest{
-		Namespace:          a.h.env.Namespace().String(),
-		ActivityId:         a.activityID,
-		RunId:              a.runID,
-		IncludeOutcome:     true,
-		IncludeLastFailure: true,
+		Namespace:               a.h.env.Namespace().String(),
+		ActivityId:              a.activityID,
+		RunId:                   a.runID,
+		IncludeOutcome:          true,
+		IncludeLastFailure:      true,
+		IncludeHeartbeatDetails: true,
 	})
 }
 
@@ -251,6 +252,29 @@ func (a *saaHandle) terminal(t require.TestingT) activityTerminalProjection {
 		Status:      resp.GetInfo().GetStatus(),
 		FailureType: saaFailureType(resp.GetOutcome().GetFailure()),
 	}
+}
+
+// heartbeatDetails reports the last heartbeat checkpoint the activity recorded, as the first payload's
+// raw bytes (a fixed test payload — see saaHeartbeatDetails). Observable while the activity is running.
+// Parallel to wfaHandle.heartbeatDetails.
+func (a *saaHandle) heartbeatDetails(t require.TestingT) []byte {
+	resp, err := a.describe()
+	require.NoError(t, err)
+	return firstPayloadData(resp.GetInfo().GetHeartbeatDetails())
+}
+
+// saaHeartbeatDetails is the fixed checkpoint payload the drivers send with a Heartbeat event, so a
+// test can assert it round-trips identically on both surfaces.
+var saaHeartbeatDetails = &commonpb.Payloads{Payloads: []*commonpb.Payload{{
+	Metadata: map[string][]byte{"encoding": []byte("json/plain")},
+	Data:     []byte(`"hb"`),
+}}}
+
+func firstPayloadData(p *commonpb.Payloads) []byte {
+	if ps := p.GetPayloads(); len(ps) > 0 {
+		return ps[0].GetData()
+	}
+	return nil
 }
 
 // saaFailureType extracts the failure discriminant a caller compares across surfaces: the application
@@ -296,6 +320,7 @@ func (a *saaHandle) rpc(e model.Event) error {
 		resp, err := fc.RecordActivityTaskHeartbeat(a.h.ctx, &workflowservice.RecordActivityTaskHeartbeatRequest{
 			Namespace: ns,
 			TaskToken: a.token,
+			Details:   saaHeartbeatDetails,
 		})
 		a.lastHeartbeat = resp
 		return err

@@ -257,7 +257,7 @@ func (a *wfaHandle) rpc(e model.Event) error {
 	switch e.Kind {
 	case model.Heartbeat:
 		_, err := fc.RecordActivityTaskHeartbeat(a.h.ctx, &workflowservice.RecordActivityTaskHeartbeatRequest{
-			Namespace: ns, TaskToken: a.token,
+			Namespace: ns, TaskToken: a.token, Details: saaHeartbeatDetails,
 		})
 		return err
 	case model.RespondCompleted:
@@ -278,6 +278,21 @@ func (a *wfaHandle) rpc(e model.Event) error {
 	default:
 		return fmt.Errorf("wfaHarness: unhandled event kind %v", e.Kind)
 	}
+}
+
+// heartbeatDetails reports the last heartbeat checkpoint the activity recorded, as the first payload's
+// raw bytes. Observable while the activity is running (still pending). Parallel to
+// saaHandle.heartbeatDetails.
+func (a *wfaHandle) heartbeatDetails(t require.TestingT) []byte {
+	resp, err := a.h.env.SdkClient().DescribeWorkflowExecution(a.h.ctx, a.workflowID, a.runID)
+	require.NoError(t, err)
+	for _, pa := range resp.GetPendingActivities() {
+		if pa.GetActivityId() == a.activityID {
+			return firstPayloadData(pa.GetHeartbeatDetails())
+		}
+	}
+	require.FailNowf(t, "no pending activity", "activity %q not pending", a.activityID)
+	return nil
 }
 
 // projection reads the activity's public info back via DescribeWorkflowExecution, as the shared
