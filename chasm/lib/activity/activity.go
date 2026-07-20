@@ -1670,7 +1670,7 @@ func (a *Activity) buildActivityExecutionInfo(
 		LastWorkerIdentity:      attempt.GetLastWorkerIdentity(),
 		SdkName:                 attempt.GetSdkName(),
 		SdkVersion:              attempt.GetSdkVersion(),
-		NextAttemptScheduleTime: dispatchTimeForRetry(attempt),
+		NextAttemptScheduleTime: a.dispatchTimeForAttempt(attempt),
 		Priority:                a.GetPriority(),
 		RetryPolicy:             a.GetRetryPolicy(),
 		RunId:                   key.RunID,
