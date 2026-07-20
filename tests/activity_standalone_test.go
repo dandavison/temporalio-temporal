@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"net/http/httptest"
+	"runtime"
 	"testing"
 	"time"
 
@@ -14399,4 +14400,48 @@ func (s *standaloneActivityTestSuite) driveTrace(t *testing.T, env *standaloneAc
 		positivePollTimeout: saaPollTimeout,
 	}
 	return h.driveTrace(t, tr.trace)
+}
+
+// recordingTestingT captures require failures instead of aborting the enclosing test, so a test can
+// assert on how the driver fails. FailNow mimics *testing.T by unwinding its goroutine, so the drive
+// must run in its own goroutine (see below).
+type recordingTestingT struct {
+	messages []string
+	failed   bool
+}
+
+func (r *recordingTestingT) Errorf(format string, args ...any) {
+	r.messages = append(r.messages, fmt.Sprintf(format, args...))
+	r.failed = true
+}
+
+func (r *recordingTestingT) FailNow() { runtime.Goexit() }
+
+// TestDriveTrace_PollFindingNoTask_FailsAtThePoll pins the driver's contract when a scripted Poll
+// finds no dispatched task: it must fail at that poll, not silently proceed with a stale token and
+// surface a confusing error from a later RPC. Here the second Poll runs while the activity is still
+// in a (deliberately hour-long) retry backoff, so no task can be dispatched to it.
+func (s *standaloneActivityTestSuite) TestDriveTrace_PollFindingNoTask_FailsAtThePoll() {
+	testcontext.For(s.T(), testcontext.WithTimeout(saaTraceBudget()))
+	env := s.newTestEnv()
+	t := s.T()
+
+	rec := &recordingTestingT{}
+	h := &saaHarness{
+		env: env.TestEnv, ctx: testcontext.For(t),
+		idBase:              testcore.RandomizeStr(t.Name()),
+		retryInterval:       time.Hour, // longer than any poll, so the second Poll can never find a task
+		positivePollTimeout: saaPollTimeout,
+	}
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		h.driveTrace(rec, []model.Event{saaPoll, saaFailRetryably, saaPoll, {Kind: model.RespondCompleted}})
+	}()
+	<-done
+
+	require.True(t, rec.failed, "expected the drive to fail")
+	require.NotEmpty(t, rec.messages)
+	require.Contains(t, rec.messages[0], saaPollNoTaskMsg,
+		"the first failure must identify the offending poll, not surface later as a stale-token RPC error; got: %s", rec.messages[0])
 }

@@ -48,6 +48,11 @@ const saaWallClockSettle = 2 * time.Second
 // saaPollTimeout bounds a poll: just above common.MinLongPollTimeout.
 const saaPollTimeout = common.MinLongPollTimeout + time.Second
 
+// saaPollNoTaskMsg is the failure a scripted Poll reports when no task is dispatched to it. It is a
+// named contract so a test can assert the driver fails at the poll rather than proceeding with a
+// stale token.
+const saaPollNoTaskMsg = "scripted Poll found no dispatched task"
+
 // saaHandle is a handle to one activity instance
 type saaHandle struct {
 	h          *saaHarness
