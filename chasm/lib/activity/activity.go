@@ -16,22 +16,8 @@
 // The main Activity struct has a.ScheduleTime which is the schedule time of the first
 // attempt; i.e. the time at which the activity was created. This is never changed.
 //
-
-// The naming situation is not perfectly clean:
-//
-// next_attempt_schedule_time
-// --------------------------
-
-// WFA pending activity has always returned a field named next_attempt_schedule_time, and SAA does
-// also. In this field, "schedule_time" actually refers to dispatch_time. Specifically,
-// next_attempt_schedule_time is the dispatch_time of the attempt that is currently being waited
-// for. It is null when paused or when an attempt is in progress, since in those states the dispatch
-// time of a future attempt is unknown: we do not even know if there will be a next attempt.
-//
-// For WFA, next_attempt_schedule_time is null prior to the first attempt since start delay is not
-// supported, hence the activity is due to be dispatched to Matching as soon as the activity is
-// created. But for SAA, if there's a start delay, then next_attempt_schedule_time is the
-// dispatch_time (non-null).
+// The naming situation is not perfectly clean. See e.g. the comment below on
+// nextAttemptDispatchTime (which is called next_attempt_schedule_time in the public API).
 
 package activity
 
@@ -369,6 +355,28 @@ func dispatchTimeForRetry(attempt *activitypb.ActivityAttemptState) *timestamppb
 		return timestamppb.New(completeTime.AsTime().Add(retryInterval.AsDuration()))
 	}
 	return nil
+}
+
+// nextAttemptDispatchTime returns what is known in the public API as next_attempt_schedule_time.
+//
+// WFA pending activity has always returned a field named next_attempt_schedule_time, and SAA does
+// also. In this field name, the term "schedule_time" actually refers to dispatch_time.
+// Specifically, next_attempt_schedule_time is the dispatch_time of the attempt that is currently
+// being waited for. It is null when paused or when an attempt is in progress, since in those states
+// the dispatch time of a future attempt is unknown: we do not even know if there will be a next
+// attempt.
+//
+// For WFA, next_attempt_schedule_time is null prior to the first attempt since start delay is not
+// supported, hence the activity is due to be dispatched to Matching as soon as the activity is
+// created. But for SAA, if there's a start delay, then next_attempt_schedule_time is the
+// dispatch_time (non-null).
+func (a *Activity) nextAttemptDispatchTime(attempt *activitypb.ActivityAttemptState) *timestamppb.Timestamp {
+	switch {
+	case a.hasAttemptInProgress() || a.isPaused():
+		return nil
+	default:
+		return a.dispatchTimeForAttempt(attempt)
+	}
 }
 
 // RecordCompleted applies the provided function to record activity completion.
@@ -1670,7 +1678,7 @@ func (a *Activity) buildActivityExecutionInfo(
 		LastWorkerIdentity:      attempt.GetLastWorkerIdentity(),
 		SdkName:                 attempt.GetSdkName(),
 		SdkVersion:              attempt.GetSdkVersion(),
-		NextAttemptScheduleTime: a.dispatchTimeForAttempt(attempt),
+		NextAttemptScheduleTime: a.nextAttemptDispatchTime(attempt),
 		Priority:                a.GetPriority(),
 		RetryPolicy:             a.GetRetryPolicy(),
 		RunId:                   key.RunID,
