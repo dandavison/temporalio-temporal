@@ -61,10 +61,11 @@ func projectWFA(p *workflowpb.PendingActivityInfo) activityInfoProjection {
 // --- driver --------------------------------------------------------------------------------
 
 type wfaHarness struct {
-	env           *standaloneActivityEnv
-	ctx           context.Context
-	maxAttempts   int32         // RetryPolicy MaximumAttempts (0 = unlimited)
-	retryInterval time.Duration // RetryPolicy interval; how long the driver waits for BackoffElapses
+	env            *standaloneActivityEnv
+	ctx            context.Context
+	maxAttempts    int32         // RetryPolicy MaximumAttempts (0 = unlimited)
+	retryInterval  time.Duration // RetryPolicy interval; how long the driver waits for BackoffElapses
+	nextRetryDelay time.Duration // ApplicationFailureInfo.NextRetryDelay injected into RespondFailed
 	// positivePollTimeout bounds a "must dispatch" poll; 0 => 10s.
 	positivePollTimeout time.Duration
 }
@@ -205,7 +206,7 @@ func (a *wfaHandle) rpc(e model.Event) error {
 		return err
 	case model.RespondFailed:
 		_, err := fc.RespondActivityTaskFailed(a.h.ctx, &workflowservice.RespondActivityTaskFailedRequest{
-			Namespace: ns, TaskToken: a.token, Identity: "worker", Failure: saaFailure(e.Retryable, 0),
+			Namespace: ns, TaskToken: a.token, Identity: "worker", Failure: saaFailure(e.Retryable, a.h.nextRetryDelay),
 		})
 		return err
 	case model.RespondCanceled:

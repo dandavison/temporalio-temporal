@@ -1624,3 +1624,32 @@ func (s *standaloneActivityTestSuite) TestBackingOff_StandaloneActivity() {
 	h := &saaHarness{env: env, ctx: testcontext.For(t), idBase: testcore.RandomizeStr(t.Name()), cfg: model.Config{MaxAttempts: 3}, retryInterval: backingOffInterval}
 	require.Equal(t, backingOffWant, h.driveTrace(t, backingOffTrace).projection(t))
 }
+
+// nextRetryDelayOverride: the worker fails with a next_retry_delay that overrides the policy backoff
+// (policy 5s, override 30s); observed during the override-length window. Both products must honor the
+// override identically — the resulting current retry interval is 30s, not the policy's 5s. Expected
+// fully green.
+var (
+	nextRetryDelayOverride = 30 * time.Second
+	nextRetryDelayTrace    = []model.Event{saaPoll, saaFailRetryably}
+	nextRetryDelayWant     = activityInfoProjection{
+		State:                  enumspb.PENDING_ACTIVITY_STATE_SCHEDULED,
+		Attempt:                2,
+		CurrentRetryInterval:   nextRetryDelayOverride,
+		NextAttemptScheduleSet: true,
+	}
+)
+
+func (s *standaloneActivityTestSuite) TestNextRetryDelayOverride_WorkflowActivity() {
+	env := s.newTestEnv()
+	t := s.T()
+	h := &wfaHarness{env: env, ctx: testcontext.For(t), maxAttempts: 3, retryInterval: 5 * time.Second, nextRetryDelay: nextRetryDelayOverride}
+	require.Equal(t, nextRetryDelayWant, h.driveTrace(t, nextRetryDelayTrace).projection(t))
+}
+
+func (s *standaloneActivityTestSuite) TestNextRetryDelayOverride_StandaloneActivity() {
+	env := s.newTestEnv()
+	t := s.T()
+	h := &saaHarness{env: env, ctx: testcontext.For(t), idBase: testcore.RandomizeStr(t.Name()), cfg: model.Config{MaxAttempts: 3}, retryInterval: 5 * time.Second, nextRetryDelay: nextRetryDelayOverride}
+	require.Equal(t, nextRetryDelayWant, h.driveTrace(t, nextRetryDelayTrace).projection(t))
+}
