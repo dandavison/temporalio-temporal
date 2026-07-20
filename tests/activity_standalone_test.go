@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"io"
 	"net/http/httptest"
-	"runtime"
 	"testing"
 	"time"
 
@@ -14402,20 +14401,35 @@ func (s *standaloneActivityTestSuite) driveTrace(t *testing.T, env *standaloneAc
 	return h.driveTrace(t, tr.trace)
 }
 
-// recordingTestingT captures require failures instead of aborting the enclosing test, so a test can
-// assert on how the driver fails. FailNow mimics *testing.T by unwinding its goroutine, so the drive
-// must run in its own goroutine (see below).
+// recordingTestingT captures a driver's require failures so a test can assert on how the driver
+// fails, rather than aborting the enclosing test. FailNow aborts the drive at the first failure with
+// a sentinel panic (mimicking *testing.T's stop-now contract) that driveRecording recovers.
 type recordingTestingT struct {
 	messages []string
-	failed   bool
 }
+
+const recordingTestingTAbort = "recordingTestingT.FailNow"
 
 func (r *recordingTestingT) Errorf(format string, args ...any) {
 	r.messages = append(r.messages, fmt.Sprintf(format, args...))
-	r.failed = true
 }
 
-func (r *recordingTestingT) FailNow() { runtime.Goexit() }
+func (r *recordingTestingT) FailNow() { panic(recordingTestingTAbort) }
+
+// driveRecording drives a trace against a recordingTestingT in the test goroutine and returns the
+// failures the driver reported, earliest first. It recovers FailNow's sentinel panic but re-panics
+// anything else.
+func driveRecording(h *saaHarness, trace []model.Event) (messages []string) {
+	rec := &recordingTestingT{}
+	defer func() {
+		if r := recover(); r != nil && r != recordingTestingTAbort {
+			panic(r)
+		}
+		messages = rec.messages
+	}()
+	h.driveTrace(rec, trace)
+	return
+}
 
 // TestDriveTrace_PollFindingNoTask_FailsAtThePoll pins the driver's contract when a scripted Poll
 // finds no dispatched task: it must fail at that poll, not silently proceed with a stale token and
@@ -14426,22 +14440,15 @@ func (s *standaloneActivityTestSuite) TestDriveTrace_PollFindingNoTask_FailsAtTh
 	env := s.newTestEnv()
 	t := s.T()
 
-	rec := &recordingTestingT{}
 	h := &saaHarness{
 		env: env.TestEnv, ctx: testcontext.For(t),
 		idBase:              testcore.RandomizeStr(t.Name()),
 		retryInterval:       time.Hour, // longer than any poll, so the second Poll can never find a task
 		positivePollTimeout: saaPollTimeout,
 	}
-	done := make(chan struct{})
-	go func() {
-		defer close(done)
-		h.driveTrace(rec, []model.Event{saaPoll, saaFailRetryably, saaPoll, {Kind: model.RespondCompleted}})
-	}()
-	<-done
+	messages := driveRecording(h, []model.Event{saaPoll, saaFailRetryably, saaPoll, {Kind: model.RespondCompleted}})
 
-	require.True(t, rec.failed, "expected the drive to fail")
-	require.NotEmpty(t, rec.messages)
-	require.Contains(t, rec.messages[0], saaPollNoTaskMsg,
-		"the first failure must identify the offending poll, not surface later as a stale-token RPC error; got: %s", rec.messages[0])
+	require.NotEmpty(t, messages, "expected the drive to fail")
+	require.Contains(t, messages[0], saaPollNoTaskMsg,
+		"the first failure must identify the offending poll, not surface later as a stale-token RPC error; got: %s", messages[0])
 }
