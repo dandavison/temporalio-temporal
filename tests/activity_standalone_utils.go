@@ -85,7 +85,9 @@ func (a *saaHandle) driveEvent(t require.TestingT, e model.Event) {
 		}
 		a.token = a.pollForTask(t, timeout).GetTaskToken()
 	case model.BackoffElapses:
-		time.Sleep(h.retryInterval + saaWallClockSettle)
+		// Real-server functional test: there is no time-skip, so advance the wall clock past the
+		// backoff dispatch time by sleeping it out.
+		time.Sleep(h.retryInterval + saaWallClockSettle) //nolint:forbidigo
 	default:
 		require.NoError(t, a.rpc(e))
 	}
