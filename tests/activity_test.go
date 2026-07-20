@@ -373,6 +373,29 @@ func (s *ActivityClientTestSuite) Test_ActivityTimeouts() {
 	s.Equal("Not enough time to schedule next retry before activity ScheduleToClose timeout, giving up retrying (type: ScheduleToClose)", timeoutErr.Error())
 }
 
+// TestStartToCloseTimeout_{WorkflowActivity,StandaloneActivity} port a slice of Test_ActivityTimeouts
+// above: a started attempt exceeds its StartToClose timeout and, with no retries left, the activity
+// ends TIMED_OUT. WFA is the oracle; both must reach the same terminal status.
+//
+// Fidelity vs the original: the original exercises all four timeout types and asserts the specific
+// TimeoutType/message the workflow observes; here we assert the terminal status (the shared contract)
+// for one timeout type. The timeout-type detail is not yet part of the terminal projection.
+func (s *standaloneActivityTestSuite) TestStartToCloseTimeout_WorkflowActivity() {
+	env := s.newTestEnv()
+	t := s.T()
+	trace := []model.Event{saaPoll, {Kind: model.StartToCloseElapses}}
+	h := &wfaHarness{env: env, ctx: testcontext.For(t), maxAttempts: 1, shortTimeout: saaTimeoutIn(trace)}
+	require.Equal(t, enumspb.ACTIVITY_EXECUTION_STATUS_TIMED_OUT, h.driveTrace(t, trace).terminalStatus(t))
+}
+
+func (s *standaloneActivityTestSuite) TestStartToCloseTimeout_StandaloneActivity() {
+	env := s.newTestEnv()
+	t := s.T()
+	trace := []model.Event{saaPoll, {Kind: model.StartToCloseElapses}}
+	h := &saaHarness{env: env, ctx: testcontext.For(t), idBase: testcore.RandomizeStr(t.Name()), cfg: model.Config{MaxAttempts: 1}, shortTimeout: saaTimeoutIn(trace)}
+	require.Equal(t, enumspb.ACTIVITY_EXECUTION_STATUS_TIMED_OUT, h.driveTrace(t, trace).terminalStatus(t))
+}
+
 func (s *ActivityTestSuite) TestActivityHeartBeatWorkflow_Success() {
 	env := testcore.NewEnv(s.T())
 	id := "functional-heartbeat-test"

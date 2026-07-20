@@ -66,6 +66,9 @@ type wfaHarness struct {
 	maxAttempts    int32         // RetryPolicy MaximumAttempts (0 = unlimited)
 	retryInterval  time.Duration // RetryPolicy interval; how long the driver waits for BackoffElapses
 	nextRetryDelay time.Duration // ApplicationFailureInfo.NextRetryDelay injected into RespondFailed
+	// shortTimeout, when set to one of the four timeout *Elapses kinds, makes that timeout short at
+	// schedule time so a trace can trigger it (mirrors saaHarness.shortTimeout).
+	shortTimeout model.EventKind
 	// positivePollTimeout bounds a "must dispatch" poll; 0 => 10s.
 	positivePollTimeout time.Duration
 }
@@ -83,11 +86,14 @@ type wfaHandle struct {
 }
 
 type wfaActivityParams struct {
-	ActivityTQ    string
-	ActivityID    string
-	StartToClose  time.Duration
-	RetryInterval time.Duration
-	MaxAttempts   int32
+	ActivityTQ      string
+	ActivityID      string
+	StartToClose    time.Duration
+	ScheduleToClose time.Duration // 0 = unset
+	ScheduleToStart time.Duration // 0 = unset
+	Heartbeat       time.Duration // 0 = unset
+	RetryInterval   time.Duration
+	MaxAttempts     int32
 }
 
 // wfaOneActivityWorkflow schedules a single activity with the given options on its own task queue and
@@ -95,10 +101,13 @@ type wfaActivityParams struct {
 // worker RPCs — so the workflow simply stays running while the test polls and responds.
 func wfaOneActivityWorkflow(ctx workflow.Context, p wfaActivityParams) error {
 	ctx = workflow.WithActivityOptions(ctx, workflow.ActivityOptions{
-		TaskQueue:             p.ActivityTQ,
-		ActivityID:            p.ActivityID,
-		DisableEagerExecution: true, // force the task through matching so the test can poll it
-		StartToCloseTimeout:   p.StartToClose,
+		TaskQueue:              p.ActivityTQ,
+		ActivityID:             p.ActivityID,
+		DisableEagerExecution:  true, // force the task through matching so the test can poll it
+		StartToCloseTimeout:    p.StartToClose,
+		ScheduleToCloseTimeout: p.ScheduleToClose,
+		ScheduleToStartTimeout: p.ScheduleToStart,
+		HeartbeatTimeout:       p.Heartbeat,
 		RetryPolicy: &temporal.RetryPolicy{
 			InitialInterval:    p.RetryInterval,
 			BackoffCoefficient: 1.0,
@@ -162,14 +171,33 @@ func (h *wfaHarness) start(t *testing.T) *wfaHandle {
 	require.NoError(t, w.Start())
 	t.Cleanup(w.Stop)
 
+	// dur returns the short timeout for the one timeout under test, long otherwise (mirrors
+	// saaHarness.startRequest). Only the timeout the trace fires is set short; the rest stay long or
+	// unset so they do not fire mid-scenario.
+	dur := func(k model.EventKind) time.Duration {
+		if h.shortTimeout == k {
+			return saaShortTimeout
+		}
+		return time.Hour
+	}
+	params := wfaActivityParams{
+		ActivityTQ: actTQ, ActivityID: actID,
+		StartToClose:  dur(model.StartToCloseElapses),
+		RetryInterval: h.retryInterval, MaxAttempts: h.maxAttempts,
+	}
+	if h.shortTimeout == model.ScheduleToCloseElapses {
+		params.ScheduleToClose = saaShortTimeout
+	}
+	if h.shortTimeout == model.ScheduleToStartElapses {
+		params.ScheduleToStart = saaShortTimeout
+	}
+	if h.shortTimeout == model.HeartbeatElapses {
+		params.Heartbeat = saaShortTimeout
+	}
 	wfID := testcore.RandomizeStr("wfa-run")
 	run, err := h.env.SdkClient().ExecuteWorkflow(h.ctx,
 		sdkclient.StartWorkflowOptions{ID: wfID, TaskQueue: wfTQ},
-		wfaOneActivityWorkflow,
-		wfaActivityParams{
-			ActivityTQ: actTQ, ActivityID: actID,
-			StartToClose: time.Hour, RetryInterval: h.retryInterval, MaxAttempts: h.maxAttempts,
-		})
+		wfaOneActivityWorkflow, params)
 	require.NoError(t, err)
 	return &wfaHandle{h: h, run: run, workflowID: wfID, runID: run.GetRunID(), activityID: actID, activityTQ: actTQ}
 }
