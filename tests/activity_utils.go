@@ -11,6 +11,7 @@ package tests
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"testing"
 	"time"
@@ -105,11 +106,19 @@ type wfaActivityParams struct {
 	MaxAttempts     int32
 }
 
+// wfaCancelSignal, when sent to the helper workflow, makes it cancel the activity — the WFA analog of
+// SAA's RequestCancelActivityExecution RPC (a workflow activity is cancelled by its workflow, not by a
+// direct RPC). See wfaHandle.rpc's RequestCancel case.
+const wfaCancelSignal = "cancel"
+
 // wfaOneActivityWorkflow schedules a single activity with the given options on its own task queue and
 // waits for it to finish. The activity is never executed by a worker — the test drives it with raw
-// worker RPCs — so the workflow simply stays running while the test polls and responds.
+// worker RPCs — so the workflow simply stays running while the test polls and responds. A cancel
+// signal cancels the activity; WaitForCancellation makes the workflow wait for the worker's
+// RespondActivityTaskCanceled so the activity actually reaches CANCELED before the workflow closes.
 func wfaOneActivityWorkflow(ctx workflow.Context, p wfaActivityParams) error {
-	ctx = workflow.WithActivityOptions(ctx, workflow.ActivityOptions{
+	actCtx, cancelActivity := workflow.WithCancel(ctx)
+	actCtx = workflow.WithActivityOptions(actCtx, workflow.ActivityOptions{
 		TaskQueue:              p.ActivityTQ,
 		ActivityID:             p.ActivityID,
 		DisableEagerExecution:  true, // force the task through matching so the test can poll it
@@ -117,6 +126,7 @@ func wfaOneActivityWorkflow(ctx workflow.Context, p wfaActivityParams) error {
 		ScheduleToCloseTimeout: p.ScheduleToClose,
 		ScheduleToStartTimeout: p.ScheduleToStart,
 		HeartbeatTimeout:       p.Heartbeat,
+		WaitForCancellation:    true,
 		RetryPolicy: &temporal.RetryPolicy{
 			InitialInterval:    p.RetryInterval,
 			BackoffCoefficient: 1.0,
@@ -124,7 +134,12 @@ func wfaOneActivityWorkflow(ctx workflow.Context, p wfaActivityParams) error {
 			MaximumAttempts:    p.MaxAttempts,
 		},
 	})
-	return workflow.ExecuteActivity(ctx, "wfaNoop").Get(ctx, nil)
+	fut := workflow.ExecuteActivity(actCtx, "wfaNoop")
+	workflow.Go(ctx, func(gctx workflow.Context) {
+		workflow.GetSignalChannel(gctx, wfaCancelSignal).Receive(gctx, nil)
+		cancelActivity()
+	})
+	return fut.Get(ctx, nil)
 }
 
 // driveTrace runs a trace on a fresh workflow-scheduled activity, realizing each event against the
@@ -220,6 +235,12 @@ func (a *wfaHandle) terminal(t require.TestingT) activityTerminalProjection {
 	if err == nil {
 		return activityTerminalProjection{Status: enumspb.ACTIVITY_EXECUTION_STATUS_COMPLETED}
 	}
+	// A canceled activity surfaces as a CanceledError directly (not wrapped in an ActivityError), so
+	// check it before asserting the ActivityError shape.
+	var canceledErr *temporal.CanceledError
+	if errors.As(err, &canceledErr) {
+		return activityTerminalProjection{Status: enumspb.ACTIVITY_EXECUTION_STATUS_CANCELED}
+	}
 	var actErr *temporal.ActivityError
 	require.ErrorAs(t, err, &actErr)
 	switch cause := actErr.Unwrap().(type) {
@@ -227,8 +248,6 @@ func (a *wfaHandle) terminal(t require.TestingT) activityTerminalProjection {
 		return activityTerminalProjection{Status: enumspb.ACTIVITY_EXECUTION_STATUS_FAILED, FailureType: cause.Type()}
 	case *temporal.TimeoutError:
 		return activityTerminalProjection{Status: enumspb.ACTIVITY_EXECUTION_STATUS_TIMED_OUT, FailureType: cause.TimeoutType().String()}
-	case *temporal.CanceledError:
-		return activityTerminalProjection{Status: enumspb.ACTIVITY_EXECUTION_STATUS_CANCELED}
 	default:
 		return activityTerminalProjection{Status: enumspb.ACTIVITY_EXECUTION_STATUS_FAILED}
 	}
@@ -275,9 +294,34 @@ func (a *wfaHandle) rpc(e model.Event) error {
 			Namespace: ns, TaskToken: a.token, Identity: "worker",
 		})
 		return err
+	case model.RequestCancel:
+		// WFA cancel comes from the workflow: signal it to cancel the activity, then wait until the
+		// server reflects CANCEL_REQUESTED so a following RespondCanceled is accepted (SAA's direct
+		// RequestCancelActivityExecution RPC is synchronous, so this makes the two comparable).
+		if err := a.h.env.SdkClient().SignalWorkflow(a.h.ctx, a.workflowID, a.runID, wfaCancelSignal, nil); err != nil {
+			return err
+		}
+		return a.waitForCancelRequested()
 	default:
 		return fmt.Errorf("wfaHarness: unhandled event kind %v", e.Kind)
 	}
+}
+
+func (a *wfaHandle) waitForCancelRequested() error {
+	deadline := time.Now().Add(10 * time.Second)
+	for time.Now().Before(deadline) {
+		resp, err := a.h.env.SdkClient().DescribeWorkflowExecution(a.h.ctx, a.workflowID, a.runID)
+		if err != nil {
+			return err
+		}
+		for _, pa := range resp.GetPendingActivities() {
+			if pa.GetActivityId() == a.activityID && pa.GetState() == enumspb.PENDING_ACTIVITY_STATE_CANCEL_REQUESTED {
+				return nil
+			}
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+	return fmt.Errorf("wfaHarness: activity %q did not reach CANCEL_REQUESTED after signal", a.activityID)
 }
 
 // heartbeatDetails reports the last heartbeat checkpoint the activity recorded, as the first payload's

@@ -1135,6 +1135,32 @@ func (s *ActivityTestSuite) TestTryActivityCancellationFromWorkflow() {
 	env.Logger.Info("Activity cancelled.", tag.WorkflowRunID(we.RunId))
 }
 
+// TestActivityCancel_{WorkflowActivity,StandaloneActivity} port the core of
+// TestTryActivityCancellationFromWorkflow above: a running activity is cancel-requested, the worker
+// acknowledges (RespondActivityTaskCanceled), and the activity ends CANCELED. WFA is the oracle; both
+// must reach CANCELED. The RequestCancel event realizes differently per surface — SAA's direct
+// RequestCancelActivityExecution RPC vs WFA's workflow-driven cancel (signal -> RequestCancelActivity)
+// — which is exactly the driver's job to hide.
+//
+// Fidelity vs the original: covered — the cancel-then-acknowledge -> CANCELED path. Not covered: the
+// original also asserts the workflow observed the cancellation (workflow-level, not the activity's
+// cross-surface contract).
+func (s *standaloneActivityTestSuite) TestActivityCancel_WorkflowActivity() {
+	env := s.newTestEnv()
+	t := s.T()
+	trace := []model.Event{saaPoll, {Kind: model.RequestCancel}, {Kind: model.RespondCanceled}}
+	h := &wfaHarness{env: env, ctx: testcontext.For(t), maxAttempts: 1}
+	require.Equal(t, activityTerminalProjection{Status: enumspb.ACTIVITY_EXECUTION_STATUS_CANCELED}, h.driveTrace(t, trace).terminal(t))
+}
+
+func (s *standaloneActivityTestSuite) TestActivityCancel_StandaloneActivity() {
+	env := s.newTestEnv()
+	t := s.T()
+	trace := []model.Event{saaPoll, {Kind: model.RequestCancel}, {Kind: model.RespondCanceled}}
+	h := &saaHarness{env: env, ctx: testcontext.For(t), idBase: testcore.RandomizeStr(t.Name()), cfg: model.Config{MaxAttempts: 1}}
+	require.Equal(t, activityTerminalProjection{Status: enumspb.ACTIVITY_EXECUTION_STATUS_CANCELED}, h.driveTrace(t, trace).terminal(t))
+}
+
 func (s *ActivityTestSuite) TestActivityCancellationNotStarted() {
 	env := testcore.NewEnv(s.T())
 	id := "functional-activity-notstarted-cancellation-test"
