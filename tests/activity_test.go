@@ -27,11 +27,13 @@ import (
 	"go.temporal.io/sdk/temporal"
 	"go.temporal.io/sdk/worker"
 	"go.temporal.io/sdk/workflow"
+	"go.temporal.io/server/chasm/lib/activity/model"
 	"go.temporal.io/server/common/convert"
 	"go.temporal.io/server/common/log/tag"
 	"go.temporal.io/server/common/payload"
 	"go.temporal.io/server/common/payloads"
 	"go.temporal.io/server/common/testing/parallelsuite"
+	"go.temporal.io/server/common/testing/testcontext"
 	"go.temporal.io/server/service/history/consts"
 	"go.temporal.io/server/tests/testcore"
 	"google.golang.org/protobuf/types/known/durationpb"
@@ -1555,4 +1557,44 @@ func (s *ActivityClientTestSuite) TestActivity_AttemptsExceeded() {
 
 	history := env.GetHistory(string(env.Namespace()), &commonpb.WorkflowExecution{WorkflowId: workflowRun.GetID()})
 	s.ContainsHistory(`ActivityTaskFailed`, &historypb.History{Events: history})
+}
+
+// --- CHASM-activity (SAA) vs workflow-activity (WFA) equivalence ----------------------------
+//
+// For each behavior at the intersection of the two products, a WFA test drives the trace with the
+// workflow-activity driver (activity_utils.go) and the SAA test immediately below drives the same
+// trace with the standalone-activity driver (activity_standalone_utils.go). Both assert the same
+// expected public activity info (activityInfoProjection). WFA is the oracle: the WFA test passing
+// blesses the expectation, and the SAA test passing proves the CHASM activity matches it. These live
+// on standaloneActivityTestSuite because its env enables the standalone activity (WFA needs nothing
+// special); driving both in one SAA-enabled env is why they sit here rather than on ActivityTestSuite.
+
+// retryAfterFail: attempt 1 fails retryably, the backoff elapses, attempt 2 starts. The activity is
+// then running its second attempt — no pending retry — so there is no current retry interval and no
+// next-attempt schedule time.
+var (
+	retryAfterFailTrace = []model.Event{saaPoll, saaFailRetryably, saaBackoffDelayElapse, saaPoll}
+	retryAfterFailWant  = activityInfoProjection{
+		State:                  enumspb.PENDING_ACTIVITY_STATE_STARTED,
+		Attempt:                2,
+		CurrentRetryInterval:   0,
+		NextAttemptScheduleSet: false,
+		LastAttemptCompleteSet: true,
+		LastStartedSet:         true,
+		LastWorkerIdentity:     "worker",
+	}
+)
+
+func (s *standaloneActivityTestSuite) TestRetryAfterFail_WorkflowActivity() {
+	env := s.newTestEnv()
+	t := s.T()
+	h := &wfaHarness{env: env, ctx: testcontext.For(t), maxAttempts: 3, retryInterval: 2 * time.Second}
+	require.Equal(t, retryAfterFailWant, h.driveTrace(t, retryAfterFailTrace).projection(t))
+}
+
+func (s *standaloneActivityTestSuite) TestRetryAfterFail_StandaloneActivity() {
+	env := s.newTestEnv()
+	t := s.T()
+	h := &saaHarness{env: env, ctx: testcontext.For(t), idBase: testcore.RandomizeStr(t.Name()), cfg: model.Config{MaxAttempts: 3}, retryInterval: 2 * time.Second}
+	require.Equal(t, retryAfterFailWant, h.driveTrace(t, retryAfterFailTrace).projection(t))
 }

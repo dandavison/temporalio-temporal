@@ -232,6 +232,26 @@ func (a *saaHandle) describe() (*workflowservice.DescribeActivityExecutionRespon
 	})
 }
 
+// projection reads the activity's public info back via DescribeActivityExecution, as the shared
+// activityInfoProjection (defined in activity_utils.go). Parallel to wfaHandle.projection.
+func (a *saaHandle) projection(t require.TestingT) activityInfoProjection {
+	resp, err := a.describe()
+	require.NoError(t, err)
+	return projectSAA(resp.GetInfo())
+}
+
+func projectSAA(i *apiactivitypb.ActivityExecutionInfo) activityInfoProjection {
+	return activityInfoProjection{
+		State:                  i.GetRunState(),
+		Attempt:                i.GetAttempt(),
+		CurrentRetryInterval:   i.GetCurrentRetryInterval().AsDuration(),
+		NextAttemptScheduleSet: i.GetNextAttemptScheduleTime() != nil,
+		LastAttemptCompleteSet: i.GetLastAttemptCompleteTime() != nil,
+		LastStartedSet:         i.GetLastStartedTime() != nil,
+		LastWorkerIdentity:     i.GetLastWorkerIdentity(),
+	}
+}
+
 // observed reads the activity's internal state back via ReadComponent, as the model's AbstractState.
 // It shifts cur->prev for the raw stamps so callers can compare the stamp change across the edge just
 // driven (see checkTaskInvalidation in the spec harness).
