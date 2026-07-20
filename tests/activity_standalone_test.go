@@ -3699,6 +3699,31 @@ func (s *standaloneActivityTestSuite) TestDescribeNextAttemptScheduleTimeAndCurr
 		})
 	})
 
+	// Retry dispatched to Matching but not yet picked up: the dispatch time has passed, so there is no
+	// pending future dispatch to report.
+	t.Run("RetryQueuedNotStarted", func(t *testing.T) {
+		desc, err := s.runTrace(t, env, saaTrace{
+			trace:         []model.Event{saaPoll, saaFailRetryably, saaBackoffDelayElapse},
+			maxAttempts:   3,
+			retryInterval: saaDelayWindow,
+		}).describe()
+		require.NoError(t, err)
+		info := desc.GetInfo()
+
+		t.Run("NextAttemptScheduleTime", func(t *testing.T) {
+			require.EqualValues(t, 2, info.GetAttempt())
+			require.Equal(t, enumspb.PENDING_ACTIVITY_STATE_SCHEDULED, info.GetRunState())
+			require.Nil(t, info.GetNextAttemptScheduleTime(),
+				"NextAttemptScheduleTime is null once the dispatch time has passed (task queued, not yet started) (got %s)",
+				info.GetNextAttemptScheduleTime().AsTime())
+		})
+
+		t.Run("CurrentRetryInterval", func(t *testing.T) {
+			require.Equal(t, saaDelayWindow, info.GetCurrentRetryInterval().AsDuration(),
+				"while queued for a retry, CurrentRetryInterval is the retry interval")
+		})
+	})
+
 	// Retry attempt running with a further retry permitted.
 	t.Run("RetryAttemptRunning", func(t *testing.T) {
 		desc, err := s.runTrace(t, env, saaTrace{
@@ -3742,6 +3767,30 @@ func (s *standaloneActivityTestSuite) TestDescribeNextAttemptScheduleTimeAndCurr
 		t.Run("CurrentRetryInterval", func(t *testing.T) {
 			require.Nil(t, info.GetCurrentRetryInterval(),
 				"CurrentRetryInterval is null when no retry remains (got %s)", info.GetCurrentRetryInterval().AsDuration())
+		})
+	})
+
+	// Terminal (completed after a retry): no attempt is pending or running, so both fields are null.
+	t.Run("Completed", func(t *testing.T) {
+		desc, err := s.runTrace(t, env, saaTrace{
+			trace:         []model.Event{saaPoll, saaFailRetryably, saaBackoffDelayElapse, saaPoll, {Kind: model.RespondCompleted}},
+			maxAttempts:   3,
+			retryInterval: saaDelayWindow,
+		}).describe()
+		require.NoError(t, err)
+		info := desc.GetInfo()
+
+		t.Run("NextAttemptScheduleTime", func(t *testing.T) {
+			require.Equal(t, enumspb.ACTIVITY_EXECUTION_STATUS_COMPLETED, info.GetStatus())
+			require.Nil(t, info.GetNextAttemptScheduleTime(),
+				"NextAttemptScheduleTime is null in a terminal state (got %s)",
+				info.GetNextAttemptScheduleTime().AsTime())
+		})
+
+		t.Run("CurrentRetryInterval", func(t *testing.T) {
+			require.Nil(t, info.GetCurrentRetryInterval(),
+				"CurrentRetryInterval is null in a terminal state (got %s)",
+				info.GetCurrentRetryInterval().AsDuration())
 		})
 	})
 }
