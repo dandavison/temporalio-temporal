@@ -1653,3 +1653,30 @@ func (s *standaloneActivityTestSuite) TestNextRetryDelayOverride_StandaloneActiv
 	h := &saaHarness{env: env, ctx: testcontext.For(t), idBase: testcore.RandomizeStr(t.Name()), cfg: model.Config{MaxAttempts: 3}, retryInterval: 5 * time.Second, nextRetryDelay: nextRetryDelayOverride}
 	require.Equal(t, nextRetryDelayWant, h.driveTrace(t, nextRetryDelayTrace).projection(t))
 }
+
+// firstAttemptStarted: a worker polls the first attempt, which is now running. No attempt has failed,
+// so there is no current retry interval and no next-attempt schedule time. The baseline running-state
+// equivalence. Expected fully green.
+var (
+	firstAttemptStartedTrace = []model.Event{saaPoll}
+	firstAttemptStartedWant  = activityInfoProjection{
+		State:                  enumspb.PENDING_ACTIVITY_STATE_STARTED,
+		Attempt:                1,
+		CurrentRetryInterval:   0,
+		NextAttemptScheduleSet: false,
+	}
+)
+
+func (s *standaloneActivityTestSuite) TestFirstAttemptStarted_WorkflowActivity() {
+	env := s.newTestEnv()
+	t := s.T()
+	h := &wfaHarness{env: env, ctx: testcontext.For(t), maxAttempts: 3, retryInterval: 2 * time.Second}
+	require.Equal(t, firstAttemptStartedWant, h.driveTrace(t, firstAttemptStartedTrace).projection(t))
+}
+
+func (s *standaloneActivityTestSuite) TestFirstAttemptStarted_StandaloneActivity() {
+	env := s.newTestEnv()
+	t := s.T()
+	h := &saaHarness{env: env, ctx: testcontext.For(t), idBase: testcore.RandomizeStr(t.Name()), cfg: model.Config{MaxAttempts: 3}, retryInterval: 2 * time.Second}
+	require.Equal(t, firstAttemptStartedWant, h.driveTrace(t, firstAttemptStartedTrace).projection(t))
+}
