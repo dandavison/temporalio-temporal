@@ -85,14 +85,14 @@ type saaHandle struct {
 func (h *saaHarness) driveTrace(t require.TestingT, trace []model.Event) *saaHandle {
 	a := h.start(t)
 	for _, e := range trace {
-		a.applyEvent(t, e)
+		a.driveEvent(t, e)
 	}
 	return a
 }
 
-// applyEvent advances the activity by one event: a poll captures the dispatched token, a wall-clock
+// driveEvent advances the activity by one event: a poll captures the dispatched token, a wall-clock
 // event is waited out, any other event is its RPC (which must succeed). It makes no model check.
-func (a *saaHandle) applyEvent(t require.TestingT, e model.Event) {
+func (a *saaHandle) driveEvent(t require.TestingT, e model.Event) {
 	h := a.h
 	switch {
 	case e.Kind == model.Poll:
