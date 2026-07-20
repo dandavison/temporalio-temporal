@@ -240,13 +240,29 @@ func (a *saaHandle) projection(t require.TestingT) activityInfoProjection {
 	return projectSAA(resp.GetInfo())
 }
 
-// terminalStatus waits for the activity to reach a terminal state and reports it. DescribeActivity
-// Execution works on a closed standalone activity, so the status is read directly. Parallel to
-// wfaHandle.terminalStatus.
-func (a *saaHandle) terminalStatus(t require.TestingT) enumspb.ActivityExecutionStatus {
+// terminal waits for the activity to reach a terminal state and reports it as the shared
+// activityTerminalProjection. DescribeActivityExecution works on a closed standalone activity: the
+// status comes from Info and the failure discriminant from the terminal Outcome. Parallel to
+// wfaHandle.terminal.
+func (a *saaHandle) terminal(t require.TestingT) activityTerminalProjection {
 	resp, err := a.describe()
 	require.NoError(t, err)
-	return resp.GetInfo().GetStatus()
+	return activityTerminalProjection{
+		Status:      resp.GetInfo().GetStatus(),
+		FailureType: saaFailureType(resp.GetOutcome().GetFailure()),
+	}
+}
+
+// saaFailureType extracts the failure discriminant a caller compares across surfaces: the application
+// failure Type, or the TimeoutType string, or "" if neither (e.g. a successful outcome).
+func saaFailureType(f *failurepb.Failure) string {
+	if app := f.GetApplicationFailureInfo(); app != nil {
+		return app.GetType()
+	}
+	if to := f.GetTimeoutFailureInfo(); to != nil {
+		return to.GetTimeoutType().String()
+	}
+	return ""
 }
 
 func projectSAA(i *apiactivitypb.ActivityExecutionInfo) activityInfoProjection {

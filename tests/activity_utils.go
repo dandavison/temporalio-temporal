@@ -49,6 +49,15 @@ type activityInfoProjection struct {
 	NextAttemptScheduleSet bool          // NextAttemptScheduleTime != nil
 }
 
+// activityTerminalProjection is the terminal-outcome contract both surfaces expose: the terminal
+// status plus the failure discriminant users see — the application failure Type for FAILED, the
+// TimeoutType string for TIMED_OUT, empty otherwise. SAA reads it from DescribeActivityExecution's
+// outcome; WFA maps it from the workflow-result error's cause (see the two terminal() methods).
+type activityTerminalProjection struct {
+	Status      enumspb.ActivityExecutionStatus
+	FailureType string
+}
+
 func projectWFA(p *workflowpb.PendingActivityInfo) activityInfoProjection {
 	return activityInfoProjection{
 		State:                  p.GetState(),
@@ -202,24 +211,26 @@ func (h *wfaHarness) start(t *testing.T) *wfaHandle {
 	return &wfaHandle{h: h, run: run, workflowID: wfID, runID: run.GetRunID(), activityID: actID, activityTQ: actTQ}
 }
 
-// terminalStatus waits for the activity to reach a terminal state and reports it, mapped onto the
-// ActivityExecutionStatus enum SAA reports directly. A workflow-activity's terminal outcome is not in
-// PendingActivities; it is the outcome the workflow's ExecuteActivity().Get returns, so we read it
-// from the workflow result. Parallel to saaHandle.terminalStatus.
-func (a *wfaHandle) terminalStatus(t require.TestingT) enumspb.ActivityExecutionStatus {
+// terminal waits for the activity to reach a terminal state and reports it as the shared
+// activityTerminalProjection. A workflow-activity's terminal outcome is not in PendingActivities; it is
+// the outcome the workflow's ExecuteActivity().Get returns, so we read status and failure discriminant
+// from the workflow-result error's cause. Parallel to saaHandle.terminal.
+func (a *wfaHandle) terminal(t require.TestingT) activityTerminalProjection {
 	err := a.run.Get(a.h.ctx, nil)
 	if err == nil {
-		return enumspb.ACTIVITY_EXECUTION_STATUS_COMPLETED
+		return activityTerminalProjection{Status: enumspb.ACTIVITY_EXECUTION_STATUS_COMPLETED}
 	}
 	var actErr *temporal.ActivityError
 	require.ErrorAs(t, err, &actErr)
-	switch actErr.Unwrap().(type) {
+	switch cause := actErr.Unwrap().(type) {
+	case *temporal.ApplicationError:
+		return activityTerminalProjection{Status: enumspb.ACTIVITY_EXECUTION_STATUS_FAILED, FailureType: cause.Type()}
 	case *temporal.TimeoutError:
-		return enumspb.ACTIVITY_EXECUTION_STATUS_TIMED_OUT
+		return activityTerminalProjection{Status: enumspb.ACTIVITY_EXECUTION_STATUS_TIMED_OUT, FailureType: cause.TimeoutType().String()}
 	case *temporal.CanceledError:
-		return enumspb.ACTIVITY_EXECUTION_STATUS_CANCELED
+		return activityTerminalProjection{Status: enumspb.ACTIVITY_EXECUTION_STATUS_CANCELED}
 	default:
-		return enumspb.ACTIVITY_EXECUTION_STATUS_FAILED
+		return activityTerminalProjection{Status: enumspb.ACTIVITY_EXECUTION_STATUS_FAILED}
 	}
 }
 

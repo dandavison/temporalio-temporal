@@ -385,7 +385,7 @@ func (s *standaloneActivityTestSuite) TestStartToCloseTimeout_WorkflowActivity()
 	t := s.T()
 	trace := []model.Event{saaPoll, {Kind: model.StartToCloseElapses}}
 	h := &wfaHarness{env: env, ctx: testcontext.For(t), maxAttempts: 1, shortTimeout: saaTimeoutIn(trace)}
-	require.Equal(t, enumspb.ACTIVITY_EXECUTION_STATUS_TIMED_OUT, h.driveTrace(t, trace).terminalStatus(t))
+	require.Equal(t, activityTerminalProjection{Status: enumspb.ACTIVITY_EXECUTION_STATUS_TIMED_OUT, FailureType: enumspb.TIMEOUT_TYPE_START_TO_CLOSE.String()}, h.driveTrace(t, trace).terminal(t))
 }
 
 func (s *standaloneActivityTestSuite) TestStartToCloseTimeout_StandaloneActivity() {
@@ -393,7 +393,7 @@ func (s *standaloneActivityTestSuite) TestStartToCloseTimeout_StandaloneActivity
 	t := s.T()
 	trace := []model.Event{saaPoll, {Kind: model.StartToCloseElapses}}
 	h := &saaHarness{env: env, ctx: testcontext.For(t), idBase: testcore.RandomizeStr(t.Name()), cfg: model.Config{MaxAttempts: 1}, shortTimeout: saaTimeoutIn(trace)}
-	require.Equal(t, enumspb.ACTIVITY_EXECUTION_STATUS_TIMED_OUT, h.driveTrace(t, trace).terminalStatus(t))
+	require.Equal(t, activityTerminalProjection{Status: enumspb.ACTIVITY_EXECUTION_STATUS_TIMED_OUT, FailureType: enumspb.TIMEOUT_TYPE_START_TO_CLOSE.String()}, h.driveTrace(t, trace).terminal(t))
 }
 
 func (s *ActivityTestSuite) TestActivityHeartBeatWorkflow_Success() {
@@ -540,7 +540,7 @@ func (s *standaloneActivityTestSuite) TestActivityHeartBeat_WorkflowActivity() {
 	t := s.T()
 	trace := []model.Event{saaPoll, {Kind: model.Heartbeat}, {Kind: model.RespondCompleted}}
 	h := &wfaHarness{env: env, ctx: testcontext.For(t), maxAttempts: 3, retryInterval: 2 * time.Second}
-	require.Equal(t, enumspb.ACTIVITY_EXECUTION_STATUS_COMPLETED, h.driveTrace(t, trace).terminalStatus(t))
+	require.Equal(t, activityTerminalProjection{Status: enumspb.ACTIVITY_EXECUTION_STATUS_COMPLETED}, h.driveTrace(t, trace).terminal(t))
 }
 
 func (s *standaloneActivityTestSuite) TestActivityHeartBeat_StandaloneActivity() {
@@ -548,7 +548,7 @@ func (s *standaloneActivityTestSuite) TestActivityHeartBeat_StandaloneActivity()
 	t := s.T()
 	trace := []model.Event{saaPoll, {Kind: model.Heartbeat}, {Kind: model.RespondCompleted}}
 	h := &saaHarness{env: env, ctx: testcontext.For(t), idBase: testcore.RandomizeStr(t.Name()), cfg: model.Config{MaxAttempts: 3}, retryInterval: 2 * time.Second}
-	require.Equal(t, enumspb.ACTIVITY_EXECUTION_STATUS_COMPLETED, h.driveTrace(t, trace).terminalStatus(t))
+	require.Equal(t, activityTerminalProjection{Status: enumspb.ACTIVITY_EXECUTION_STATUS_COMPLETED}, h.driveTrace(t, trace).terminal(t))
 }
 
 func (s *ActivityTestSuite) TestActivityRetry() {
@@ -760,7 +760,7 @@ func (s *standaloneActivityTestSuite) TestActivityRetry_WorkflowActivity() {
 	t := s.T()
 	trace := []model.Event{saaPoll, saaFailRetryably, saaBackoffDelayElapse, saaPoll, saaFailNonRetryably}
 	h := &wfaHarness{env: env, ctx: testcontext.For(t), maxAttempts: 3, retryInterval: 2 * time.Second}
-	require.Equal(t, enumspb.ACTIVITY_EXECUTION_STATUS_FAILED, h.driveTrace(t, trace).terminalStatus(t))
+	require.Equal(t, activityTerminalProjection{Status: enumspb.ACTIVITY_EXECUTION_STATUS_FAILED, FailureType: "drive"}, h.driveTrace(t, trace).terminal(t))
 }
 
 func (s *standaloneActivityTestSuite) TestActivityRetry_StandaloneActivity() {
@@ -768,7 +768,7 @@ func (s *standaloneActivityTestSuite) TestActivityRetry_StandaloneActivity() {
 	t := s.T()
 	trace := []model.Event{saaPoll, saaFailRetryably, saaBackoffDelayElapse, saaPoll, saaFailNonRetryably}
 	h := &saaHarness{env: env, ctx: testcontext.For(t), idBase: testcore.RandomizeStr(t.Name()), cfg: model.Config{MaxAttempts: 3}, retryInterval: 2 * time.Second}
-	require.Equal(t, enumspb.ACTIVITY_EXECUTION_STATUS_FAILED, h.driveTrace(t, trace).terminalStatus(t))
+	require.Equal(t, activityTerminalProjection{Status: enumspb.ACTIVITY_EXECUTION_STATUS_FAILED, FailureType: "drive"}, h.driveTrace(t, trace).terminal(t))
 }
 
 func (s *ActivityTestSuite) TestActivityRetry_Infinite() {
