@@ -148,15 +148,15 @@ func wfaOneActivityWorkflow(ctx workflow.Context, p wfaActivityParams) error {
 func (h *wfaHarness) driveTrace(t *testing.T, trace []model.Event) *wfaHandle {
 	a := h.start(t)
 	for _, e := range trace {
-		a.applyEvent(t, e)
+		a.driveEvent(t, e)
 	}
 	return a
 }
 
-// applyEvent advances the activity by one event: a poll captures the dispatched token, a wall-clock
+// driveEvent advances the activity by one event: a poll captures the dispatched token, a wall-clock
 // event is waited out, any other event is its worker RPC (which must succeed). Parallel to
-// saaHandle.applyEvent.
-func (a *wfaHandle) applyEvent(t require.TestingT, e model.Event) {
+// saaHandle.driveEvent.
+func (a *wfaHandle) driveEvent(t require.TestingT, e model.Event) {
 	h := a.h
 	switch {
 	case e.Kind == model.Poll:

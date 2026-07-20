@@ -565,7 +565,7 @@ func (s *standaloneActivityTestSuite) TestActivityHeartBeat_WorkflowActivity() {
 	h := &wfaHarness{env: env, ctx: testcontext.For(t), maxAttempts: 3, retryInterval: 2 * time.Second}
 	a := h.driveTrace(t, []model.Event{saaPoll, {Kind: model.Heartbeat}})
 	require.Equal(t, heartbeatWant, a.heartbeatDetails(t))
-	a.applyEvent(t, model.Event{Kind: model.RespondCompleted})
+	a.driveEvent(t, model.Event{Kind: model.RespondCompleted})
 	require.Equal(t, activityTerminalProjection{Status: enumspb.ACTIVITY_EXECUTION_STATUS_COMPLETED}, a.terminal(t))
 }
 
@@ -575,7 +575,7 @@ func (s *standaloneActivityTestSuite) TestActivityHeartBeat_StandaloneActivity()
 	h := &saaHarness{env: env, ctx: testcontext.For(t), idBase: testcore.RandomizeStr(t.Name()), cfg: model.Config{MaxAttempts: 3}, retryInterval: 2 * time.Second}
 	a := h.driveTrace(t, []model.Event{saaPoll, {Kind: model.Heartbeat}})
 	require.Equal(t, heartbeatWant, a.heartbeatDetails(t))
-	a.applyEvent(t, model.Event{Kind: model.RespondCompleted})
+	a.driveEvent(t, model.Event{Kind: model.RespondCompleted})
 	require.Equal(t, activityTerminalProjection{Status: enumspb.ACTIVITY_EXECUTION_STATUS_COMPLETED}, a.terminal(t))
 }
 
