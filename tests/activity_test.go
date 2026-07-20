@@ -1825,3 +1825,95 @@ func (s *standaloneActivityTestSuite) TestFirstAttemptStarted_StandaloneActivity
 	h := &saaHarness{env: env, ctx: testcontext.For(t), idBase: testcore.RandomizeStr(t.Name()), cfg: model.Config{MaxAttempts: 3}, retryInterval: 2 * time.Second}
 	require.Equal(t, firstAttemptStartedWant, h.driveTrace(t, firstAttemptStartedTrace).projection(t))
 }
+
+// TestDescribeNextAttemptScheduleTimeAndCurrentRetryInterval sweeps NextAttemptScheduleTime and
+// CurrentRetryInterval across the activity lifecycle, comparing SAA against WFA (the oracle) at each
+// point. Each scenario drives the same trace through both surfaces and asserts the same public info.
+// The running-state scenarios are the C5 divergence: WFA reports no pending retry while an attempt
+// runs, whereas SAA leaks the preceding backoff's retry-scheduling metadata — so those SAA subtests
+// are expected red until C5 is fixed. StartDelayPending and PausedDuringBackoff are standalone-only
+// (WFA has no per-activity start delay, and the WFA driver has no operator pause).
+func (s *standaloneActivityTestSuite) TestDescribeNextAttemptScheduleTimeAndCurrentRetryInterval() {
+	env := s.newTestEnv()
+	t := s.T()
+
+	// both drives a trace through the WFA oracle and the SAA surface, asserting each reports want.
+	both := func(t *testing.T, maxAttempts int32, retryInterval time.Duration, trace []model.Event, want activityInfoProjection) {
+		t.Run("WorkflowActivity", func(t *testing.T) {
+			h := &wfaHarness{env: env, ctx: testcontext.For(t), maxAttempts: maxAttempts, retryInterval: retryInterval}
+			require.Equal(t, want, h.driveTrace(t, trace).projection(t))
+		})
+		t.Run("StandaloneActivity", func(t *testing.T) {
+			h := &saaHarness{env: env, ctx: testcontext.For(t), idBase: testcore.RandomizeStr(t.Name()), cfg: model.Config{MaxAttempts: maxAttempts}, retryInterval: retryInterval}
+			require.Equal(t, want, h.driveTrace(t, trace).projection(t))
+		})
+	}
+
+	// First attempt within its start delay: the dispatch is pending in the future and is not a retry.
+	t.Run("StartDelayPending", func(t *testing.T) {
+		info := s.driveTrace(t, env, saaTrace{trace: []model.Event{}, startDelayed: true}).describe(t).GetInfo()
+		require.Equal(t, enumspb.PENDING_ACTIVITY_STATE_SCHEDULED, info.GetRunState())
+		require.Equal(t, info.GetExecutionTime().AsTime(), info.GetNextAttemptScheduleTime().AsTime(),
+			"during a start delay, NextAttemptScheduleTime is the pending dispatch time (schedule+delay)")
+		require.Nil(t, info.GetCurrentRetryInterval(), "the first attempt is not a retry")
+	})
+
+	// First attempt running: no pending next dispatch, and no preceding backoff, so no retry interval.
+	t.Run("FirstAttemptRunning", func(t *testing.T) {
+		both(t, 3, saaDelayWindow, []model.Event{saaPoll},
+			activityInfoProjection{State: enumspb.PENDING_ACTIVITY_STATE_STARTED, Attempt: 1})
+	})
+
+	// Backing off before the retry dispatches: the retry is genuinely pending, so both the interval and
+	// the next-attempt schedule time are populated. The case where the two products agree.
+	t.Run("BackingOffBeforeRetry", func(t *testing.T) {
+		both(t, 3, saaDelayWindow, []model.Event{saaPoll, saaFailRetryably},
+			activityInfoProjection{State: enumspb.PENDING_ACTIVITY_STATE_SCHEDULED, Attempt: 2, CurrentRetryInterval: saaDelayWindow, NextAttemptScheduleSet: true})
+	})
+
+	// Retry dispatched to matching but not yet polled: schedulable now, so no future dispatch time.
+	t.Run("RetryQueuedNotStarted", func(t *testing.T) {
+		both(t, 3, saaDelayWindow, []model.Event{saaPoll, saaFailRetryably, saaBackoffDelayElapse},
+			activityInfoProjection{State: enumspb.PENDING_ACTIVITY_STATE_SCHEDULED, Attempt: 2, CurrentRetryInterval: saaDelayWindow})
+	})
+
+	// Retry attempt running with a further retry permitted: nothing pending (C5 — SAA leaks the backoff's
+	// metadata here).
+	t.Run("RetryAttemptRunning", func(t *testing.T) {
+		both(t, 3, saaDelayWindow, []model.Event{saaPoll, saaFailRetryably, saaBackoffDelayElapse, saaPoll},
+			activityInfoProjection{State: enumspb.PENDING_ACTIVITY_STATE_STARTED, Attempt: 2})
+	})
+
+	// Final attempt running with no retry remaining: nothing pending (C5 — SAA leaks metadata here too).
+	t.Run("FinalAttemptRunning", func(t *testing.T) {
+		both(t, 2, saaDelayWindow, []model.Event{saaPoll, saaFailRetryably, saaBackoffDelayElapse, saaPoll},
+			activityInfoProjection{State: enumspb.PENDING_ACTIVITY_STATE_STARTED, Attempt: 2})
+	})
+
+	// Completed after a retry: terminal, nothing pending.
+	t.Run("Completed", func(t *testing.T) {
+		trace := []model.Event{saaPoll, saaFailRetryably, saaBackoffDelayElapse, saaPoll, saaComplete}
+		want := activityTerminalProjection{Status: enumspb.ACTIVITY_EXECUTION_STATUS_COMPLETED}
+		t.Run("WorkflowActivity", func(t *testing.T) {
+			h := &wfaHarness{env: env, ctx: testcontext.For(t), maxAttempts: 3, retryInterval: saaDelayWindow}
+			require.Equal(t, want, h.driveTrace(t, trace).terminal(t))
+		})
+		t.Run("StandaloneActivity", func(t *testing.T) {
+			h := &saaHarness{env: env, ctx: testcontext.For(t), idBase: testcore.RandomizeStr(t.Name()), cfg: model.Config{MaxAttempts: 3}, retryInterval: saaDelayWindow}
+			require.Equal(t, want, h.driveTrace(t, trace).terminal(t))
+		})
+	})
+
+	// Paused while backing off: dispatch is suspended, so neither a next dispatch nor a current retry
+	// interval is reported (even though the attempt carries a stored interval).
+	t.Run("PausedDuringBackoff", func(t *testing.T) {
+		info := s.driveTrace(t, env, saaTrace{
+			trace:         []model.Event{saaPoll, saaFailRetryably, saaPause},
+			maxAttempts:   3,
+			retryInterval: saaDelayWindow,
+		}).describe(t).GetInfo()
+		require.Equal(t, enumspb.PENDING_ACTIVITY_STATE_PAUSED, info.GetRunState())
+		require.Nil(t, info.GetNextAttemptScheduleTime())
+		require.Nil(t, info.GetCurrentRetryInterval())
+	})
+}
