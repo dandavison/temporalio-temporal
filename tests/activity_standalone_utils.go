@@ -224,12 +224,78 @@ func (h *saaHarness) startRequest(activityID, taskQueue string) *workflowservice
 // failure) are requested so a caller can assert on a closed activity's result or failure.
 func (a *saaHandle) describe() (*workflowservice.DescribeActivityExecutionResponse, error) {
 	return a.h.env.FrontendClient().DescribeActivityExecution(a.h.ctx, &workflowservice.DescribeActivityExecutionRequest{
-		Namespace:          a.h.env.Namespace().String(),
-		ActivityId:         a.activityID,
-		RunId:              a.runID,
-		IncludeOutcome:     true,
-		IncludeLastFailure: true,
+		Namespace:               a.h.env.Namespace().String(),
+		ActivityId:              a.activityID,
+		RunId:                   a.runID,
+		IncludeOutcome:          true,
+		IncludeLastFailure:      true,
+		IncludeHeartbeatDetails: true,
 	})
+}
+
+// projection reads the activity's public info back via DescribeActivityExecution, as the shared
+// activityInfoProjection (defined in activity_utils.go). Parallel to wfaHandle.projection.
+func (a *saaHandle) projection(t require.TestingT) activityInfoProjection {
+	resp, err := a.describe()
+	require.NoError(t, err)
+	return projectSAA(resp.GetInfo())
+}
+
+// terminal waits for the activity to reach a terminal state and reports it as the shared
+// activityTerminalProjection. DescribeActivityExecution works on a closed standalone activity: the
+// status comes from Info and the failure discriminant from the terminal Outcome. Parallel to
+// wfaHandle.terminal.
+func (a *saaHandle) terminal(t require.TestingT) activityTerminalProjection {
+	resp, err := a.describe()
+	require.NoError(t, err)
+	return activityTerminalProjection{
+		Status:      resp.GetInfo().GetStatus(),
+		FailureType: saaFailureType(resp.GetOutcome().GetFailure()),
+	}
+}
+
+// heartbeatDetails reports the last heartbeat checkpoint the activity recorded, as the first payload's
+// raw bytes (a fixed test payload — see saaHeartbeatDetails). Observable while the activity is running.
+// Parallel to wfaHandle.heartbeatDetails.
+func (a *saaHandle) heartbeatDetails(t require.TestingT) []byte {
+	resp, err := a.describe()
+	require.NoError(t, err)
+	return firstPayloadData(resp.GetInfo().GetHeartbeatDetails())
+}
+
+// saaHeartbeatDetails is the fixed checkpoint payload the drivers send with a Heartbeat event, so a
+// test can assert it round-trips identically on both surfaces.
+var saaHeartbeatDetails = &commonpb.Payloads{Payloads: []*commonpb.Payload{{
+	Metadata: map[string][]byte{"encoding": []byte("json/plain")},
+	Data:     []byte(`"hb"`),
+}}}
+
+func firstPayloadData(p *commonpb.Payloads) []byte {
+	if ps := p.GetPayloads(); len(ps) > 0 {
+		return ps[0].GetData()
+	}
+	return nil
+}
+
+// saaFailureType extracts the failure discriminant a caller compares across surfaces: the application
+// failure Type, or the TimeoutType string, or "" if neither (e.g. a successful outcome).
+func saaFailureType(f *failurepb.Failure) string {
+	if app := f.GetApplicationFailureInfo(); app != nil {
+		return app.GetType()
+	}
+	if to := f.GetTimeoutFailureInfo(); to != nil {
+		return to.GetTimeoutType().String()
+	}
+	return ""
+}
+
+func projectSAA(i *apiactivitypb.ActivityExecutionInfo) activityInfoProjection {
+	return activityInfoProjection{
+		State:                  i.GetRunState(),
+		Attempt:                i.GetAttempt(),
+		CurrentRetryInterval:   i.GetCurrentRetryInterval().AsDuration().Round(time.Second),
+		NextAttemptScheduleSet: i.GetNextAttemptScheduleTime() != nil,
+	}
 }
 
 // observed reads the activity's internal state back via ReadComponent, as the model's AbstractState.
@@ -254,6 +320,7 @@ func (a *saaHandle) rpc(e model.Event) error {
 		resp, err := fc.RecordActivityTaskHeartbeat(a.h.ctx, &workflowservice.RecordActivityTaskHeartbeatRequest{
 			Namespace: ns,
 			TaskToken: a.token,
+			Details:   saaHeartbeatDetails,
 		})
 		a.lastHeartbeat = resp
 		return err
@@ -525,6 +592,7 @@ const saaLongStartDelay = time.Hour
 var (
 	saaPoll               = model.Event{Kind: model.Poll}
 	saaFailRetryably      = model.Event{Kind: model.RespondFailed, Retryable: true}
+	saaFailNonRetryably   = model.Event{Kind: model.RespondFailed, Retryable: false}
 	saaStartDelayElapse   = model.Event{Kind: model.StartDelayElapses}
 	saaBackoffDelayElapse = model.Event{Kind: model.BackoffElapses}
 )
