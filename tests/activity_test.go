@@ -398,6 +398,27 @@ func (s *standaloneActivityTestSuite) TestStartToCloseTimeout_StandaloneActivity
 	require.Equal(t, activityTerminalProjection{Status: enumspb.ACTIVITY_EXECUTION_STATUS_TIMED_OUT, FailureType: enumspb.TIMEOUT_TYPE_START_TO_CLOSE.String()}, h.driveTrace(t, trace).terminal(t))
 }
 
+// TestScheduleToCloseTimeout_{WorkflowActivity,StandaloneActivity} port the schedule-to-close slice of
+// Test_ActivityTimeouts (fired-during-run): the activity is started, then its ScheduleToClose deadline
+// elapses while it runs, so it ends TIMED_OUT with the ScheduleToClose TimeoutType. Both must reach the
+// same status and type. (A never-started activity that hits the deadline times out as ScheduleToStart
+// instead — on both surfaces — which is why the port polls first.)
+func (s *standaloneActivityTestSuite) TestScheduleToCloseTimeout_WorkflowActivity() {
+	env := s.newTestEnv()
+	t := s.T()
+	trace := []model.Event{saaPoll, {Kind: model.ScheduleToCloseElapses}}
+	h := &wfaHarness{env: env, ctx: testcontext.For(t), maxAttempts: 1, shortTimeout: saaTimeoutIn(trace)}
+	require.Equal(t, activityTerminalProjection{Status: enumspb.ACTIVITY_EXECUTION_STATUS_TIMED_OUT, FailureType: enumspb.TIMEOUT_TYPE_SCHEDULE_TO_CLOSE.String()}, h.driveTrace(t, trace).terminal(t))
+}
+
+func (s *standaloneActivityTestSuite) TestScheduleToCloseTimeout_StandaloneActivity() {
+	env := s.newTestEnv()
+	t := s.T()
+	trace := []model.Event{saaPoll, {Kind: model.ScheduleToCloseElapses}}
+	h := &saaHarness{env: env, ctx: testcontext.For(t), idBase: testcore.RandomizeStr(t.Name()), cfg: model.Config{MaxAttempts: 1, HasScheduleToClose: true}, shortTimeout: saaTimeoutIn(trace)}
+	require.Equal(t, activityTerminalProjection{Status: enumspb.ACTIVITY_EXECUTION_STATUS_TIMED_OUT, FailureType: enumspb.TIMEOUT_TYPE_SCHEDULE_TO_CLOSE.String()}, h.driveTrace(t, trace).terminal(t))
+}
+
 func (s *ActivityTestSuite) TestActivityHeartBeatWorkflow_Success() {
 	env := testcore.NewEnv(s.T())
 	id := "functional-heartbeat-test"
@@ -983,6 +1004,26 @@ func (s *ActivityTestSuite) TestActivityHeartBeatWorkflow_Timeout() {
 	_, err = poller.PollAndProcessWorkflowTask(testcore.WithDumpHistory)
 	s.NoError(err)
 	s.True(workflowComplete)
+}
+
+// TestHeartbeatTimeout_{WorkflowActivity,StandaloneActivity} port the core of
+// TestActivityHeartBeatWorkflow_Timeout above: a started attempt heartbeats nothing within its
+// HeartbeatTimeout and, with no retries left, the activity ends TIMED_OUT with the Heartbeat
+// TimeoutType. Both must reach the same status and type.
+func (s *standaloneActivityTestSuite) TestHeartbeatTimeout_WorkflowActivity() {
+	env := s.newTestEnv()
+	t := s.T()
+	trace := []model.Event{saaPoll, {Kind: model.HeartbeatElapses}}
+	h := &wfaHarness{env: env, ctx: testcontext.For(t), maxAttempts: 1, shortTimeout: saaTimeoutIn(trace)}
+	require.Equal(t, activityTerminalProjection{Status: enumspb.ACTIVITY_EXECUTION_STATUS_TIMED_OUT, FailureType: enumspb.TIMEOUT_TYPE_HEARTBEAT.String()}, h.driveTrace(t, trace).terminal(t))
+}
+
+func (s *standaloneActivityTestSuite) TestHeartbeatTimeout_StandaloneActivity() {
+	env := s.newTestEnv()
+	t := s.T()
+	trace := []model.Event{saaPoll, {Kind: model.HeartbeatElapses}}
+	h := &saaHarness{env: env, ctx: testcontext.For(t), idBase: testcore.RandomizeStr(t.Name()), cfg: model.Config{MaxAttempts: 1, HasHeartbeat: true}, shortTimeout: saaTimeoutIn(trace)}
+	require.Equal(t, activityTerminalProjection{Status: enumspb.ACTIVITY_EXECUTION_STATUS_TIMED_OUT, FailureType: enumspb.TIMEOUT_TYPE_HEARTBEAT.String()}, h.driveTrace(t, trace).terminal(t))
 }
 
 func (s *ActivityTestSuite) TestTryActivityCancellationFromWorkflow() {
