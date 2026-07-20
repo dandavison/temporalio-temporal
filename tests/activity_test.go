@@ -700,6 +700,31 @@ func (s *ActivityTestSuite) TestActivityRetry() {
 	s.True(workflowComplete)
 }
 
+// TestActivityRetry_{WorkflowActivity,StandaloneActivity} port the core of TestActivityRetry above to
+// the equivalence framework: an attempt fails retryably, the backoff elapses, the next attempt fails
+// non-retryably, and the activity ends FAILED (retries not exhausted, but a non-retryable failure
+// stops them). WFA is the oracle; both must reach the same terminal status.
+//
+// Fidelity vs the original: the original also schedules a second activity that schedule-to-start times
+// out on a no-worker queue, and asserts on the workflow's history events; those are not expressed here
+// (the timeout case is ported separately, and history-event shape is not part of the shared contract).
+// This captures the retryable-then-non-retryable -> FAILED path for one activity.
+func (s *standaloneActivityTestSuite) TestActivityRetry_WorkflowActivity() {
+	env := s.newTestEnv()
+	t := s.T()
+	trace := []model.Event{saaPoll, saaFailRetryably, saaBackoffDelayElapse, saaPoll, saaFailNonRetryably}
+	h := &wfaHarness{env: env, ctx: testcontext.For(t), maxAttempts: 3, retryInterval: 2 * time.Second}
+	require.Equal(t, enumspb.ACTIVITY_EXECUTION_STATUS_FAILED, h.driveTrace(t, trace).terminalStatus(t))
+}
+
+func (s *standaloneActivityTestSuite) TestActivityRetry_StandaloneActivity() {
+	env := s.newTestEnv()
+	t := s.T()
+	trace := []model.Event{saaPoll, saaFailRetryably, saaBackoffDelayElapse, saaPoll, saaFailNonRetryably}
+	h := &saaHarness{env: env, ctx: testcontext.For(t), idBase: testcore.RandomizeStr(t.Name()), cfg: model.Config{MaxAttempts: 3}, retryInterval: 2 * time.Second}
+	require.Equal(t, enumspb.ACTIVITY_EXECUTION_STATUS_FAILED, h.driveTrace(t, trace).terminalStatus(t))
+}
+
 func (s *ActivityTestSuite) TestActivityRetry_Infinite() {
 	env := testcore.NewEnv(s.T())
 	id := "functional-activity-retry-test"

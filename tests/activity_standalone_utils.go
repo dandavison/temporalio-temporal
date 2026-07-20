@@ -240,6 +240,15 @@ func (a *saaHandle) projection(t require.TestingT) activityInfoProjection {
 	return projectSAA(resp.GetInfo())
 }
 
+// terminalStatus waits for the activity to reach a terminal state and reports it. DescribeActivity
+// Execution works on a closed standalone activity, so the status is read directly. Parallel to
+// wfaHandle.terminalStatus.
+func (a *saaHandle) terminalStatus(t require.TestingT) enumspb.ActivityExecutionStatus {
+	resp, err := a.describe()
+	require.NoError(t, err)
+	return resp.GetInfo().GetStatus()
+}
+
 func projectSAA(i *apiactivitypb.ActivityExecutionInfo) activityInfoProjection {
 	return activityInfoProjection{
 		State:                  i.GetRunState(),
@@ -542,6 +551,7 @@ const saaLongStartDelay = time.Hour
 var (
 	saaPoll               = model.Event{Kind: model.Poll}
 	saaFailRetryably      = model.Event{Kind: model.RespondFailed, Retryable: true}
+	saaFailNonRetryably   = model.Event{Kind: model.RespondFailed, Retryable: false}
 	saaStartDelayElapse   = model.Event{Kind: model.StartDelayElapses}
 	saaBackoffDelayElapse = model.Event{Kind: model.BackoffElapses}
 )

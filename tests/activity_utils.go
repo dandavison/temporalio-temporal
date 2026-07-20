@@ -74,6 +74,7 @@ type wfaHarness struct {
 // ids needed to address it and the workflow that owns it.
 type wfaHandle struct {
 	h          *wfaHarness
+	run        sdkclient.WorkflowRun
 	workflowID string
 	runID      string
 	activityID string
@@ -170,7 +171,28 @@ func (h *wfaHarness) start(t *testing.T) *wfaHandle {
 			StartToClose: time.Hour, RetryInterval: h.retryInterval, MaxAttempts: h.maxAttempts,
 		})
 	require.NoError(t, err)
-	return &wfaHandle{h: h, workflowID: wfID, runID: run.GetRunID(), activityID: actID, activityTQ: actTQ}
+	return &wfaHandle{h: h, run: run, workflowID: wfID, runID: run.GetRunID(), activityID: actID, activityTQ: actTQ}
+}
+
+// terminalStatus waits for the activity to reach a terminal state and reports it, mapped onto the
+// ActivityExecutionStatus enum SAA reports directly. A workflow-activity's terminal outcome is not in
+// PendingActivities; it is the outcome the workflow's ExecuteActivity().Get returns, so we read it
+// from the workflow result. Parallel to saaHandle.terminalStatus.
+func (a *wfaHandle) terminalStatus(t require.TestingT) enumspb.ActivityExecutionStatus {
+	err := a.run.Get(a.h.ctx, nil)
+	if err == nil {
+		return enumspb.ACTIVITY_EXECUTION_STATUS_COMPLETED
+	}
+	var actErr *temporal.ActivityError
+	require.ErrorAs(t, err, &actErr)
+	switch actErr.Unwrap().(type) {
+	case *temporal.TimeoutError:
+		return enumspb.ACTIVITY_EXECUTION_STATUS_TIMED_OUT
+	case *temporal.CanceledError:
+		return enumspb.ACTIVITY_EXECUTION_STATUS_CANCELED
+	default:
+		return enumspb.ACTIVITY_EXECUTION_STATUS_FAILED
+	}
 }
 
 func (a *wfaHandle) pollForTask(t require.TestingT, timeout time.Duration) *workflowservice.PollActivityTaskQueueResponse {
