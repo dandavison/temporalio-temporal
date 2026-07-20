@@ -1,0 +1,79 @@
+=== RUN   TestStandaloneActivityTestSuite
+=== PAUSE TestStandaloneActivityTestSuite
+=== CONT  TestStandaloneActivityTestSuite
+=== RUN   TestStandaloneActivityTestSuite/TestDescribeNextAttemptScheduleTimeAndCurrentRetryInterval
+=== PAUSE TestStandaloneActivityTestSuite/TestDescribeNextAttemptScheduleTimeAndCurrentRetryInterval
+=== CONT  TestStandaloneActivityTestSuite/TestDescribeNextAttemptScheduleTimeAndCurrentRetryInterval
+2026/07/19 20:06:13 CLUSTEREVENT {"kind":"shared","reason":"shared pool","suite":"TestStandaloneActivityTestSuite","test":"TestStandaloneActivityTestSuite/TestDescribeNextAttemptScheduleTimeAndCurrentRetryInterval","worker":false}
+=== RUN   TestStandaloneActivityTestSuite/TestDescribeNextAttemptScheduleTimeAndCurrentRetryInterval/StartDelayPending
+=== RUN   TestStandaloneActivityTestSuite/TestDescribeNextAttemptScheduleTimeAndCurrentRetryInterval/StartDelayPending/NextAttemptScheduleTime
+    activity_standalone_test.go:3655:
+        	Error Trace:	/Users/dan/worktrees/temporal/dan--saa-model-tests/temporal/tests/activity_standalone_test.go:3655
+        	Error:      	Not equal:
+        	            	expected: time.Date(2026, time.July, 20, 1, 6, 13, 813260000, time.UTC)
+        	            	actual  : time.Date(1970, time.January, 1, 0, 0, 0, 0, time.UTC)
+        	            	
+        	            	Diff:
+        	            	--- Expected
+        	            	+++ Actual
+        	            	@@ -1,2 +1,2 @@
+        	            	-(time.Time) 2026-07-20 01:06:13.81326 +0000 UTC
+        	            	+(time.Time) 1970-01-01 00:00:00 +0000 UTC
+        	            	
+        	Test:       	TestStandaloneActivityTestSuite/TestDescribeNextAttemptScheduleTimeAndCurrentRetryInterval/StartDelayPending/NextAttemptScheduleTime
+        	Messages:   	during a start delay, NextAttemptScheduleTime is the pending dispatch time (schedule+delay)
+=== RUN   TestStandaloneActivityTestSuite/TestDescribeNextAttemptScheduleTimeAndCurrentRetryInterval/StartDelayPending/CurrentRetryInterval
+=== RUN   TestStandaloneActivityTestSuite/TestDescribeNextAttemptScheduleTimeAndCurrentRetryInterval/FirstAttemptRunning
+=== RUN   TestStandaloneActivityTestSuite/TestDescribeNextAttemptScheduleTimeAndCurrentRetryInterval/FirstAttemptRunning/NextAttemptScheduleTime
+=== RUN   TestStandaloneActivityTestSuite/TestDescribeNextAttemptScheduleTimeAndCurrentRetryInterval/FirstAttemptRunning/CurrentRetryInterval
+    activity_standalone_test.go:3679:
+        	Error Trace:	/Users/dan/worktrees/temporal/dan--saa-model-tests/temporal/tests/activity_standalone_test.go:3679
+        	Error:      	Not equal:
+        	            	expected: 5s
+        	            	actual  : 0s
+        	Test:       	TestStandaloneActivityTestSuite/TestDescribeNextAttemptScheduleTimeAndCurrentRetryInterval/FirstAttemptRunning/CurrentRetryInterval
+        	Messages:   	while running with a retry permitted, CurrentRetryInterval is the next interval
+=== RUN   TestStandaloneActivityTestSuite/TestDescribeNextAttemptScheduleTimeAndCurrentRetryInterval/BackingOffBeforeRetry
+=== RUN   TestStandaloneActivityTestSuite/TestDescribeNextAttemptScheduleTimeAndCurrentRetryInterval/BackingOffBeforeRetry/NextAttemptScheduleTime
+=== RUN   TestStandaloneActivityTestSuite/TestDescribeNextAttemptScheduleTimeAndCurrentRetryInterval/BackingOffBeforeRetry/CurrentRetryInterval
+=== RUN   TestStandaloneActivityTestSuite/TestDescribeNextAttemptScheduleTimeAndCurrentRetryInterval/RetryAttemptRunning
+=== RUN   TestStandaloneActivityTestSuite/TestDescribeNextAttemptScheduleTimeAndCurrentRetryInterval/RetryAttemptRunning/NextAttemptScheduleTime
+    activity_standalone_test.go:3715:
+        	Error Trace:	/Users/dan/worktrees/temporal/dan--saa-model-tests/temporal/tests/activity_standalone_test.go:3715
+        	Error:      	Expected nil, but got: &timestamppb.Timestamp{state:impl.MessageState{NoUnkeyedLiterals:pragma.NoUnkeyedLiterals{}, DoNotCompare:pragma.DoNotCompare{}, DoNotCopy:pragma.DoNotCopy{}, atomicMessageInfo:(*impl.MessageInfo)(nil)}, Seconds:1784505978, Nanos:841122000, unknownFields:[]uint8(nil), sizeCache:0}
+        	Test:       	TestStandaloneActivityTestSuite/TestDescribeNextAttemptScheduleTimeAndCurrentRetryInterval/RetryAttemptRunning/NextAttemptScheduleTime
+        	Messages:   	NextAttemptScheduleTime is null while running (got 2026-07-20 00:06:18.841122 +0000 UTC)
+=== RUN   TestStandaloneActivityTestSuite/TestDescribeNextAttemptScheduleTimeAndCurrentRetryInterval/RetryAttemptRunning/CurrentRetryInterval
+=== RUN   TestStandaloneActivityTestSuite/TestDescribeNextAttemptScheduleTimeAndCurrentRetryInterval/FinalAttemptRunning
+=== RUN   TestStandaloneActivityTestSuite/TestDescribeNextAttemptScheduleTimeAndCurrentRetryInterval/FinalAttemptRunning/NextAttemptScheduleTime
+    activity_standalone_test.go:3738:
+        	Error Trace:	/Users/dan/worktrees/temporal/dan--saa-model-tests/temporal/tests/activity_standalone_test.go:3738
+        	Error:      	Expected nil, but got: &timestamppb.Timestamp{state:impl.MessageState{NoUnkeyedLiterals:pragma.NoUnkeyedLiterals{}, DoNotCompare:pragma.DoNotCompare{}, DoNotCopy:pragma.DoNotCopy{}, atomicMessageInfo:(*impl.MessageInfo)(nil)}, Seconds:1784505985, Nanos:864766000, unknownFields:[]uint8(nil), sizeCache:0}
+        	Test:       	TestStandaloneActivityTestSuite/TestDescribeNextAttemptScheduleTimeAndCurrentRetryInterval/FinalAttemptRunning/NextAttemptScheduleTime
+        	Messages:   	NextAttemptScheduleTime is null while running (got 2026-07-20 00:06:25.864766 +0000 UTC)
+=== RUN   TestStandaloneActivityTestSuite/TestDescribeNextAttemptScheduleTimeAndCurrentRetryInterval/FinalAttemptRunning/CurrentRetryInterval
+    activity_standalone_test.go:3743:
+        	Error Trace:	/Users/dan/worktrees/temporal/dan--saa-model-tests/temporal/tests/activity_standalone_test.go:3743
+        	Error:      	Expected nil, but got: &durationpb.Duration{state:impl.MessageState{NoUnkeyedLiterals:pragma.NoUnkeyedLiterals{}, DoNotCompare:pragma.DoNotCompare{}, DoNotCopy:pragma.DoNotCopy{}, atomicMessageInfo:(*impl.MessageInfo)(nil)}, Seconds:5, Nanos:0, unknownFields:[]uint8(nil), sizeCache:0}
+        	Test:       	TestStandaloneActivityTestSuite/TestDescribeNextAttemptScheduleTimeAndCurrentRetryInterval/FinalAttemptRunning/CurrentRetryInterval
+        	Messages:   	CurrentRetryInterval is null when no retry remains (got 5s)
+--- FAIL: TestStandaloneActivityTestSuite (0.00s)
+    --- FAIL: TestStandaloneActivityTestSuite/TestDescribeNextAttemptScheduleTimeAndCurrentRetryInterval (14.12s)
+        --- FAIL: TestStandaloneActivityTestSuite/TestDescribeNextAttemptScheduleTimeAndCurrentRetryInterval/StartDelayPending (0.00s)
+            --- FAIL: TestStandaloneActivityTestSuite/TestDescribeNextAttemptScheduleTimeAndCurrentRetryInterval/StartDelayPending/NextAttemptScheduleTime (0.00s)
+            --- PASS: TestStandaloneActivityTestSuite/TestDescribeNextAttemptScheduleTimeAndCurrentRetryInterval/StartDelayPending/CurrentRetryInterval (0.00s)
+        --- FAIL: TestStandaloneActivityTestSuite/TestDescribeNextAttemptScheduleTimeAndCurrentRetryInterval/FirstAttemptRunning (0.01s)
+            --- PASS: TestStandaloneActivityTestSuite/TestDescribeNextAttemptScheduleTimeAndCurrentRetryInterval/FirstAttemptRunning/NextAttemptScheduleTime (0.00s)
+            --- FAIL: TestStandaloneActivityTestSuite/TestDescribeNextAttemptScheduleTimeAndCurrentRetryInterval/FirstAttemptRunning/CurrentRetryInterval (0.00s)
+        --- PASS: TestStandaloneActivityTestSuite/TestDescribeNextAttemptScheduleTimeAndCurrentRetryInterval/BackingOffBeforeRetry (0.01s)
+            --- PASS: TestStandaloneActivityTestSuite/TestDescribeNextAttemptScheduleTimeAndCurrentRetryInterval/BackingOffBeforeRetry/NextAttemptScheduleTime (0.00s)
+            --- PASS: TestStandaloneActivityTestSuite/TestDescribeNextAttemptScheduleTimeAndCurrentRetryInterval/BackingOffBeforeRetry/CurrentRetryInterval (0.00s)
+        --- FAIL: TestStandaloneActivityTestSuite/TestDescribeNextAttemptScheduleTimeAndCurrentRetryInterval/RetryAttemptRunning (7.01s)
+            --- FAIL: TestStandaloneActivityTestSuite/TestDescribeNextAttemptScheduleTimeAndCurrentRetryInterval/RetryAttemptRunning/NextAttemptScheduleTime (0.00s)
+            --- PASS: TestStandaloneActivityTestSuite/TestDescribeNextAttemptScheduleTimeAndCurrentRetryInterval/RetryAttemptRunning/CurrentRetryInterval (0.00s)
+        --- FAIL: TestStandaloneActivityTestSuite/TestDescribeNextAttemptScheduleTimeAndCurrentRetryInterval/FinalAttemptRunning (7.03s)
+            --- FAIL: TestStandaloneActivityTestSuite/TestDescribeNextAttemptScheduleTimeAndCurrentRetryInterval/FinalAttemptRunning/NextAttemptScheduleTime (0.00s)
+            --- FAIL: TestStandaloneActivityTestSuite/TestDescribeNextAttemptScheduleTimeAndCurrentRetryInterval/FinalAttemptRunning/CurrentRetryInterval (0.00s)
+FAIL
+FAIL	go.temporal.io/server/tests	16.000s
+FAIL
