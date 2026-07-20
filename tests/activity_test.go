@@ -375,11 +375,13 @@ func (s *ActivityClientTestSuite) Test_ActivityTimeouts() {
 
 // TestStartToCloseTimeout_{WorkflowActivity,StandaloneActivity} port a slice of Test_ActivityTimeouts
 // above: a started attempt exceeds its StartToClose timeout and, with no retries left, the activity
-// ends TIMED_OUT. WFA is the oracle; both must reach the same terminal status.
+// ends TIMED_OUT. Both must reach the same terminal status AND the same TimeoutType. WFA is the oracle.
 //
-// Fidelity vs the original: the original exercises all four timeout types and asserts the specific
-// TimeoutType/message the workflow observes; here we assert the terminal status (the shared contract)
-// for one timeout type. The timeout-type detail is not yet part of the terminal projection.
+// Fidelity vs the original: covered — terminal status and the StartToClose TimeoutType (the semantic
+// contract). Not covered: the other three timeout types (each is an additional scenario, not more
+// fidelity here) and the failure *message* (SAA carries a proto message; WFA's SDK TimeoutError
+// formats its own, so the strings differ by construction, not by behavior — the TimeoutType is the
+// stable cross-surface discriminant).
 func (s *standaloneActivityTestSuite) TestStartToCloseTimeout_WorkflowActivity() {
 	env := s.newTestEnv()
 	t := s.T()
@@ -753,13 +755,13 @@ func (s *ActivityTestSuite) TestActivityRetry() {
 
 // TestActivityRetry_{WorkflowActivity,StandaloneActivity} port the core of TestActivityRetry above to
 // the equivalence framework: an attempt fails retryably, the backoff elapses, the next attempt fails
-// non-retryably, and the activity ends FAILED (retries not exhausted, but a non-retryable failure
-// stops them). WFA is the oracle; both must reach the same terminal status.
+// non-retryably, and the activity ends FAILED with the application failure type. Both must reach the
+// same terminal status AND the same failure type. WFA is the oracle.
 //
-// Fidelity vs the original: the original also schedules a second activity that schedule-to-start times
-// out on a no-worker queue, and asserts on the workflow's history events; those are not expressed here
-// (the timeout case is ported separately, and history-event shape is not part of the shared contract).
-// This captures the retryable-then-non-retryable -> FAILED path for one activity.
+// Fidelity vs the original: covered — the retryable-then-non-retryable -> FAILED path and the terminal
+// application failure type. Not covered: the original's second activity (a schedule-to-start timeout on
+// a no-worker queue — a separate scenario) and its assertions on workflow history-event shape, which is
+// not part of the shared cross-surface contract.
 func (s *standaloneActivityTestSuite) TestActivityRetry_WorkflowActivity() {
 	env := s.newTestEnv()
 	t := s.T()
