@@ -176,7 +176,7 @@ func (a *saaHandle) pollForTask(t require.TestingT, timeout time.Duration) *work
 				time.Until(deadline).Seconds(), common.MinLongPollTimeout, err)
 		}
 		require.FailNowf(t, "saaHarness: PollActivityTaskQueue did not complete cleanly",
-			"the server rejected the poll, or the deadline fired before matching answered. error: %v", err)
+			"the server rejected the poll or returned an unexpected error (a no-task result would be an empty response, not an error). error: %v", err)
 	}
 	// An empty response with a nil error means "waited, no task available"; a scripted Poll always
 	// expects one, so fail here rather than proceed with a stale token.
