@@ -21,6 +21,7 @@ import (
 	"go.temporal.io/server/common/metrics"
 	"go.temporal.io/server/common/metrics/metricstest"
 	"go.temporal.io/server/common/namespace"
+	"go.temporal.io/server/common/payloads"
 	"go.temporal.io/server/common/searchattribute/sadefs"
 	serviceerrors "go.temporal.io/server/common/serviceerror"
 	"go.uber.org/mock/gomock"
@@ -556,6 +557,119 @@ func TestRecordHeartbeatPauseResetCancelFlags(t *testing.T) {
 			require.Equal(t, tc.wantPaused, resp.ActivityPaused, "ActivityPaused")
 			require.Equal(t, tc.wantReset, resp.ActivityReset, "ActivityReset")
 			require.Equal(t, tc.wantCancel, resp.CancelRequested, "CancelRequested")
+		})
+	}
+}
+
+func TestRecordHeartbeatEmitsMetrics(t *testing.T) {
+	testTime := time.Date(2000, 1, 1, 0, 0, 0, 0, time.UTC)
+	const (
+		namespaceID = "test-namespace-id"
+		activityID  = "test-activity-id"
+		runID       = "test-run-id"
+		attempt     = int32(1)
+	)
+
+	componentRef, err := (&persistencespb.ChasmComponentRef{
+		NamespaceId: namespaceID,
+		BusinessId:  activityID,
+		RunId:       runID,
+	}).Marshal()
+	require.NoError(t, err)
+
+	testCases := []struct {
+		name           string
+		details        *commonpb.Payloads
+		wantHasDetails string
+		wantPayload    bool
+	}{
+		{
+			name:           "heartbeat with details emits payload size and has_details=true",
+			details:        payloads.EncodeString("progress"),
+			wantHasDetails: "true",
+			wantPayload:    true,
+		},
+		{
+			name:           "heartbeat without details emits no payload size and has_details=false",
+			details:        nil,
+			wantHasDetails: "false",
+			wantPayload:    false,
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			ctrl := gomock.NewController(t)
+			defer ctrl.Finish()
+			nsRegistry := namespace.NewMockRegistry(ctrl)
+			nsRegistry.EXPECT().GetNamespaceName(gomock.Any()).Return(namespace.Name("test-namespace"), nil).AnyTimes()
+
+			metricsHandler := metricstest.NewCaptureHandler()
+			capture := metricsHandler.StartCapture()
+
+			ctx := &chasm.MockMutableContext{
+				MockContext: chasm.MockContext{
+					HandleNow:            func(chasm.Component) time.Time { return testTime },
+					HandleMetricsHandler: func() metrics.Handler { return metricsHandler },
+					HandleExecutionKey: func() chasm.ExecutionKey {
+						return chasm.ExecutionKey{
+							NamespaceID: namespaceID,
+							BusinessID:  activityID,
+							RunID:       runID,
+						}
+					},
+					GoCtx: context.WithValue(context.Background(), ctxKeyActivityContext, &activityContext{
+						config: &Config{
+							BreakdownMetricsByTaskQueue: dynamicconfig.GetBoolPropertyFnFilteredByTaskQueue(true),
+						},
+						namespaceRegistry: nsRegistry,
+					}),
+				},
+			}
+
+			act := &Activity{
+				ActivityState: &activitypb.ActivityState{
+					ActivityType:     &commonpb.ActivityType{Name: "test-activity-type"},
+					Status:           activitypb.ACTIVITY_EXECUTION_STATUS_STARTED,
+					HeartbeatTimeout: durationpb.New(0),
+					TaskQueue:        &taskqueuepb.TaskQueue{Name: "test-task-queue"},
+				},
+				LastAttempt: chasm.NewDataField(ctx, &activitypb.ActivityAttemptState{Count: attempt}),
+			}
+
+			token := &tokenspb.Task{
+				NamespaceId:  namespaceID,
+				Attempt:      attempt,
+				ComponentRef: componentRef,
+			}
+			req := &historyservice.RecordActivityTaskHeartbeatRequest{
+				NamespaceId: namespaceID,
+				HeartbeatRequest: &workflowservice.RecordActivityTaskHeartbeatRequest{
+					Details: tc.details,
+				},
+			}
+
+			_, err := act.RecordHeartbeat(ctx, WithToken[*historyservice.RecordActivityTaskHeartbeatRequest]{
+				Token:   token,
+				Request: req,
+			})
+			require.NoError(t, err)
+
+			snapshot := capture.Snapshot()
+
+			heartbeatRecordings := snapshot[metrics.ActivityHeartbeatCount.Name()]
+			require.Len(t, heartbeatRecordings, 1)
+			require.Equal(t, int64(1), heartbeatRecordings[0].Value)
+			require.Equal(t, tc.wantHasDetails, heartbeatRecordings[0].Tags["has_details"])
+			require.Equal(t, WorkflowTypeTag, heartbeatRecordings[0].Tags["workflowType"])
+
+			payloadRecordings := snapshot[metrics.ActivityPayloadSize.Name()]
+			if tc.wantPayload {
+				require.Len(t, payloadRecordings, 1)
+				require.Equal(t, int64(tc.details.Size()), payloadRecordings[0].Value)
+			} else {
+				require.Empty(t, payloadRecordings)
+			}
 		})
 	}
 }
