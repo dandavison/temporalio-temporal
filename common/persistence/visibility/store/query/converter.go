@@ -78,6 +78,7 @@ type (
 var (
 	groupByFieldAllowlist = []string{
 		sadefs.ExecutionStatus,
+		sadefs.TemporalNamespaceDivision,
 	}
 
 	groupByFieldPrefixAllowlist = []string{

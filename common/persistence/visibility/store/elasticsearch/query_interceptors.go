@@ -109,6 +109,9 @@ func (ni *nameInterceptor) Name(name string, usage query.FieldNameUsage) (string
 				query.NotSupportedErrMessage,
 			)
 		}
+		if fieldName == sadefs.TemporalNamespaceDivision {
+			ni.seenNamespaceDivision = true
+		}
 	}
 
 	return fieldName, nil
