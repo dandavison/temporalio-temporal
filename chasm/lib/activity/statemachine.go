@@ -41,6 +41,14 @@ var TransitionScheduled = chasm.NewTransition(
 	},
 	activitypb.ACTIVITY_EXECUTION_STATUS_SCHEDULED,
 	func(a *Activity, ctx chasm.MutableContext, _ any) error {
+		// Mirrors the legacy workflow-embedded path, which records the input payload size on
+		// ActivityTaskScheduled tagged with the RecordActivityTaskStarted operation scope.
+		metricsHandler, err := a.enrichMetricsHandler(ctx, metrics.HistoryRecordActivityTaskStartedScope)
+		if err != nil {
+			return err
+		}
+		recordPayloadSize(metricsHandler, a.RequestData.Get(ctx).GetInput().Size())
+
 		attempt := a.LastAttempt.Get(ctx)
 
 		attempt.Count++
