@@ -207,7 +207,7 @@ var TransitionCompleted = chasm.NewTransition(
 				},
 			}
 
-			a.emitOnCompletedMetrics(ctx, event.metricsHandler)
+			a.emitOnCompletedMetrics(ctx, event.metricsHandler, req.GetResult().Size())
 
 			return nil
 		})
@@ -244,7 +244,7 @@ var TransitionFailed = chasm.NewTransition(
 				return err
 			}
 
-			a.emitOnFailedMetrics(ctx, event.metricsHandler)
+			a.emitOnFailedMetrics(ctx, event.metricsHandler, req.GetFailure().Size())
 
 			return nil
 		})

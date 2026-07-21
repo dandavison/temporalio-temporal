@@ -23,6 +23,7 @@ import (
 	"fmt"
 	"math/rand"
 	"slices"
+	"strconv"
 	"time"
 
 	"github.com/nexus-rpc/sdk-go/nexus"
@@ -1538,12 +1539,18 @@ func (a *Activity) RecordHeartbeat(
 	if err != nil {
 		return nil, err
 	}
+	metricsHandler, err := a.enrichMetricsHandler(ctx, metrics.HistoryRecordActivityTaskHeartbeatScope)
+	if err != nil {
+		return nil, err
+	}
+	details := input.Request.GetHeartbeatRequest().GetDetails()
 	prevHeartbeat, _ := a.LastHeartbeat.TryGet(ctx)
 	a.LastHeartbeat = chasm.NewDataField(ctx, &activitypb.ActivityHeartbeatState{
 		RecordedTime:        timestamppb.New(ctx.Now(a)),
-		Details:             input.Request.GetHeartbeatRequest().GetDetails(),
+		Details:             details,
 		TotalHeartbeatCount: prevHeartbeat.GetTotalHeartbeatCount() + 1,
 	})
+	a.emitOnHeartbeatMetrics(metricsHandler, details)
 	if heartbeatTimeout := a.GetHeartbeatTimeout().AsDuration(); heartbeatTimeout > 0 {
 		ctx.AddTask(
 			a,
@@ -1919,7 +1926,7 @@ func (a *Activity) emitOnAttemptFailedMetrics(ctx chasm.Context, handler metrics
 	metrics.ActivityTaskFail.With(handler).Record(1)
 }
 
-func (a *Activity) emitOnCompletedMetrics(ctx chasm.Context, handler metrics.Handler) {
+func (a *Activity) emitOnCompletedMetrics(ctx chasm.Context, handler metrics.Handler, payloadSize int) {
 	attempt := a.LastAttempt.Get(ctx)
 	startedTime := attempt.GetStartedTime().AsTime()
 
@@ -1930,9 +1937,10 @@ func (a *Activity) emitOnCompletedMetrics(ctx chasm.Context, handler metrics.Han
 	metrics.ActivityScheduleToCloseLatency.With(handler).Record(scheduleToCloseLatency)
 
 	metrics.ActivitySuccess.With(handler).Record(1)
+	recordPayloadSize(handler, payloadSize)
 }
 
-func (a *Activity) emitOnFailedMetrics(ctx chasm.Context, handler metrics.Handler) {
+func (a *Activity) emitOnFailedMetrics(ctx chasm.Context, handler metrics.Handler, payloadSize int) {
 	attempt := a.LastAttempt.Get(ctx)
 	startedTime := attempt.GetStartedTime().AsTime()
 
@@ -1944,6 +1952,20 @@ func (a *Activity) emitOnFailedMetrics(ctx chasm.Context, handler metrics.Handle
 
 	metrics.ActivityTaskFail.With(handler).Record(1)
 	metrics.ActivityFail.With(handler).Record(1)
+	recordPayloadSize(handler, payloadSize)
+}
+
+func (a *Activity) emitOnHeartbeatMetrics(handler metrics.Handler, details *commonpb.Payloads) {
+	payloadSize := details.Size()
+	recordPayloadSize(handler, payloadSize)
+	metrics.ActivityHeartbeatCount.With(handler).Record(1,
+		metrics.StringTag("has_details", strconv.FormatBool(payloadSize > 0)))
+}
+
+func recordPayloadSize(handler metrics.Handler, payloadSize int) {
+	if payloadSize > 0 {
+		metrics.ActivityPayloadSize.With(handler).Record(int64(payloadSize))
+	}
 }
 
 func (a *Activity) emitOnTerminatedMetrics(

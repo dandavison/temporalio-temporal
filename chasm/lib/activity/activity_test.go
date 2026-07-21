@@ -526,6 +526,7 @@ func TestRecordHeartbeatPauseResetCancelFlags(t *testing.T) {
 							RunID:       runID,
 						}
 					},
+					GoCtx: context.WithValue(context.Background(), ctxKeyActivityContext, testActivityContext(t)),
 				},
 			}
 
@@ -558,6 +559,18 @@ func TestRecordHeartbeatPauseResetCancelFlags(t *testing.T) {
 			require.Equal(t, tc.wantReset, resp.ActivityReset, "ActivityReset")
 			require.Equal(t, tc.wantCancel, resp.CancelRequested, "CancelRequested")
 		})
+	}
+}
+
+// testActivityContext returns an activityContext suitable for exercising
+// enrichMetricsHandler in unit tests: it resolves any namespace ID to a fixed
+// name and disables per-task-queue metric breakdown.
+func testActivityContext(t *testing.T) *activityContext {
+	nsRegistry := namespace.NewMockRegistry(gomock.NewController(t))
+	nsRegistry.EXPECT().GetNamespaceName(gomock.Any()).Return(namespace.Name("test-namespace"), nil).AnyTimes()
+	return &activityContext{
+		config:            &Config{BreakdownMetricsByTaskQueue: dynamicconfig.GetBoolPropertyFnFilteredByTaskQueue(false)},
+		namespaceRegistry: nsRegistry,
 	}
 }
 
@@ -700,6 +713,7 @@ func TestActivityTaskTokenAttemptStampRejectsTokenFromBeforeAttemptReset(t *test
 					RunID:       runID,
 				}
 			},
+			GoCtx: context.WithValue(context.Background(), ctxKeyActivityContext, testActivityContext(t)),
 		},
 	}
 
@@ -793,6 +807,7 @@ func TestActivityTaskTokenWithoutAttemptStampAcceptedForCurrentRetryAttempt(t *t
 					RunID:       runID,
 				}
 			},
+			GoCtx: context.WithValue(context.Background(), ctxKeyActivityContext, testActivityContext(t)),
 		},
 	}
 
