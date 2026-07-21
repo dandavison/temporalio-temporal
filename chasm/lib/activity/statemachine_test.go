@@ -17,6 +17,7 @@ import (
 	"go.temporal.io/server/chasm/lib/activity/gen/activitypb/v1"
 	"go.temporal.io/server/common/headers"
 	"go.temporal.io/server/common/metrics"
+	"go.temporal.io/server/common/metrics/metricstest"
 	"go.temporal.io/server/common/payloads"
 	"go.temporal.io/server/common/testing/protorequire"
 	"go.uber.org/mock/gomock"
@@ -103,9 +104,13 @@ func TestTransitionScheduled(t *testing.T) {
 
 	for _, tc := range testCases {
 		t.Run(tc.name, func(t *testing.T) {
+			metricsHandler := metricstest.NewCaptureHandler()
+			capture := metricsHandler.StartCapture()
 			ctx := &chasm.MockMutableContext{
 				MockContext: chasm.MockContext{
-					HandleNow: func(chasm.Component) time.Time { return defaultTime },
+					HandleNow:            func(chasm.Component) time.Time { return defaultTime },
+					HandleMetricsHandler: func() metrics.Handler { return metricsHandler },
+					GoCtx:                context.WithValue(context.Background(), ctxKeyActivityContext, testActivityContext(t)),
 				},
 			}
 			attemptState := &activitypb.ActivityAttemptState{Count: tc.startingAttemptCount}
@@ -163,6 +168,10 @@ func TestTransitionScheduled(t *testing.T) {
 				}
 
 			}
+
+			payloadRecordings := capture.Snapshot()[metrics.ActivityPayloadSize.Name()]
+			require.Len(t, payloadRecordings, 1)
+			require.Equal(t, int64(input.Size()), payloadRecordings[0].Value)
 		})
 	}
 }
