@@ -1254,6 +1254,7 @@ func (a *Activity) recordScheduleToStartOrCloseTimeoutFailure(
 ) error {
 	failure := &failurepb.Failure{
 		Message: message,
+		Cause:   a.priorAttemptFailure(ctx),
 		FailureInfo: &failurepb.Failure_TimeoutFailureInfo{
 			TimeoutFailureInfo: &failurepb.TimeoutFailureInfo{
 				TimeoutType:          timeoutType,
@@ -1306,6 +1307,13 @@ func (a *Activity) recordFailedAttempt(
 		attempt.CurrentRetryIntervalSource = retryIntervalSource
 	}
 	return nil
+}
+
+// priorAttemptFailure returns the failure recorded for the most recent attempt, or nil if none. A
+// terminal timeout chains it as its Cause so the error that drove the retries survives to the client,
+// matching workflow activities (mutable_state_impl.go AddActivityTaskTimedOutEvent).
+func (a *Activity) priorAttemptFailure(ctx chasm.Context) *failurepb.Failure {
+	return a.LastAttempt.Get(ctx).GetLastFailureDetails().GetFailure()
 }
 
 // tryReschedule attempts to reschedule the activity for retry. It handles the cases of pause and
