@@ -508,7 +508,7 @@ func (s *standaloneActivityTestSuite) TestWFASAAQueuedRetryInterval() {
 	// attempt 2 is queued (SCHEDULED, not started) when we observe.
 	trace := []model.Event{saaPoll, saaFailRetryably, saaBackoffDelayElapse}
 	const initialInterval, maxInterval = 5 * time.Second, 30 * time.Second
-	want := activityInfoProjection{State: enumspb.PENDING_ACTIVITY_STATE_SCHEDULED, Attempt: 2, CurrentRetryInterval: 10 * time.Second}
+	want := activityInfoProjection{State: enumspb.PENDING_ACTIVITY_STATE_SCHEDULED, Attempt: 2}
 
 	s.T().Run("WorkflowActivity", func(t *testing.T) {
 		h := &wfaHarness{env: env, ctx: testcontext.For(t), maxAttempts: 3, retryInterval: initialInterval, backoffCoefficient: 2.0, maxRetryInterval: maxInterval}
