@@ -280,10 +280,8 @@ func (e *someError) Error() string {
 	return "Some Error"
 }
 
-// TestExponentialBackoffOverflow verifies overflow handling when
-// initInterval * coefficient^(attempt-1) exceeds the largest duration an int64 can represent.
-// The float64->int64 conversion of an out-of-range value is implementation-defined in Go (amd64
-// yields math.MinInt64, arm64 saturates), so the guard must clamp in float space before conversion.
+// TestExponentialBackoffOverflow verifies overflow handling when initInterval * coefficient^(attempt-1)
+// exceeds the largest duration an int64 can represent. The float64->int64 conversion of an out-of-range value is
 func TestExponentialBackoffOverflow(t *testing.T) {
 	t.Run("Algorithm saturates to max duration", func(t *testing.T) {
 		// 1s * 2^99 vastly exceeds MaxInt64 nanoseconds.
