@@ -286,7 +286,7 @@ func (e *someError) Error() string {
 // yields math.MinInt64, arm64 saturates), so the guard must clamp in float space before conversion.
 func TestExponentialBackoffAlgorithmOverflow(t *testing.T) {
 	// 1s * 2^99 vastly exceeds MaxInt64 nanoseconds.
-	interval := ExponentialBackoffAlgorithm(durationpb.New(time.Second), 2.0, 100)
+	interval := ExponentialBackoff(durationpb.New(time.Second), 2.0, 100)
 	require.Equal(t, time.Duration(math.MaxInt64), interval)
 }
 

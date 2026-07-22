@@ -379,7 +379,7 @@ func (nbis *nextBackoffIntervalStub) nextBackoffInterval(
 	maxInterval *durationpb.Duration,
 	expirationTime *timestamppb.Timestamp,
 	backoffCoefficient float64,
-	_ backoff.BackoffCalculatorAlgorithmFunc,
+	_ backoff.BackoffFunc,
 ) (time.Duration, enumspb.RetryState) {
 	nbis.recorded = fmt.Sprintf(
 		nextBackoffIntervalParametersFormat,

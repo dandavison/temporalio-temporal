@@ -129,7 +129,7 @@ func GetPendingActivityInfo(
 				// in this case activity is at least scheduled
 				p.NextAttemptScheduleTime = nil
 				// we rely on the fact that ExponentialBackoffAlgorithm is deterministic, and  there's no random jitter
-				interval := backoff.ExponentialBackoffAlgorithm(ai.RetryInitialInterval, ai.RetryBackoffCoefficient, p.Attempt)
+				interval := backoff.ExponentialBackoff(ai.RetryInitialInterval, ai.RetryBackoffCoefficient, p.Attempt)
 				p.CurrentRetryInterval = durationpb.New(interval)
 			}
 		}
@@ -231,7 +231,7 @@ func GetNextScheduledTime(ai *persistencespb.ActivityInfo) time.Time {
 	nextScheduledTime := ai.ScheduledTime.AsTime()
 	if ai.Attempt > 1 {
 		// calculate new schedule time
-		interval := backoff.ExponentialBackoffAlgorithm(ai.RetryInitialInterval, ai.RetryBackoffCoefficient, ai.Attempt)
+		interval := backoff.ExponentialBackoff(ai.RetryInitialInterval, ai.RetryBackoffCoefficient, ai.Attempt)
 
 		if ai.RetryMaximumInterval.AsDuration() != 0 && (interval <= 0 || interval > ai.RetryMaximumInterval.AsDuration()) {
 			interval = ai.RetryMaximumInterval.AsDuration()

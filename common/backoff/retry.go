@@ -169,36 +169,34 @@ func IgnoreErrors(errorsToExclude []error) func(error) bool {
 	}
 }
 
-// BackoffCalculatorAlgorithmFunc is a function type that calculates backoff duration based on
+// BackoffFunc is a function type that calculates backoff duration based on
 // initial duration, coefficient, and current attempt number.
-type BackoffCalculatorAlgorithmFunc func(duration *durationpb.Duration, coefficient float64, currentAttempt int32) time.Duration
+type BackoffFunc func(duration *durationpb.Duration, coefficient float64, currentAttempt int32) time.Duration
 
-// ExponentialBackoffAlgorithm calculates the backoff duration using exponential algorithm.
-// The result is initInterval * (backoffCoefficient ^ (currentAttempt - 1)).
-// If the calculation overflows int64, it returns the maximum possible duration. A negative result will also never be returned.
-func ExponentialBackoffAlgorithm(initInterval *durationpb.Duration, backoffCoefficient float64, currentAttempt int32) time.Duration {
+// ExponentialBackoff calculates the backoff duration as `initInterval * (backoffCoefficient ^ (currentAttempt - 1))`.
+// The result is clamped to [0, math.MaxInt64].
+func ExponentialBackoff(initInterval *durationpb.Duration, backoffCoefficient float64, currentAttempt int32) time.Duration {
 	result := float64(initInterval.AsDuration().Nanoseconds()) * math.Pow(backoffCoefficient, float64(currentAttempt-1))
-	// Clamp in float space: an out-of-range float64->int64 conversion is implementation-defined in Go.
 	if result >= float64(math.MaxInt64) {
 		return time.Duration(math.MaxInt64)
 	}
 	return time.Duration(max(0, int64(result)))
 }
 
-// MakeBackoffAlgorithm creates a BackoffCalculatorAlgorithmFunc that returns a fixed delay if requestedDelay is non-nil,
+// MakeBackoffFunc creates a BackoffCalculatorAlgorithmFunc that returns a fixed delay if requestedDelay is non-nil,
 // otherwise falls back to exponential backoff algorithm.
-func MakeBackoffAlgorithm(requestedDelay *time.Duration) BackoffCalculatorAlgorithmFunc {
+func MakeBackoffFunc(requestedDelay *time.Duration) BackoffFunc {
 	return func(duration *durationpb.Duration, coefficient float64, currentAttempt int32) time.Duration {
 		if requestedDelay != nil {
 			return *requestedDelay
 		}
-		return ExponentialBackoffAlgorithm(duration, coefficient, currentAttempt)
+		return ExponentialBackoff(duration, coefficient, currentAttempt)
 	}
 }
 
 // CalculateExponentialRetryInterval calculates the retry interval using exponential backoff algorithm
 func CalculateExponentialRetryInterval(retryPolicy *commonpb.RetryPolicy, attempt int32) time.Duration {
-	interval := ExponentialBackoffAlgorithm(retryPolicy.GetInitialInterval(), retryPolicy.GetBackoffCoefficient(), attempt)
+	interval := ExponentialBackoff(retryPolicy.GetInitialInterval(), retryPolicy.GetBackoffCoefficient(), attempt)
 
 	maxInterval := retryPolicy.GetMaximumInterval()
 
