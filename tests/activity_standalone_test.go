@@ -3539,48 +3539,12 @@ func (s *standaloneActivityTestSuite) TestStartToCloseTimeout() {
 func (s *standaloneActivityTestSuite) TestStartToCloseTimeout_WhileCancelRequested() {
 	env := s.newTestEnv()
 	t := s.T()
-
-	activityID := testcore.RandomizeStr(t.Name())
-	taskQueue := testcore.RandomizeStr(t.Name())
-
-	startResp, err := env.FrontendClient().StartActivityExecution(s.Context(), &workflowservice.StartActivityExecutionRequest{
-		Namespace:           env.Namespace().String(),
-		ActivityId:          activityID,
-		ActivityType:        &commonpb.ActivityType{Name: "test-activity"},
-		TaskQueue:           &taskqueuepb.TaskQueue{Name: taskQueue},
-		StartToCloseTimeout: durationpb.New(2 * time.Second),
-		RetryPolicy:         &commonpb.RetryPolicy{MaximumAttempts: 1},
+	a := s.driveTrace(t, env, saaTrace{
+		trace:       []model.Event{saaPoll, saaRequestCancel, saaStartToCloseElapse},
+		maxAttempts: 1,
 	})
-	require.NoError(t, err)
-
-	// Worker accepts the task — activity is STARTED.
-	_, err = env.FrontendClient().PollActivityTaskQueue(s.Context(), &workflowservice.PollActivityTaskQueueRequest{
-		Namespace: env.Namespace().String(),
-		TaskQueue: &taskqueuepb.TaskQueue{Name: taskQueue, Kind: enumspb.TASK_QUEUE_KIND_NORMAL},
-	})
-	require.NoError(t, err)
-
-	// Request cancellation — activity moves to CANCEL_REQUESTED.
-	_, err = env.FrontendClient().RequestCancelActivityExecution(s.Context(), &workflowservice.RequestCancelActivityExecutionRequest{
-		Namespace:  env.Namespace().String(),
-		ActivityId: activityID,
-		RunId:      startResp.RunId,
-		Identity:   "canceller",
-		RequestId:  "cancel-req-1",
-	})
-	require.NoError(t, err)
-
-	// Worker ignores cancellation and doesn't respond.
-	// The start-to-close timeout (2s) should still fire.
-	pollOutcome, err := env.FrontendClient().PollActivityExecution(s.Context(), &workflowservice.PollActivityExecutionRequest{
-		Namespace:  env.Namespace().String(),
-		ActivityId: activityID,
-		RunId:      startResp.RunId,
-	})
-	require.NoError(t, err)
 	require.Equal(t, enumspb.TIMEOUT_TYPE_START_TO_CLOSE,
-		pollOutcome.GetOutcome().GetFailure().GetTimeoutFailureInfo().GetTimeoutType(),
-		"activity in CANCEL_REQUESTED should still time out via START_TO_CLOSE")
+		a.describe(t).GetOutcome().GetFailure().GetTimeoutFailureInfo().GetTimeoutType())
 }
 
 // TestScheduleToStartTimeout tests that a schedule-to-start timeout is recorded after the activity is
