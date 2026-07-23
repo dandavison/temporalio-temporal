@@ -50,12 +50,10 @@ func (s *standaloneActivityTestSuite) TestParityNonRetryableTimeout() {
 	})
 }
 
-// When a timeout closes the activity terminally — retries exhausted by a StartToClose/Heartbeat timeout
-// on the final attempt, or a schedule-to-close deadline reached while backing off — the terminal
-// TimedOut failure must chain the application failure that drove the retries as its Cause, so the error
-// survives to the client. This is the workflow-activity behavior (mutable_state_impl.go
-// AddActivityTaskTimedOutEvent sets timeoutFailure.Cause = ai.RetryLastFailure) the standalone activity
-// must match.
+// When a timeout closes the activity terminally — retries exhausted by a StartToClose/Heartbeat
+// timeout on the final attempt, or a schedule-to-close deadline reached — the terminal TimedOut
+// failure must chain the application failure that drove the retries as its Cause, so the error
+// survives to the client.
 func (s *standaloneActivityTestSuite) TestParityTimeoutPreservesUnderlyingFailureCause() {
 	env := s.newTestEnv()
 
@@ -84,8 +82,7 @@ func (s *standaloneActivityTestSuite) TestParityTimeoutPreservesUnderlyingFailur
 			return d.start_Poll_Fail_Poll_HeartbeatTimeoutElapses(t)
 		})
 	})
-	// Schedule-to-close deadline closes the activity while it backs off to retry — a distinct server
-	// code path (recordScheduleToStartOrCloseTimeoutFailure) that must also chain the cause.
+	// Schedule-to-close deadline closes the activity while it backs off to retry.
 	s.T().Run("ScheduleToClose", func(t *testing.T) {
 		both(t, enumspb.TIMEOUT_TYPE_SCHEDULE_TO_CLOSE, func(d driver, t *testing.T) terminalTimeout {
 			return d.start_Poll_Fail_ScheduleToCloseTimeoutElapses(t)
@@ -102,8 +99,8 @@ type driver interface {
 	start_Poll_Fail_ScheduleToCloseTimeoutElapses(t *testing.T) terminalTimeout
 }
 
-// terminalTimeout is the terminal-timeout outcome both surfaces expose: the terminal status, the
-// timeout type, and the application failure the timeout chains as its Cause (its Type and Message).
+// terminalTimeout is a terminal-timeout outcome: the terminal status, the timeout type, and the
+// application failure the timeout chains as its Cause (its Type and Message).
 type terminalTimeout struct {
 	Status       enumspb.ActivityExecutionStatus
 	TimeoutType  enumspb.TimeoutType
@@ -113,11 +110,6 @@ type terminalTimeout struct {
 
 // reproTimeout is the timeout under test, kept short so it fires within the test.
 const reproTimeout = 2 * time.Second
-
-// reproScheduleToCloseTimeout is the schedule-to-close budget for the cause-chaining test: generous
-// enough for the first attempt to fail (including WFA worker startup) before the deadline closes the
-// backing-off activity.
-const reproScheduleToCloseTimeout = 6 * time.Second
 
 // reproCauseType is the Type and Message of the retryable application failure driven on the first
 // attempt; a terminal timeout must chain it verbatim as its Cause.
@@ -260,7 +252,9 @@ func (d *saaDriver) startForCauseChaining(t *testing.T, timeoutType enumspb.Time
 	case enumspb.TIMEOUT_TYPE_HEARTBEAT:
 		req.HeartbeatTimeout = durationpb.New(reproTimeout)
 	case enumspb.TIMEOUT_TYPE_SCHEDULE_TO_CLOSE:
-		req.ScheduleToCloseTimeout = durationpb.New(reproScheduleToCloseTimeout)
+		// Measured from schedule time (unlike the others, from Started), so it must outlast the first
+		// attempt's failure before it closes the backing-off activity.
+		req.ScheduleToCloseTimeout = durationpb.New(3 * reproTimeout)
 		req.RetryPolicy.MaximumAttempts = 0 // the deadline, not the attempt count, ends the activity
 	}
 	resp, err := d.env.FrontendClient().StartActivityExecution(d.s.Context(), req)
@@ -396,7 +390,9 @@ func (d *wfaDriver) startForCauseChaining(t *testing.T, timeoutType enumspb.Time
 	case enumspb.TIMEOUT_TYPE_HEARTBEAT:
 		p.Heartbeat = reproTimeout
 	case enumspb.TIMEOUT_TYPE_SCHEDULE_TO_CLOSE:
-		p.ScheduleToClose = reproScheduleToCloseTimeout
+		// Measured from schedule time (unlike the others, from Started), so it must outlast worker
+		// startup and the first attempt's failure before it closes the backing-off activity.
+		p.ScheduleToClose = 3 * reproTimeout
 		p.MaxAttempts = 0 // the deadline, not the attempt count, ends the activity
 	}
 	run, err := d.env.SdkClient().ExecuteWorkflow(d.s.Context(),
