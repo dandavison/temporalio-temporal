@@ -31,7 +31,6 @@ import (
 	"go.temporal.io/server/common/testing/testhooks"
 	"go.temporal.io/server/common/testing/testlogger"
 	"go.temporal.io/server/common/testing/testvars"
-	"go.temporal.io/server/temporal"
 )
 
 // shardSalt is used to distribute functional tests across shards.
@@ -175,7 +174,7 @@ func WithPersistenceFaultInjection(cfg *config.FaultInjection) TestOption {
 func WithArchival() TestOption {
 	return func(o *testOptions) {
 		o.dedicatedCluster = true
-		o.clusterOptions = append(o.clusterOptions, withArchivalConfig())
+		o.clusterOptions = append(o.clusterOptions, WithArchivalEnabled())
 		o.dedicatedReason = "archival enabled"
 	}
 }
@@ -186,12 +185,10 @@ func WithArchival() TestOption {
 func WithCustomArchivers(historyFactory provider.CustomHistoryArchiverFactory, visibilityFactory provider.CustomVisibilityArchiverFactory) TestOption {
 	return func(o *testOptions) {
 		o.dedicatedCluster = true
-		o.clusterOptions = append(o.clusterOptions, func(params *testClusterParams) {
-			params.AdditionalServerOptions = append(params.AdditionalServerOptions,
-				temporal.WithCustomHistoryArchiverFactory(historyFactory),
-				temporal.WithCustomVisibilityArchiverFactory(visibilityFactory),
-			)
-		})
+		o.clusterOptions = append(o.clusterOptions,
+			WithCustomHistoryArchiverFactory(historyFactory),
+			WithCustomVisibilityArchiverFactory(visibilityFactory),
+		)
 		o.dedicatedReason = "custom archivers used"
 	}
 }

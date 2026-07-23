@@ -2085,7 +2085,7 @@ func (s *nodeSuite) TestValidateAccess() {
 			s.NoError(err)
 
 			ctx := NewContext(
-				NewContextWithOperationIntent(context.Background(), tc.intent),
+				newContextWithOperationIntent(context.Background(), tc.intent),
 				root,
 			)
 
@@ -2142,7 +2142,7 @@ func (s *nodeSuite) TestGetComponent_DetachedNodeBypassesParentValidation() {
 
 	// Close the root node (set lifecycle to COMPLETED).
 	ctx := NewMutableContext(
-		NewContextWithOperationIntent(context.Background(), OperationIntentProgress),
+		newContextWithOperationIntent(context.Background(), OperationIntentProgress),
 		root,
 	)
 	err = root.prepareComponentValue(ctx)
@@ -2171,7 +2171,7 @@ func (s *nodeSuite) TestGetComponent_ClosedTargetSucceeds() {
 	s.True(ok)
 
 	ctx := NewMutableContext(
-		NewContextWithOperationIntent(context.Background(), OperationIntentProgress),
+		newContextWithOperationIntent(context.Background(), OperationIntentProgress),
 		root,
 	)
 
@@ -3038,7 +3038,7 @@ func (s *nodeSuite) TestCloseTransaction_PausedStateInvalidatesTasks() {
 		s.NoError(err)
 
 		ctx := NewContext(
-			NewContextWithOperationIntent(context.Background(), OperationIntentProgress),
+			newContextWithOperationIntent(context.Background(), OperationIntentProgress),
 			root,
 		)
 

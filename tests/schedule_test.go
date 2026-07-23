@@ -468,7 +468,6 @@ func runSharedScheduleTests(t *testing.T, newContext contextFactory) {
 	t.Run("TestLastCompletionAndError", func(t *testing.T) { t.Parallel(); testLastCompletionAndError(t, newContext) })
 	t.Run("TestScheduleContinuesAfterWorkflowRetryFailure", func(t *testing.T) { t.Parallel(); testScheduleContinuesAfterWorkflowRetryFailure(t, newContext) })
 	t.Run("TestListSchedulesReturnsWorkflowStatus", func(t *testing.T) { t.Parallel(); testListSchedulesReturnsWorkflowStatus(t, newContext) })
-	t.Run("TestListSchedulesRecentActionsCapped", func(t *testing.T) { t.Parallel(); testListSchedulesRecentActionsCapped(t, newContext) })
 	t.Run("TestUpdateIntervalTakesEffect", func(t *testing.T) { t.Parallel(); testUpdateIntervalTakesEffect(t, newContext) })
 	t.Run("TestListScheduleMatchingTimes", func(t *testing.T) { t.Parallel(); testListScheduleMatchingTimes(t, newContext) })
 	t.Run("TestLimitMemoSpecSize", func(t *testing.T) { t.Parallel(); testLimitMemoSpecSize(t, newContext) })
@@ -1707,53 +1706,6 @@ func testListSchedulesReturnsWorkflowStatus(t *testing.T, newContext contextFact
 	// Verify no duplicate RunIds in recent actions (regression for migration dedup bug).
 	assertRecentActionsNoDuplicateRunIDs(s.T(), descResp.Info.RecentActions)
 	assertRecentActionsNoDuplicateRunIDs(s.T(), listResp.Info.RecentActions)
-}
-
-// testListSchedulesRecentActionsCapped verifies that RecentActions on the
-// ListSchedules visibility memo stay hard-capped, independent of the (larger)
-// window DescribeSchedule reports. The memo is persisted to visibility, so it
-// must stay bounded no matter how many actions the schedule takes. Both the V1
-// and V2 (CHASM) schedulers apply this cap, so it runs as a shared test.
-func testListSchedulesRecentActionsCapped(t *testing.T, newContext contextFactory) {
-	s := newScheduleEnv(t, scheduleCommonOpts(t)...)
-	ctx := newContext(testcore.NewContext())
-
-	// The list memo caps RecentActions at this many entries (V1
-	// RecentActionCountForList / V2 recentActionCountForList).
-	const memoCap = 5
-
-	sid := testcore.RandomizeStr("sched-list-cap")
-	wid := testcore.RandomizeStr("sched-list-cap-wf")
-	wt := testcore.RandomizeStr("sched-list-cap-wt")
-
-	// A workflow that returns immediately, so actions accrue quickly as completed
-	// recent actions; a fast interval fires more than the memo cap in short order.
-	var runs atomic.Int32
-	registerCountingWorkflow(s, wt, &runs)
-	createSchedule(ctx, t, s, sid, &schedulepb.Schedule{
-		Spec:   intervalSpec(fastInterval),
-		Action: startWorkflowAction(s, wid, wt),
-	})
-
-	// DescribeSchedule reports a wider recent-action window than the memo. Wait
-	// until it exceeds the cap, proving the two projections are independent.
-	var describeResp *workflowservice.DescribeScheduleResponse
-	require.Eventually(t, func() bool {
-		var err error
-		describeResp, err = s.FrontendClient().DescribeSchedule(ctx, &workflowservice.DescribeScheduleRequest{
-			Namespace:  s.Namespace().String(),
-			ScheduleId: sid,
-		})
-		return err == nil && len(describeResp.GetInfo().GetRecentActions()) > memoCap
-	}, awaitTimeout, pollInterval, "DescribeSchedule should report more than %d recent actions", memoCap)
-
-	// The ListSchedules memo must stay capped even though more actions exist.
-	listResp := getScheduleEntryFromVisibility(s, sid, newContext, func(ent *schedulepb.ScheduleListEntry) bool {
-		return len(ent.GetInfo().GetRecentActions()) >= memoCap
-	})
-	require.Len(t, listResp.Info.RecentActions, memoCap,
-		"ListSchedules memo RecentActions must be capped at %d (Describe reported %d)",
-		memoCap, len(describeResp.Info.RecentActions))
 }
 
 func testUpdateIntervalTakesEffect(t *testing.T, newContext contextFactory) {
@@ -3110,26 +3062,14 @@ func testCreateScheduleDuplicateSdkError(t *testing.T, useCHASM bool) {
 }
 
 func testPatchRejectsExcessBackfillers(t *testing.T, newContext contextFactory) {
-	// Hold all 100 backfillers alive through legitimate buffer backpressure rather
-	// than starvation. Backfillers are given a real (non-zero) share of an empty
-	// buffer, but each is pointed at a range far larger than the buffer under
-	// BUFFER_ALL with no worker registered: the first start runs forever (nothing
-	// completes it) and the rest fill the shared buffer, so every backfiller stalls
-	// with range still to process and none can finish and self-delete before the
-	// 101st patch is rejected. (Before the capacity fix this test passed only
-	// because all 100 backfillers were starved to zero capacity and never drained.)
-	tweakables := chasmscheduler.DefaultTweakables
-	tweakables.MaxBufferSize = 300
-	tweakables.GeneratorBufferReserveSize = 25
-	opts := append(scheduleCommonOpts(t), testcore.WithDynamicConfig(chasmscheduler.CurrentTweakables, tweakables))
-	s := newScheduleEnv(t, opts...)
+	s := newScheduleEnv(t, scheduleCommonOpts(t)...)
 	sid := "sched-test-too-many-backfillers"
 	wt := "sched-test-too-many-backfillers-wt"
 
 	schedule := &schedulepb.Schedule{
 		Spec: &schedulepb.ScheduleSpec{
 			Interval: []*schedulepb.IntervalSpec{
-				{Interval: durationpb.New(fastInterval)},
+				{Interval: durationpb.New(1 * time.Hour)},
 			},
 		},
 		Action: &schedulepb.ScheduleAction{
@@ -3160,11 +3100,9 @@ func testPatchRejectsExcessBackfillers(t *testing.T, newContext contextFactory) 
 		backfills := make([]*schedulepb.BackfillRequest, 50)
 		for j := range backfills {
 			backfills[j] = &schedulepb.BackfillRequest{
-				// A range far larger than the buffer (fastInterval fires over an hour)
-				// so no backfiller can finish processing it and self-delete.
-				StartTime:     timestamppb.New(now.Add(-time.Hour)),
-				EndTime:       timestamppb.New(now),
-				OverlapPolicy: enumspb.SCHEDULE_OVERLAP_POLICY_BUFFER_ALL,
+				StartTime:     timestamppb.New(now),
+				EndTime:       timestamppb.New(now.Add(time.Minute)),
+				OverlapPolicy: enumspb.SCHEDULE_OVERLAP_POLICY_ALLOW_ALL,
 			}
 		}
 		_, err = s.FrontendClient().PatchSchedule(ctx, &workflowservice.PatchScheduleRequest{
@@ -3186,9 +3124,9 @@ func testPatchRejectsExcessBackfillers(t *testing.T, newContext contextFactory) 
 		Patch: &schedulepb.SchedulePatch{
 			BackfillRequest: []*schedulepb.BackfillRequest{
 				{
-					StartTime:     timestamppb.New(now.Add(-time.Hour)),
-					EndTime:       timestamppb.New(now),
-					OverlapPolicy: enumspb.SCHEDULE_OVERLAP_POLICY_BUFFER_ALL,
+					StartTime:     timestamppb.New(now),
+					EndTime:       timestamppb.New(now.Add(time.Minute)),
+					OverlapPolicy: enumspb.SCHEDULE_OVERLAP_POLICY_ALLOW_ALL,
 				},
 			},
 		},

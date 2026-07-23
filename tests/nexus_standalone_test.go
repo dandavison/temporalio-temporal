@@ -2167,7 +2167,7 @@ func (s *NexusStandaloneTestSuite) TestStandaloneNexusOperationPoll() {
 	})
 }
 
-func (s *NexusStandaloneTestSuite) TestAsyncCompletionIgnoresExecutionTransitionInCallbackToken() {
+func (s *NexusStandaloneTestSuite) TestAsyncCompletionIgnoresTransitionFieldsInCallbackToken() {
 	env := s.newTestEnv()
 	handlerLink := &commonpb.Link_WorkflowEvent{
 		Namespace:  env.Namespace().String(),
@@ -2226,11 +2226,8 @@ func (s *NexusStandaloneTestSuite) TestAsyncCompletionIgnoresExecutionTransition
 	completionToken, err := gen.DecodeCompletion(decodedToken)
 	s.NoError(err)
 
-	// Deliberately corrupt the execution transition in the callback token. Completion should still
-	// succeed: it resolves at RefConsistencyLevelComponentCreation, which ignores the execution
-	// transition (staleness is checked against the component's creation transition instead) and
-	// re-establishes identity by request ID. The creation transition is left valid, as the framework
-	// legitimately relies on it to guarantee the loaded state knows about the operation.
+	// Deliberately corrupt transition fields in the callback token. Completion should
+	// still succeed because the handler strips these fields before validation.
 	ref := &persistencespb.ChasmComponentRef{}
 	s.NoError(ref.Unmarshal(completionToken.GetComponentRef()))
 	s.NotNil(ref.ExecutionVersionedTransition)
@@ -2238,6 +2235,10 @@ func (s *NexusStandaloneTestSuite) TestAsyncCompletionIgnoresExecutionTransition
 	ref.ExecutionVersionedTransition = &persistencespb.VersionedTransition{
 		NamespaceFailoverVersion: ref.ExecutionVersionedTransition.NamespaceFailoverVersion + 1000,
 		TransitionCount:          ref.ExecutionVersionedTransition.TransitionCount + 1000,
+	}
+	ref.ComponentInitialVersionedTransition = &persistencespb.VersionedTransition{
+		NamespaceFailoverVersion: ref.ComponentInitialVersionedTransition.NamespaceFailoverVersion + 1000,
+		TransitionCount:          ref.ComponentInitialVersionedTransition.TransitionCount + 1000,
 	}
 	completionToken.ComponentRef, err = ref.Marshal()
 	s.NoError(err)
