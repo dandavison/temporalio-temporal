@@ -35,15 +35,16 @@ import (
 )
 
 type clients struct {
-	logger            log.Logger
-	hostsByService    map[primitives.ServiceName]static.Hosts
-	tlsConfigProvider *encryption.FixedTLSConfigProvider
-	metricsHandler    metrics.Handler
-	dcClient          *dynamicconfig.MemoryClient
-	testHooks         testhooks.TestHooks
-	numHistoryShards  int32
-	metadataMgr       persistence.MetadataManager
-	tokenProvider     auth.TokenProvider
+	logger                    log.Logger
+	hostsByService            map[primitives.ServiceName]static.Hosts
+	frontendMembershipAddress *string
+	tlsConfigProvider         *encryption.FixedTLSConfigProvider
+	metricsHandler            metrics.Handler
+	dcClient                  *dynamicconfig.MemoryClient
+	testHooks                 testhooks.TestHooks
+	numHistoryShards          int32
+	metadataMgr               persistence.MetadataManager
+	tokenProvider             auth.TokenProvider
 
 	frontend frontendClients
 	history  historyClients
@@ -73,6 +74,7 @@ type matchingClient struct {
 func newClients(
 	logger log.Logger,
 	hostsByService map[primitives.ServiceName]static.Hosts,
+	frontendMembershipAddress *string,
 	tlsConfigProvider *encryption.FixedTLSConfigProvider,
 	metricsHandler metrics.Handler,
 	dcClient *dynamicconfig.MemoryClient,
@@ -82,15 +84,16 @@ func newClients(
 	tokenProvider auth.TokenProvider,
 ) clients {
 	return clients{
-		logger:            logger,
-		hostsByService:    hostsByService,
-		tlsConfigProvider: tlsConfigProvider,
-		metricsHandler:    metricsHandler,
-		dcClient:          dcClient,
-		testHooks:         testHooks,
-		numHistoryShards:  numHistoryShards,
-		metadataMgr:       metadataMgr,
-		tokenProvider:     tokenProvider,
+		logger:                    logger,
+		hostsByService:            hostsByService,
+		frontendMembershipAddress: frontendMembershipAddress,
+		tlsConfigProvider:         tlsConfigProvider,
+		metricsHandler:            metricsHandler,
+		dcClient:                  dcClient,
+		testHooks:                 testHooks,
+		numHistoryShards:          numHistoryShards,
+		metadataMgr:               metadataMgr,
+		tokenProvider:             tokenProvider,
 	}
 }
 
@@ -164,15 +167,14 @@ func (c *clients) ensureMatching() {
 
 		monitor := static.NewMonitor(c.hostsByService)
 		monitor.Start()
-		frontendMembershipAddress := membership.GRPCResolverURLForTesting(monitor, primitives.FrontendService)
 		rpcFactory := rpc.NewFactory(
 			&config.Config{},
 			primitives.FrontendService,
 			c.logger,
 			c.metricsHandler,
 			tlsConfigProvider,
-			frontendMembershipAddress,
-			frontendMembershipAddress,
+			*c.frontendMembershipAddress,
+			*c.frontendMembershipAddress,
 			0,
 			frontendTLSConfig,
 			nil,

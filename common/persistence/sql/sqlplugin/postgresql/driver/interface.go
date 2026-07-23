@@ -8,7 +8,6 @@ const (
 	// check http://www.postgresql.org/docs/9.3/static/errcodes-appendix.html
 	dupEntryCode            = "23505"
 	dupDatabaseCode         = "42P04"
-	objectInUseCode         = "55006"
 	readOnlyTransactionCode = "25006"
 	cannotConnectNowCode    = "57P03"
 	featureNotSupportedCode = "0A000"
@@ -25,7 +24,6 @@ type Driver interface {
 	CreateRefreshableConnection(buildDSN func() (string, error)) (*sqlx.DB, error)
 	IsDupEntryError(error) bool
 	IsDupDatabaseError(error) bool
-	IsObjectInUseError(error) bool
 	IsConnNeedsRefreshError(error) bool
 }
 
