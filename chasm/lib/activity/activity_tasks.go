@@ -8,6 +8,7 @@ import (
 	"go.temporal.io/server/chasm/lib/activity/gen/activitypb/v1"
 	"go.temporal.io/server/common/metrics"
 	"go.temporal.io/server/common/resource"
+	"go.temporal.io/server/common/util"
 	"go.uber.org/fx"
 )
 
@@ -221,18 +222,37 @@ func newHeartbeatTimeoutTaskHandler() *heartbeatTimeoutTaskHandler {
 func (h *heartbeatTimeoutTaskHandler) Validate(
 	ctx chasm.Context,
 	activity *Activity,
-	_ chasm.TaskInvocation,
+	taskAttrs chasm.TaskInvocation,
 	task *activitypb.HeartbeatTimeoutTask,
 ) (bool, error) {
-	// The task is registered as a singleton (SingletonTaskModeReplace), so each heartbeat replaces
-	// the outstanding timeout task: at most one exists per attempt and it always reflects the latest
-	// heartbeat. Staleness relative to a newer heartbeat is therefore structurally impossible, and
-	// we only need to reject a task whose attempt is no longer in progress or has been superseded.
+	// Let T = user-configured heartbeat timeout and let hb_i be the time of the ith user-submitted
+	// heartbeat request. (hb_0 = 0 since we always start a timer task when an attempt starts).
+
+	// There are two concurrent sequences of events:
+	// 1. A worker is sending heartbeats at times hb_i.
+	// 2. This task is being executed at (shortly after) times hb_i + T.
+
+	// On the i-th execution of this function, we look back into the past and determine whether the
+	// last heartbeat was received after hb_i. If so, we reject this timeout task. Otherwise, the
+	// Execute function runs and we fail the attempt.
 	if !activity.hasAttemptInProgress() {
 		return false, nil
 	}
+	// Task attempt must still match current attempt.
 	attempt := activity.LastAttempt.Get(ctx)
 	if attempt.GetStamp() != task.Stamp {
+		return false, nil
+	}
+
+	// Must not have been a heartbeat since this task was created
+	hbTimeout := activity.GetHeartbeatTimeout().AsDuration() // T
+	attemptStartTime := attempt.GetStartedTime().AsTime()
+	lastHb, _ := activity.LastHeartbeat.TryGet(ctx) // could be nil, or from a previous attempt
+	// No hbs in attempt so far is equivalent to hb having been sent at attempt start time.
+	lastHbTime := util.MaxTime(lastHb.GetRecordedTime().AsTime(), attemptStartTime)
+	thisTaskHbTime := taskAttrs.ScheduledTime.Add(-hbTimeout) // hb_i
+	if lastHbTime.After(thisTaskHbTime) {
+		// another heartbeat has invalidated this task's heartbeat
 		return false, nil
 	}
 	return true, nil
