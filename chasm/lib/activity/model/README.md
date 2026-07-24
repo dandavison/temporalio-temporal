@@ -63,7 +63,9 @@ The urgent goal: prove the CHASM activity (SAA) behaves like the legacy workflow
 their intersection. Because the model is ours, "SAA conforms to the model" does not prove "SAA matches
 WFA"; equivalence is checked by *differential testing* — drive the same trace through a SAA and a WFA
 activity with the parallel real drivers (`activity_standalone_driver.go`, `activity_workflow_driver.go`)
-and compare the user-visible activity info, with WFA as the oracle. Each `TestWFASAA*` holds a
+and compare their user-visible activity info. There is no oracle: each test's `want` encodes how the
+product *should* behave, and both surfaces are asserted against it, so a failure on either (or both) is
+useful information — it can mean SAA is wrong, WFA is wrong, or both. Each `TestWFASAA*` holds a
 `WorkflowActivity` and a `StandaloneActivity` subtest asserting the same projection; a few one-sided
 `TestSAA*` tests cover SAA-only behavior (worker-side validation and the timeout-marked-non-retryable
 config injected via `customizeStart`). All live in `tests/activity_parity_with_real_drivers_test.go`.
