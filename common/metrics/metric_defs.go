@@ -1,3 +1,4 @@
+// This package should hold all the metrics and tags for temporal
 package metrics
 
 // Common tags for all services
@@ -36,7 +37,6 @@ const (
 	timeoutTypeTagName             = "timeout_type"
 )
 
-// This package should hold all the metrics and tags for temporal
 const (
 	HistoryRoleTagValue       = "history"
 	MatchingRoleTagValue      = "matching"
