@@ -88,6 +88,43 @@ func (s *standaloneActivityTestSuite) TestParityRespondByID_BeforeAnyWorkerStart
 	}
 }
 
+// Test behavior of the RespondActivityTask*ById RPCs for an activity that is Scheduled and then
+// Paused before any worker picks it up.
+func (s *standaloneActivityTestSuite) TestParityRespondByID_FromPausedState() {
+	env := s.newTestEnv()
+	t := s.T()
+
+	cases := []struct {
+		name         string
+		op           byIDOp
+		expectErr    bool
+		expectStatus enumspb.ActivityExecutionStatus // if expectErr is false
+	}{
+		{"Complete", byIDComplete, false, enumspb.ACTIVITY_EXECUTION_STATUS_COMPLETED},
+		{"Fail", byIDFail, true, 0},
+		{"Cancel", byIDCancel, true, 0},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			both := func(t *testing.T, d driver) {
+				d.scheduleNeverStarted(t)
+				d.pause(t)
+				status, err := d.respondByID(t, tc.op)
+				if tc.expectErr {
+					var notFound *serviceerror.NotFound
+					require.ErrorAs(t, err, &notFound,
+						"ById %s of a paused, never-started activity by ID must be rejected as NotFound", tc.name)
+					return
+				}
+				require.NoError(t, err, "ById %s of a paused, never-started activity by ID must succeed", tc.name)
+				require.Equal(t, tc.expectStatus, status)
+			}
+			t.Run("WorkflowActivity", func(t *testing.T) { both(t, &wfaDriver{s: s, env: env}) })
+			t.Run("StandaloneActivity", func(t *testing.T) { both(t, &saaDriver{s: s, env: env}) })
+		})
+	}
+}
+
 // driver is the interface implemented by the WFA and SAA drivers.
 type driver interface {
 	start_Poll_StartToCloseTimeoutElapses(t *testing.T) enumspb.ActivityExecutionStatus
@@ -95,6 +132,8 @@ type driver interface {
 
 	// scheduleNeverStarted schedules a single activity that no worker ever polls, leaving it Scheduled.
 	scheduleNeverStarted(t *testing.T)
+	// pause pauses the scheduled activity, leaving it Paused.
+	pause(t *testing.T)
 	// respondByID force-terminates that activity by ID with the given outcome. On success it returns
 	// the activity's terminal status; otherwise it returns the RPC error.
 	respondByID(t *testing.T, op byIDOp) (enumspb.ActivityExecutionStatus, error)
@@ -228,6 +267,20 @@ func (d *saaDriver) scheduleNeverStarted(t *testing.T) {
 	// Start commits the Scheduled state before returning; a single Describe observes it. No poller
 	// ever calls PollActivityTaskQueue, so the activity stays Scheduled.
 	require.Equal(t, enumspb.PENDING_ACTIVITY_STATE_SCHEDULED, d.describeActivity(t).GetInfo().GetRunState())
+}
+
+func (d *saaDriver) pause(t *testing.T) {
+	_, err := d.env.FrontendClient().PauseActivityExecution(d.s.Context(), &workflowservice.PauseActivityExecutionRequest{
+		Namespace:  d.env.Namespace().String(),
+		ActivityId: d.activityID,
+		RunId:      d.runID,
+		Identity:   "worker",
+		Reason:     "parity-test",
+	})
+	require.NoError(t, err)
+
+	// Pause commits before the RPC returns; a single Describe observes the Paused state.
+	require.Equal(t, enumspb.PENDING_ACTIVITY_STATE_PAUSED, d.describeActivity(t).GetInfo().GetRunState())
 }
 
 func (d *saaDriver) respondByID(t *testing.T, op byIDOp) (enumspb.ActivityExecutionStatus, error) {
@@ -397,6 +450,27 @@ func (d *wfaDriver) scheduleNeverStarted(t *testing.T) {
 		at.Require().NoError(err)
 		at.Require().Len(desc.GetPendingActivities(), 1)
 		at.Require().Equal(enumspb.PENDING_ACTIVITY_STATE_SCHEDULED, desc.GetPendingActivities()[0].GetState())
+	}, 10*time.Second, 100*time.Millisecond)
+}
+
+func (d *wfaDriver) pause(t *testing.T) {
+	_, err := d.env.FrontendClient().PauseActivity(d.s.Context(), &workflowservice.PauseActivityRequest{
+		Namespace: d.env.Namespace().String(),
+		Execution: &commonpb.WorkflowExecution{WorkflowId: d.run.GetID(), RunId: d.run.GetRunID()},
+		Activity:  &workflowservice.PauseActivityRequest_Id{Id: singleActivityID},
+		Identity:  "worker",
+		Reason:    "parity-test",
+	})
+	require.NoError(t, err)
+
+	await.Require(d.s.Context(), t, func(at *await.T) {
+		desc, err := d.env.FrontendClient().DescribeWorkflowExecution(d.s.Context(), &workflowservice.DescribeWorkflowExecutionRequest{
+			Namespace: d.env.Namespace().String(),
+			Execution: &commonpb.WorkflowExecution{WorkflowId: d.run.GetID(), RunId: d.run.GetRunID()},
+		})
+		at.Require().NoError(err)
+		at.Require().Len(desc.GetPendingActivities(), 1)
+		at.Require().True(desc.GetPendingActivities()[0].GetPaused())
 	}, 10*time.Second, 100*time.Millisecond)
 }
 
