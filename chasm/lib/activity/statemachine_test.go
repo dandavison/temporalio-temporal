@@ -617,9 +617,9 @@ func TestTransitionCompleted(t *testing.T) {
 
 // TestTransitionCompleted_FromScheduled covers force-completing an activity by ID before any
 // worker has started it (RespondActivityTaskCompletedById). Since no attempt ever started,
-// ActivityStartToCloseLatency must not be emitted, mirroring the WFA behavior in
-// respondactivitytaskcompleted/api.go of leaving attemptStartedTime zero when the started event
-// is fabricated.
+// ActivityStartToCloseLatency must not be emitted: the started time is synthesized at completion
+// and would produce a meaningless ~zero latency. This mirrors WFA, which leaves the metric's
+// attemptStartedTime input zero when it fabricates the started event (respondactivitytaskcompleted/api.go).
 func TestTransitionCompleted_FromScheduled(t *testing.T) {
 	ctx := &chasm.MockMutableContext{}
 	ctx.HandleNow = func(chasm.Component) time.Time { return defaultTime }

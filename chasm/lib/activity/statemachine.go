@@ -199,8 +199,11 @@ var TransitionCompleted = chasm.NewTransition(
 		return a.StoreOrSelf(ctx).RecordCompleted(ctx, func(ctx chasm.MutableContext) error {
 			req := event.req.GetCompleteRequest()
 
+			attemptWasStarted := a.hasAttemptInProgress()
 			attempt := a.LastAttempt.Get(ctx)
-			if a.GetStatus() == activitypb.ACTIVITY_EXECUTION_STATUS_SCHEDULED {
+			if !attemptWasStarted {
+				// RespondActivityTaskCompletedById can complete an activity when no attempt is in
+				// progress.
 				attempt.StartedTime = timestamppb.New(ctx.Now(a))
 				if a.FirstAttemptStartedTime == nil {
 					a.FirstAttemptStartedTime = attempt.StartedTime
@@ -215,7 +218,7 @@ var TransitionCompleted = chasm.NewTransition(
 				},
 			}
 
-			a.emitOnCompletedMetrics(ctx, event.metricsHandler)
+			a.emitOnCompletedMetrics(ctx, event.metricsHandler, attemptWasStarted)
 
 			return nil
 		})

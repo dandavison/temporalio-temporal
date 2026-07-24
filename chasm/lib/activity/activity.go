@@ -1994,11 +1994,11 @@ func (a *Activity) emitOnAttemptFailedMetrics(ctx chasm.Context, handler metrics
 	metrics.ActivityTaskFail.With(handler).Record(1)
 }
 
-func (a *Activity) emitOnCompletedMetrics(ctx chasm.Context, handler metrics.Handler) {
+func (a *Activity) emitOnCompletedMetrics(ctx chasm.Context, handler metrics.Handler, attemptWasStarted bool) {
 	attempt := a.LastAttempt.Get(ctx)
 	startedTime := attempt.GetStartedTime().AsTime()
 
-	if a.GetStatus() != activitypb.ACTIVITY_EXECUTION_STATUS_SCHEDULED {
+	if attemptWasStarted {
 		startToCloseLatency := time.Since(startedTime)
 		metrics.ActivityStartToCloseLatency.With(handler).Record(startToCloseLatency)
 	}
