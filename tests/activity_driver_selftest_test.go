@@ -95,3 +95,62 @@ func (s *standaloneActivityTestSuite) TestSAADriverReportsUnrealizedWallClockEve
 			"the attempt was still running when the driver moved past StartToCloseElapses; the driver must report that")
 	})
 }
+
+// TestSAAHarnessRejectsInconsistentConfig requires the harness to refuse a configuration in which the
+// activity it starts and the model.Config it reports do not describe the same activity. saaHarness takes
+// its start-time config from two places — the model.Config flags and the timing knobs — and nothing
+// relates them, so a knob can be silently dropped (a scheduleToClose with no HasScheduleToClose) or a
+// timeout can be configured that the model does not know about (a startDelay with no HasStartDelay).
+//
+// Both directions are harness bugs that surface as product findings: a parity test whose SAA side
+// silently lacks a timeout its WFA side has fails on SAA and reads as a divergence.
+func (s *standaloneActivityTestSuite) TestSAAHarnessRejectsInconsistentConfig() {
+	env := s.newTestEnv()
+
+	for _, tc := range []struct {
+		name  string
+		cfg   model.Config
+		knobs func(*saaHarness)
+		why   string
+	}{
+		{
+			name:  "scheduleToCloseWithoutConfigFlag",
+			cfg:   model.Config{MaxAttempts: 1},
+			knobs: func(h *saaHarness) { h.scheduleToClose = 10 * time.Second },
+			why:   "startRequest drops scheduleToClose unless cfg.HasScheduleToClose is set",
+		},
+		{
+			name:  "shortHeartbeatTimeoutWithoutConfigFlag",
+			cfg:   model.Config{MaxAttempts: 1},
+			knobs: func(h *saaHarness) { h.shortTimeout = model.HeartbeatElapses },
+			why:   "no heartbeat timeout is configured at all, so a HeartbeatElapses event can never fire",
+		},
+		{
+			name:  "startDelayWithoutConfigFlag",
+			cfg:   model.Config{MaxAttempts: 1},
+			knobs: func(h *saaHarness) { h.startDelay = time.Hour },
+			why:   "the activity is start-delayed but the model believes it is immediately dispatchable",
+		},
+	} {
+		s.T().Run(tc.name, func(t *testing.T) {
+			reports := recordDriverReports(func(rt require.TestingT) {
+				h := newSAAHarness(t, env, tc.cfg)
+				tc.knobs(h)
+				h.start(rt)
+			})
+			require.NotEmpty(t, reports, "the harness must reject this configuration: %s", tc.why)
+		})
+	}
+
+	// Control: a consistent configuration must start cleanly, so a check that rejects everything cannot
+	// pass this test.
+	s.T().Run("consistentConfigIsAccepted", func(t *testing.T) {
+		reports := recordDriverReports(func(rt require.TestingT) {
+			h := newSAAHarness(t, env, model.Config{MaxAttempts: 1, HasScheduleToClose: true, HasHeartbeat: true})
+			h.scheduleToClose = 10 * time.Second
+			h.shortTimeout = model.HeartbeatElapses
+			h.start(rt)
+		})
+		require.Empty(t, reports, "a consistent configuration must be accepted")
+	})
+}
