@@ -66,7 +66,7 @@ func projectWFA(p *workflowpb.PendingActivityInfo) activityInfoProjection {
 
 // --- driver --------------------------------------------------------------------------------
 
-type wfaHarness struct {
+type wfaDriver struct {
 	env                *standaloneActivityEnv
 	ctx                context.Context
 	maxAttempts        int32         // RetryPolicy MaximumAttempts (0 = unlimited)
@@ -75,30 +75,30 @@ type wfaHarness struct {
 	maxRetryInterval   time.Duration // RetryPolicy MaximumInterval; 0 => retryInterval
 	nextRetryDelay     time.Duration // ApplicationFailureInfo.NextRetryDelay sent with RespondFailed
 
-	shortTimeout        model.EventKind // this timeout is configured short at schedule time; mirrors saaHarness.shortTimeout
-	scheduleToClose     time.Duration   // ScheduleToClose deadline; mirrors saaHarness.scheduleToClose
+	shortTimeout        model.EventKind // this timeout is configured short at schedule time; mirrors saaDriver.shortTimeout
+	scheduleToClose     time.Duration   // ScheduleToClose deadline; mirrors saaDriver.scheduleToClose
 	positivePollTimeout time.Duration   // bounds a "must dispatch" poll; 0 => saaPositivePollTimeout
 
 	// nonRetryableErrorTypes are the RetryPolicy's NonRetryableErrorTypes. A timeout type is named via
-	// retrypolicy.TimeoutFailureTypePrefix. The WFA analog of saaHarness.customizeStart.
+	// retrypolicy.TimeoutFailureTypePrefix. The WFA analog of saaDriver.customizeStart.
 	nonRetryableErrorTypes []string
 }
 
-// newWFAHarness builds a harness with the test-scoped context. The caller sets whichever timing knobs it
+// newWFADriver builds a driver with the test-scoped context. The caller sets whichever timing knobs it
 // needs on the result.
-func newWFAHarness(t *testing.T, env *standaloneActivityEnv, maxAttempts int32) *wfaHarness {
-	return &wfaHarness{env: env, ctx: testcontext.For(t), maxAttempts: maxAttempts}
+func newWFADriver(t *testing.T, env *standaloneActivityEnv, maxAttempts int32) *wfaDriver {
+	return &wfaDriver{env: env, ctx: testcontext.For(t), maxAttempts: maxAttempts}
 }
 
-// effectiveRetryInterval is the RetryPolicy InitialInterval the harness schedules activities with.
-func (h *wfaHarness) effectiveRetryInterval() time.Duration {
-	return cmp.Or(h.retryInterval, saaDefaultRetryInterval)
+// effectiveRetryInterval is the RetryPolicy InitialInterval the driver schedules activities with.
+func (d *wfaDriver) effectiveRetryInterval() time.Duration {
+	return cmp.Or(d.retryInterval, saaDefaultRetryInterval)
 }
 
 // wfaHandle is a handle to one workflow-scheduled activity: the ids that address it and the workflow
 // that owns it, plus the token last dispatched to it.
 type wfaHandle struct {
-	h          *wfaHarness
+	d          *wfaDriver
 	run        sdkclient.WorkflowRun
 	workflowID string
 	runID      string
@@ -166,9 +166,9 @@ func wfaOneActivityWorkflow(ctx workflow.Context, p wfaActivityParams) error {
 }
 
 // driveTrace runs a trace on a fresh workflow-scheduled activity and returns a handle at the reached
-// state. Model-free, parallel to saaHarness.driveTrace.
-func (h *wfaHarness) driveTrace(t *testing.T, trace []model.Event) *wfaHandle {
-	a := h.start(t)
+// state. Model-free, parallel to saaDriver.driveTrace.
+func (d *wfaDriver) driveTrace(t *testing.T, trace []model.Event) *wfaHandle {
+	a := d.start(t)
 	for _, e := range trace {
 		a.driveEvent(t, e)
 	}
@@ -177,11 +177,11 @@ func (h *wfaHarness) driveTrace(t *testing.T, trace []model.Event) *wfaHandle {
 
 // driveEvent advances the activity by one event. Parallel to saaHandle.driveEvent.
 func (a *wfaHandle) driveEvent(t require.TestingT, e model.Event) {
-	h := a.h
+	d := a.d
 	switch {
 	case e.Kind == model.Poll:
 		// A poll captures the dispatched task token.
-		if resp := a.pollForTask(t, cmp.Or(h.positivePollTimeout, saaPositivePollTimeout)); resp != nil {
+		if resp := a.pollForTask(t, cmp.Or(d.positivePollTimeout, saaPositivePollTimeout)); resp != nil {
 			a.token = resp.GetTaskToken()
 		}
 	case saaIsWallClock(e.Kind):
@@ -198,14 +198,14 @@ func (a *wfaHandle) driveEvent(t require.TestingT, e model.Event) {
 // unlike saaHandle.awaitWallClock this polls.
 func (a *wfaHandle) awaitWallClock(t require.TestingT, e model.Event) {
 	before, beforePending := a.pendingSnapshot(t)
-	deadline := time.Now().Add(a.h.eventClock(e) + saaWallClockSettle)
+	deadline := time.Now().Add(a.d.eventClock(e) + saaWallClockSettle)
 	for {
 		if now, nowPending := a.pendingSnapshot(t); nowPending != beforePending || (nowPending && now != before) {
 			return
 		}
 		if !time.Now().Before(deadline) {
 			t.Errorf("%s: the activity did not change within %s of driving the event, so the event did not "+
-				"take effect. Last observed: %+v", model.EventLabel(e), a.h.eventClock(e)+saaWallClockSettle, before)
+				"take effect. Last observed: %+v", model.EventLabel(e), a.d.eventClock(e)+saaWallClockSettle, before)
 			return
 		}
 		time.Sleep(saaPollInterval)
@@ -216,7 +216,7 @@ func (a *wfaHandle) awaitWallClock(t require.TestingT, e model.Event) {
 // Describe error is reported rather than reported as absence, which awaitWallClock would read as the
 // activity having closed.
 func (a *wfaHandle) pendingSnapshot(t require.TestingT) (activityInfoProjection, bool) {
-	resp, err := a.h.env.SdkClient().DescribeWorkflowExecution(a.h.ctx, a.workflowID, a.runID)
+	resp, err := a.d.env.SdkClient().DescribeWorkflowExecution(a.d.ctx, a.workflowID, a.runID)
 	require.NoError(t, err)
 	for _, pa := range resp.GetPendingActivities() {
 		if pa.GetActivityId() == a.activityID {
@@ -228,29 +228,29 @@ func (a *wfaHandle) pendingSnapshot(t require.TestingT) (activityInfoProjection,
 
 // eventClock is how long the clock behind a wall-clock event takes to elapse. WFA has no per-activity
 // start delay, so the only dispatch delay is a retry backoff.
-func (h *wfaHarness) eventClock(e model.Event) time.Duration {
+func (d *wfaDriver) eventClock(e model.Event) time.Duration {
 	if e.Kind == model.BackoffElapses {
-		return cmp.Or(h.nextRetryDelay, h.effectiveRetryInterval())
+		return cmp.Or(d.nextRetryDelay, d.effectiveRetryInterval())
 	}
 	return saaShortTimeout // the four timeouts
 }
 
-func (h *wfaHarness) start(t *testing.T) *wfaHandle {
+func (d *wfaDriver) start(t *testing.T) *wfaHandle {
 	wfTQ := testcore.RandomizeStr("wfa-wf")
 	actTQ := testcore.RandomizeStr("wfa-act")
 	const actID = "act"
 
 	// A dedicated workflow worker runs the helper workflow. Nothing polls the activity task queue, so the
 	// test is the only consumer of the activity's tasks.
-	w := sdkworker.New(h.env.SdkClient(), wfTQ, sdkworker.Options{})
+	w := sdkworker.New(d.env.SdkClient(), wfTQ, sdkworker.Options{})
 	w.RegisterWorkflow(wfaOneActivityWorkflow)
 	require.NoError(t, w.Start())
 	t.Cleanup(w.Stop)
 
 	// dur is short for the one timeout under test and long otherwise, so no other timeout fires
-	// mid-scenario. Mirrors saaHarness.startRequest.
+	// mid-scenario. Mirrors saaDriver.startRequest.
 	dur := func(k model.EventKind) time.Duration {
-		if h.shortTimeout == k {
+		if d.shortTimeout == k {
 			return saaShortTimeout
 		}
 		return time.Hour
@@ -258,35 +258,35 @@ func (h *wfaHarness) start(t *testing.T) *wfaHandle {
 	params := wfaActivityParams{
 		ActivityTQ: actTQ, ActivityID: actID,
 		StartToClose:  dur(model.StartToCloseElapses),
-		RetryInterval: h.effectiveRetryInterval(), BackoffCoefficient: h.backoffCoefficient, MaxInterval: h.maxRetryInterval,
-		MaxAttempts:            h.maxAttempts,
-		NonRetryableErrorTypes: h.nonRetryableErrorTypes,
+		RetryInterval: d.effectiveRetryInterval(), BackoffCoefficient: d.backoffCoefficient, MaxInterval: d.maxRetryInterval,
+		MaxAttempts:            d.maxAttempts,
+		NonRetryableErrorTypes: d.nonRetryableErrorTypes,
 	}
-	if h.shortTimeout == model.ScheduleToCloseElapses {
+	if d.shortTimeout == model.ScheduleToCloseElapses {
 		params.ScheduleToClose = saaShortTimeout
 	}
-	if h.shortTimeout == model.ScheduleToStartElapses {
+	if d.shortTimeout == model.ScheduleToStartElapses {
 		params.ScheduleToStart = saaShortTimeout
 	}
-	if h.shortTimeout == model.HeartbeatElapses {
+	if d.shortTimeout == model.HeartbeatElapses {
 		params.Heartbeat = saaShortTimeout
 	}
-	if h.scheduleToClose > 0 {
-		params.ScheduleToClose = h.scheduleToClose
+	if d.scheduleToClose > 0 {
+		params.ScheduleToClose = d.scheduleToClose
 	}
 	wfID := testcore.RandomizeStr("wfa-run")
-	run, err := h.env.SdkClient().ExecuteWorkflow(h.ctx,
+	run, err := d.env.SdkClient().ExecuteWorkflow(d.ctx,
 		sdkclient.StartWorkflowOptions{ID: wfID, TaskQueue: wfTQ},
 		wfaOneActivityWorkflow, params)
 	require.NoError(t, err)
-	return &wfaHandle{h: h, run: run, workflowID: wfID, runID: run.GetRunID(), activityID: actID, activityTQ: actTQ}
+	return &wfaHandle{d: d, run: run, workflowID: wfID, runID: run.GetRunID(), activityID: actID, activityTQ: actTQ}
 }
 
 // terminal waits for the activity to reach a terminal state and reports it. A workflow activity's
 // terminal outcome is not in PendingActivities, so it is read from the workflow-result error's cause.
 // Parallel to saaHandle.terminal.
 func (a *wfaHandle) terminal(t require.TestingT) activityTerminalProjection {
-	err := a.run.Get(a.h.ctx, nil)
+	err := a.run.Get(a.d.ctx, nil)
 	if err == nil {
 		return activityTerminalProjection{Status: enumspb.ACTIVITY_EXECUTION_STATUS_COMPLETED}
 	}
@@ -311,7 +311,7 @@ func (a *wfaHandle) terminal(t require.TestingT) activityTerminalProjection {
 // SDK surfaces it via TimeoutError.Unwrap(). Parallel to saaHandle.terminalCause.
 func (a *wfaHandle) terminalCause(_ require.TestingT) failureCause {
 	var toErr *temporal.TimeoutError
-	if errors.As(a.run.Get(a.h.ctx, nil), &toErr) {
+	if errors.As(a.run.Get(a.d.ctx, nil), &toErr) {
 		var appErr *temporal.ApplicationError
 		if errors.As(toErr.Unwrap(), &appErr) {
 			return failureCause{Type: appErr.Type(), Message: appErr.Message()}
@@ -321,10 +321,10 @@ func (a *wfaHandle) terminalCause(_ require.TestingT) failureCause {
 }
 
 func (a *wfaHandle) pollForTask(t require.TestingT, timeout time.Duration) *workflowservice.PollActivityTaskQueueResponse {
-	ctx, cancel := context.WithTimeout(a.h.ctx, timeout)
+	ctx, cancel := context.WithTimeout(a.d.ctx, timeout)
 	defer cancel()
-	resp, err := a.h.env.FrontendClient().PollActivityTaskQueue(ctx, &workflowservice.PollActivityTaskQueueRequest{
-		Namespace: a.h.env.Namespace().String(),
+	resp, err := a.d.env.FrontendClient().PollActivityTaskQueue(ctx, &workflowservice.PollActivityTaskQueueRequest{
+		Namespace: a.d.env.Namespace().String(),
 		TaskQueue: &taskqueuepb.TaskQueue{Name: a.activityTQ},
 		Identity:  "worker",
 	})
@@ -339,49 +339,49 @@ func (a *wfaHandle) pollForTask(t require.TestingT, timeout time.Duration) *work
 // saaHandle.rpc: the operator commands are the same *Execution APIs with WorkflowId set. Cancel is the
 // exception; see RequestCancel below.
 func (a *wfaHandle) rpc(e model.Event) error {
-	fc := a.h.env.FrontendClient()
-	ns := a.h.env.Namespace().String()
+	fc := a.d.env.FrontendClient()
+	ns := a.d.env.Namespace().String()
 	switch e.Kind {
 	case model.Heartbeat:
-		_, err := fc.RecordActivityTaskHeartbeat(a.h.ctx, &workflowservice.RecordActivityTaskHeartbeatRequest{
+		_, err := fc.RecordActivityTaskHeartbeat(a.d.ctx, &workflowservice.RecordActivityTaskHeartbeatRequest{
 			Namespace: ns, TaskToken: a.token, Details: saaHeartbeatDetails,
 		})
 		return err
 	case model.RespondCompleted:
-		_, err := fc.RespondActivityTaskCompleted(a.h.ctx, &workflowservice.RespondActivityTaskCompletedRequest{
+		_, err := fc.RespondActivityTaskCompleted(a.d.ctx, &workflowservice.RespondActivityTaskCompletedRequest{
 			Namespace: ns, TaskToken: a.token, Identity: "worker",
 		})
 		return err
 	case model.RespondFailed:
-		_, err := fc.RespondActivityTaskFailed(a.h.ctx, &workflowservice.RespondActivityTaskFailedRequest{
-			Namespace: ns, TaskToken: a.token, Identity: "worker", Failure: saaFailure(e.Retryable, a.h.nextRetryDelay),
+		_, err := fc.RespondActivityTaskFailed(a.d.ctx, &workflowservice.RespondActivityTaskFailedRequest{
+			Namespace: ns, TaskToken: a.token, Identity: "worker", Failure: saaFailure(e.Retryable, a.d.nextRetryDelay),
 		})
 		return err
 	case model.RespondCanceled:
-		_, err := fc.RespondActivityTaskCanceled(a.h.ctx, &workflowservice.RespondActivityTaskCanceledRequest{
+		_, err := fc.RespondActivityTaskCanceled(a.d.ctx, &workflowservice.RespondActivityTaskCanceledRequest{
 			Namespace: ns, TaskToken: a.token, Identity: "worker",
 		})
 		return err
 	case model.RequestCancel:
 		// WFA cancel comes from the workflow, so signal it, then wait for CANCEL_REQUESTED. SAA's direct
 		// RequestCancelActivityExecution RPC is synchronous; waiting here makes the two comparable.
-		if err := a.h.env.SdkClient().SignalWorkflow(a.h.ctx, a.workflowID, a.runID, wfaCancelSignal, nil); err != nil {
+		if err := a.d.env.SdkClient().SignalWorkflow(a.d.ctx, a.workflowID, a.runID, wfaCancelSignal, nil); err != nil {
 			return err
 		}
 		return a.waitForCancelRequested()
 	case model.Pause:
-		_, err := fc.PauseActivityExecution(a.h.ctx, &workflowservice.PauseActivityExecutionRequest{
+		_, err := fc.PauseActivityExecution(a.d.ctx, &workflowservice.PauseActivityExecutionRequest{
 			Namespace: ns, WorkflowId: a.workflowID, ActivityId: a.activityID, RunId: a.runID, Identity: "op", Reason: "drive", RequestId: uuid.NewString(),
 		})
 		return err
 	case model.Unpause:
-		_, err := fc.UnpauseActivityExecution(a.h.ctx, &workflowservice.UnpauseActivityExecutionRequest{
+		_, err := fc.UnpauseActivityExecution(a.d.ctx, &workflowservice.UnpauseActivityExecutionRequest{
 			Namespace: ns, WorkflowId: a.workflowID, ActivityId: a.activityID, RunId: a.runID, Identity: "op",
 			ResetAttempts: e.ResetAttempts, ResetHeartbeat: e.ResetHeartbeat,
 		})
 		return err
 	case model.Reset:
-		_, err := fc.ResetActivityExecution(a.h.ctx, &workflowservice.ResetActivityExecutionRequest{
+		_, err := fc.ResetActivityExecution(a.d.ctx, &workflowservice.ResetActivityExecutionRequest{
 			Namespace: ns, WorkflowId: a.workflowID, ActivityId: a.activityID, RunId: a.runID, Identity: "op",
 			KeepPaused: e.KeepPaused, RestoreOriginalOptions: e.RestoreOriginal,
 		})
@@ -389,13 +389,13 @@ func (a *wfaHandle) rpc(e model.Event) error {
 	case model.UpdateOptions:
 		return a.updateOptions(e)
 	default:
-		return fmt.Errorf("wfaHarness: unhandled event kind %v", e.Kind)
+		return fmt.Errorf("wfaDriver: unhandled event kind %v", e.Kind)
 	}
 }
 
 func (a *wfaHandle) updateOptions(e model.Event) error {
 	req := &workflowservice.UpdateActivityExecutionOptionsRequest{
-		Namespace: a.h.env.Namespace().String(), WorkflowId: a.workflowID, ActivityId: a.activityID, RunId: a.runID, Identity: "op",
+		Namespace: a.d.env.Namespace().String(), WorkflowId: a.workflowID, ActivityId: a.activityID, RunId: a.runID, Identity: "op",
 	}
 	switch {
 	case e.RestoreOriginal:
@@ -408,7 +408,7 @@ func (a *wfaHandle) updateOptions(e model.Event) error {
 		req.ActivityOptions = &apiactivitypb.ActivityOptions{HeartbeatTimeout: durationpb.New(time.Hour)}
 		req.UpdateMask = &fieldmaskpb.FieldMask{Paths: []string{"heartbeat_timeout"}}
 	}
-	_, err := a.h.env.FrontendClient().UpdateActivityExecutionOptions(a.h.ctx, req)
+	_, err := a.d.env.FrontendClient().UpdateActivityExecutionOptions(a.d.ctx, req)
 	return err
 }
 
@@ -416,7 +416,7 @@ func (a *wfaHandle) updateOptions(e model.Event) error {
 func (a *wfaHandle) waitForCancelRequested() error {
 	deadline := time.Now().Add(10 * time.Second)
 	for time.Now().Before(deadline) {
-		resp, err := a.h.env.SdkClient().DescribeWorkflowExecution(a.h.ctx, a.workflowID, a.runID)
+		resp, err := a.d.env.SdkClient().DescribeWorkflowExecution(a.d.ctx, a.workflowID, a.runID)
 		if err != nil {
 			return err
 		}
@@ -427,13 +427,13 @@ func (a *wfaHandle) waitForCancelRequested() error {
 		}
 		time.Sleep(100 * time.Millisecond)
 	}
-	return fmt.Errorf("wfaHarness: activity %q did not reach CANCEL_REQUESTED after signal", a.activityID)
+	return fmt.Errorf("wfaDriver: activity %q did not reach CANCEL_REQUESTED after signal", a.activityID)
 }
 
 // heartbeatDetails is the last heartbeat checkpoint, as the first payload's raw bytes. Readable only
 // while the activity is still pending. Parallel to saaHandle.heartbeatDetails.
 func (a *wfaHandle) heartbeatDetails(t require.TestingT) []byte {
-	resp, err := a.h.env.SdkClient().DescribeWorkflowExecution(a.h.ctx, a.workflowID, a.runID)
+	resp, err := a.d.env.SdkClient().DescribeWorkflowExecution(a.d.ctx, a.workflowID, a.runID)
 	require.NoError(t, err)
 	for _, pa := range resp.GetPendingActivities() {
 		if pa.GetActivityId() == a.activityID {
@@ -447,7 +447,7 @@ func (a *wfaHandle) heartbeatDetails(t require.TestingT) []byte {
 // projection is the activity's pending-activity info as an activityInfoProjection. Parallel to
 // saaHandle.projection.
 func (a *wfaHandle) projection(t require.TestingT) activityInfoProjection {
-	resp, err := a.h.env.SdkClient().DescribeWorkflowExecution(a.h.ctx, a.workflowID, a.runID)
+	resp, err := a.d.env.SdkClient().DescribeWorkflowExecution(a.d.ctx, a.workflowID, a.runID)
 	require.NoError(t, err)
 	for _, pa := range resp.GetPendingActivities() {
 		if pa.GetActivityId() == a.activityID {

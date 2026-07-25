@@ -110,7 +110,7 @@ const (
 	InvalidArgument
 )
 
-// Observed is the internal state the harness reads
+// Observed is the internal state the driver reads
 type Observed struct {
 	Status               activitypb.ActivityExecutionStatus
 	Count                int32

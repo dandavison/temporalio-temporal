@@ -20,7 +20,7 @@ import enumspb "go.temporal.io/api/enums/v1"
 //
 // These two booleans are not part of AbstractState: a task invalidation is observable only as a
 // change in the underlying stamp, not as a distinct state value. The model states, per transition,
-// whether each is invalidated, and the harness detects it as a stamp delta across the edge.
+// whether each is invalidated, and the driver detects it as a stamp delta across the edge.
 type Outcome struct {
 	Next                           AbstractState
 	Reject                         ErrorKind
@@ -342,7 +342,7 @@ func updateOptions(cfg Config, s AbstractState, e Event) Outcome {
 
 // The events below represent timeouts (scheduleToStartElapses, scheduleToCloseElapses,
 // startToCloseElapses, heartbeatElapses) or dispatch delays (startDelayElapses, backoffElapses).
-// More precisely, they represent the end of a time window configured by the harness: whether or not
+// More precisely, they represent the end of a time window configured by the driver: whether or not
 // a timer task actually fires around that time depends on whether this nominal timeout or delay
 // should correspond to a real one in the product behavior, and on the correctness of the
 // implementation. These events never reject; they either cause a transition, or no-op.
@@ -353,7 +353,7 @@ func updateOptions(cfg Config, s AbstractState, e Event) Outcome {
 // the schedule-to-close timer starts to count down at the end of the start delay.
 
 // scheduleToStartElapses represents the end of the nominal schedule-to-start timeout configured by
-// the harness. The product behavior is that the timeout starts counting from dispatch time, so a
+// the driver. The product behavior is that the timeout starts counting from dispatch time, so a
 // start_delay or retry backoff effectively pushes it back.
 func scheduleToStartElapses(_ Config, s AbstractState, _ Event) Outcome {
 	if s.Status != Scheduled || s.Dispatchability != Dispatchable {
@@ -365,7 +365,7 @@ func scheduleToStartElapses(_ Config, s AbstractState, _ Event) Outcome {
 }
 
 // scheduleToCloseElapses represents the end of the nominal schedule-to-close timeout configured by
-// the harness. The product behavior is that the deadline is anchored at first-dispatch time
+// the driver. The product behavior is that the deadline is anchored at first-dispatch time
 // (schedule_time + start_delay), so it does not run during a start_delay, and — unlike a workflow
 // activity — is not suspended while paused.
 func scheduleToCloseElapses(_ Config, s AbstractState, _ Event) Outcome {
@@ -378,7 +378,7 @@ func scheduleToCloseElapses(_ Config, s AbstractState, _ Event) Outcome {
 }
 
 // startToCloseElapses and heartbeatElapses represent the end of the nominal per-attempt timeouts
-// configured by the harness. The product behavior is that either one ends the running attempt.
+// configured by the driver. The product behavior is that either one ends the running attempt.
 func startToCloseElapses(cfg Config, s AbstractState, _ Event) Outcome {
 	return attemptTimedOut(cfg, s)
 }
@@ -386,7 +386,7 @@ func heartbeatElapses(cfg Config, s AbstractState, _ Event) Outcome {
 	return attemptTimedOut(cfg, s)
 }
 
-// startDelayElapses represents the end of the nominal start_delay window configured by the harness.
+// startDelayElapses represents the end of the nominal start_delay window configured by the driver.
 // The product behavior is that the delayed first dispatch becomes available; the status is unchanged
 // (a Paused activity stays Paused but now dispatches on unpause).
 func startDelayElapses(_ Config, s AbstractState, _ Event) Outcome {
@@ -398,7 +398,7 @@ func startDelayElapses(_ Config, s AbstractState, _ Event) Outcome {
 	return Outcome{Next: n}
 }
 
-// backoffElapses represents the end of the nominal retry-backoff window configured by the harness.
+// backoffElapses represents the end of the nominal retry-backoff window configured by the driver.
 // The product behavior is that the delayed retry dispatch becomes available; symmetric to startDelayElapses.
 func backoffElapses(_ Config, s AbstractState, _ Event) Outcome {
 	if s.Dispatchability != BackoffPending {

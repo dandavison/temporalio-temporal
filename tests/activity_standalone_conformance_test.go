@@ -60,16 +60,16 @@ func saaConformanceContextBudget() time.Duration {
 func (s *standaloneActivityTestSuite) conformanceRPCGraphTraversal(t *testing.T) {
 	env := s.newTestEnv()
 	for i, cfg := range saaTraversalConfigs {
-		// newSAAHarness anchors on the subtest t, not s.T(): the suite context is memoized once per suite
+		// newSAADriver anchors on the subtest t, not s.T(): the suite context is memoized once per suite
 		// test, so all TestConformance subtests would otherwise share a single budget.
-		h := newSAAHarness(t, env, cfg)
-		h.cfgIdx = i
+		d := newSAADriver(t, env, cfg)
+		d.cfgIdx = i
 		if cfg.HasStartDelay {
 			// Keep the first-dispatch window open for the whole traversal, so the activity stays
 			// StartDelayPending.
-			h.startDelay = time.Hour
+			d.startDelay = time.Hour
 		}
-		h.traverse(t)
+		d.traverse(t)
 	}
 }
 
@@ -84,14 +84,14 @@ func (s *standaloneActivityTestSuite) conformanceRandomWalk(t *testing.T) {
 	t.Logf("random walk: seed=%d steps=%d/cfg (override TEMPORAL_SAASPEC_WALK_SEED / _WALK_STEPS)", seed, steps)
 
 	for i, cfg := range saaTraversalConfigs {
-		h := newSAAHarness(t, env, cfg) // subtest-scoped budget; see conformanceRPCGraphTraversal
-		h.cfgIdx = i
+		d := newSAADriver(t, env, cfg) // subtest-scoped budget; see conformanceRPCGraphTraversal
+		d.cfgIdx = i
 		if cfg.HasStartDelay {
 			// Keep the first-dispatch window open for the whole walk. Unlike the BFS, the walk re-polls
 			// post-operation states, so it catches an early re-dispatch.
-			h.startDelay = time.Hour
+			d.startDelay = time.Hour
 		}
 		// Independent, reproducible RNG stream per config.
-		h.randomWalk(t, rand.New(rand.NewSource(seed+int64(i))), steps)
+		d.randomWalk(t, rand.New(rand.NewSource(seed+int64(i))), steps)
 	}
 }

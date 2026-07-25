@@ -28,7 +28,7 @@ import (
 func TestDispatchRouting(t *testing.T) {
 	// polled leaves a fresh activity STARTED: attempt 1 was dispatched and picked up by a worker.
 	polled := func(t *testing.T) *handle {
-		a := newHarness(t, model.Config{MaxAttempts: 3}).start()
+		a := newDriver(t, model.Config{MaxAttempts: 3}).start()
 		require.NoError(t, a.realize(model.PollEvent))
 		return a
 	}
@@ -46,7 +46,7 @@ func TestDispatchRouting(t *testing.T) {
 	}
 
 	t.Run("initial schedule", func(t *testing.T) {
-		require.Equal(t, routing{transfer: 1}, newHarness(t, model.Config{MaxAttempts: 3}).start().routed())
+		require.Equal(t, routing{transfer: 1}, newDriver(t, model.Config{MaxAttempts: 3}).start().routed())
 	})
 
 	// The other negative control, and the one the routing decision is most delicately balanced on:
@@ -54,7 +54,7 @@ func TestDispatchRouting(t *testing.T) {
 	// thing keeping a first dispatch off the transfer queue. Route it immediate and start_delay stops
 	// deferring anything at all.
 	t.Run("initial schedule within a start delay", func(t *testing.T) {
-		a := newHarness(t, model.Config{MaxAttempts: 3, HasStartDelay: true}).start()
+		a := newDriver(t, model.Config{MaxAttempts: 3, HasStartDelay: true}).start()
 		require.Equal(t, routing{timer: 1}, a.routed(), "a first dispatch still inside its start delay must remain a timer task")
 	})
 
@@ -127,8 +127,8 @@ func (a *handle) dispatchRouting(fn func()) routing {
 // because they coalesce into a single payload-free ChasmTaskPure that is always a timer task, and so say
 // nothing about dispatch routing.
 func (a *handle) routed() routing {
-	byCategory, err := a.h.engine.Tasks(a.ref)
-	require.NoError(a.h.t, err)
+	byCategory, err := a.d.engine.Tasks(a.ref)
+	require.NoError(a.d.t, err)
 	counts := routing{}
 	for _, category := range []tasks.Category{tasks.CategoryTransfer, tasks.CategoryTimer} {
 		for _, task := range byCategory[category] {

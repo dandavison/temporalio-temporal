@@ -39,9 +39,9 @@ import (
 
 const testNamespaceID = "activity-test-ns"
 
-// harness is the tier-2 driver: a registry, an in-memory engine, and a virtual clock, shared
-// across the fresh activities a traversal or walk starts.
-type harness struct {
+// driver holds a registry, an in-memory engine, and a virtual clock, shared across the fresh
+// activities a traversal or walk starts.
+type driver struct {
 	t          *testing.T
 	ctx        context.Context
 	engine     *chasmtest.Engine
@@ -51,7 +51,7 @@ type harness struct {
 	numStarted int
 }
 
-func newHarness(t *testing.T, cfg model.Config) *harness {
+func newDriver(t *testing.T, cfg model.Config) *driver {
 	nsReg := namespace.NewMockRegistry(gomock.NewController(t))
 	nsReg.EXPECT().GetNamespaceName(gomock.Any()).Return(namespace.Name(testNamespaceID), nil).AnyTimes()
 	registry := chasm.NewRegistry(log.NewNoopLogger())
@@ -75,7 +75,7 @@ func newHarness(t *testing.T, cfg model.Config) *harness {
 	now := time.Date(2020, 1, 1, 0, 0, 0, 0, time.UTC)
 	ts.Update(now)
 	engine := chasmtest.NewEngine(t, registry, chasmtest.WithTimeSource(ts))
-	return &harness{
+	return &driver{
 		t:      t,
 		ctx:    chasm.NewEngineContext(context.Background(), engine),
 		engine: engine,
@@ -85,7 +85,7 @@ func newHarness(t *testing.T, cfg model.Config) *harness {
 
 // handle is a handle to one activity instance.
 type handle struct {
-	h    *harness
+	d    *driver
 	ref  chasm.ComponentRef
 	path []model.Event
 	// stamp deltas across the last observed() read; see apply.
@@ -102,9 +102,9 @@ const backoffInterval = 30 * time.Second
 // first dispatch is always still in the future.
 const startDelayInterval = time.Hour
 
-func (h *harness) start() *handle {
-	h.ts.Update(h.nowStart) // fresh activities all start at the same virtual instant
-	h.numStarted++
+func (d *driver) start() *handle {
+	d.ts.Update(d.nowStart) // fresh activities all start at the same virtual instant
+	d.numStarted++
 	id := "test-activity"
 	req := &workflowservice.StartActivityExecutionRequest{
 		Namespace:           testNamespaceID,
@@ -114,22 +114,22 @@ func (h *harness) start() *handle {
 		StartToCloseTimeout: durationpb.New(time.Hour),
 		RetryPolicy: &commonpb.RetryPolicy{
 			InitialInterval: durationpb.New(backoffInterval), BackoffCoefficient: 1.0,
-			MaximumInterval: durationpb.New(backoffInterval), MaximumAttempts: h.cfg.MaxAttempts,
+			MaximumInterval: durationpb.New(backoffInterval), MaximumAttempts: d.cfg.MaxAttempts,
 		},
 		RequestId: uuid.NewString(),
 	}
-	if h.cfg.HasScheduleToClose {
+	if d.cfg.HasScheduleToClose {
 		req.ScheduleToCloseTimeout = durationpb.New(24 * time.Hour)
 	}
-	if h.cfg.HasHeartbeat {
+	if d.cfg.HasHeartbeat {
 		req.HeartbeatTimeout = durationpb.New(10 * time.Minute)
 	}
-	if h.cfg.HasStartDelay {
+	if d.cfg.HasStartDelay {
 		req.StartDelay = durationpb.New(startDelayInterval)
 	}
 	// Terminate any prior run, so business-id reuse does not conflict.
 	key := chasm.ExecutionKey{NamespaceID: testNamespaceID, BusinessID: id}
-	result, err := chasm.StartExecution(h.ctx, key,
+	result, err := chasm.StartExecution(d.ctx, key,
 		func(mc chasm.MutableContext, r *workflowservice.StartActivityExecutionRequest) (*Activity, error) {
 			a, err := NewStandaloneActivity(mc, r)
 			if err != nil {
@@ -141,15 +141,15 @@ func (h *harness) start() *handle {
 		chasm.WithRequestID(req.RequestId),
 		chasm.WithBusinessIDPolicy(chasm.BusinessIDReusePolicyAllowDuplicate, chasm.BusinessIDConflictPolicyTerminateExisting),
 	)
-	require.NoError(h.t, err)
-	return &handle{h: h, ref: chasm.NewComponentRef[*Activity](chasm.ExecutionKey{
+	require.NoError(d.t, err)
+	return &handle{d: d, ref: chasm.NewComponentRef[*Activity](chasm.ExecutionKey{
 		NamespaceID: testNamespaceID, BusinessID: id, RunID: result.ExecutionKey.RunID,
 	})}
 }
 
 // observed is the activity's internal state as the model's AbstractState, refreshing the stamp deltas.
 func (a *handle) observed() model.AbstractState {
-	o, err := chasm.ReadComponent(a.h.ctx, a.ref, func(act *Activity, cctx chasm.Context, _ struct{}) (model.Observed, error) {
+	o, err := chasm.ReadComponent(a.d.ctx, a.ref, func(act *Activity, cctx chasm.Context, _ struct{}) (model.Observed, error) {
 		attempt := act.LastAttempt.Get(cctx)
 		return model.Observed{
 			Status:               act.GetStatus(),
@@ -162,7 +162,7 @@ func (a *handle) observed() model.AbstractState {
 			DispatchTimeSet:      attempt.GetDispatchTime() != nil,
 		}, nil
 	}, struct{}{})
-	require.NoError(a.h.t, err)
+	require.NoError(a.d.t, err)
 	a.prevStamp, a.curStamp = a.curStamp, o.Stamp
 	a.prevSTCStamp, a.curSTCStamp = a.curSTCStamp, o.ScheduleToCloseStamp
 	return model.Abstract(o)
@@ -170,19 +170,19 @@ func (a *handle) observed() model.AbstractState {
 
 // describe is the public status, run state, and attempt, via the production Describe builder.
 func (a *handle) describe() (enumspb.ActivityExecutionStatus, enumspb.PendingActivityState, int32) {
-	resp, err := chasm.ReadComponent(a.h.ctx, a.ref, func(act *Activity, cctx chasm.Context, req *activitypb.DescribeActivityExecutionRequest) (*activitypb.DescribeActivityExecutionResponse, error) {
+	resp, err := chasm.ReadComponent(a.d.ctx, a.ref, func(act *Activity, cctx chasm.Context, req *activitypb.DescribeActivityExecutionRequest) (*activitypb.DescribeActivityExecutionResponse, error) {
 		return act.buildDescribeActivityExecutionResponse(cctx, req)
 	}, &activitypb.DescribeActivityExecutionRequest{})
-	require.NoError(a.h.t, err)
+	require.NoError(a.d.t, err)
 	info := resp.GetFrontendResponse().GetInfo()
 	return info.GetStatus(), info.GetRunState(), info.GetAttempt()
 }
 
 func (a *handle) read(fn func(*Activity, chasm.Context) any) any {
-	v, err := chasm.ReadComponent(a.h.ctx, a.ref, func(act *Activity, cctx chasm.Context, _ struct{}) (any, error) {
+	v, err := chasm.ReadComponent(a.d.ctx, a.ref, func(act *Activity, cctx chasm.Context, _ struct{}) (any, error) {
 		return fn(act, cctx), nil
 	}, struct{}{})
-	require.NoError(a.h.t, err)
+	require.NoError(a.d.t, err)
 	return v
 }
 
@@ -196,7 +196,7 @@ func (a *handle) token() *tokenspb.Task {
 }
 
 func (a *handle) update(fn func(*Activity, chasm.MutableContext) error) error {
-	_, _, err := chasm.UpdateComponent(a.h.ctx, a.ref, func(act *Activity, mc chasm.MutableContext, _ any) (any, error) {
+	_, _, err := chasm.UpdateComponent(a.d.ctx, a.ref, func(act *Activity, mc chasm.MutableContext, _ any) (any, error) {
 		return nil, fn(act, mc)
 	}, nil)
 	return err
@@ -245,7 +245,7 @@ func (a *handle) rpc(e model.Event) error {
 			return err
 		})
 	default:
-		a.h.t.Fatalf("unhandled rpc kind %v", e.Kind)
+		a.d.t.Fatalf("unhandled rpc kind %v", e.Kind)
 		return nil
 	}
 }
@@ -278,33 +278,33 @@ func (a *handle) realize(e model.Event) error {
 		}
 		return nil // not dispatchable: poll finds nothing
 	case e.Kind == model.BackoffElapses:
-		a.h.ts.Update(a.h.ts.Now().Add(backoffInterval + time.Second))
+		a.d.ts.Update(a.d.ts.Now().Add(backoffInterval + time.Second))
 		return nil
 	case e.Kind == model.StartToCloseElapses:
 		a.advanceTo(a.timerDeadline(e.Kind))
-		h, task := newStartToCloseTimeoutTaskHandler(), &activitypb.StartToCloseTimeoutTask{Stamp: a.stamp()}
+		handler, task := newStartToCloseTimeoutTaskHandler(), &activitypb.StartToCloseTimeoutTask{Stamp: a.stamp()}
 		return a.fireTimer(func(act *Activity, mc chasm.MutableContext) (bool, error) {
-			return h.Validate(mc, act, chasm.TaskInvocation{}, task)
+			return handler.Validate(mc, act, chasm.TaskInvocation{}, task)
 		}, func(act *Activity, mc chasm.MutableContext) error {
-			return h.Execute(mc, act, chasm.TaskAttributes{}, task)
+			return handler.Execute(mc, act, chasm.TaskAttributes{}, task)
 		})
 	case e.Kind == model.HeartbeatElapses:
 		deadline := a.timerDeadline(e.Kind)
 		a.advanceTo(deadline)
-		h, task := newHeartbeatTimeoutTaskHandler(), &activitypb.HeartbeatTimeoutTask{Stamp: a.stamp()}
+		handler, task := newHeartbeatTimeoutTaskHandler(), &activitypb.HeartbeatTimeoutTask{Stamp: a.stamp()}
 		return a.fireTimer(func(act *Activity, mc chasm.MutableContext) (bool, error) {
-			return h.Validate(mc, act, chasm.TaskInvocation{TaskAttributes: chasm.TaskAttributes{ScheduledTime: deadline}}, task)
+			return handler.Validate(mc, act, chasm.TaskInvocation{TaskAttributes: chasm.TaskAttributes{ScheduledTime: deadline}}, task)
 		}, func(act *Activity, mc chasm.MutableContext) error {
-			return h.Execute(mc, act, chasm.TaskAttributes{}, task)
+			return handler.Execute(mc, act, chasm.TaskAttributes{}, task)
 		})
 	case e.Kind == model.ScheduleToCloseElapses:
 		a.advanceTo(a.timerDeadline(e.Kind))
 		stc := a.read(func(act *Activity, c chasm.Context) any { return act.GetScheduleToCloseStamp() }).(int32)
-		h, task := newScheduleToCloseTimeoutTaskHandler(), &activitypb.ScheduleToCloseTimeoutTask{Stamp: stc}
+		handler, task := newScheduleToCloseTimeoutTaskHandler(), &activitypb.ScheduleToCloseTimeoutTask{Stamp: stc}
 		return a.fireTimer(func(act *Activity, mc chasm.MutableContext) (bool, error) {
-			return h.Validate(mc, act, chasm.TaskInvocation{}, task)
+			return handler.Validate(mc, act, chasm.TaskInvocation{}, task)
 		}, func(act *Activity, mc chasm.MutableContext) error {
-			return h.Execute(mc, act, chasm.TaskAttributes{}, task)
+			return handler.Execute(mc, act, chasm.TaskAttributes{}, task)
 		})
 	default:
 		return a.rpc(e)
@@ -348,8 +348,8 @@ func (a *handle) timerDeadline(kind model.EventKind) time.Time {
 // advanceTo moves the virtual clock just past deadline if that is in the future. Otherwise a no-op, so
 // an inapplicable timer fires at the current instant and is rejected by its own Validate.
 func (a *handle) advanceTo(deadline time.Time) {
-	if !deadline.IsZero() && deadline.After(a.h.ts.Now()) {
-		a.h.ts.Update(deadline.Add(time.Second))
+	if !deadline.IsZero() && deadline.After(a.d.ts.Now()) {
+		a.d.ts.Update(deadline.Add(time.Second))
 	}
 }
 
@@ -387,7 +387,7 @@ func rejectKind(err error) model.ErrorKind {
 // candidateEvents is the tier-2 event alphabet: the worker RPCs plus the wall-clock timeouts and
 // backoff, which are prohibitively slow at tier 3 but instant here. The operator commands are
 // tier-3-only; being synchronous, the virtual clock buys them nothing.
-func (h *harness) candidateEvents() []model.Event {
+func (d *driver) candidateEvents() []model.Event {
 	events := []model.Event{
 		{Kind: model.Poll},
 		{Kind: model.Heartbeat},
@@ -398,10 +398,10 @@ func (h *harness) candidateEvents() []model.Event {
 		{Kind: model.BackoffElapses},
 		{Kind: model.StartToCloseElapses},
 	}
-	if h.cfg.HasHeartbeat {
+	if d.cfg.HasHeartbeat {
 		events = append(events, model.Event{Kind: model.HeartbeatElapses})
 	}
-	if h.cfg.HasScheduleToClose {
+	if d.cfg.HasScheduleToClose {
 		events = append(events, model.Event{Kind: model.ScheduleToCloseElapses})
 	}
 	return events
@@ -410,16 +410,16 @@ func (h *harness) candidateEvents() []model.Event {
 // verifyPath starts a fresh activity, replays path, and checks its final edge against the model. A
 // prefix divergence aborts the replay silently; that edge is reported when it is the final edge of its
 // own shorter path. Reports whether the final edge verified.
-func (h *harness) verifyPath(path []model.Event) bool {
-	a := h.start()
+func (d *driver) verifyPath(path []model.Event) bool {
+	a := d.start()
 	a.path = path
-	cur := model.Initial(h.cfg)
+	cur := model.Initial(d.cfg)
 	if obs := a.observed(); !cur.SameObserved(obs) {
-		h.t.Errorf("cfg %+v: state after Start disagrees with Initial\n  observed=%s want=%s", h.cfg, model.Fingerprint(obs), model.Fingerprint(cur))
+		d.t.Errorf("cfg %+v: state after Start disagrees with Initial\n  observed=%s want=%s", d.cfg, model.Fingerprint(obs), model.Fingerprint(cur))
 		return false
 	}
 	for i, e := range path {
-		out := model.Transition(h.cfg, cur, e)
+		out := model.Transition(d.cfg, cur, e)
 		final := i == len(path)-1
 		if !a.apply(e, cur, out, final) {
 			return false
@@ -437,7 +437,7 @@ func (a *handle) apply(e model.Event, cur model.AbstractState, out model.Outcome
 		wantDispatchable := cur.Dispatchability == model.Dispatchable
 		if a.dispatchable() != wantDispatchable {
 			if final {
-				a.h.t.Errorf("%s: dispatch readiness disagrees — driver=%v model=%v\n  path: %s",
+				a.d.t.Errorf("%s: dispatch readiness disagrees — driver=%v model=%v\n  path: %s",
 					model.EventLabel(e), a.dispatchable(), wantDispatchable, pathString(a.path))
 			}
 			return false
@@ -450,28 +450,28 @@ func (a *handle) apply(e model.Event, cur model.AbstractState, out model.Outcome
 		return ok
 	}
 	if gotKind != out.Reject {
-		a.h.t.Errorf("%s from %s: reject kind disagrees — driver=%v model=%v\n  path: %s",
+		a.d.t.Errorf("%s from %s: reject kind disagrees — driver=%v model=%v\n  path: %s",
 			model.EventLabel(e), cur.Status, gotKind, out.Reject, pathString(a.path))
 	}
 	if !out.Next.SameObserved(obs) {
-		a.h.t.Errorf("%s from %s: state disagrees\n  observed=%s\n  model=   %s\n  path: %s",
+		a.d.t.Errorf("%s from %s: state disagrees\n  observed=%s\n  model=   %s\n  path: %s",
 			model.EventLabel(e), cur.Status, model.Fingerprint(obs), model.Fingerprint(out.Next), pathString(a.path))
 	}
 	// An edge invalidates the prior attempt's tasks by bumping a stamp, so compare the stamp delta across
 	// this edge, refreshed by observed() above, to the model's per-transition invalidation bools.
 	gotAttempt, gotSTC := a.curStamp != a.prevStamp, a.curSTCStamp != a.prevSTCStamp
 	if gotAttempt != out.AttemptTasksInvalidated {
-		a.h.t.Errorf("%s from %s: attempt-task invalidation disagrees — driver=%v model=%v\n  path: %s",
+		a.d.t.Errorf("%s from %s: attempt-task invalidation disagrees — driver=%v model=%v\n  path: %s",
 			model.EventLabel(e), cur.Status, gotAttempt, out.AttemptTasksInvalidated, pathString(a.path))
 	}
 	if gotSTC != out.ScheduleToCloseTaskInvalidated {
-		a.h.t.Errorf("%s from %s: schedule-to-close-task invalidation disagrees — driver=%v model=%v\n  path: %s",
+		a.d.t.Errorf("%s from %s: schedule-to-close-task invalidation disagrees — driver=%v model=%v\n  path: %s",
 			model.EventLabel(e), cur.Status, gotSTC, out.ScheduleToCloseTaskInvalidated, pathString(a.path))
 	}
 	st, rs, attempt := a.describe()
 	wantSt, wantRs := model.ExpectedDescribe(out.Next)
 	if st != wantSt || rs != wantRs || attempt != out.Next.AttemptCount {
-		a.h.t.Errorf("%s from %s: Describe disagrees — driver=(%v,%v,attempt=%d) model=(%v,%v,attempt=%d)\n  path: %s",
+		a.d.t.Errorf("%s from %s: Describe disagrees — driver=(%v,%v,attempt=%d) model=(%v,%v,attempt=%d)\n  path: %s",
 			model.EventLabel(e), cur.Status, st, rs, attempt, wantSt, wantRs, out.Next.AttemptCount, pathString(a.path))
 	}
 	return gotKind == out.Reject && out.Next.SameObserved(obs)
@@ -499,24 +499,24 @@ func joinArrows(parts []string) string {
 
 // traverse does a depth-bounded breadth-first walk of the model's reachable states, verifying every
 // decided edge against the engine.
-func (h *harness) traverse(maxDepth int) {
+func (d *driver) traverse(maxDepth int) {
 	type node struct {
 		path  []model.Event
 		state model.AbstractState
 	}
-	start := model.Initial(h.cfg)
+	start := model.Initial(d.cfg)
 	visited := map[string]bool{model.Fingerprint(start): true}
 	frontier := []node{{nil, start}}
 	edges, states := 0, 1
-	h.verifyPath(nil)
+	d.verifyPath(nil)
 	for depth := 0; depth < maxDepth && len(frontier) > 0; depth++ {
 		var next []node
 		for _, nd := range frontier {
-			for _, e := range h.candidateEvents() {
-				out := model.Transition(h.cfg, nd.state, e)
+			for _, e := range d.candidateEvents() {
+				out := model.Transition(d.cfg, nd.state, e)
 				edges++
 				path := append(append([]model.Event{}, nd.path...), e)
-				h.verifyPath(path)
+				d.verifyPath(path)
 				if out.Reject != model.NoError {
 					continue
 				}
@@ -530,18 +530,18 @@ func (h *harness) traverse(maxDepth int) {
 		}
 		frontier = next
 	}
-	h.t.Logf("cfg %+v: verified %d edges across %d states (depth<=%d)", h.cfg, edges, states, maxDepth)
+	d.t.Logf("cfg %+v: verified %d edges across %d states (depth<=%d)", d.cfg, edges, states, maxDepth)
 }
 
 // randomWalk drives one activity, picking a random applicable event each step and checking it against
 // the model. On reaching a terminal state it restarts, until the step budget is spent.
-func (h *harness) randomWalk(rng *rand.Rand, steps int) {
+func (d *driver) randomWalk(rng *rand.Rand, steps int) {
 	// freshWalk seeds the stamp-delta baseline via observed(), so the first edge's invalidation check
 	// measures that edge and not the start.
 	freshWalk := func() (*handle, model.AbstractState) {
-		a := h.start()
-		cur := model.Initial(h.cfg)
-		require.True(h.t, cur.SameObserved(a.observed()))
+		a := d.start()
+		cur := model.Initial(d.cfg)
+		require.True(d.t, cur.SameObserved(a.observed()))
 		return a, cur
 	}
 	a, cur := freshWalk()
@@ -553,11 +553,11 @@ func (h *harness) randomWalk(rng *rand.Rand, steps int) {
 			trace = nil
 			continue
 		}
-		events := h.candidateEvents()
+		events := d.candidateEvents()
 		e := events[rng.Intn(len(events))]
 		trace = append(trace, e)
 		a.path = trace
-		out := model.Transition(h.cfg, cur, e)
+		out := model.Transition(d.cfg, cur, e)
 		if !a.apply(e, cur, out, true) {
 			a, cur = freshWalk() // diverged (already reported); restart from a known state
 			trace = nil
@@ -571,7 +571,7 @@ func (h *harness) randomWalk(rng *rand.Rand, steps int) {
 		keys = append(keys, k)
 	}
 	sort.Strings(keys)
-	h.t.Logf("cfg %+v: random walk covered %d distinct states", h.cfg, len(keys))
+	d.t.Logf("cfg %+v: random walk covered %d distinct states", d.cfg, len(keys))
 }
 
 func TestConformance(t *testing.T) {
@@ -581,12 +581,12 @@ func TestConformance(t *testing.T) {
 	}
 	t.Run("BFSGraphTraversal", func(t *testing.T) {
 		for _, cfg := range configs {
-			newHarness(t, cfg).traverse(5)
+			newDriver(t, cfg).traverse(5)
 		}
 	})
 	t.Run("RandomWalk", func(t *testing.T) {
 		for _, cfg := range configs {
-			newHarness(t, cfg).randomWalk(rand.New(rand.NewSource(1)), 300)
+			newDriver(t, cfg).randomWalk(rand.New(rand.NewSource(1)), 300)
 		}
 	})
 }

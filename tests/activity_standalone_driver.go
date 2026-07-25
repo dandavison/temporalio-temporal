@@ -30,14 +30,14 @@ import (
 
 // --- driver --------------------------------------------------------------------------------
 
-type saaHarness struct {
+type saaDriver struct {
 	env        *standaloneActivityEnv
 	ctx        context.Context
 	chasmCtx   context.Context // memoized by chasmContext
 	cfg        model.Config
 	cfgIdx     int
 	numStarted int
-	idBase     string // activity-id prefix, unique per harness
+	idBase     string // activity-id prefix, unique per driver
 
 	shortTimeout        model.EventKind // this timeout is configured short at Start; zero leaves all timeouts long
 	startDelay          time.Duration   // StartActivityExecutionRequest.StartDelay
@@ -52,10 +52,10 @@ type saaHarness struct {
 	customizeStart func(*workflowservice.StartActivityExecutionRequest)
 }
 
-// newSAAHarness builds a harness with the test-scoped context and its own activity-id prefix. The
+// newSAADriver builds a driver with the test-scoped context and its own activity-id prefix. The
 // caller sets whichever timing knobs it needs on the result.
-func newSAAHarness(t *testing.T, env *standaloneActivityEnv, cfg model.Config) *saaHarness {
-	return &saaHarness{
+func newSAADriver(t *testing.T, env *standaloneActivityEnv, cfg model.Config) *saaDriver {
+	return &saaDriver{
 		env:    env,
 		ctx:    testcontext.For(t),
 		cfg:    cfg,
@@ -65,7 +65,7 @@ func newSAAHarness(t *testing.T, env *standaloneActivityEnv, cfg model.Config) *
 
 const saaShortTimeout = 2 * time.Second
 
-// saaDefaultRetryInterval is the RetryPolicy InitialInterval when a harness sets none.
+// saaDefaultRetryInterval is the RetryPolicy InitialInterval when a driver sets none.
 const saaDefaultRetryInterval = 200 * time.Millisecond
 
 // saaPositivePollTimeout bounds a poll that must find a task.
@@ -84,7 +84,7 @@ const saaPollTimeout = common.MinLongPollTimeout + time.Second
 // saaHandle is a handle to one activity instance: the ids that address it, plus the token last
 // dispatched to it.
 type saaHandle struct {
-	h             *saaHarness
+	d             *saaDriver
 	activityID    string
 	taskQueue     string
 	runID         string
@@ -104,8 +104,8 @@ type saaHandle struct {
 
 // driveTrace runs a trace on a fresh activity and returns a handle at the reached state. Model-free:
 // each RPC must succeed.
-func (h *saaHarness) driveTrace(t require.TestingT, trace []model.Event) *saaHandle {
-	a := h.start(t)
+func (d *saaDriver) driveTrace(t require.TestingT, trace []model.Event) *saaHandle {
+	a := d.start(t)
 	for _, e := range trace {
 		a.driveEvent(t, e)
 	}
@@ -114,11 +114,11 @@ func (h *saaHarness) driveTrace(t require.TestingT, trace []model.Event) *saaHan
 
 // driveEvent advances the activity by one event.
 func (a *saaHandle) driveEvent(t require.TestingT, e model.Event) {
-	h := a.h
+	d := a.d
 	switch {
 	case e.Kind == model.Poll:
 		// A poll captures the dispatched task token.
-		if resp := a.pollForTask(t, cmp.Or(h.positivePollTimeout, saaPositivePollTimeout)); resp != nil {
+		if resp := a.pollForTask(t, cmp.Or(d.positivePollTimeout, saaPositivePollTimeout)); resp != nil {
 			a.token = resp.GetTaskToken()
 		}
 	case saaIsWallClock(e.Kind):
@@ -135,7 +135,7 @@ func (a *saaHandle) driveEvent(t require.TestingT, e model.Event) {
 // version — the dispatch time simply passes — so it is detected by the read-time
 // NextAttemptScheduleTime flip instead.
 func (a *saaHandle) awaitWallClock(t require.TestingT, e model.Event) {
-	deadline := time.Now().Add(a.h.eventClock(e) + saaWallClockSettle)
+	deadline := time.Now().Add(a.d.eventClock(e) + saaWallClockSettle)
 	if saaIsDispatchDelay(e.Kind) {
 		a.awaitDispatchTimePassed(t, e, deadline)
 		return
@@ -150,9 +150,9 @@ func (a *saaHandle) awaitWallClock(t require.TestingT, e model.Event) {
 func (a *saaHandle) awaitStateTransition(t require.TestingT, e model.Event, deadline time.Time) {
 	token := a.describe(t).GetLongPollToken()
 	for time.Now().Before(deadline) {
-		ctx, cancel := context.WithDeadline(a.h.ctx, deadline)
-		resp, err := a.h.env.FrontendClient().DescribeActivityExecution(ctx, &workflowservice.DescribeActivityExecutionRequest{
-			Namespace:     a.h.env.Namespace().String(),
+		ctx, cancel := context.WithDeadline(a.d.ctx, deadline)
+		resp, err := a.d.env.FrontendClient().DescribeActivityExecution(ctx, &workflowservice.DescribeActivityExecutionRequest{
+			Namespace:     a.d.env.Namespace().String(),
 			ActivityId:    a.activityID,
 			RunId:         a.runID,
 			LongPollToken: token,
@@ -169,7 +169,7 @@ func (a *saaHandle) awaitStateTransition(t require.TestingT, e model.Event, dead
 		}
 	}
 	t.Errorf("%s: the activity did not transition within %s of driving the event, so the event did not take "+
-		"effect. Last observed: %+v", model.EventLabel(e), a.h.eventClock(e)+saaWallClockSettle, a.projection(t))
+		"effect. Last observed: %+v", model.EventLabel(e), a.d.eventClock(e)+saaWallClockSettle, a.projection(t))
 }
 
 // awaitDispatchTimePassed polls the public projection until the pending dispatch time has passed, which
@@ -184,7 +184,7 @@ func (a *saaHandle) awaitDispatchTimePassed(t require.TestingT, e model.Event, d
 		if !time.Now().Before(deadline) {
 			t.Errorf("%s: a dispatch is still pending in the future %s after driving the event, so the "+
 				"window did not elapse. Last observed: %+v",
-				model.EventLabel(e), a.h.eventClock(e)+saaWallClockSettle, p)
+				model.EventLabel(e), a.d.eventClock(e)+saaWallClockSettle, p)
 			return
 		}
 		time.Sleep(saaPollInterval)
@@ -194,76 +194,76 @@ func (a *saaHandle) awaitDispatchTimePassed(t require.TestingT, e model.Event, d
 // driveTraceWithModelConformanceChecking drives a trace like driveTrace, additionally checking each
 // step against model.Transition (see apply). The state after Start must equal model.Initial(cfg).
 // Requires a config the model can see in full, so no customizeStart.
-func (h *saaHarness) driveTraceWithModelConformanceChecking(t *testing.T, trace []model.Event) *saaHandle {
-	a := h.start(t)
+func (d *saaDriver) driveTraceWithModelConformanceChecking(t *testing.T, trace []model.Event) *saaHandle {
+	a := d.start(t)
 	a.path = trace
-	cur := model.Initial(h.cfg)
+	cur := model.Initial(d.cfg)
 	obs, err := a.observed()
 	require.NoError(t, err)
 	if !cur.SameObserved(obs) {
 		t.Fatalf("after Start, state disagrees with Initial(cfg).\n%s", saaStateDiff(obs, cur))
 	}
 	for _, e := range trace {
-		out := model.Transition(h.cfg, cur, e)
+		out := model.Transition(d.cfg, cur, e)
 		a.apply(t, e, cur, out, true)
 		cur = out.Next
 	}
 	return a
 }
 
-func (h *saaHarness) start(t require.TestingT) *saaHandle {
-	h.requireConsistentConfig(t)
-	h.numStarted++
-	// cfgIdx keeps ids distinct across the per-config harnesses an explorer sweeps.
-	id := fmt.Sprintf("%s-%d-%d", h.idBase, h.cfgIdx, h.numStarted)
-	resp, err := h.env.FrontendClient().StartActivityExecution(h.ctx, h.startRequest(id, id))
+func (d *saaDriver) start(t require.TestingT) *saaHandle {
+	d.requireConsistentConfig(t)
+	d.numStarted++
+	// cfgIdx keeps ids distinct across the per-config drivers an explorer sweeps.
+	id := fmt.Sprintf("%s-%d-%d", d.idBase, d.cfgIdx, d.numStarted)
+	resp, err := d.env.FrontendClient().StartActivityExecution(d.ctx, d.startRequest(id, id))
 	require.NoError(t, err)
-	return &saaHandle{h: h, activityID: id, taskQueue: id, runID: resp.RunId, establishedReqID: map[model.EventKind]string{}}
+	return &saaHandle{d: d, activityID: id, taskQueue: id, runID: resp.RunId, establishedReqID: map[model.EventKind]string{}}
 }
 
-func (h *saaHarness) startRequest(activityID, taskQueue string) *workflowservice.StartActivityExecutionRequest {
+func (d *saaDriver) startRequest(activityID, taskQueue string) *workflowservice.StartActivityExecutionRequest {
 	long := durationpb.New(time.Hour)
 	dur := func(k model.EventKind) *durationpb.Duration {
-		if h.shortTimeout == k {
+		if d.shortTimeout == k {
 			return durationpb.New(saaShortTimeout)
 		}
 		return long
 	}
-	retryInterval := h.effectiveRetryInterval()
+	retryInterval := d.effectiveRetryInterval()
 	req := &workflowservice.StartActivityExecutionRequest{
-		Namespace:           h.env.Namespace().String(),
+		Namespace:           d.env.Namespace().String(),
 		ActivityId:          activityID,
-		ActivityType:        h.env.Tv().ActivityType(),
+		ActivityType:        d.env.Tv().ActivityType(),
 		Identity:            "worker",
 		Input:               defaultInput,
 		TaskQueue:           &taskqueuepb.TaskQueue{Name: taskQueue},
 		StartToCloseTimeout: dur(model.StartToCloseElapses),
 		RetryPolicy: &commonpb.RetryPolicy{
 			InitialInterval:    durationpb.New(retryInterval),
-			BackoffCoefficient: cmp.Or(h.backoffCoefficient, 1.0),
-			MaximumInterval:    durationpb.New(cmp.Or(h.maxRetryInterval, retryInterval)),
-			MaximumAttempts:    h.cfg.MaxAttempts,
+			BackoffCoefficient: cmp.Or(d.backoffCoefficient, 1.0),
+			MaximumInterval:    durationpb.New(cmp.Or(d.maxRetryInterval, retryInterval)),
+			MaximumAttempts:    d.cfg.MaxAttempts,
 		},
 		RequestId: uuid.NewString(),
 	}
-	if h.startDelay > 0 {
-		req.StartDelay = durationpb.New(h.startDelay)
+	if d.startDelay > 0 {
+		req.StartDelay = durationpb.New(d.startDelay)
 	}
-	if h.cfg.HasScheduleToClose {
-		if h.scheduleToClose > 0 {
-			req.ScheduleToCloseTimeout = durationpb.New(h.scheduleToClose)
+	if d.cfg.HasScheduleToClose {
+		if d.scheduleToClose > 0 {
+			req.ScheduleToCloseTimeout = durationpb.New(d.scheduleToClose)
 		} else {
 			req.ScheduleToCloseTimeout = dur(model.ScheduleToCloseElapses)
 		}
 	}
-	if h.cfg.HasScheduleToStart {
+	if d.cfg.HasScheduleToStart {
 		req.ScheduleToStartTimeout = dur(model.ScheduleToStartElapses)
 	}
-	if h.cfg.HasHeartbeat {
+	if d.cfg.HasHeartbeat {
 		req.HeartbeatTimeout = dur(model.HeartbeatElapses)
 	}
-	if h.customizeStart != nil {
-		h.customizeStart(req)
+	if d.customizeStart != nil {
+		d.customizeStart(req)
 	}
 	return req
 }
@@ -271,8 +271,8 @@ func (h *saaHarness) startRequest(activityID, taskQueue string) *workflowservice
 // describe returns the DescribeActivityExecution response, including the outcome, the last failure, and
 // the heartbeat details.
 func (a *saaHandle) describe(t require.TestingT) *workflowservice.DescribeActivityExecutionResponse {
-	resp, err := a.h.env.FrontendClient().DescribeActivityExecution(a.h.ctx, &workflowservice.DescribeActivityExecutionRequest{
-		Namespace:               a.h.env.Namespace().String(),
+	resp, err := a.d.env.FrontendClient().DescribeActivityExecution(a.d.ctx, &workflowservice.DescribeActivityExecutionRequest{
+		Namespace:               a.d.env.Namespace().String(),
 		ActivityId:              a.activityID,
 		RunId:                   a.runID,
 		IncludeOutcome:          true,
@@ -381,53 +381,53 @@ func (a *saaHandle) awaitObservedMatch(want model.AbstractState, deadline time.T
 
 // rpc performs the frontend RPC for a non-Poll, non-wall-clock event and returns its error.
 func (a *saaHandle) rpc(e model.Event) error {
-	fc := a.h.env.FrontendClient()
-	ns := a.h.env.Namespace().String()
+	fc := a.d.env.FrontendClient()
+	ns := a.d.env.Namespace().String()
 	switch e.Kind {
 	case model.Heartbeat:
-		resp, err := fc.RecordActivityTaskHeartbeat(a.h.ctx, &workflowservice.RecordActivityTaskHeartbeatRequest{
+		resp, err := fc.RecordActivityTaskHeartbeat(a.d.ctx, &workflowservice.RecordActivityTaskHeartbeatRequest{
 			Namespace: ns, TaskToken: a.token, Details: saaHeartbeatDetails,
 		})
 		a.lastHeartbeat = resp
 		return err
 	case model.RespondCompleted:
-		_, err := fc.RespondActivityTaskCompleted(a.h.ctx, &workflowservice.RespondActivityTaskCompletedRequest{
+		_, err := fc.RespondActivityTaskCompleted(a.d.ctx, &workflowservice.RespondActivityTaskCompletedRequest{
 			Namespace: ns, TaskToken: a.token, Identity: "worker",
 		})
 		return err
 	case model.RespondFailed:
-		_, err := fc.RespondActivityTaskFailed(a.h.ctx, &workflowservice.RespondActivityTaskFailedRequest{
-			Namespace: ns, TaskToken: a.token, Identity: "worker", Failure: saaFailure(e.Retryable, a.h.nextRetryDelay),
+		_, err := fc.RespondActivityTaskFailed(a.d.ctx, &workflowservice.RespondActivityTaskFailedRequest{
+			Namespace: ns, TaskToken: a.token, Identity: "worker", Failure: saaFailure(e.Retryable, a.d.nextRetryDelay),
 		})
 		return err
 	case model.RespondCanceled:
-		_, err := fc.RespondActivityTaskCanceled(a.h.ctx, &workflowservice.RespondActivityTaskCanceledRequest{
+		_, err := fc.RespondActivityTaskCanceled(a.d.ctx, &workflowservice.RespondActivityTaskCanceledRequest{
 			Namespace: ns, TaskToken: a.token, Identity: "worker",
 		})
 		return err
 	case model.RequestCancel:
-		_, err := fc.RequestCancelActivityExecution(a.h.ctx, &workflowservice.RequestCancelActivityExecutionRequest{
+		_, err := fc.RequestCancelActivityExecution(a.d.ctx, &workflowservice.RequestCancelActivityExecutionRequest{
 			Namespace: ns, ActivityId: a.activityID, RunId: a.runID, Identity: "op", Reason: "drive", RequestId: a.reqID(e),
 		})
 		return err
 	case model.Terminate:
-		_, err := fc.TerminateActivityExecution(a.h.ctx, &workflowservice.TerminateActivityExecutionRequest{
+		_, err := fc.TerminateActivityExecution(a.d.ctx, &workflowservice.TerminateActivityExecutionRequest{
 			Namespace: ns, ActivityId: a.activityID, RunId: a.runID, Identity: "op", Reason: "drive", RequestId: a.reqID(e),
 		})
 		return err
 	case model.Pause:
-		_, err := fc.PauseActivityExecution(a.h.ctx, &workflowservice.PauseActivityExecutionRequest{
+		_, err := fc.PauseActivityExecution(a.d.ctx, &workflowservice.PauseActivityExecutionRequest{
 			Namespace: ns, ActivityId: a.activityID, RunId: a.runID, Identity: "op", Reason: "drive", RequestId: a.reqID(e),
 		})
 		return err
 	case model.Unpause:
-		_, err := fc.UnpauseActivityExecution(a.h.ctx, &workflowservice.UnpauseActivityExecutionRequest{
+		_, err := fc.UnpauseActivityExecution(a.d.ctx, &workflowservice.UnpauseActivityExecutionRequest{
 			Namespace: ns, ActivityId: a.activityID, RunId: a.runID, Identity: "op",
 			ResetAttempts: e.ResetAttempts, ResetHeartbeat: e.ResetHeartbeat,
 		})
 		return err
 	case model.Reset:
-		_, err := fc.ResetActivityExecution(a.h.ctx, &workflowservice.ResetActivityExecutionRequest{
+		_, err := fc.ResetActivityExecution(a.d.ctx, &workflowservice.ResetActivityExecutionRequest{
 			Namespace: ns, ActivityId: a.activityID, RunId: a.runID, Identity: "op",
 			KeepPaused: e.KeepPaused, RestoreOriginalOptions: e.RestoreOriginal,
 		})
@@ -435,13 +435,13 @@ func (a *saaHandle) rpc(e model.Event) error {
 	case model.UpdateOptions:
 		return a.updateOptions(e)
 	default:
-		return fmt.Errorf("saaHarness: unhandled event kind %v", e.Kind)
+		return fmt.Errorf("saaDriver: unhandled event kind %v", e.Kind)
 	}
 }
 
 func (a *saaHandle) updateOptions(e model.Event) error {
 	req := &workflowservice.UpdateActivityExecutionOptionsRequest{
-		Namespace: a.h.env.Namespace().String(), ActivityId: a.activityID, RunId: a.runID, Identity: "op",
+		Namespace: a.d.env.Namespace().String(), ActivityId: a.activityID, RunId: a.runID, Identity: "op",
 	}
 	switch {
 	case e.RestoreOriginal:
@@ -454,7 +454,7 @@ func (a *saaHandle) updateOptions(e model.Event) error {
 		req.ActivityOptions = &apiactivitypb.ActivityOptions{HeartbeatTimeout: durationpb.New(time.Hour)}
 		req.UpdateMask = &fieldmaskpb.FieldMask{Paths: []string{"heartbeat_timeout"}}
 	}
-	_, err := a.h.env.FrontendClient().UpdateActivityExecutionOptions(a.h.ctx, req)
+	_, err := a.d.env.FrontendClient().UpdateActivityExecutionOptions(a.d.ctx, req)
 	return err
 }
 
@@ -472,26 +472,26 @@ func (a *saaHandle) reqID(e model.Event) string {
 }
 
 func (a *saaHandle) pollForTask(t require.TestingT, timeout time.Duration) *workflowservice.PollActivityTaskQueueResponse {
-	ctx, cancel := context.WithTimeout(a.h.ctx, timeout)
+	ctx, cancel := context.WithTimeout(a.d.ctx, timeout)
 	defer cancel()
-	resp, err := a.h.env.FrontendClient().PollActivityTaskQueue(ctx, &workflowservice.PollActivityTaskQueueRequest{
-		Namespace: a.h.env.Namespace().String(),
+	resp, err := a.d.env.FrontendClient().PollActivityTaskQueue(ctx, &workflowservice.PollActivityTaskQueueRequest{
+		Namespace: a.d.env.Namespace().String(),
 		TaskQueue: &taskqueuepb.TaskQueue{Name: a.taskQueue},
 		Identity:  "worker",
 	})
 	// Matching signals "waited, found nothing" with an empty response and a nil error, so any error
 	// means the poll did not complete cleanly.
 	if err != nil {
-		if a.h.ctx.Err() != nil {
+		if a.d.ctx.Err() != nil {
 			return nil // teardown
 		}
-		if deadline, ok := a.h.ctx.Deadline(); ok && time.Until(deadline) < common.MinLongPollTimeout {
-			t.Errorf("saaHarness: test context budget exhausted before the poll could run (%.1fs left, need >= %s). "+
+		if deadline, ok := a.d.ctx.Deadline(); ok && time.Until(deadline) < common.MinLongPollTimeout {
+			t.Errorf("saaDriver: test context budget exhausted before the poll could run (%.1fs left, need >= %s). "+
 				"Raise TEMPORAL_TEST_TIMEOUT and `go test -timeout`.\n  %v",
 				time.Until(deadline).Seconds(), common.MinLongPollTimeout, err)
 			return nil
 		}
-		t.Errorf("saaHarness bug: PollActivityTaskQueue did not complete cleanly (poll timeout must be >= "+
+		t.Errorf("saaDriver bug: PollActivityTaskQueue did not complete cleanly (poll timeout must be >= "+
 			"MinLongPollTimeout; only an empty response with a nil error means \"no task\"): %v", err)
 		return nil
 	}
@@ -502,53 +502,53 @@ func (a *saaHandle) pollForTask(t require.TestingT, timeout time.Duration) *work
 }
 
 // eventClock is how long the clock behind a wall-clock event takes to elapse.
-func (h *saaHarness) eventClock(e model.Event) time.Duration {
+func (d *saaDriver) eventClock(e model.Event) time.Duration {
 	switch e.Kind {
 	case model.StartDelayElapses:
-		return h.dispatchDelay(model.StartDelayPending)
+		return d.dispatchDelay(model.StartDelayPending)
 	case model.BackoffElapses:
-		return h.dispatchDelay(model.BackoffPending)
+		return d.dispatchDelay(model.BackoffPending)
 	default: // the four timeouts
 		return saaShortTimeout
 	}
 }
 
-// dispatchDelay is how long the harness configured the pending delay to last.
-func (h *saaHarness) dispatchDelay(d model.Dispatchability) time.Duration {
-	switch d {
+// dispatchDelay is how long the driver configured the pending delay to last.
+func (d *saaDriver) dispatchDelay(disp model.Dispatchability) time.Duration {
+	switch disp {
 	case model.StartDelayPending:
-		return h.startDelay
+		return d.startDelay
 	case model.BackoffPending:
-		return cmp.Or(h.nextRetryDelay, h.effectiveRetryInterval())
+		return cmp.Or(d.nextRetryDelay, d.effectiveRetryInterval())
 	default:
 		return 0
 	}
 }
 
-// effectiveRetryInterval is the RetryPolicy InitialInterval the harness starts activities with.
-func (h *saaHarness) effectiveRetryInterval() time.Duration {
-	return cmp.Or(h.retryInterval, saaDefaultRetryInterval)
+// effectiveRetryInterval is the RetryPolicy InitialInterval the driver starts activities with.
+func (d *saaDriver) effectiveRetryInterval() time.Duration {
+	return cmp.Or(d.retryInterval, saaDefaultRetryInterval)
 }
 
 // requireConsistentConfig fails unless cfg and the timing knobs describe the same activity. cfg is what
 // the model reasons about and the knobs are what startRequest sends, so a disagreement means the test is
 // asserting against an activity nobody configured.
-func (h *saaHarness) requireConsistentConfig(t require.TestingT) {
+func (d *saaDriver) requireConsistentConfig(t require.TestingT) {
 	requireBoth := func(flag bool, knobSet bool, flagName, knobName string) {
 		if flag && !knobSet {
-			require.Fail(t, fmt.Sprintf("saaHarness misconfigured: cfg.%s requires %s", flagName, knobName))
+			require.Fail(t, fmt.Sprintf("saaDriver misconfigured: cfg.%s requires %s", flagName, knobName))
 		}
 		if knobSet && !flag {
-			require.Fail(t, fmt.Sprintf("saaHarness misconfigured: %s requires cfg.%s, or the model cannot "+
+			require.Fail(t, fmt.Sprintf("saaDriver misconfigured: %s requires cfg.%s, or the model cannot "+
 				"see it", knobName, flagName))
 		}
 	}
-	requireBoth(h.cfg.HasStartDelay, h.startDelay > 0, "HasStartDelay", "startDelay")
+	requireBoth(d.cfg.HasStartDelay, d.startDelay > 0, "HasStartDelay", "startDelay")
 	// A timeout knob only reaches the request when its cfg flag is set, so the flag is what makes the knob
 	// meaningful. The reverse does not hold: a set flag with no knob configures that timeout long, which is
 	// how a trace leaves a timeout alive without firing it.
-	if h.scheduleToClose > 0 && !h.cfg.HasScheduleToClose {
-		require.Fail(t, "saaHarness misconfigured: scheduleToClose requires cfg.HasScheduleToClose, or "+
+	if d.scheduleToClose > 0 && !d.cfg.HasScheduleToClose {
+		require.Fail(t, "saaDriver misconfigured: scheduleToClose requires cfg.HasScheduleToClose, or "+
 			"startRequest drops it")
 	}
 	// Shortening a timeout so a trace can fire it requires that timeout to be configured at all.
@@ -557,37 +557,37 @@ func (h *saaHarness) requireConsistentConfig(t require.TestingT) {
 		flag     bool
 		flagName string
 	}{
-		{model.ScheduleToCloseElapses, h.cfg.HasScheduleToClose, "HasScheduleToClose"},
-		{model.ScheduleToStartElapses, h.cfg.HasScheduleToStart, "HasScheduleToStart"},
-		{model.HeartbeatElapses, h.cfg.HasHeartbeat, "HasHeartbeat"},
+		{model.ScheduleToCloseElapses, d.cfg.HasScheduleToClose, "HasScheduleToClose"},
+		{model.ScheduleToStartElapses, d.cfg.HasScheduleToStart, "HasScheduleToStart"},
+		{model.HeartbeatElapses, d.cfg.HasHeartbeat, "HasHeartbeat"},
 	} {
-		if h.shortTimeout == c.kind && !c.flag {
-			require.Fail(t, fmt.Sprintf("saaHarness misconfigured: shortTimeout=%s requires cfg.%s, or that "+
+		if d.shortTimeout == c.kind && !c.flag {
+			require.Fail(t, fmt.Sprintf("saaDriver misconfigured: shortTimeout=%s requires cfg.%s, or that "+
 				"timeout is never configured and the event cannot fire", model.KindName(c.kind), c.flagName))
 		}
 	}
 }
 
 // chasmContext is the context ReadComponent needs to read internal component state, memoized.
-func (h *saaHarness) chasmContext() (context.Context, error) {
-	if h.chasmCtx == nil {
-		ctx, err := h.env.GetTestCluster().Host().ChasmContext(h.ctx)
+func (d *saaDriver) chasmContext() (context.Context, error) {
+	if d.chasmCtx == nil {
+		ctx, err := d.env.GetTestCluster().Host().ChasmContext(d.ctx)
 		if err != nil {
 			return nil, err
 		}
-		h.chasmCtx = ctx
+		d.chasmCtx = ctx
 	}
-	return h.chasmCtx, nil
+	return d.chasmCtx, nil
 }
 
 // readObserved reads the activity's internal component state.
 func (a *saaHandle) readObserved() (model.Observed, error) {
-	chasmCtx, err := a.h.chasmContext()
+	chasmCtx, err := a.d.chasmContext()
 	if err != nil {
 		return model.Observed{}, err
 	}
 	ref := chasm.NewComponentRef[*activity.Activity](chasm.ExecutionKey{
-		NamespaceID: a.h.env.NamespaceID().String(), BusinessID: a.activityID, RunID: a.runID,
+		NamespaceID: a.d.env.NamespaceID().String(), BusinessID: a.activityID, RunID: a.runID,
 	})
 	return chasm.ReadComponent(chasmCtx, ref, func(act *activity.Activity, cctx chasm.Context, _ struct{}) (model.Observed, error) {
 		attempt := act.LastAttempt.Get(cctx)
@@ -649,7 +649,7 @@ func saaFailure(retryable bool, nextRetryDelay time.Duration) *failurepb.Failure
 // --- traces --------------------------------------------------------------------------------
 //
 // A trace is an event sequence run once on one fresh activity. Writing a timeout's *Elapses event into
-// the sequence is what makes the harness configure that timeout short, so that it fires.
+// the sequence is what makes the driver configure that timeout short, so that it fires.
 
 type saaTrace struct {
 	trace          []model.Event

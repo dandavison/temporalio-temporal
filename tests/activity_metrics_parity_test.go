@@ -13,7 +13,7 @@ package tests
 // activity_end_to_end_latency alias, and activity_terminate (a workflow activity has no individual
 // terminate path). See activityMetricCatalog.
 //
-// Not every catalog metric is attributable to a single driven activity through this harness. The
+// Not every catalog metric is attributable to a single driven activity through this driver. The
 // shard/mutable-state aggregates, the eager-execution counter, and the matching worker-registry gauge
 // are marked not-measured and only shown in the matrix; the namespace capture rejects non-namespaced
 // metrics.
@@ -147,17 +147,17 @@ func (s *standaloneActivityTestSuite) TestWFASAAMetricsParity() {
 
 func (s *standaloneActivityTestSuite) saaActivityMetrics(t *testing.T, env *standaloneActivityEnv, sc activityMetricsScenario) map[string]map[string]string {
 	return s.captureActivityMetrics(t, env, sc, func() {
-		h := newSAAHarness(t, env, model.Config{MaxAttempts: sc.maxAttempts})
-		h.shortTimeout = saaTimeoutIn(sc.trace)
-		h.driveTrace(t, sc.trace)
+		d := newSAADriver(t, env, model.Config{MaxAttempts: sc.maxAttempts})
+		d.shortTimeout = saaTimeoutIn(sc.trace)
+		d.driveTrace(t, sc.trace)
 	})
 }
 
 func (s *standaloneActivityTestSuite) wfaActivityMetrics(t *testing.T, env *standaloneActivityEnv, sc activityMetricsScenario) map[string]map[string]string {
 	return s.captureActivityMetrics(t, env, sc, func() {
-		h := newWFAHarness(t, env, sc.maxAttempts)
-		h.shortTimeout = saaTimeoutIn(sc.trace)
-		h.driveTrace(t, sc.trace)
+		d := newWFADriver(t, env, sc.maxAttempts)
+		d.shortTimeout = saaTimeoutIn(sc.trace)
+		d.driveTrace(t, sc.trace)
 	})
 }
 
@@ -218,7 +218,7 @@ func activityMetricsMatrix(observed map[string]activityMetricSets) string {
 		note := ""
 		switch {
 		case !m.measured:
-			note = "  (not measured by this harness)"
+			note = "  (not measured by this driver)"
 		case !m.compared:
 			note = "  (not asserted: intended asymmetry)"
 		}

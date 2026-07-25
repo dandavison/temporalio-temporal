@@ -61,16 +61,16 @@ func saaWalkSeed() int64 {
 
 func saaVerbose() bool { return os.Getenv("TEMPORAL_SAASPEC_VERBOSE") != "" }
 
-// --- harness / engine ----------------------------------------------------------------------
+// --- driver / engine ----------------------------------------------------------------------
 
 // traverse does a breadth-first walk of the model's reachable states, verifying every decided
 // edge against the server.
-func (h *saaHarness) traverse(t *testing.T) {
+func (d *saaDriver) traverse(t *testing.T) {
 	type node struct {
 		path  []model.Event
 		state model.AbstractState
 	}
-	start := model.Initial(h.cfg)
+	start := model.Initial(d.cfg)
 	visited := map[string]bool{model.Fingerprint(start): true}
 	frontier := []node{{nil, start}}
 
@@ -80,7 +80,7 @@ func (h *saaHarness) traverse(t *testing.T) {
 	verifiedFine := map[string]bool{}
 	skippedFine := map[string]bool{}
 
-	h.verifyPath(t, nil) // the freshly started activity matches Initial(cfg)
+	d.verifyPath(t, nil) // the freshly started activity matches Initial(cfg)
 
 	edges, states := 0, 1
 	maxDepth := saaMaxDepth()
@@ -88,10 +88,10 @@ func (h *saaHarness) traverse(t *testing.T) {
 		var next []node
 		for _, nd := range frontier {
 			for _, e := range saaCandidateEvents() {
-				out := model.Transition(h.cfg, nd.state, e)
+				out := model.Transition(d.cfg, nd.state, e)
 				edges++
 				path := append(append([]model.Event{}, nd.path...), e)
-				res, reached := h.verifyPath(t, path)
+				res, reached := d.verifyPath(t, path)
 				if reached {
 					c := saaCell{nd.state.Status, e.Kind}
 					key := model.CellKey(nd.state, e.Kind)
@@ -118,7 +118,7 @@ func (h *saaHarness) traverse(t *testing.T) {
 	}
 
 	t.Logf("cfg %d: verified %d decided edges (%d distinct cells) across %d reachable states (depth<=%d)",
-		h.cfgIdx, edges, len(verifiedCells), states, maxDepth)
+		d.cfgIdx, edges, len(verifiedCells), states, maxDepth)
 
 	// The only decided edges the traversal cannot verify are worker RPCs on a path that never polled, so
 	// holds no task token.
@@ -132,21 +132,21 @@ func (h *saaHarness) traverse(t *testing.T) {
 		sort.Strings(unexercised)
 		if len(unexercised) > 0 {
 			t.Logf("cfg %d: decided cells NOT exercised (worker RPC, no token on a never-polled path): %v",
-				h.cfgIdx, unexercised)
+				d.cfgIdx, unexercised)
 		}
 	}
 
-	h.checkCompleteness(t, verifiedFine, skippedFine)
+	d.checkCompleteness(t, verifiedFine, skippedFine)
 }
 
 // checkCompleteness logs the cells the model can reach but this run did not — what the depth cap left
 // out. Informational; it never fails.
-func (h *saaHarness) checkCompleteness(t *testing.T, verifiedFine, skippedFine map[string]bool) {
+func (d *saaDriver) checkCompleteness(t *testing.T, verifiedFine, skippedFine map[string]bool) {
 	if os.Getenv("TEMPORAL_SAASPEC_COMPLETENESS") == "" {
 		return
 	}
 	var gaps []string
-	for key := range model.Reachable(h.cfg, saaCandidateEvents()) {
+	for key := range model.Reachable(d.cfg, saaCandidateEvents()) {
 		if verifiedFine[key] || skippedFine[key] {
 			continue
 		}
@@ -163,27 +163,27 @@ func (h *saaHarness) checkCompleteness(t *testing.T, verifiedFine, skippedFine m
 	}
 	t.Logf("cfg %d: %d model-reachable cell(s) not exercised at depth<=%d (raise TEMPORAL_SAASPEC_MAX_DEPTH to reach deeper).\n"+
 		"  fingerprint = Status|count|resetKeepPaused|resetHeartbeats|resetRestoreOpts|firstStarted|dispatchSet|dispatch\n  %s%s",
-		h.cfgIdx, len(gaps), saaMaxDepth(), strings.Join(shown, "\n  "), suffix)
+		d.cfgIdx, len(gaps), saaMaxDepth(), strings.Join(shown, "\n  "), suffix)
 }
 
 // verifyPath starts a fresh activity, replays the path, and asserts only its final edge. A prefix edge
 // that diverges aborts the replay silently; that edge is reported when it is the final edge of its own
 // shorter path.
-func (h *saaHarness) verifyPath(t require.TestingT, path []model.Event) (saaApply, bool) {
-	a := h.start(t)
+func (d *saaDriver) verifyPath(t require.TestingT, path []model.Event) (saaApply, bool) {
+	a := d.start(t)
 	a.path = path
-	cur := model.Initial(h.cfg)
+	cur := model.Initial(d.cfg)
 
 	obs, err := a.observed()
 	require.NoError(t, err)
 	if !cur.SameObserved(obs) {
 		t.Errorf("cfg %d: state immediately after StartActivityExecution disagrees with Initial(cfg).\n%s",
-			h.cfgIdx, saaStateDiff(obs, cur))
+			d.cfgIdx, saaStateDiff(obs, cur))
 		return saaMismatch, false
 	}
 
 	for i, e := range path {
-		out := model.Transition(h.cfg, cur, e)
+		out := model.Transition(d.cfg, cur, e)
 		final := i == len(path)-1
 		res := a.apply(t, e, cur, out, final)
 		if final {
@@ -206,9 +206,9 @@ const (
 	saaSkippedNoToken                 // a worker RPC with no task token held; not drivable on this path
 )
 
-// outranDispatchWindow marks a report as a harness failure rather than a product one: the dispatch
+// outranDispatchWindow marks a report as a driver failure rather than a product one: the dispatch
 // window the negative poll meant to check had already closed by the time it ran.
-const outranDispatchWindow = "the harness outran the dispatch window"
+const outranDispatchWindow = "the driver outran the dispatch window"
 
 // negativePollResult is what a negative poll established about a pending dispatch window.
 type negativePollResult int
@@ -220,7 +220,7 @@ const (
 )
 
 // negativePoll checks that a pending dispatch window dispatches nothing, bounding the poll by what the
-// server says is left of the window rather than by the delay the harness configured, which assumes no
+// server says is left of the window rather than by the delay the driver configured, which assumes no
 // time has passed since it began.
 //
 // A task it does find is adjudicated by comparing two observed times — whether the dispatch time had
@@ -280,7 +280,7 @@ func (a *saaHandle) apply(t require.TestingT, e model.Event, cur model.AbstractS
 	// idempotent no-op, which is what probing it here determines. Beyond that region the server would
 	// dedupe the already-consumed id, while the model, which tracks no id history, expects a fresh op.
 	for k := range a.establishedReqID {
-		probe := model.Transition(a.h.cfg, out.Next, model.Event{Kind: k, SameRequestID: true})
+		probe := model.Transition(a.d.cfg, out.Next, model.Event{Kind: k, SameRequestID: true})
 		if probe.Reject != model.NoError || !probe.Next.SameObserved(out.Next) {
 			delete(a.establishedReqID, k)
 		}
@@ -349,7 +349,7 @@ func (a *saaHandle) applyPoll(cur model.AbstractState, out model.Outcome, final 
 	case cur.Status == model.Scheduled && out.Next.Status == model.Started:
 		// A dispatchable activity must dispatch. The traces bound the deadline, so "Dispatchable" means
 		// "dispatches promptly".
-		timeout := cmp.Or(a.h.positivePollTimeout, saaPositivePollTimeout)
+		timeout := cmp.Or(a.d.positivePollTimeout, saaPositivePollTimeout)
 		resp := a.pollForTask(t, timeout)
 		if resp == nil {
 			if final {
@@ -367,7 +367,7 @@ func (a *saaHandle) applyPoll(cur model.AbstractState, out model.Outcome, final 
 		// A start_delay or backoff is still pending, so the poll must find no task. Only worth a negative
 		// poll when the configured delay outlasts a valid long poll; otherwise the state comparison below
 		// suffices.
-		if a.h.dispatchDelay(cur.Dispatchability) > saaPollTimeout {
+		if a.d.dispatchDelay(cur.Dispatchability) > saaPollTimeout {
 			switch result, resp := a.negativePoll(t); result {
 			case dispatchedEarly:
 				if final {
@@ -416,7 +416,7 @@ func (a *saaHandle) applyPoll(cur model.AbstractState, out model.Outcome, final 
 // out.Next. Where the model predicts an observable change it polls for that state; where it predicts
 // none, the only way to confirm is to wait the window out and see nothing move.
 func (a *saaHandle) applyWallClock(t require.TestingT, e model.Event, cur model.AbstractState, out model.Outcome, final bool) saaApply {
-	deadline := time.Now().Add(a.h.eventClock(e) + saaWallClockSettle)
+	deadline := time.Now().Add(a.d.eventClock(e) + saaWallClockSettle)
 	switch {
 	case saaIsDispatchDelay(e.Kind) && out.Next.Dispatchability == model.Dispatchable &&
 		cur.Dispatchability != model.Dispatchable:
@@ -448,8 +448,8 @@ func (a *saaHandle) applyWallClock(t require.TestingT, e model.Event, cur model.
 // model.ExpectedDescribe.
 func (a *saaHandle) checkDescribe(t require.TestingT, expected model.AbstractState) {
 	st, rs := model.ExpectedDescribe(expected)
-	resp, err := a.h.env.FrontendClient().DescribeActivityExecution(a.h.ctx, &workflowservice.DescribeActivityExecutionRequest{
-		Namespace: a.h.env.Namespace().String(), ActivityId: a.activityID, RunId: a.runID,
+	resp, err := a.d.env.FrontendClient().DescribeActivityExecution(a.d.ctx, &workflowservice.DescribeActivityExecutionRequest{
+		Namespace: a.d.env.Namespace().String(), ActivityId: a.activityID, RunId: a.runID,
 	})
 	require.NoError(t, err)
 	gotSt, gotRs := resp.GetInfo().GetStatus(), resp.GetInfo().GetRunState()
@@ -470,37 +470,37 @@ func (a *saaHandle) checkDescribe(t require.TestingT, expected model.AbstractSta
 // randomWalk drives one activity, picking a random applicable event each step and checking it against
 // model.Transition. On reaching a terminal state, or diverging, it restarts on a fresh activity, until
 // the step budget is spent.
-func (h *saaHarness) randomWalk(t *testing.T, rng *rand.Rand, maxSteps int) {
+func (d *saaDriver) randomWalk(t *testing.T, rng *rand.Rand, maxSteps int) {
 	verbose := saaVerbose()
 	seen := map[string]bool{}
 	walks := 0
 
-	a, cur := h.walkStart(t)
+	a, cur := d.walkStart(t)
 	var trace []model.Event // events driven since the last (re)start, for the divergence report
 	seen[model.Fingerprint(cur)] = true
 	walks++
 	if verbose {
-		t.Logf("cfg %d walk %d: start %s", h.cfgIdx, walks, cur.Status)
+		t.Logf("cfg %d walk %d: start %s", d.cfgIdx, walks, cur.Status)
 	}
 
 	for step := range maxSteps {
 		if cur.Status.Terminal() {
-			a, cur = h.walkStart(t)
+			a, cur = d.walkStart(t)
 			trace = nil
 			seen[model.Fingerprint(cur)] = true
 			walks++
 			if verbose {
-				t.Logf("cfg %d walk %d: start %s (restart after terminal)", h.cfgIdx, walks, cur.Status)
+				t.Logf("cfg %d walk %d: start %s (restart after terminal)", d.cfgIdx, walks, cur.Status)
 			}
 			continue
 		}
-		e := h.pickWalkEvent(rng, a, cur)
+		e := d.pickWalkEvent(rng, a, cur)
 		trace = append(trace, e)
 		a.path = trace
-		out := model.Transition(h.cfg, cur, e)
+		out := model.Transition(d.cfg, cur, e)
 		res := a.apply(t, e, cur, out, true)
 		if verbose {
-			t.Logf("cfg %d walk %d step %d: %s", h.cfgIdx, walks, step, saaStepDesc(cur, e, out, res))
+			t.Logf("cfg %d walk %d step %d: %s", d.cfgIdx, walks, step, saaStepDesc(cur, e, out, res))
 		}
 		switch res {
 		case saaVerified:
@@ -511,23 +511,23 @@ func (h *saaHarness) randomWalk(t *testing.T, rng *rand.Rand, maxSteps int) {
 		case saaMismatch:
 			// apply() has already reported the divergence. Restart from a known state rather than compound
 			// from a suspect one.
-			a, cur = h.walkStart(t)
+			a, cur = d.walkStart(t)
 			trace = nil
 			walks++
 		}
 	}
 	t.Logf("cfg %d: random walk done — %d steps, %d walks, %d distinct states covered",
-		h.cfgIdx, maxSteps, walks, len(seen))
+		d.cfgIdx, maxSteps, walks, len(seen))
 }
 
 // walkStart begins a fresh activity and asserts it matches Initial(cfg).
-func (h *saaHarness) walkStart(t *testing.T) (*saaHandle, model.AbstractState) {
-	a := h.start(t)
-	cur := model.Initial(h.cfg)
+func (d *saaDriver) walkStart(t *testing.T) (*saaHandle, model.AbstractState) {
+	a := d.start(t)
+	cur := model.Initial(d.cfg)
 	obs, err := a.observed()
 	require.NoError(t, err)
 	if !cur.SameObserved(obs) {
-		t.Fatalf("cfg %d: fresh activity disagrees with Initial(cfg)\n%s", h.cfgIdx, saaStateDiff(obs, cur))
+		t.Fatalf("cfg %d: fresh activity disagrees with Initial(cfg)\n%s", d.cfgIdx, saaStateDiff(obs, cur))
 	}
 	return a, cur
 }
@@ -536,14 +536,14 @@ func (h *saaHarness) walkStart(t *testing.T) (*saaHandle, model.AbstractState) {
 // walk goes deep rather than restarting every few steps. It still sometimes takes a terminal or a
 // reject/no-op edge, so those are exercised deep too. The BFS covers terminal edges exhaustively.
 // Events needing a task token the handle does not hold are skipped.
-func (h *saaHarness) pickWalkEvent(rng *rand.Rand, a *saaHandle, cur model.AbstractState) model.Event {
+func (d *saaDriver) pickWalkEvent(rng *rand.Rand, a *saaHandle, cur model.AbstractState) model.Event {
 	var applicable, changing, deep []model.Event
 	for _, e := range saaCandidateEvents() {
 		if model.NeedsToken(e.Kind) && a.token == nil {
 			continue
 		}
 		applicable = append(applicable, e)
-		if out := model.Transition(h.cfg, cur, e); out.Reject == model.NoError && !out.Next.SameObserved(cur) {
+		if out := model.Transition(d.cfg, cur, e); out.Reject == model.NoError && !out.Next.SameObserved(cur) {
 			changing = append(changing, e)
 			if !out.Next.Status.Terminal() {
 				deep = append(deep, e)
