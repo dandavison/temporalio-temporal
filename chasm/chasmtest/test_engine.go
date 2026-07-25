@@ -48,6 +48,8 @@ type (
 		backend   *chasm.MockNodeBackend
 		root      chasm.RootComponent
 		requestID string
+		// commitTransition advances the backend's committed transition count. See closeTransaction.
+		commitTransition func()
 	}
 
 	businessKey struct {
@@ -439,7 +441,7 @@ func (e *Engine) startNew(
 	if err := exec.node.SetRootComponent(root); err != nil {
 		return chasm.StartExecutionResult{}, err
 	}
-	if _, err = exec.node.CloseTransaction(); err != nil {
+	if err = exec.closeTransaction(); err != nil {
 		return chasm.StartExecutionResult{}, err
 	}
 
@@ -482,7 +484,7 @@ func (e *Engine) startAndUpdateNew(
 	if err := updateFn(mutableCtx, root); err != nil {
 		return chasm.EngineUpdateWithStartExecutionResult{}, err
 	}
-	if _, err = exec.node.CloseTransaction(); err != nil {
+	if err = exec.closeTransaction(); err != nil {
 		return chasm.EngineUpdateWithStartExecutionResult{}, err
 	}
 
@@ -515,13 +517,13 @@ func (e *Engine) newExecution(key chasm.ExecutionKey) *execution {
 	)
 
 	backend := &chasm.MockNodeBackend{
-		// NextTransitionCount increments on every CloseTransaction call, matching
-		// the real engine's per transition monotonic counter.
+		// NextTransitionCount is the count the in-flight transaction will commit as. The real backend
+		// derives it from committed state, so it is stable however many times the tree asks within one
+		// transaction; closeTransaction advances it.
 		HandleNextTransitionCount: func() int64 {
 			bsMu.Lock()
 			defer bsMu.Unlock()
-			transitionCount++
-			return transitionCount
+			return transitionCount + 1
 		},
 		// CurrentVersionedTransition reflects the latest committed transition count.
 		HandleCurrentVersionedTransition: func() *persistencespb.VersionedTransition {
@@ -569,7 +571,22 @@ func (e *Engine) newExecution(key chasm.ExecutionKey) *execution {
 			e.logger,
 			e.metrics,
 		),
+		commitTransition: func() {
+			bsMu.Lock()
+			defer bsMu.Unlock()
+			transitionCount++
+		},
 	}
+}
+
+// closeTransaction closes the execution's transaction and commits its transition count, so the next
+// transaction sees this one as committed state.
+func (x *execution) closeTransaction() error {
+	if _, err := x.node.CloseTransaction(); err != nil {
+		return err
+	}
+	x.commitTransition()
+	return nil
 }
 
 // executionForRef looks up an execution by the ref's RunID when present, or falls back
@@ -610,7 +627,7 @@ func (e *Engine) updateComponentInExecution(
 		return nil, err
 	}
 
-	if _, err = execution.node.CloseTransaction(); err != nil {
+	if err = execution.closeTransaction(); err != nil {
 		return nil, err
 	}
 
