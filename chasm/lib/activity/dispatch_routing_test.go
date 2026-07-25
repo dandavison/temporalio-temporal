@@ -27,26 +27,26 @@ import (
 
 func TestDispatchRouting(t *testing.T) {
 	// polled leaves a fresh activity STARTED: attempt 1 was dispatched and picked up by a worker.
-	polled := func(t *testing.T) *inProcActivity {
-		a := newInProcExplorer(t, model.Config{MaxAttempts: 3}).start()
-		require.NoError(t, a.realize(model.Event{Kind: model.Poll}))
+	polled := func(t *testing.T) *handle {
+		a := newHarness(t, model.Config{MaxAttempts: 3}).start()
+		require.NoError(t, a.realize(model.PollEvent))
 		return a
 	}
 	// backedOff leaves it SCHEDULED with a retry backoff still pending.
-	backedOff := func(t *testing.T) *inProcActivity {
+	backedOff := func(t *testing.T) *handle {
 		a := polled(t)
-		require.NoError(t, a.realize(model.Event{Kind: model.RespondFailed, Retryable: true}))
+		require.NoError(t, a.realize(model.FailRetryablyEvent))
 		return a
 	}
 	// dispatchable leaves it SCHEDULED with the backoff elapsed, so nothing is left to wait for.
-	dispatchable := func(t *testing.T) *inProcActivity {
+	dispatchable := func(t *testing.T) *handle {
 		a := backedOff(t)
-		require.NoError(t, a.realize(model.Event{Kind: model.BackoffElapses}))
+		require.NoError(t, a.realize(model.BackoffElapsesEvent))
 		return a
 	}
 
 	t.Run("initial schedule", func(t *testing.T) {
-		require.Equal(t, routing{transfer: 1}, newInProcExplorer(t, model.Config{MaxAttempts: 3}).start().routed())
+		require.Equal(t, routing{transfer: 1}, newHarness(t, model.Config{MaxAttempts: 3}).start().routed())
 	})
 
 	// The other negative control, and the one the routing decision is most delicately balanced on:
@@ -54,7 +54,7 @@ func TestDispatchRouting(t *testing.T) {
 	// thing keeping a first dispatch off the transfer queue. Route it immediate and start_delay stops
 	// deferring anything at all.
 	t.Run("initial schedule within a start delay", func(t *testing.T) {
-		a := newInProcExplorer(t, model.Config{MaxAttempts: 3, HasStartDelay: true}).start()
+		a := newHarness(t, model.Config{MaxAttempts: 3, HasStartDelay: true}).start()
 		require.Equal(t, routing{timer: 1}, a.routed(), "a first dispatch still inside its start delay must remain a timer task")
 	})
 
@@ -63,7 +63,7 @@ func TestDispatchRouting(t *testing.T) {
 	t.Run("retry with a backoff still to wait out", func(t *testing.T) {
 		a := polled(t)
 		require.Equal(t, routing{timer: 1}, a.dispatchRouting(func() {
-			require.NoError(t, a.realize(model.Event{Kind: model.RespondFailed, Retryable: true}))
+			require.NoError(t, a.realize(model.FailRetryablyEvent))
 		}), "a retry scheduled in the future must remain a timer task")
 	})
 
@@ -110,7 +110,7 @@ var (
 )
 
 // dispatchRouting runs fn and reports where the side-effect tasks it added were routed.
-func (a *inProcActivity) dispatchRouting(fn func()) routing {
+func (a *handle) dispatchRouting(fn func()) routing {
 	before := a.routed()
 	fn()
 	added := routing{}
@@ -126,9 +126,9 @@ func (a *inProcActivity) dispatchRouting(fn func()) routing {
 // routed to. The framework's own visibility tasks are excluded by that restriction; pure tasks are excluded
 // because they coalesce into a single payload-free ChasmTaskPure that is always a timer task, and so say
 // nothing about dispatch routing.
-func (a *inProcActivity) routed() routing {
-	byCategory, err := a.x.engine.Tasks(a.ref)
-	require.NoError(a.x.t, err)
+func (a *handle) routed() routing {
+	byCategory, err := a.h.engine.Tasks(a.ref)
+	require.NoError(a.h.t, err)
 	counts := routing{}
 	for _, category := range []tasks.Category{tasks.CategoryTransfer, tasks.CategoryTimer} {
 		for _, task := range byCategory[category] {
@@ -140,20 +140,20 @@ func (a *inProcActivity) routed() routing {
 	return counts
 }
 
-func (a *inProcActivity) pause(t *testing.T) {
+func (a *handle) pause(t *testing.T) {
 	require.NoError(t, a.update(func(act *Activity, mc chasm.MutableContext) error {
 		_, err := act.handlePauseRequested(mc, &activitypb.PauseActivityExecutionRequest{
-			NamespaceId:     inProcNS,
+			NamespaceId:     testNamespaceID,
 			FrontendRequest: &workflowservice.PauseActivityExecutionRequest{Identity: "operator"},
 		})
 		return err
 	}))
 }
 
-func (a *inProcActivity) unpause(t *testing.T) {
+func (a *handle) unpause(t *testing.T) {
 	require.NoError(t, a.update(func(act *Activity, mc chasm.MutableContext) error {
 		_, err := act.handleUnpauseRequested(mc, &activitypb.UnpauseActivityExecutionRequest{
-			NamespaceId:     inProcNS,
+			NamespaceId:     testNamespaceID,
 			FrontendRequest: &workflowservice.UnpauseActivityExecutionRequest{Identity: "operator"},
 		})
 		return err
@@ -161,10 +161,10 @@ func (a *inProcActivity) unpause(t *testing.T) {
 }
 
 // updateOptions applies a minimal, always-valid options update: re-setting the heartbeat timeout.
-func (a *inProcActivity) updateOptions(t *testing.T) {
+func (a *handle) updateOptions(t *testing.T) {
 	require.NoError(t, a.update(func(act *Activity, mc chasm.MutableContext) error {
 		_, err := act.UpdateActivityExecutionOptions(mc, &activitypb.UpdateActivityExecutionOptionsRequest{
-			NamespaceId: inProcNS,
+			NamespaceId: testNamespaceID,
 			FrontendRequest: &workflowservice.UpdateActivityExecutionOptionsRequest{
 				Identity:        "operator",
 				ActivityOptions: &apiactivitypb.ActivityOptions{HeartbeatTimeout: durationpb.New(time.Hour)},
@@ -175,10 +175,10 @@ func (a *inProcActivity) updateOptions(t *testing.T) {
 	}))
 }
 
-func (a *inProcActivity) reset(t *testing.T) {
+func (a *handle) reset(t *testing.T) {
 	require.NoError(t, a.update(func(act *Activity, mc chasm.MutableContext) error {
 		_, err := act.handleReset(mc, &activitypb.ResetActivityExecutionRequest{
-			NamespaceId:     inProcNS,
+			NamespaceId:     testNamespaceID,
 			FrontendRequest: &workflowservice.ResetActivityExecutionRequest{Identity: "operator"},
 		})
 		return err

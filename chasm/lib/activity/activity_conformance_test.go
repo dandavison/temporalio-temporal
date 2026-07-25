@@ -1,6 +1,7 @@
 package activity
 
-// Tier-2 (in-process) model-conformance explorer for the activity archetype. It drives the event
+// Model-conformance explorer for the activity archetype, one tier below the onebox one in tests/. It
+// drives the event
 // alphabet of chasm/lib/activity/model against a real in-memory CHASM engine (chasm/chasmtest) with a
 // virtual clock, and checks every step against that model — the same model the tier-3 onebox explorer in
 // tests/ uses. Timeouts and backoffs are realized by advancing clock.EventTimeSource, so no wall-clock
@@ -36,23 +37,23 @@ import (
 	"google.golang.org/protobuf/types/known/durationpb"
 )
 
-const inProcNS = "inproc-ns"
+const testNamespaceID = "activity-test-ns"
 
-// inProcExplorer is the tier-2 driver: a registry, an in-memory engine, and a virtual clock, shared
+// harness is the tier-2 driver: a registry, an in-memory engine, and a virtual clock, shared
 // across the fresh activities a traversal or walk starts.
-type inProcExplorer struct {
-	t        *testing.T
-	ctx      context.Context
-	engine   *chasmtest.Engine
-	ts       *clock.EventTimeSource
-	cfg      model.Config
-	nowStart time.Time
-	counter  int
+type harness struct {
+	t          *testing.T
+	ctx        context.Context
+	engine     *chasmtest.Engine
+	ts         *clock.EventTimeSource
+	cfg        model.Config
+	nowStart   time.Time
+	numStarted int
 }
 
-func newInProcExplorer(t *testing.T, cfg model.Config) *inProcExplorer {
+func newHarness(t *testing.T, cfg model.Config) *harness {
 	nsReg := namespace.NewMockRegistry(gomock.NewController(t))
-	nsReg.EXPECT().GetNamespaceName(gomock.Any()).Return(namespace.Name(inProcNS), nil).AnyTimes()
+	nsReg.EXPECT().GetNamespaceName(gomock.Any()).Return(namespace.Name(testNamespaceID), nil).AnyTimes()
 	registry := chasm.NewRegistry(log.NewNoopLogger())
 	require.NoError(t, registry.Register(&chasm.CoreLibrary{}))
 	// The full library, not the component-only one: closing a transaction validates every task the
@@ -74,7 +75,7 @@ func newInProcExplorer(t *testing.T, cfg model.Config) *inProcExplorer {
 	now := time.Date(2020, 1, 1, 0, 0, 0, 0, time.UTC)
 	ts.Update(now)
 	engine := chasmtest.NewEngine(t, registry, chasmtest.WithTimeSource(ts))
-	return &inProcExplorer{
+	return &harness{
 		t:      t,
 		ctx:    chasm.NewEngineContext(context.Background(), engine),
 		engine: engine,
@@ -82,9 +83,9 @@ func newInProcExplorer(t *testing.T, cfg model.Config) *inProcExplorer {
 	}
 }
 
-// inProcActivity is a handle to one in-process activity instance.
-type inProcActivity struct {
-	x    *inProcExplorer
+// handle is a handle to one activity instance.
+type handle struct {
+	h    *harness
 	ref  chasm.ComponentRef
 	path []model.Event
 	// stamp deltas across the last observed() read; see apply.
@@ -101,34 +102,34 @@ const backoffInterval = 30 * time.Second
 // first dispatch is always still in the future.
 const startDelayInterval = time.Hour
 
-func (x *inProcExplorer) start() *inProcActivity {
-	x.ts.Update(x.nowStart) // fresh activities all start at the same virtual instant
-	x.counter++
-	id := "inproc-act"
+func (h *harness) start() *handle {
+	h.ts.Update(h.nowStart) // fresh activities all start at the same virtual instant
+	h.numStarted++
+	id := "test-activity"
 	req := &workflowservice.StartActivityExecutionRequest{
-		Namespace:           inProcNS,
+		Namespace:           testNamespaceID,
 		ActivityId:          id,
-		ActivityType:        &commonpb.ActivityType{Name: "inproc-type"},
+		ActivityType:        &commonpb.ActivityType{Name: "test-activity-type"},
 		TaskQueue:           &taskqueuepb.TaskQueue{Name: id},
 		StartToCloseTimeout: durationpb.New(time.Hour),
 		RetryPolicy: &commonpb.RetryPolicy{
 			InitialInterval: durationpb.New(backoffInterval), BackoffCoefficient: 1.0,
-			MaximumInterval: durationpb.New(backoffInterval), MaximumAttempts: x.cfg.MaxAttempts,
+			MaximumInterval: durationpb.New(backoffInterval), MaximumAttempts: h.cfg.MaxAttempts,
 		},
 		RequestId: uuid.NewString(),
 	}
-	if x.cfg.HasScheduleToClose {
+	if h.cfg.HasScheduleToClose {
 		req.ScheduleToCloseTimeout = durationpb.New(24 * time.Hour)
 	}
-	if x.cfg.HasHeartbeat {
+	if h.cfg.HasHeartbeat {
 		req.HeartbeatTimeout = durationpb.New(10 * time.Minute)
 	}
-	if x.cfg.HasStartDelay {
+	if h.cfg.HasStartDelay {
 		req.StartDelay = durationpb.New(startDelayInterval)
 	}
 	// Terminate any prior run, so business-id reuse does not conflict.
-	key := chasm.ExecutionKey{NamespaceID: inProcNS, BusinessID: id}
-	result, err := chasm.StartExecution(x.ctx, key,
+	key := chasm.ExecutionKey{NamespaceID: testNamespaceID, BusinessID: id}
+	result, err := chasm.StartExecution(h.ctx, key,
 		func(mc chasm.MutableContext, r *workflowservice.StartActivityExecutionRequest) (*Activity, error) {
 			a, err := NewStandaloneActivity(mc, r)
 			if err != nil {
@@ -140,15 +141,15 @@ func (x *inProcExplorer) start() *inProcActivity {
 		chasm.WithRequestID(req.RequestId),
 		chasm.WithBusinessIDPolicy(chasm.BusinessIDReusePolicyAllowDuplicate, chasm.BusinessIDConflictPolicyTerminateExisting),
 	)
-	require.NoError(x.t, err)
-	return &inProcActivity{x: x, ref: chasm.NewComponentRef[*Activity](chasm.ExecutionKey{
-		NamespaceID: inProcNS, BusinessID: id, RunID: result.ExecutionKey.RunID,
+	require.NoError(h.t, err)
+	return &handle{h: h, ref: chasm.NewComponentRef[*Activity](chasm.ExecutionKey{
+		NamespaceID: testNamespaceID, BusinessID: id, RunID: result.ExecutionKey.RunID,
 	})}
 }
 
 // observed is the activity's internal state as the model's AbstractState, refreshing the stamp deltas.
-func (a *inProcActivity) observed() model.AbstractState {
-	o, err := chasm.ReadComponent(a.x.ctx, a.ref, func(act *Activity, cctx chasm.Context, _ struct{}) (model.Observed, error) {
+func (a *handle) observed() model.AbstractState {
+	o, err := chasm.ReadComponent(a.h.ctx, a.ref, func(act *Activity, cctx chasm.Context, _ struct{}) (model.Observed, error) {
 		attempt := act.LastAttempt.Get(cctx)
 		return model.Observed{
 			Status:               act.GetStatus(),
@@ -161,41 +162,41 @@ func (a *inProcActivity) observed() model.AbstractState {
 			DispatchTimeSet:      attempt.GetDispatchTime() != nil,
 		}, nil
 	}, struct{}{})
-	require.NoError(a.x.t, err)
+	require.NoError(a.h.t, err)
 	a.prevStamp, a.curStamp = a.curStamp, o.Stamp
 	a.prevSTCStamp, a.curSTCStamp = a.curSTCStamp, o.ScheduleToCloseStamp
 	return model.Abstract(o)
 }
 
 // describe is the public status, run state, and attempt, via the production Describe builder.
-func (a *inProcActivity) describe() (enumspb.ActivityExecutionStatus, enumspb.PendingActivityState, int32) {
-	resp, err := chasm.ReadComponent(a.x.ctx, a.ref, func(act *Activity, cctx chasm.Context, req *activitypb.DescribeActivityExecutionRequest) (*activitypb.DescribeActivityExecutionResponse, error) {
+func (a *handle) describe() (enumspb.ActivityExecutionStatus, enumspb.PendingActivityState, int32) {
+	resp, err := chasm.ReadComponent(a.h.ctx, a.ref, func(act *Activity, cctx chasm.Context, req *activitypb.DescribeActivityExecutionRequest) (*activitypb.DescribeActivityExecutionResponse, error) {
 		return act.buildDescribeActivityExecutionResponse(cctx, req)
 	}, &activitypb.DescribeActivityExecutionRequest{})
-	require.NoError(a.x.t, err)
+	require.NoError(a.h.t, err)
 	info := resp.GetFrontendResponse().GetInfo()
 	return info.GetStatus(), info.GetRunState(), info.GetAttempt()
 }
 
-func (a *inProcActivity) read(fn func(*Activity, chasm.Context) any) any {
-	v, err := chasm.ReadComponent(a.x.ctx, a.ref, func(act *Activity, cctx chasm.Context, _ struct{}) (any, error) {
+func (a *handle) read(fn func(*Activity, chasm.Context) any) any {
+	v, err := chasm.ReadComponent(a.h.ctx, a.ref, func(act *Activity, cctx chasm.Context, _ struct{}) (any, error) {
 		return fn(act, cctx), nil
 	}, struct{}{})
-	require.NoError(a.x.t, err)
+	require.NoError(a.h.t, err)
 	return v
 }
 
-func (a *inProcActivity) stamp() int32 {
+func (a *handle) stamp() int32 {
 	return a.read(func(act *Activity, c chasm.Context) any { return act.LastAttempt.Get(c).GetStamp() }).(int32)
 }
 
-func (a *inProcActivity) token() *tokenspb.Task {
+func (a *handle) token() *tokenspb.Task {
 	refBytes := a.read(func(act *Activity, c chasm.Context) any { b, _ := c.Ref(act); return b }).([]byte)
 	return &tokenspb.Task{ComponentRef: refBytes}
 }
 
-func (a *inProcActivity) update(fn func(*Activity, chasm.MutableContext) error) error {
-	_, _, err := chasm.UpdateComponent(a.x.ctx, a.ref, func(act *Activity, mc chasm.MutableContext, _ any) (any, error) {
+func (a *handle) update(fn func(*Activity, chasm.MutableContext) error) error {
+	_, _, err := chasm.UpdateComponent(a.h.ctx, a.ref, func(act *Activity, mc chasm.MutableContext, _ any) (any, error) {
 		return nil, fn(act, mc)
 	}, nil)
 	return err
@@ -203,14 +204,14 @@ func (a *inProcActivity) update(fn func(*Activity, chasm.MutableContext) error) 
 
 // rpc realizes a non-Poll, non-wall-clock event by invoking the component method its worker RPC would,
 // and returns the reject error, nil on accept.
-func (a *inProcActivity) rpc(e model.Event) error {
+func (a *handle) rpc(e model.Event) error {
 	switch e.Kind {
 	case model.Heartbeat:
 		return a.update(func(act *Activity, mc chasm.MutableContext) error {
 			resp, err := act.RecordHeartbeat(mc, WithToken[*historyservice.RecordActivityTaskHeartbeatRequest]{
 				Token: a.token(),
 				Request: &historyservice.RecordActivityTaskHeartbeatRequest{
-					NamespaceId:      inProcNS,
+					NamespaceId:      testNamespaceID,
 					HeartbeatRequest: &workflowservice.RecordActivityTaskHeartbeatRequest{Identity: "worker"},
 				},
 			})
@@ -220,7 +221,7 @@ func (a *inProcActivity) rpc(e model.Event) error {
 	case model.RespondCompleted:
 		return a.update(func(act *Activity, mc chasm.MutableContext) error {
 			_, err := act.HandleCompleted(mc, RespondCompletedEvent{Token: a.token(), Request: &historyservice.RespondActivityTaskCompletedRequest{
-				NamespaceId:     inProcNS,
+				NamespaceId:     testNamespaceID,
 				CompleteRequest: &workflowservice.RespondActivityTaskCompletedRequest{Identity: "worker"},
 			}})
 			return err
@@ -228,7 +229,7 @@ func (a *inProcActivity) rpc(e model.Event) error {
 	case model.RespondFailed:
 		return a.update(func(act *Activity, mc chasm.MutableContext) error {
 			_, err := act.HandleFailed(mc, RespondFailedEvent{Token: a.token(), Request: &historyservice.RespondActivityTaskFailedRequest{
-				NamespaceId: inProcNS,
+				NamespaceId: testNamespaceID,
 				FailedRequest: &workflowservice.RespondActivityTaskFailedRequest{Identity: "worker",
 					Failure: &failurepb.Failure{Message: "drive", FailureInfo: &failurepb.Failure_ApplicationFailureInfo{
 						ApplicationFailureInfo: &failurepb.ApplicationFailureInfo{Type: "drive", NonRetryable: !e.Retryable}}}},
@@ -238,20 +239,20 @@ func (a *inProcActivity) rpc(e model.Event) error {
 	case model.RespondCanceled:
 		return a.update(func(act *Activity, mc chasm.MutableContext) error {
 			_, err := act.HandleCanceled(mc, RespondCancelledEvent{Token: a.token(), Request: &historyservice.RespondActivityTaskCanceledRequest{
-				NamespaceId:   inProcNS,
+				NamespaceId:   testNamespaceID,
 				CancelRequest: &workflowservice.RespondActivityTaskCanceledRequest{Identity: "worker"},
 			}})
 			return err
 		})
 	default:
-		a.x.t.Fatalf("inProc: unhandled rpc kind %v", e.Kind)
+		a.h.t.Fatalf("unhandled rpc kind %v", e.Kind)
 		return nil
 	}
 }
 
 // dispatchable reports whether a SCHEDULED attempt's dispatch time has arrived, so a poll would return a
 // task. The tier-2 analog of a positive or negative poll, read directly rather than long-polled.
-func (a *inProcActivity) dispatchable() bool {
+func (a *handle) dispatchable() bool {
 	return a.read(func(act *Activity, c chasm.Context) any {
 		if act.GetStatus() != activitypb.ACTIVITY_EXECUTION_STATUS_SCHEDULED {
 			return false
@@ -262,7 +263,7 @@ func (a *inProcActivity) dispatchable() bool {
 }
 
 // realize applies one event to the activity and returns the reject error, nil on accept or no-op.
-func (a *inProcActivity) realize(e model.Event) error {
+func (a *handle) realize(e model.Event) error {
 	switch {
 	case e.Kind == model.Poll:
 		if a.dispatchable() {
@@ -270,14 +271,14 @@ func (a *inProcActivity) realize(e model.Event) error {
 			return a.update(func(act *Activity, mc chasm.MutableContext) error {
 				_, err := act.HandleStarted(mc, &historyservice.RecordActivityTaskStartedRequest{
 					Stamp:       stamp,
-					PollRequest: &workflowservice.PollActivityTaskQueueRequest{Namespace: inProcNS, Identity: "worker"},
+					PollRequest: &workflowservice.PollActivityTaskQueueRequest{Namespace: testNamespaceID, Identity: "worker"},
 				})
 				return err
 			})
 		}
 		return nil // not dispatchable: poll finds nothing
 	case e.Kind == model.BackoffElapses:
-		a.x.ts.Update(a.x.ts.Now().Add(backoffInterval + time.Second))
+		a.h.ts.Update(a.h.ts.Now().Add(backoffInterval + time.Second))
 		return nil
 	case e.Kind == model.StartToCloseElapses:
 		a.advanceTo(a.timerDeadline(e.Kind))
@@ -313,7 +314,7 @@ func (a *inProcActivity) realize(e model.Event) error {
 // timerDeadline is the instant the given timeout's timer is due, computed from current state exactly as
 // the transition that scheduled it did. Zero when the timer does not apply in the current state, such as
 // a start-to-close timer while not started; firing it then is a validated no-op.
-func (a *inProcActivity) timerDeadline(kind model.EventKind) time.Time {
+func (a *handle) timerDeadline(kind model.EventKind) time.Time {
 	return a.read(func(act *Activity, c chasm.Context) any {
 		attempt := act.LastAttempt.Get(c)
 		switch kind {
@@ -346,14 +347,14 @@ func (a *inProcActivity) timerDeadline(kind model.EventKind) time.Time {
 
 // advanceTo moves the virtual clock just past deadline if that is in the future. Otherwise a no-op, so
 // an inapplicable timer fires at the current instant and is rejected by its own Validate.
-func (a *inProcActivity) advanceTo(deadline time.Time) {
-	if !deadline.IsZero() && deadline.After(a.x.ts.Now()) {
-		a.x.ts.Update(deadline.Add(time.Second))
+func (a *handle) advanceTo(deadline time.Time) {
+	if !deadline.IsZero() && deadline.After(a.h.ts.Now()) {
+		a.h.ts.Update(deadline.Add(time.Second))
 	}
 }
 
 // fireTimer runs a pure timeout task handler, Validate then Execute, as the task processor would.
-func (a *inProcActivity) fireTimer(validate func(*Activity, chasm.MutableContext) (bool, error), execute func(*Activity, chasm.MutableContext) error) error {
+func (a *handle) fireTimer(validate func(*Activity, chasm.MutableContext) (bool, error), execute func(*Activity, chasm.MutableContext) error) error {
 	return a.update(func(act *Activity, mc chasm.MutableContext) error {
 		if ok, err := validate(act, mc); err != nil || !ok {
 			return err
@@ -386,7 +387,7 @@ func rejectKind(err error) model.ErrorKind {
 // candidateEvents is the tier-2 event alphabet: the worker RPCs plus the wall-clock timeouts and
 // backoff, which are prohibitively slow at tier 3 but instant here. The operator commands are
 // tier-3-only; being synchronous, the virtual clock buys them nothing.
-func (x *inProcExplorer) candidateEvents() []model.Event {
+func (h *harness) candidateEvents() []model.Event {
 	events := []model.Event{
 		{Kind: model.Poll},
 		{Kind: model.Heartbeat},
@@ -397,10 +398,10 @@ func (x *inProcExplorer) candidateEvents() []model.Event {
 		{Kind: model.BackoffElapses},
 		{Kind: model.StartToCloseElapses},
 	}
-	if x.cfg.HasHeartbeat {
+	if h.cfg.HasHeartbeat {
 		events = append(events, model.Event{Kind: model.HeartbeatElapses})
 	}
-	if x.cfg.HasScheduleToClose {
+	if h.cfg.HasScheduleToClose {
 		events = append(events, model.Event{Kind: model.ScheduleToCloseElapses})
 	}
 	return events
@@ -409,16 +410,16 @@ func (x *inProcExplorer) candidateEvents() []model.Event {
 // verifyPath starts a fresh activity, replays path, and checks its final edge against the model. A
 // prefix divergence aborts the replay silently; that edge is reported when it is the final edge of its
 // own shorter path. Reports whether the final edge verified.
-func (x *inProcExplorer) verifyPath(path []model.Event) bool {
-	a := x.start()
+func (h *harness) verifyPath(path []model.Event) bool {
+	a := h.start()
 	a.path = path
-	cur := model.Initial(x.cfg)
+	cur := model.Initial(h.cfg)
 	if obs := a.observed(); !cur.SameObserved(obs) {
-		x.t.Errorf("cfg %+v: state after Start disagrees with Initial\n  observed=%s want=%s", x.cfg, model.Fingerprint(obs), model.Fingerprint(cur))
+		h.t.Errorf("cfg %+v: state after Start disagrees with Initial\n  observed=%s want=%s", h.cfg, model.Fingerprint(obs), model.Fingerprint(cur))
 		return false
 	}
 	for i, e := range path {
-		out := model.Transition(x.cfg, cur, e)
+		out := model.Transition(h.cfg, cur, e)
 		final := i == len(path)-1
 		if !a.apply(e, cur, out, final) {
 			return false
@@ -431,12 +432,12 @@ func (x *inProcExplorer) verifyPath(path []model.Event) bool {
 // apply realizes e, whose predicted outcome from cur is out, and checks the observed reject kind, state,
 // public Describe, task invalidation, and — for Poll — dispatch readiness against the model. It reports
 // only on the final edge. Parallel to saaHandle.apply.
-func (a *inProcActivity) apply(e model.Event, cur model.AbstractState, out model.Outcome, final bool) bool {
+func (a *handle) apply(e model.Event, cur model.AbstractState, out model.Outcome, final bool) bool {
 	if e.Kind == model.Poll && cur.Status == model.Scheduled {
 		wantDispatchable := cur.Dispatchability == model.Dispatchable
 		if a.dispatchable() != wantDispatchable {
 			if final {
-				a.x.t.Errorf("%s: dispatch readiness disagrees — driver=%v model=%v\n  path: %s",
+				a.h.t.Errorf("%s: dispatch readiness disagrees — driver=%v model=%v\n  path: %s",
 					model.EventLabel(e), a.dispatchable(), wantDispatchable, pathString(a.path))
 			}
 			return false
@@ -449,28 +450,28 @@ func (a *inProcActivity) apply(e model.Event, cur model.AbstractState, out model
 		return ok
 	}
 	if gotKind != out.Reject {
-		a.x.t.Errorf("%s from %s: reject kind disagrees — driver=%v model=%v\n  path: %s",
+		a.h.t.Errorf("%s from %s: reject kind disagrees — driver=%v model=%v\n  path: %s",
 			model.EventLabel(e), cur.Status, gotKind, out.Reject, pathString(a.path))
 	}
 	if !out.Next.SameObserved(obs) {
-		a.x.t.Errorf("%s from %s: state disagrees\n  observed=%s\n  model=   %s\n  path: %s",
+		a.h.t.Errorf("%s from %s: state disagrees\n  observed=%s\n  model=   %s\n  path: %s",
 			model.EventLabel(e), cur.Status, model.Fingerprint(obs), model.Fingerprint(out.Next), pathString(a.path))
 	}
 	// An edge invalidates the prior attempt's tasks by bumping a stamp, so compare the stamp delta across
 	// this edge, refreshed by observed() above, to the model's per-transition invalidation bools.
 	gotAttempt, gotSTC := a.curStamp != a.prevStamp, a.curSTCStamp != a.prevSTCStamp
 	if gotAttempt != out.AttemptTasksInvalidated {
-		a.x.t.Errorf("%s from %s: attempt-task invalidation disagrees — driver=%v model=%v\n  path: %s",
+		a.h.t.Errorf("%s from %s: attempt-task invalidation disagrees — driver=%v model=%v\n  path: %s",
 			model.EventLabel(e), cur.Status, gotAttempt, out.AttemptTasksInvalidated, pathString(a.path))
 	}
 	if gotSTC != out.ScheduleToCloseTaskInvalidated {
-		a.x.t.Errorf("%s from %s: schedule-to-close-task invalidation disagrees — driver=%v model=%v\n  path: %s",
+		a.h.t.Errorf("%s from %s: schedule-to-close-task invalidation disagrees — driver=%v model=%v\n  path: %s",
 			model.EventLabel(e), cur.Status, gotSTC, out.ScheduleToCloseTaskInvalidated, pathString(a.path))
 	}
 	st, rs, attempt := a.describe()
 	wantSt, wantRs := model.ExpectedDescribe(out.Next)
 	if st != wantSt || rs != wantRs || attempt != out.Next.AttemptCount {
-		a.x.t.Errorf("%s from %s: Describe disagrees — driver=(%v,%v,attempt=%d) model=(%v,%v,attempt=%d)\n  path: %s",
+		a.h.t.Errorf("%s from %s: Describe disagrees — driver=(%v,%v,attempt=%d) model=(%v,%v,attempt=%d)\n  path: %s",
 			model.EventLabel(e), cur.Status, st, rs, attempt, wantSt, wantRs, out.Next.AttemptCount, pathString(a.path))
 	}
 	return gotKind == out.Reject && out.Next.SameObserved(obs)
@@ -497,25 +498,25 @@ func joinArrows(parts []string) string {
 }
 
 // traverse does a depth-bounded breadth-first walk of the model's reachable states, verifying every
-// decided edge against the in-process engine.
-func (x *inProcExplorer) traverse(maxDepth int) {
+// decided edge against the engine.
+func (h *harness) traverse(maxDepth int) {
 	type node struct {
 		path  []model.Event
 		state model.AbstractState
 	}
-	start := model.Initial(x.cfg)
+	start := model.Initial(h.cfg)
 	visited := map[string]bool{model.Fingerprint(start): true}
 	frontier := []node{{nil, start}}
 	edges, states := 0, 1
-	x.verifyPath(nil)
+	h.verifyPath(nil)
 	for depth := 0; depth < maxDepth && len(frontier) > 0; depth++ {
 		var next []node
 		for _, nd := range frontier {
-			for _, e := range x.candidateEvents() {
-				out := model.Transition(x.cfg, nd.state, e)
+			for _, e := range h.candidateEvents() {
+				out := model.Transition(h.cfg, nd.state, e)
 				edges++
 				path := append(append([]model.Event{}, nd.path...), e)
-				x.verifyPath(path)
+				h.verifyPath(path)
 				if out.Reject != model.NoError {
 					continue
 				}
@@ -529,18 +530,18 @@ func (x *inProcExplorer) traverse(maxDepth int) {
 		}
 		frontier = next
 	}
-	x.t.Logf("cfg %+v: verified %d edges across %d states (depth<=%d), in-process", x.cfg, edges, states, maxDepth)
+	h.t.Logf("cfg %+v: verified %d edges across %d states (depth<=%d)", h.cfg, edges, states, maxDepth)
 }
 
 // randomWalk drives one activity, picking a random applicable event each step and checking it against
 // the model. On reaching a terminal state it restarts, until the step budget is spent.
-func (x *inProcExplorer) randomWalk(rng *rand.Rand, steps int) {
+func (h *harness) randomWalk(rng *rand.Rand, steps int) {
 	// freshWalk seeds the stamp-delta baseline via observed(), so the first edge's invalidation check
 	// measures that edge and not the start.
-	freshWalk := func() (*inProcActivity, model.AbstractState) {
-		a := x.start()
-		cur := model.Initial(x.cfg)
-		require.True(x.t, cur.SameObserved(a.observed()))
+	freshWalk := func() (*handle, model.AbstractState) {
+		a := h.start()
+		cur := model.Initial(h.cfg)
+		require.True(h.t, cur.SameObserved(a.observed()))
 		return a, cur
 	}
 	a, cur := freshWalk()
@@ -552,11 +553,11 @@ func (x *inProcExplorer) randomWalk(rng *rand.Rand, steps int) {
 			trace = nil
 			continue
 		}
-		events := x.candidateEvents()
+		events := h.candidateEvents()
 		e := events[rng.Intn(len(events))]
 		trace = append(trace, e)
 		a.path = trace
-		out := model.Transition(x.cfg, cur, e)
+		out := model.Transition(h.cfg, cur, e)
 		if !a.apply(e, cur, out, true) {
 			a, cur = freshWalk() // diverged (already reported); restart from a known state
 			trace = nil
@@ -570,7 +571,7 @@ func (x *inProcExplorer) randomWalk(rng *rand.Rand, steps int) {
 		keys = append(keys, k)
 	}
 	sort.Strings(keys)
-	x.t.Logf("cfg %+v: random walk covered %d distinct states, in-process", x.cfg, len(keys))
+	h.t.Logf("cfg %+v: random walk covered %d distinct states", h.cfg, len(keys))
 }
 
 func TestConformance(t *testing.T) {
@@ -580,12 +581,12 @@ func TestConformance(t *testing.T) {
 	}
 	t.Run("BFSGraphTraversal", func(t *testing.T) {
 		for _, cfg := range configs {
-			newInProcExplorer(t, cfg).traverse(5)
+			newHarness(t, cfg).traverse(5)
 		}
 	})
 	t.Run("RandomWalk", func(t *testing.T) {
 		for _, cfg := range configs {
-			newInProcExplorer(t, cfg).randomWalk(rand.New(rand.NewSource(1)), 300)
+			newHarness(t, cfg).randomWalk(rand.New(rand.NewSource(1)), 300)
 		}
 	})
 }
