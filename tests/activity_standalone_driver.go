@@ -129,42 +129,64 @@ func (a *saaHandle) driveEvent(t require.TestingT, e model.Event) {
 	}
 }
 
-// awaitWallClock blocks until a wall-clock event's effect is visible on the frontend surface, or until
-// (window + settle) has passed. A timeout advances the execution's transition-history version, so it is
-// waited for with a long poll. A dispatch-delay elapse advances no version — the dispatch time simply
-// passes — so it is detected by the read-time NextAttemptScheduleTime flip instead.
+// awaitWallClock blocks until a wall-clock event's effect is visible on the frontend surface, and reports
+// a failure if it is not visible within (window + settle). A timeout advances the execution's
+// transition-history version, so it is waited for with a long poll. A dispatch-delay elapse advances no
+// version — the dispatch time simply passes — so it is detected by the read-time
+// NextAttemptScheduleTime flip instead.
 func (a *saaHandle) awaitWallClock(t require.TestingT, e model.Event) {
 	deadline := time.Now().Add(a.h.eventClock(e) + saaWallClockSettle)
-	if e.Kind == model.StartDelayElapses || e.Kind == model.BackoffElapses {
-		a.awaitProjectionChange(t, deadline)
+	if saaIsDispatchDelay(e.Kind) {
+		a.awaitDispatchTimePassed(t, e, deadline)
 		return
 	}
-	a.awaitStateTransition(t, deadline)
+	a.awaitStateTransition(t, e, deadline)
 }
 
 // awaitStateTransition long-polls DescribeActivityExecution until the execution's transition-history
-// version advances past the token's, or the deadline passes. An empty response means the server's
-// long-poll window expired, so resubmit.
-func (a *saaHandle) awaitStateTransition(t require.TestingT, deadline time.Time) {
+// version advances past the token's, and fails if none does by the deadline. An empty response means the
+// server's long-poll window expired, so resubmit. Each long poll is bounded by the deadline so that a
+// server window longer than the deadline cannot overrun it.
+func (a *saaHandle) awaitStateTransition(t require.TestingT, e model.Event, deadline time.Time) {
 	token := a.describe(t).GetLongPollToken()
 	for time.Now().Before(deadline) {
-		resp, err := a.h.env.FrontendClient().DescribeActivityExecution(a.h.ctx, &workflowservice.DescribeActivityExecutionRequest{
+		ctx, cancel := context.WithDeadline(a.h.ctx, deadline)
+		resp, err := a.h.env.FrontendClient().DescribeActivityExecution(ctx, &workflowservice.DescribeActivityExecutionRequest{
 			Namespace:     a.h.env.Namespace().String(),
 			ActivityId:    a.activityID,
 			RunId:         a.runID,
 			LongPollToken: token,
 		})
-		require.NoError(t, err)
+		cancel()
+		if err != nil {
+			if time.Now().Before(deadline) {
+				require.NoError(t, err)
+			}
+			break // the deadline cancelled the long poll
+		}
 		if resp.GetInfo() != nil {
 			return // non-empty: the state advanced
 		}
 	}
+	t.Errorf("%s: the activity did not transition within %s of driving the event, so the event did not take "+
+		"effect. Last observed: %+v", model.EventLabel(e), a.h.eventClock(e)+saaWallClockSettle, a.projection(t))
 }
 
-// awaitProjectionChange polls the public projection until it changes, or the deadline passes.
-func (a *saaHandle) awaitProjectionChange(t require.TestingT, deadline time.Time) {
-	before := a.projection(t)
-	for a.projection(t) == before && time.Now().Before(deadline) {
+// awaitDispatchTimePassed polls the public projection until the pending dispatch time has passed, which
+// is how a start-delay or retry-backoff window elapsing is observable, and fails if it has not by the
+// deadline.
+func (a *saaHandle) awaitDispatchTimePassed(t require.TestingT, e model.Event, deadline time.Time) {
+	for {
+		p := a.projection(t)
+		if !p.NextAttemptScheduleSet {
+			return
+		}
+		if !time.Now().Before(deadline) {
+			t.Errorf("%s: a dispatch is still pending in the future %s after driving the event, so the "+
+				"window did not elapse. Last observed: %+v",
+				model.EventLabel(e), a.h.eventClock(e)+saaWallClockSettle, p)
+			return
+		}
 		time.Sleep(saaPollInterval)
 	}
 }
@@ -555,6 +577,13 @@ func saaIsWallClock(k model.EventKind) bool {
 	default:
 		return false
 	}
+}
+
+// saaIsDispatchDelay reports whether an event is a dispatch-delay window elapsing, as opposed to a
+// timeout. A dispatch delay advances no transition-history version; its effect is the pending dispatch
+// time passing.
+func saaIsDispatchDelay(k model.EventKind) bool {
+	return k == model.StartDelayElapses || k == model.BackoffElapses
 }
 
 // saaTimeoutIn is the timeout whose *Elapses event a trace fires, zero if none. A trace fires at most

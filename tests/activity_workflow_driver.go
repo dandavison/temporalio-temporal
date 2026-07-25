@@ -186,36 +186,38 @@ func (a *wfaHandle) driveEvent(t require.TestingT, e model.Event) {
 		}
 	case saaIsWallClock(e.Kind):
 		// A wall-clock event is realized by waiting out its configured window.
-		a.awaitWallClock(e)
+		a.awaitWallClock(t, e)
 	default:
 		require.NoError(t, a.rpc(e))
 	}
 }
 
 // awaitWallClock blocks until a wall-clock event's effect shows up in the workflow's view of the
-// activity, or until (window + settle) has passed. The effect is a change in the pending-activity
-// projection, or the activity leaving the pending set. WFA has no long-poll Describe, so unlike
-// saaHandle.awaitWallClock this polls.
-func (a *wfaHandle) awaitWallClock(e model.Event) {
-	before, beforePending := a.pendingSnapshot()
+// activity, and reports a failure if it does not within (window + settle). The effect is a change in the
+// pending-activity projection, or the activity leaving the pending set. WFA has no long-poll Describe, so
+// unlike saaHandle.awaitWallClock this polls.
+func (a *wfaHandle) awaitWallClock(t require.TestingT, e model.Event) {
+	before, beforePending := a.pendingSnapshot(t)
 	deadline := time.Now().Add(a.h.eventClock(e) + saaWallClockSettle)
 	for {
-		if now, nowPending := a.pendingSnapshot(); nowPending != beforePending || (nowPending && now != before) {
+		if now, nowPending := a.pendingSnapshot(t); nowPending != beforePending || (nowPending && now != before) {
 			return
 		}
 		if !time.Now().Before(deadline) {
+			t.Errorf("%s: the activity did not change within %s of driving the event, so the event did not "+
+				"take effect. Last observed: %+v", model.EventLabel(e), a.h.eventClock(e)+saaWallClockSettle, before)
 			return
 		}
 		time.Sleep(saaPollInterval)
 	}
 }
 
-// pendingSnapshot is the activity's pending-activity projection, and whether it is currently pending.
-func (a *wfaHandle) pendingSnapshot() (activityInfoProjection, bool) {
+// pendingSnapshot is the activity's pending-activity projection, and whether it is currently pending. A
+// Describe error is reported rather than reported as absence, which awaitWallClock would read as the
+// activity having closed.
+func (a *wfaHandle) pendingSnapshot(t require.TestingT) (activityInfoProjection, bool) {
 	resp, err := a.h.env.SdkClient().DescribeWorkflowExecution(a.h.ctx, a.workflowID, a.runID)
-	if err != nil {
-		return activityInfoProjection{}, false
-	}
+	require.NoError(t, err)
 	for _, pa := range resp.GetPendingActivities() {
 		if pa.GetActivityId() == a.activityID {
 			return projectWFA(pa), true

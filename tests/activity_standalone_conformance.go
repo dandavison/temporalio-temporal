@@ -360,9 +360,16 @@ func (a *saaHandle) applyPoll(cur model.AbstractState, out model.Outcome, final 
 // none, the only way to confirm is to wait the window out and see nothing move.
 func (a *saaHandle) applyWallClock(t require.TestingT, e model.Event, cur model.AbstractState, out model.Outcome, final bool) saaApply {
 	deadline := time.Now().Add(a.h.eventClock(e) + saaWallClockSettle)
-	if out.Next.SameObserved(cur) {
+	switch {
+	case saaIsDispatchDelay(e.Kind) && out.Next.Dispatchability == model.Dispatchable &&
+		cur.Dispatchability != model.Dispatchable:
+		// The delay elapsing is not visible in the component state the oracle compares — Dispatchability is
+		// masked out of SameObserved — so assert the public dispatch time passing instead. Otherwise this
+		// edge would be a sleep that verifies nothing.
+		a.awaitDispatchTimePassed(t, e, deadline)
+	case out.Next.SameObserved(cur):
 		time.Sleep(time.Until(deadline))
-	} else {
+	default:
 		a.awaitObservedMatch(out.Next, deadline)
 	}
 	obs, err := a.observed()
