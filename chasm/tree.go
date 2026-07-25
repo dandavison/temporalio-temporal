@@ -1674,15 +1674,20 @@ func (n *Node) AddTask(
 	task any,
 ) {
 	rt, ok := n.registry.taskFor(task)
-	if ok && rt.isPureTask && taskAttributes.IsImmediate() {
-		// Those tasks will be executed in the current transaction.
-		n.immediatePureTasks[component] = append(n.immediatePureTasks[component], taskWithAttributes{
-			task:       task,
-			attributes: taskAttributes,
-		})
-		return
-	}
+	if ok {
+		if !rt.isPureTask && !taskAttributes.ScheduledTime.After(n.Now(component)) {
+			taskAttributes.ScheduledTime = TaskScheduledTimeImmediate
+		}
 
+		if rt.isPureTask && taskAttributes.IsImmediate() {
+			// Those tasks will be executed in the current transaction.
+			n.immediatePureTasks[component] = append(n.immediatePureTasks[component], taskWithAttributes{
+				task:       task,
+				attributes: taskAttributes,
+			})
+			return
+		}
+	}
 	n.newTasks[component] = append(n.newTasks[component], taskWithAttributes{
 		task:       task,
 		attributes: taskAttributes,
