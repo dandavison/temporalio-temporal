@@ -212,9 +212,7 @@ func (h *saaHarness) driveTraceWithModelConformanceChecking(t *testing.T, trace 
 }
 
 func (h *saaHarness) start(t require.TestingT) *saaHandle {
-	if h.cfg.HasStartDelay && h.startDelay <= 0 {
-		require.Fail(t, "saaHarness misconfigured: cfg.HasStartDelay requires startDelay > 0")
-	}
+	h.requireConsistentConfig(t)
 	h.numStarted++
 	// cfgIdx keeps ids distinct across the per-config harnesses an explorer sweeps.
 	id := fmt.Sprintf("%s-%d-%d", h.idBase, h.cfgIdx, h.numStarted)
@@ -530,6 +528,44 @@ func (h *saaHarness) dispatchDelay(d model.Dispatchability) time.Duration {
 // effectiveRetryInterval is the RetryPolicy InitialInterval the harness starts activities with.
 func (h *saaHarness) effectiveRetryInterval() time.Duration {
 	return cmp.Or(h.retryInterval, saaDefaultRetryInterval)
+}
+
+// requireConsistentConfig fails unless cfg and the timing knobs describe the same activity. cfg is what
+// the model reasons about and the knobs are what startRequest sends, so a disagreement means the test is
+// asserting against an activity nobody configured.
+func (h *saaHarness) requireConsistentConfig(t require.TestingT) {
+	requireBoth := func(flag bool, knobSet bool, flagName, knobName string) {
+		if flag && !knobSet {
+			require.Fail(t, fmt.Sprintf("saaHarness misconfigured: cfg.%s requires %s", flagName, knobName))
+		}
+		if knobSet && !flag {
+			require.Fail(t, fmt.Sprintf("saaHarness misconfigured: %s requires cfg.%s, or the model cannot "+
+				"see it", knobName, flagName))
+		}
+	}
+	requireBoth(h.cfg.HasStartDelay, h.startDelay > 0, "HasStartDelay", "startDelay")
+	// A timeout knob only reaches the request when its cfg flag is set, so the flag is what makes the knob
+	// meaningful. The reverse does not hold: a set flag with no knob configures that timeout long, which is
+	// how a trace leaves a timeout alive without firing it.
+	if h.scheduleToClose > 0 && !h.cfg.HasScheduleToClose {
+		require.Fail(t, "saaHarness misconfigured: scheduleToClose requires cfg.HasScheduleToClose, or "+
+			"startRequest drops it")
+	}
+	// Shortening a timeout so a trace can fire it requires that timeout to be configured at all.
+	for _, c := range []struct {
+		kind     model.EventKind
+		flag     bool
+		flagName string
+	}{
+		{model.ScheduleToCloseElapses, h.cfg.HasScheduleToClose, "HasScheduleToClose"},
+		{model.ScheduleToStartElapses, h.cfg.HasScheduleToStart, "HasScheduleToStart"},
+		{model.HeartbeatElapses, h.cfg.HasHeartbeat, "HasHeartbeat"},
+	} {
+		if h.shortTimeout == c.kind && !c.flag {
+			require.Fail(t, fmt.Sprintf("saaHarness misconfigured: shortTimeout=%s requires cfg.%s, or that "+
+				"timeout is never configured and the event cannot fire", model.KindName(c.kind), c.flagName))
+		}
+	}
 }
 
 // chasmContext is the context ReadComponent needs to read internal component state, memoized.
