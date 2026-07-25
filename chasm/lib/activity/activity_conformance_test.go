@@ -43,6 +43,7 @@ const inProcNS = "inproc-ns"
 type inProcExplorer struct {
 	t        *testing.T
 	ctx      context.Context
+	engine   *chasmtest.Engine
 	ts       *clock.EventTimeSource
 	cfg      model.Config
 	nowStart time.Time
@@ -54,16 +55,30 @@ func newInProcExplorer(t *testing.T, cfg model.Config) *inProcExplorer {
 	nsReg.EXPECT().GetNamespaceName(gomock.Any()).Return(namespace.Name(inProcNS), nil).AnyTimes()
 	registry := chasm.NewRegistry(log.NewNoopLogger())
 	require.NoError(t, registry.Register(&chasm.CoreLibrary{}))
-	require.NoError(t, registry.Register(newComponentOnlyLibrary(ConfigProvider(dynamicconfig.NewNoopCollection()), nsReg)))
+	// The full library, not the component-only one: closing a transaction validates every task the
+	// transitions added, and an unregistered task type is a hard error there. The task handlers are only
+	// ever constructed, never executed — the driver fires timers itself, and no side-effect task runs.
+	config := ConfigProvider(dynamicconfig.NewNoopCollection())
+	require.NoError(t, registry.Register(newLibrary(
+		nil, // gRPC handler, unused: nothing here serves the activity service
+		newActivityDispatchTaskHandler(activityDispatchTaskHandlerOptions{}),
+		newScheduleToStartTimeoutTaskHandler(),
+		newScheduleToCloseTimeoutTaskHandler(),
+		newStartToCloseTimeoutTaskHandler(),
+		newHeartbeatTimeoutTaskHandler(),
+		config,
+		nsReg,
+	)))
 
 	ts := clock.NewEventTimeSource()
 	now := time.Date(2020, 1, 1, 0, 0, 0, 0, time.UTC)
 	ts.Update(now)
 	engine := chasmtest.NewEngine(t, registry, chasmtest.WithTimeSource(ts))
 	return &inProcExplorer{
-		t:   t,
-		ctx: chasm.NewEngineContext(context.Background(), engine),
-		ts:  ts, cfg: cfg, nowStart: now,
+		t:      t,
+		ctx:    chasm.NewEngineContext(context.Background(), engine),
+		engine: engine,
+		ts:     ts, cfg: cfg, nowStart: now,
 	}
 }
 
