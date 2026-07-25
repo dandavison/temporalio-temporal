@@ -19,6 +19,20 @@ model will let the two be checked for equivalence.
 The model is exercised at three tiers, cheapest first. Tiers 2 and 3 are conformance testing (a
 running implementation vs the model); tier 1 is static model validation. All three use the *same* model.
 
+## Everything on this branch, in one go
+
+Runs every test this branch adds — the model tier 1, the in-process tier 2, and the onebox tier 3
+(RPC graph traversal + random walk, SAA↔WFA equivalence, and the wall-clock declarative traces). The
+tier-3 leg needs `-tags test_dep` and takes a couple of minutes; the first two are ~1s each.
+
+```bash
+export TEMPORAL_TEST_LOG_LEVEL=ERROR TEMPORAL_TEST_LOG_STACKTRACE_LEVEL=off
+go test -count=1 ./chasm/lib/activity/model/... &&                                    # tier 1
+go test -count=1 -run TestConformance ./chasm/lib/activity/ &&                         # tier 2
+go test -tags test_dep -count=1 \
+  -run 'TestStandaloneActivityTestSuite/(TestConformance|TestWFASAA|TestSAA|Test.*_Declarative)' ./tests/  # tier 3
+```
+
 ## Tier 1 — no server (~1s): model unit tests + static model validation
 
 `model_test.go` smoke tests (including the dispatch-delay requirements for start_delay and retry
