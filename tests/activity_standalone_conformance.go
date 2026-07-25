@@ -210,21 +210,46 @@ const (
 // window the negative poll meant to check had already closed by the time it ran.
 const outranDispatchWindow = "the harness outran the dispatch window"
 
-// saaNegativePollMargin keeps a negative poll from outliving the window it is checking, so a dispatch
-// arriving as the window closes cannot be mistaken for one arriving early.
-const saaNegativePollMargin = 500 * time.Millisecond
+// negativePollResult is what a negative poll established about a pending dispatch window.
+type negativePollResult int
 
-// negativePollTimeout bounds a negative poll by what the server says is left of the pending dispatch
-// window, rather than by the delay the harness configured, which assumes no time has passed since. It
-// reports false when too little is left to poll for: the window has closed, or will before a poll that
-// reaches matching could finish.
-func (a *saaHandle) negativePollTimeout(t require.TestingT) (time.Duration, bool) {
+const (
+	dispatchedNothing negativePollResult = iota // the window held
+	dispatchedEarly                             // a task arrived while the window was still open
+	windowOutrun                                // the window closed too soon to establish either
+)
+
+// negativePoll checks that a pending dispatch window dispatches nothing, bounding the poll by what the
+// server says is left of the window rather than by the delay the harness configured, which assumes no
+// time has passed since it began.
+//
+// A task it does find is adjudicated by comparing two observed times — whether the dispatch time had
+// arrived by the time the poll returned — so no margin is needed to keep the poll inside the window. A
+// poll that straddles the boundary establishes nothing rather than blaming the product.
+func (a *saaHandle) negativePoll(t require.TestingT) (negativePollResult, *workflowservice.PollActivityTaskQueueResponse) {
 	next := a.describe(t).GetInfo().GetNextAttemptScheduleTime()
 	if next == nil {
-		return 0, false // the dispatch time has already passed
+		return windowOutrun, nil // the dispatch time passed before the check began
 	}
-	timeout := min(saaPollTimeout, time.Until(next.AsTime())-saaNegativePollMargin)
-	return timeout, timeout >= common.MinLongPollTimeout
+	dispatchTime := next.AsTime()
+	timeout := min(saaPollTimeout, time.Until(dispatchTime))
+	if timeout < common.MinLongPollTimeout {
+		return windowOutrun, nil // too little left for a poll that reaches matching
+	}
+	resp := a.pollForTask(t, timeout)
+	if resp == nil {
+		return dispatchedNothing, nil
+	}
+	return adjudicateDispatch(time.Now(), dispatchTime), resp
+}
+
+// adjudicateDispatch says whether a task a negative poll found arrived early, or only as the window it
+// was checking closed underneath it.
+func adjudicateDispatch(polledUntil, dispatchTime time.Time) negativePollResult {
+	if polledUntil.Before(dispatchTime) {
+		return dispatchedEarly
+	}
+	return windowOutrun
 }
 
 // saaCell identifies a (source status, event kind) pair for the coverage ledger.
@@ -343,21 +368,19 @@ func (a *saaHandle) applyPoll(cur model.AbstractState, out model.Outcome, final 
 		// poll when the configured delay outlasts a valid long poll; otherwise the state comparison below
 		// suffices.
 		if a.h.dispatchDelay(cur.Dispatchability) > saaPollTimeout {
-			timeout, ok := a.negativePollTimeout(t)
-			if !ok {
-				// The window shut before the check could run, so any task now waiting was dispatched
-				// legitimately and says nothing about the product.
-				if final {
-					t.Errorf("%s: %s — %s was configured but the dispatch time has passed, so this edge went "+
-						"unchecked. Lengthen the window or shorten the trace ahead of it.\n%s",
-						a.edge(poll, cur.Status), outranDispatchWindow, cur.Dispatchability, a.pathLine())
-				}
-				return saaMismatch
-			}
-			if resp := a.pollForTask(t, timeout); resp != nil {
+			switch result, resp := a.negativePoll(t); result {
+			case dispatchedEarly:
 				if final {
 					t.Errorf("%s: model expected no dispatch (%s pending) but a task WAS dispatched (attempt %d)\n%s",
 						a.edge(poll, cur.Status), cur.Dispatchability, resp.GetAttempt(), a.pathLine())
+				}
+				return saaMismatch
+			case windowOutrun:
+				if final {
+					t.Errorf("%s: %s — %s was configured, but its dispatch time arrived before the check could "+
+						"establish anything, so this edge went unchecked. Lengthen the window, or shorten the "+
+						"trace ahead of it.\n%s",
+						a.edge(poll, cur.Status), outranDispatchWindow, cur.Dispatchability, a.pathLine())
 				}
 				return saaMismatch
 			}

@@ -163,8 +163,9 @@ func (s *standaloneActivityTestSuite) TestSAAHarnessRejectsInconsistentConfig() 
 // whether to run from the delay the harness configured, not from how much of the window is actually
 // left, so it assumes little time has passed since the delay began. Nothing enforces that: under load
 // the window can close first, and the poll then finds a task that was dispatched entirely legitimately
-// and reports it as a product divergence. That is a fabricated finding, which is worse than a missed
-// one — it is the failure mode this whole harness exists to avoid.
+// and reports it as a product divergence. Such a finding at least announces itself, unlike a missed one,
+// but it costs an investigation, invites a fix to a product that is behaving correctly, and teaches
+// everyone to read a red parity test as flake.
 //
 // Injected here by shortening the real start delay to nothing while the harness still believes it is an
 // hour, which puts the poll in exactly the position a slow machine would.
@@ -201,4 +202,25 @@ func (s *standaloneActivityTestSuite) TestSAADriverAttributesAnOutrunDispatchWin
 		require.Contains(t, reports, outranDispatchWindow,
 			"the harness must report that it could no longer make this check")
 	})
+}
+
+// TestAdjudicateDispatch pins how a negative poll tells a product defect from its own window closing.
+// Removing the timing margin rests on this: a task found while the window was still open is still
+// reported as the product dispatching early, and only one found after the window closed is excused.
+func TestAdjudicateDispatch(t *testing.T) {
+	dispatchTime := time.Date(2020, 1, 1, 0, 0, 10, 0, time.UTC)
+	for _, tc := range []struct {
+		name        string
+		polledUntil time.Time
+		want        negativePollResult
+	}{
+		{"well inside the window", dispatchTime.Add(-5 * time.Second), dispatchedEarly},
+		{"just inside the window", dispatchTime.Add(-time.Nanosecond), dispatchedEarly},
+		{"exactly at the dispatch time", dispatchTime, windowOutrun},
+		{"after the window closed", dispatchTime.Add(5 * time.Second), windowOutrun},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			require.Equal(t, tc.want, adjudicateDispatch(tc.polledUntil, dispatchTime))
+		})
+	}
 }
