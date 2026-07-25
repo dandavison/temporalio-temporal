@@ -67,9 +67,10 @@ go test -run TestConformance -count=1 -v ./chasm/lib/activity/
 In the commands below, `-count=1` skips the test cache and `-v` shows per-subtest logs. Prefix with
 `TEMPORAL_TEST_LOG_LEVEL=ERROR TEMPORAL_TEST_LOG_STACKTRACE_LEVEL=off` to quiet logger noise. The SAA
 driver and model-conformance engine live in `tests/` (`activity_standalone_driver.go`,
-`activity_standalone_conformance.go`, `activity_standalone_conformance_test.go`,
-`activity_standalone_test.go`); the parallel WFA driver is `activity_workflow_driver.go` and the
-real-driver SAA↔WFA equivalence tests are `activity_parity_with_real_drivers_test.go`.
+`activity_standalone_conformance.go`, `activity_standalone_conformance_test.go`); the parallel WFA
+driver is `activity_workflow_driver.go`, and the real-driver SAA↔WFA tests are
+`activity_parity_with_real_drivers_test.go` (behavior) and `activity_metrics_parity_test.go` (metric
+emission and tag keys).
 
 ### SAA↔WFA equivalence (real drivers)
 

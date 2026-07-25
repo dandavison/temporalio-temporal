@@ -5,7 +5,7 @@ package tests
 // and these tests drive a real onebox server through the same event alphabet, asserting the server
 // conforms to the model at every step. The wall-clock scenarios (timeouts, dispatch delays) are checked
 // by the declarative trace tests (Test{StartDelay,Backoff,Timeout}_Declarative in
-// activity_standalone_test.go), which model-check each step via driveTrace; the exhaustive RPC-graph and
+// activity_parity_with_real_drivers_test.go), which model-check each step via driveTrace; the exhaustive RPC-graph and
 // random-walk explorers are here. The engine that drives and checks each event is in
 // activity_standalone_conformance.go, built on the driver in activity_standalone_driver.go.
 
