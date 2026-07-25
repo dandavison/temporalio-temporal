@@ -463,6 +463,15 @@ func (s *standaloneActivityTestSuite) TestWFASAANextAttemptScheduleTimeAndCurren
 
 	// Paused after the backoff elapsed and the retry was dispatched to Matching. As above, no
 	// next-attempt schedule time; and as in RetryQueuedNotStarted, nothing is backing off.
+	//
+	// This `want` is necessarily identical to PausedBeforeDispatch's: diffing the whole of
+	// ActivityExecutionInfo and PendingActivityInfo between the two states, over repeated runs to
+	// separate signal from run-to-run noise, turns up no field that distinguishes them on either
+	// surface. So the two subtests differ only in the state they reach, which the driver verifies (it
+	// requires BackoffElapses to clear the pending dispatch time), not in what they assert. The
+	// behavioral difference — whether an unpause dispatches at once or waits out the rest of the
+	// backoff — is observable, and is covered by the backoff/pause-{before,after}-dispatch-then-unpause
+	// traces.
 	t.Run("PausedAfterDispatch", func(t *testing.T) {
 		both(t, 3, saaDelayWindow, []model.Event{saaPoll, saaFailRetryably, saaBackoffDelayElapse, saaPause},
 			activityInfoProjection{State: enumspb.PENDING_ACTIVITY_STATE_PAUSED, Attempt: 2})
@@ -622,9 +631,21 @@ func (s *standaloneActivityTestSuite) TestBackoff_Declarative() {
 			nextRetryDelay: saaDelayWindow,
 		})
 	})
-	t.Run("backoff/pause-then-unpause", func(t *testing.T) {
+	// Paused mid-backoff: the unpause resumes waiting, so the next poll must find nothing until the
+	// remaining window elapses.
+	t.Run("backoff/pause-before-dispatch-then-unpause", func(t *testing.T) {
 		s.driveTrace(t, env, saaTrace{
 			trace:         []model.Event{saaPoll, saaFailRetryably, {Kind: model.Pause}, {Kind: model.Unpause}, saaPoll, saaBackoffDelayElapse, saaPoll},
+			maxAttempts:   3,
+			retryInterval: saaDelayWindow,
+		})
+	})
+	// The counterpart: paused after the backoff already elapsed, so the unpause must dispatch at once
+	// rather than impose a fresh window. This is the only observable difference between the two paused
+	// states — see PausedAfterDispatch.
+	t.Run("backoff/pause-after-dispatch-then-unpause", func(t *testing.T) {
+		s.driveTrace(t, env, saaTrace{
+			trace:         []model.Event{saaPoll, saaFailRetryably, saaBackoffDelayElapse, {Kind: model.Pause}, {Kind: model.Unpause}, saaPoll},
 			maxAttempts:   3,
 			retryInterval: saaDelayWindow,
 		})
