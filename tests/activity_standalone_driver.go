@@ -698,15 +698,3 @@ const saaDelayWindow = 5 * time.Second
 
 // saaLongStartDelay keeps a first attempt in its start-delay window for the whole trace.
 const saaLongStartDelay = time.Hour
-
-var (
-	saaPoll               = model.Event{Kind: model.Poll}
-	saaComplete           = model.Event{Kind: model.RespondCompleted}
-	saaFailRetryably      = model.Event{Kind: model.RespondFailed, Retryable: true}
-	saaFailNonRetryably   = model.Event{Kind: model.RespondFailed, Retryable: false}
-	saaPause              = model.Event{Kind: model.Pause}
-	saaRequestCancel      = model.Event{Kind: model.RequestCancel}
-	saaStartDelayElapse   = model.Event{Kind: model.StartDelayElapses}
-	saaBackoffDelayElapse = model.Event{Kind: model.BackoffElapses}
-	saaStartToCloseElapse = model.Event{Kind: model.StartToCloseElapses}
-)

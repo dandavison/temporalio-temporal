@@ -79,17 +79,17 @@ type activityMetricsScenario struct {
 }
 
 var activityMetricsScenarios = []activityMetricsScenario{
-	{name: "Success", trace: []model.Event{saaPoll, saaComplete}, maxAttempts: 1},
-	{name: "TerminalFailure", trace: []model.Event{saaPoll, saaFailNonRetryably}, maxAttempts: 1},
-	{name: "Cancel", trace: []model.Event{saaPoll, saaRequestCancel, {Kind: model.RespondCanceled}}, maxAttempts: 1},
-	{name: "TerminalTimeout", trace: []model.Event{saaPoll, saaStartToCloseElapse}, maxAttempts: 1, anchor: metrics.ActivityTimeout.Name()},
-	{name: "RetryableTaskFailure", trace: []model.Event{saaPoll, saaFailRetryably}, maxAttempts: 2},
-	{name: "Heartbeat", trace: []model.Event{saaPoll, {Kind: model.Heartbeat}}, maxAttempts: 1},
-	{name: "Pause", trace: []model.Event{saaPoll, saaPause}, maxAttempts: 1},
-	{name: "Unpause", trace: []model.Event{saaPoll, saaPause, {Kind: model.Unpause}}, maxAttempts: 1},
-	{name: "Reset", trace: []model.Event{saaPoll, {Kind: model.Reset}}, maxAttempts: 1},
-	{name: "UpdateOptions", trace: []model.Event{saaPoll, {Kind: model.UpdateOptions}}, maxAttempts: 1},
-	{name: "Terminate", trace: []model.Event{saaPoll, {Kind: model.Terminate}}, maxAttempts: 1, saaOnly: true},
+	{name: "Success", trace: []model.Event{model.PollEvent, model.CompleteEvent}, maxAttempts: 1},
+	{name: "TerminalFailure", trace: []model.Event{model.PollEvent, model.FailNonRetryablyEvent}, maxAttempts: 1},
+	{name: "Cancel", trace: []model.Event{model.PollEvent, model.RequestCancelEvent, {Kind: model.RespondCanceled}}, maxAttempts: 1},
+	{name: "TerminalTimeout", trace: []model.Event{model.PollEvent, model.StartToCloseElapsesEvent}, maxAttempts: 1, anchor: metrics.ActivityTimeout.Name()},
+	{name: "RetryableTaskFailure", trace: []model.Event{model.PollEvent, model.FailRetryablyEvent}, maxAttempts: 2},
+	{name: "Heartbeat", trace: []model.Event{model.PollEvent, {Kind: model.Heartbeat}}, maxAttempts: 1},
+	{name: "Pause", trace: []model.Event{model.PollEvent, model.PauseEvent}, maxAttempts: 1},
+	{name: "Unpause", trace: []model.Event{model.PollEvent, model.PauseEvent, {Kind: model.Unpause}}, maxAttempts: 1},
+	{name: "Reset", trace: []model.Event{model.PollEvent, {Kind: model.Reset}}, maxAttempts: 1},
+	{name: "UpdateOptions", trace: []model.Event{model.PollEvent, {Kind: model.UpdateOptions}}, maxAttempts: 1},
+	{name: "Terminate", trace: []model.Event{model.PollEvent, {Kind: model.Terminate}}, maxAttempts: 1, saaOnly: true},
 }
 
 // expectedTimeoutType returns the timeout_type tag value the timeout counters must carry for this

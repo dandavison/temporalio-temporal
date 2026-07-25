@@ -63,7 +63,7 @@ func (s *standaloneActivityTestSuite) TestSAADriverReportsUnrealizedWallClockEve
 				h := newSAAHarness(t, env, model.Config{MaxAttempts: 3})
 				h.retryInterval = time.Second // the window the driver will wait out
 				h.customizeStart = customize
-				h.driveTrace(rt, []model.Event{saaPoll, saaFailRetryably, saaBackoffDelayElapse})
+				h.driveTrace(rt, []model.Event{model.PollEvent, model.FailRetryablyEvent, model.BackoffElapsesEvent})
 			})
 		}
 
@@ -83,7 +83,7 @@ func (s *standaloneActivityTestSuite) TestSAADriverReportsUnrealizedWallClockEve
 				h := newSAAHarness(t, env, model.Config{MaxAttempts: 1})
 				h.shortTimeout = model.StartToCloseElapses // the window the driver will wait out
 				h.customizeStart = customize
-				h.driveTrace(rt, []model.Event{saaPoll, saaStartToCloseElapse})
+				h.driveTrace(rt, []model.Event{model.PollEvent, model.StartToCloseElapsesEvent})
 			})
 		}
 
@@ -182,7 +182,7 @@ func (s *standaloneActivityTestSuite) TestSAADriverAttributesAnOutrunDispatchWin
 			a := h.start(rt)
 			_, err := a.observed() // seed the stamp baseline, as the model-checking driver does after Start
 			require.NoError(rt, err)
-			cur, poll := model.Initial(h.cfg), model.Event{Kind: model.Poll}
+			cur, poll := model.Initial(h.cfg), model.PollEvent
 			a.apply(rt, poll, cur, model.Transition(h.cfg, cur, poll), true)
 		})
 	}

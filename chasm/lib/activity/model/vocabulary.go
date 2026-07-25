@@ -239,3 +239,17 @@ func mapStatus(s activitypb.ActivityExecutionStatus) Status {
 		return Unspecified
 	}
 }
+
+// Canonical Event values for the variants tests drive most, so a trace reads as a sequence of names
+// rather than of struct literals. Kinds whose flags matter get one value per variant.
+var (
+	PollEvent                = Event{Kind: Poll}
+	CompleteEvent            = Event{Kind: RespondCompleted}
+	FailRetryablyEvent       = Event{Kind: RespondFailed, Retryable: true}
+	FailNonRetryablyEvent    = Event{Kind: RespondFailed, Retryable: false}
+	PauseEvent               = Event{Kind: Pause}
+	RequestCancelEvent       = Event{Kind: RequestCancel}
+	StartDelayElapsesEvent   = Event{Kind: StartDelayElapses}
+	BackoffElapsesEvent      = Event{Kind: BackoffElapses}
+	StartToCloseElapsesEvent = Event{Kind: StartToCloseElapses}
+)

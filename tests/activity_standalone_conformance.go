@@ -344,7 +344,7 @@ func (a *saaHandle) checkTaskInvalidation(t require.TestingT, e model.Event, cur
 // applyPoll drives a Poll and checks the dispatch against the model: a dispatchable activity must
 // dispatch a task, and a delayed or paused one must not.
 func (a *saaHandle) applyPoll(cur model.AbstractState, out model.Outcome, final bool, t require.TestingT) saaApply {
-	poll := model.Event{Kind: model.Poll}
+	poll := model.PollEvent
 	switch {
 	case cur.Status == model.Scheduled && out.Next.Status == model.Started:
 		// A dispatchable activity must dispatch. The traces bound the deadline, so "Dispatchable" means
@@ -558,7 +558,7 @@ func (h *saaHarness) pickWalkEvent(rng *rand.Rand, a *saaHandle, cur model.Abstr
 	case len(applicable) > 0:
 		return applicable[rng.Intn(len(applicable))]
 	default:
-		return model.Event{Kind: model.Poll} // needs no token, so always applicable
+		return model.PollEvent // needs no token, so always applicable
 	}
 }
 
