@@ -73,9 +73,13 @@ var TransitionScheduled = chasm.NewTransition(
 				&activitypb.ScheduleToCloseTimeoutTask{Stamp: a.GetScheduleToCloseStamp()})
 		}
 
+		dispatchAttrs := chasm.TaskAttributes{}
+		if dispatchTime.After(a.ScheduleTime.AsTime()) {
+			dispatchAttrs.ScheduledTime = dispatchTime
+		}
 		ctx.AddTask(
 			a,
-			a.activityDispatchTaskAttributes(ctx, dispatchTime),
+			dispatchAttrs,
 			a.newActivityDispatchTask(ctx))
 
 		return nil
@@ -118,7 +122,9 @@ var TransitionRescheduled = chasm.NewTransition(
 
 		ctx.AddTask(
 			a,
-			a.activityDispatchTaskAttributes(ctx, retryScheduledTime),
+			chasm.TaskAttributes{
+				ScheduledTime: retryScheduledTime,
+			},
 			a.newActivityDispatchTask(ctx))
 
 		return nil
@@ -600,7 +606,9 @@ var TransitionResetAttemptFailedToScheduled = chasm.NewTransition(
 		}
 		ctx.AddTask(
 			a,
-			a.activityDispatchTaskAttributes(ctx, dispatchTime),
+			chasm.TaskAttributes{
+				ScheduledTime: dispatchTime,
+			},
 			a.newActivityDispatchTask(ctx))
 
 		return nil
