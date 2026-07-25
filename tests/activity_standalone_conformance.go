@@ -205,6 +205,10 @@ const (
 	saaSkippedNoToken                 // a worker RPC with no task token held; not drivable on this path
 )
 
+// outranDispatchWindow marks a report as a harness failure rather than a product one: the dispatch
+// window the negative poll meant to check had already closed by the time it ran.
+const outranDispatchWindow = "the harness outran the dispatch window"
+
 // saaCell identifies a (source status, event kind) pair for the coverage ledger.
 type saaCell struct {
 	status model.Status

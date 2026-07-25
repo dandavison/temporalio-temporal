@@ -13,6 +13,7 @@ package tests
 
 import (
 	"fmt"
+	"strings"
 	"testing"
 	"time"
 
@@ -152,5 +153,52 @@ func (s *standaloneActivityTestSuite) TestSAAHarnessRejectsInconsistentConfig() 
 			h.start(rt)
 		})
 		require.Empty(t, reports, "a consistent configuration must be accepted")
+	})
+}
+
+// TestSAADriverAttributesAnOutrunDispatchWindowToTheHarness requires the negative poll to blame the
+// harness, not the product, when it can no longer make its check.
+//
+// The negative poll asserts that a start-delayed or backing-off activity dispatches nothing. It decides
+// whether to run from the delay the harness configured, not from how much of the window is actually
+// left, so it assumes little time has passed since the delay began. Nothing enforces that: under load
+// the window can close first, and the poll then finds a task that was dispatched entirely legitimately
+// and reports it as a product divergence. That is a fabricated finding, which is worse than a missed
+// one — it is the failure mode this whole harness exists to avoid.
+//
+// Injected here by shortening the real start delay to nothing while the harness still believes it is an
+// hour, which puts the poll in exactly the position a slow machine would.
+func (s *standaloneActivityTestSuite) TestSAADriverAttributesAnOutrunDispatchWindowToTheHarness() {
+	env := s.newTestEnv()
+
+	// negativePoll drives the one Poll of a start-delayed activity through the model-checking path, which
+	// is what runs the negative poll, and returns everything the driver reported.
+	negativePoll := func(t *testing.T, customize func(*workflowservice.StartActivityExecutionRequest)) []string {
+		return recordDriverReports(func(rt require.TestingT) {
+			h := newSAAHarness(t, env, model.Config{MaxAttempts: 1, HasStartDelay: true})
+			h.startDelay = time.Hour
+			h.customizeStart = customize
+			a := h.start(rt)
+			_, err := a.observed() // seed the stamp baseline, as the model-checking driver does after Start
+			require.NoError(rt, err)
+			cur, poll := model.Initial(h.cfg), model.Event{Kind: model.Poll}
+			a.apply(rt, poll, cur, model.Transition(h.cfg, cur, poll), true)
+		})
+	}
+
+	s.T().Run("windowStillOpen", func(t *testing.T) {
+		require.Empty(t, negativePoll(t, nil),
+			"control: an activity genuinely inside its start delay dispatches nothing, and the poll must say so")
+	})
+
+	s.T().Run("windowAlreadyClosed", func(t *testing.T) {
+		reports := strings.Join(negativePoll(t, func(req *workflowservice.StartActivityExecutionRequest) {
+			req.StartDelay = nil
+		}), "\n")
+		require.NotContains(t, reports, "a task WAS dispatched",
+			"the dispatch was legitimate — the harness ran its check after the window closed — so this must "+
+				"not be reported as the product dispatching early")
+		require.Contains(t, reports, outranDispatchWindow,
+			"the harness must report that it could no longer make this check")
 	})
 }
