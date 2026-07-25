@@ -29,19 +29,19 @@ func TestDispatchRouting(t *testing.T) {
 	// polled leaves a fresh activity STARTED: attempt 1 was dispatched and picked up by a worker.
 	polled := func(t *testing.T) *handle {
 		a := newDriver(t, model.Config{MaxAttempts: 3}).start()
-		require.NoError(t, a.realize(model.PollEvent))
+		require.NoError(t, a.realize(model.Poll))
 		return a
 	}
 	// backedOff leaves it SCHEDULED with a retry backoff still pending.
 	backedOff := func(t *testing.T) *handle {
 		a := polled(t)
-		require.NoError(t, a.realize(model.FailRetryablyEvent))
+		require.NoError(t, a.realize(model.FailRetryably))
 		return a
 	}
 	// dispatchable leaves it SCHEDULED with the backoff elapsed, so nothing is left to wait for.
 	dispatchable := func(t *testing.T) *handle {
 		a := backedOff(t)
-		require.NoError(t, a.realize(model.BackoffElapsesEvent))
+		require.NoError(t, a.realize(model.BackoffElapses))
 		return a
 	}
 
@@ -63,7 +63,7 @@ func TestDispatchRouting(t *testing.T) {
 	t.Run("retry with a backoff still to wait out", func(t *testing.T) {
 		a := polled(t)
 		require.Equal(t, routing{timer: 1}, a.dispatchRouting(func() {
-			require.NoError(t, a.realize(model.FailRetryablyEvent))
+			require.NoError(t, a.realize(model.FailRetryably))
 		}), "a retry scheduled in the future must remain a timer task")
 	})
 

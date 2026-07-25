@@ -116,7 +116,7 @@ func (d *saaDriver) driveTrace(t require.TestingT, trace []model.Event) *saaHand
 func (a *saaHandle) driveEvent(t require.TestingT, e model.Event) {
 	d := a.d
 	switch {
-	case e.Kind == model.Poll:
+	case e.Kind == model.PollKind:
 		// A poll captures the dispatched task token.
 		if resp := a.pollForTask(t, cmp.Or(d.positivePollTimeout, saaPositivePollTimeout)); resp != nil {
 			a.token = resp.GetTaskToken()
@@ -237,7 +237,7 @@ func (d *saaDriver) startRequest(activityID, taskQueue string) *workflowservice.
 		Identity:            "worker",
 		Input:               defaultInput,
 		TaskQueue:           &taskqueuepb.TaskQueue{Name: taskQueue},
-		StartToCloseTimeout: dur(model.StartToCloseElapses),
+		StartToCloseTimeout: dur(model.StartToCloseElapsesKind),
 		RetryPolicy: &commonpb.RetryPolicy{
 			InitialInterval:    durationpb.New(retryInterval),
 			BackoffCoefficient: cmp.Or(d.backoffCoefficient, 1.0),
@@ -253,14 +253,14 @@ func (d *saaDriver) startRequest(activityID, taskQueue string) *workflowservice.
 		if d.scheduleToClose > 0 {
 			req.ScheduleToCloseTimeout = durationpb.New(d.scheduleToClose)
 		} else {
-			req.ScheduleToCloseTimeout = dur(model.ScheduleToCloseElapses)
+			req.ScheduleToCloseTimeout = dur(model.ScheduleToCloseElapsesKind)
 		}
 	}
 	if d.cfg.HasScheduleToStart {
-		req.ScheduleToStartTimeout = dur(model.ScheduleToStartElapses)
+		req.ScheduleToStartTimeout = dur(model.ScheduleToStartElapsesKind)
 	}
 	if d.cfg.HasHeartbeat {
-		req.HeartbeatTimeout = dur(model.HeartbeatElapses)
+		req.HeartbeatTimeout = dur(model.HeartbeatElapsesKind)
 	}
 	if d.customizeStart != nil {
 		d.customizeStart(req)
@@ -384,55 +384,55 @@ func (a *saaHandle) rpc(e model.Event) error {
 	fc := a.d.env.FrontendClient()
 	ns := a.d.env.Namespace().String()
 	switch e.Kind {
-	case model.Heartbeat:
+	case model.HeartbeatKind:
 		resp, err := fc.RecordActivityTaskHeartbeat(a.d.ctx, &workflowservice.RecordActivityTaskHeartbeatRequest{
 			Namespace: ns, TaskToken: a.token, Details: saaHeartbeatDetails,
 		})
 		a.lastHeartbeat = resp
 		return err
-	case model.RespondCompleted:
+	case model.RespondCompletedKind:
 		_, err := fc.RespondActivityTaskCompleted(a.d.ctx, &workflowservice.RespondActivityTaskCompletedRequest{
 			Namespace: ns, TaskToken: a.token, Identity: "worker",
 		})
 		return err
-	case model.RespondFailed:
+	case model.RespondFailedKind:
 		_, err := fc.RespondActivityTaskFailed(a.d.ctx, &workflowservice.RespondActivityTaskFailedRequest{
 			Namespace: ns, TaskToken: a.token, Identity: "worker", Failure: saaFailure(e.Retryable, a.d.nextRetryDelay),
 		})
 		return err
-	case model.RespondCanceled:
+	case model.RespondCanceledKind:
 		_, err := fc.RespondActivityTaskCanceled(a.d.ctx, &workflowservice.RespondActivityTaskCanceledRequest{
 			Namespace: ns, TaskToken: a.token, Identity: "worker",
 		})
 		return err
-	case model.RequestCancel:
+	case model.RequestCancelKind:
 		_, err := fc.RequestCancelActivityExecution(a.d.ctx, &workflowservice.RequestCancelActivityExecutionRequest{
 			Namespace: ns, ActivityId: a.activityID, RunId: a.runID, Identity: "op", Reason: "drive", RequestId: a.reqID(e),
 		})
 		return err
-	case model.Terminate:
+	case model.TerminateKind:
 		_, err := fc.TerminateActivityExecution(a.d.ctx, &workflowservice.TerminateActivityExecutionRequest{
 			Namespace: ns, ActivityId: a.activityID, RunId: a.runID, Identity: "op", Reason: "drive", RequestId: a.reqID(e),
 		})
 		return err
-	case model.Pause:
+	case model.PauseKind:
 		_, err := fc.PauseActivityExecution(a.d.ctx, &workflowservice.PauseActivityExecutionRequest{
 			Namespace: ns, ActivityId: a.activityID, RunId: a.runID, Identity: "op", Reason: "drive", RequestId: a.reqID(e),
 		})
 		return err
-	case model.Unpause:
+	case model.UnpauseKind:
 		_, err := fc.UnpauseActivityExecution(a.d.ctx, &workflowservice.UnpauseActivityExecutionRequest{
 			Namespace: ns, ActivityId: a.activityID, RunId: a.runID, Identity: "op",
 			ResetAttempts: e.ResetAttempts, ResetHeartbeat: e.ResetHeartbeat,
 		})
 		return err
-	case model.Reset:
+	case model.ResetKind:
 		_, err := fc.ResetActivityExecution(a.d.ctx, &workflowservice.ResetActivityExecutionRequest{
 			Namespace: ns, ActivityId: a.activityID, RunId: a.runID, Identity: "op",
 			KeepPaused: e.KeepPaused, RestoreOriginalOptions: e.RestoreOriginal,
 		})
 		return err
-	case model.UpdateOptions:
+	case model.UpdateOptionsKind:
 		return a.updateOptions(e)
 	default:
 		return fmt.Errorf("saaDriver: unhandled event kind %v", e.Kind)
@@ -504,9 +504,9 @@ func (a *saaHandle) pollForTask(t require.TestingT, timeout time.Duration) *work
 // eventClock is how long the clock behind a wall-clock event takes to elapse.
 func (d *saaDriver) eventClock(e model.Event) time.Duration {
 	switch e.Kind {
-	case model.StartDelayElapses:
+	case model.StartDelayElapsesKind:
 		return d.dispatchDelay(model.StartDelayPending)
-	case model.BackoffElapses:
+	case model.BackoffElapsesKind:
 		return d.dispatchDelay(model.BackoffPending)
 	default: // the four timeouts
 		return saaShortTimeout
@@ -557,9 +557,9 @@ func (d *saaDriver) requireConsistentConfig(t require.TestingT) {
 		flag     bool
 		flagName string
 	}{
-		{model.ScheduleToCloseElapses, d.cfg.HasScheduleToClose, "HasScheduleToClose"},
-		{model.ScheduleToStartElapses, d.cfg.HasScheduleToStart, "HasScheduleToStart"},
-		{model.HeartbeatElapses, d.cfg.HasHeartbeat, "HasHeartbeat"},
+		{model.ScheduleToCloseElapsesKind, d.cfg.HasScheduleToClose, "HasScheduleToClose"},
+		{model.ScheduleToStartElapsesKind, d.cfg.HasScheduleToStart, "HasScheduleToStart"},
+		{model.HeartbeatElapsesKind, d.cfg.HasHeartbeat, "HasHeartbeat"},
 	} {
 		if d.shortTimeout == c.kind && !c.flag {
 			require.Fail(t, fmt.Sprintf("saaDriver misconfigured: shortTimeout=%s requires cfg.%s, or that "+
@@ -607,8 +607,8 @@ func (a *saaHandle) readObserved() (model.Observed, error) {
 // saaIsWallClock reports whether an event fires on wall-clock time rather than synchronously.
 func saaIsWallClock(k model.EventKind) bool {
 	switch k {
-	case model.ScheduleToStartElapses, model.ScheduleToCloseElapses, model.StartToCloseElapses,
-		model.HeartbeatElapses, model.StartDelayElapses, model.BackoffElapses:
+	case model.ScheduleToStartElapsesKind, model.ScheduleToCloseElapsesKind, model.StartToCloseElapsesKind,
+		model.HeartbeatElapsesKind, model.StartDelayElapsesKind, model.BackoffElapsesKind:
 		return true
 	default:
 		return false
@@ -619,7 +619,7 @@ func saaIsWallClock(k model.EventKind) bool {
 // timeout. A dispatch delay advances no transition-history version; its effect is the pending dispatch
 // time passing.
 func saaIsDispatchDelay(k model.EventKind) bool {
-	return k == model.StartDelayElapses || k == model.BackoffElapses
+	return k == model.StartDelayElapsesKind || k == model.BackoffElapsesKind
 }
 
 // saaTimeoutIn is the timeout whose *Elapses event a trace fires, zero if none. A trace fires at most
@@ -627,8 +627,8 @@ func saaIsDispatchDelay(k model.EventKind) bool {
 func saaTimeoutIn(trace []model.Event) model.EventKind {
 	for _, e := range trace {
 		switch e.Kind {
-		case model.ScheduleToStartElapses, model.ScheduleToCloseElapses,
-			model.StartToCloseElapses, model.HeartbeatElapses:
+		case model.ScheduleToStartElapsesKind, model.ScheduleToCloseElapsesKind,
+			model.StartToCloseElapsesKind, model.HeartbeatElapsesKind:
 			return e.Kind
 		}
 	}
@@ -667,11 +667,11 @@ func (tr saaTrace) config() model.Config {
 	cfg := model.Config{MaxAttempts: tr.maxAttempts, HasStartDelay: tr.startDelayed}
 	for _, e := range tr.trace {
 		switch e.Kind {
-		case model.ScheduleToStartElapses:
+		case model.ScheduleToStartElapsesKind:
 			cfg.HasScheduleToStart = true
-		case model.ScheduleToCloseElapses:
+		case model.ScheduleToCloseElapsesKind:
 			cfg.HasScheduleToClose = true
-		case model.HeartbeatElapses:
+		case model.HeartbeatElapsesKind:
 			cfg.HasHeartbeat = true
 		}
 	}
@@ -685,7 +685,7 @@ func (tr saaTrace) startDelay() time.Duration {
 		return 0
 	}
 	for _, e := range tr.trace {
-		if e.Kind == model.StartDelayElapses {
+		if e.Kind == model.StartDelayElapsesKind {
 			return saaDelayWindow
 		}
 	}

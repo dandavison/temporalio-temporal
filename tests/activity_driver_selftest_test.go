@@ -63,7 +63,7 @@ func (s *standaloneActivityTestSuite) TestSAADriverReportsUnrealizedWallClockEve
 				d := newSAADriver(t, env, model.Config{MaxAttempts: 3})
 				d.retryInterval = time.Second // the window the driver will wait out
 				d.customizeStart = customize
-				d.driveTrace(rt, []model.Event{model.PollEvent, model.FailRetryablyEvent, model.BackoffElapsesEvent})
+				d.driveTrace(rt, []model.Event{model.Poll, model.FailRetryably, model.BackoffElapses})
 			})
 		}
 
@@ -81,9 +81,9 @@ func (s *standaloneActivityTestSuite) TestSAADriverReportsUnrealizedWallClockEve
 		drive := func(customize func(*workflowservice.StartActivityExecutionRequest)) []string {
 			return recordDriverReports(func(rt require.TestingT) {
 				d := newSAADriver(t, env, model.Config{MaxAttempts: 1})
-				d.shortTimeout = model.StartToCloseElapses // the window the driver will wait out
+				d.shortTimeout = model.StartToCloseElapsesKind // the window the driver will wait out
 				d.customizeStart = customize
-				d.driveTrace(rt, []model.Event{model.PollEvent, model.StartToCloseElapsesEvent})
+				d.driveTrace(rt, []model.Event{model.Poll, model.StartToCloseElapses})
 			})
 		}
 
@@ -123,7 +123,7 @@ func (s *standaloneActivityTestSuite) TestSAADriverRejectsInconsistentConfig() {
 		{
 			name:  "shortHeartbeatTimeoutWithoutConfigFlag",
 			cfg:   model.Config{MaxAttempts: 1},
-			knobs: func(d *saaDriver) { d.shortTimeout = model.HeartbeatElapses },
+			knobs: func(d *saaDriver) { d.shortTimeout = model.HeartbeatElapsesKind },
 			why:   "no heartbeat timeout is configured at all, so a HeartbeatElapses event can never fire",
 		},
 		{
@@ -149,7 +149,7 @@ func (s *standaloneActivityTestSuite) TestSAADriverRejectsInconsistentConfig() {
 		reports := recordDriverReports(func(rt require.TestingT) {
 			d := newSAADriver(t, env, model.Config{MaxAttempts: 1, HasScheduleToClose: true, HasHeartbeat: true})
 			d.scheduleToClose = 10 * time.Second
-			d.shortTimeout = model.HeartbeatElapses
+			d.shortTimeout = model.HeartbeatElapsesKind
 			d.start(rt)
 		})
 		require.Empty(t, reports, "a consistent configuration must be accepted")
@@ -182,7 +182,7 @@ func (s *standaloneActivityTestSuite) TestSAADriverAttributesAnOutrunDispatchWin
 			a := d.start(rt)
 			_, err := a.observed() // seed the stamp baseline, as the model-checking driver does after Start
 			require.NoError(rt, err)
-			cur, poll := model.Initial(d.cfg), model.PollEvent
+			cur, poll := model.Initial(d.cfg), model.Poll
 			a.apply(rt, poll, cur, model.Transition(d.cfg, cur, poll), true)
 		})
 	}

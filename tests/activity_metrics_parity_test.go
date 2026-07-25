@@ -79,30 +79,30 @@ type activityMetricsScenario struct {
 }
 
 var activityMetricsScenarios = []activityMetricsScenario{
-	{name: "Success", trace: []model.Event{model.PollEvent, model.CompleteEvent}, maxAttempts: 1},
-	{name: "TerminalFailure", trace: []model.Event{model.PollEvent, model.FailNonRetryablyEvent}, maxAttempts: 1},
-	{name: "Cancel", trace: []model.Event{model.PollEvent, model.RequestCancelEvent, {Kind: model.RespondCanceled}}, maxAttempts: 1},
-	{name: "TerminalTimeout", trace: []model.Event{model.PollEvent, model.StartToCloseElapsesEvent}, maxAttempts: 1, anchor: metrics.ActivityTimeout.Name()},
-	{name: "RetryableTaskFailure", trace: []model.Event{model.PollEvent, model.FailRetryablyEvent}, maxAttempts: 2},
-	{name: "Heartbeat", trace: []model.Event{model.PollEvent, {Kind: model.Heartbeat}}, maxAttempts: 1},
-	{name: "Pause", trace: []model.Event{model.PollEvent, model.PauseEvent}, maxAttempts: 1},
-	{name: "Unpause", trace: []model.Event{model.PollEvent, model.PauseEvent, {Kind: model.Unpause}}, maxAttempts: 1},
-	{name: "Reset", trace: []model.Event{model.PollEvent, {Kind: model.Reset}}, maxAttempts: 1},
-	{name: "UpdateOptions", trace: []model.Event{model.PollEvent, {Kind: model.UpdateOptions}}, maxAttempts: 1},
-	{name: "Terminate", trace: []model.Event{model.PollEvent, {Kind: model.Terminate}}, maxAttempts: 1, saaOnly: true},
+	{name: "Success", trace: []model.Event{model.Poll, model.Complete}, maxAttempts: 1},
+	{name: "TerminalFailure", trace: []model.Event{model.Poll, model.FailNonRetryably}, maxAttempts: 1},
+	{name: "Cancel", trace: []model.Event{model.Poll, model.RequestCancel, {Kind: model.RespondCanceledKind}}, maxAttempts: 1},
+	{name: "TerminalTimeout", trace: []model.Event{model.Poll, model.StartToCloseElapses}, maxAttempts: 1, anchor: metrics.ActivityTimeout.Name()},
+	{name: "RetryableTaskFailure", trace: []model.Event{model.Poll, model.FailRetryably}, maxAttempts: 2},
+	{name: "Heartbeat", trace: []model.Event{model.Poll, {Kind: model.HeartbeatKind}}, maxAttempts: 1},
+	{name: "Pause", trace: []model.Event{model.Poll, model.Pause}, maxAttempts: 1},
+	{name: "Unpause", trace: []model.Event{model.Poll, model.Pause, {Kind: model.UnpauseKind}}, maxAttempts: 1},
+	{name: "Reset", trace: []model.Event{model.Poll, {Kind: model.ResetKind}}, maxAttempts: 1},
+	{name: "UpdateOptions", trace: []model.Event{model.Poll, {Kind: model.UpdateOptionsKind}}, maxAttempts: 1},
+	{name: "Terminate", trace: []model.Event{model.Poll, {Kind: model.TerminateKind}}, maxAttempts: 1, saaOnly: true},
 }
 
 // expectedTimeoutType returns the timeout_type tag value the timeout counters must carry for this
 // scenario, or "" if the trace fires no timeout.
 func (sc activityMetricsScenario) expectedTimeoutType() string {
 	switch saaTimeoutIn(sc.trace) {
-	case model.StartToCloseElapses:
+	case model.StartToCloseElapsesKind:
 		return enumspb.TIMEOUT_TYPE_START_TO_CLOSE.String()
-	case model.ScheduleToCloseElapses:
+	case model.ScheduleToCloseElapsesKind:
 		return enumspb.TIMEOUT_TYPE_SCHEDULE_TO_CLOSE.String()
-	case model.ScheduleToStartElapses:
+	case model.ScheduleToStartElapsesKind:
 		return enumspb.TIMEOUT_TYPE_SCHEDULE_TO_START.String()
-	case model.HeartbeatElapses:
+	case model.HeartbeatElapsesKind:
 		return enumspb.TIMEOUT_TYPE_HEARTBEAT.String()
 	default:
 		return ""

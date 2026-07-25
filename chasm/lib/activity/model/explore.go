@@ -21,7 +21,7 @@ func CellKey(s AbstractState, k EventKind) string {
 // NeedsToken reports whether an event is a worker RPC that requires a dispatched task token.
 func NeedsToken(k EventKind) bool {
 	switch k {
-	case Heartbeat, RespondCompleted, RespondFailed, RespondCanceled:
+	case HeartbeatKind, RespondCompletedKind, RespondFailedKind, RespondCanceledKind:
 		return true
 	default:
 		return false
@@ -31,7 +31,7 @@ func NeedsToken(k EventKind) bool {
 // CarriesReqID reports whether an operator command's server-side idempotency is keyed on its request id.
 func CarriesReqID(k EventKind) bool {
 	switch k {
-	case RequestCancel, Terminate, Pause:
+	case RequestCancelKind, TerminateKind, PauseKind:
 		return true
 	default:
 		return false
@@ -69,39 +69,39 @@ func Reachable(cfg Config, events []Event) map[string]bool {
 // KindName is a stable label for an event kind, for logs and failure reports.
 func KindName(k EventKind) string {
 	switch k {
-	case Poll:
+	case PollKind:
 		return "Poll"
-	case Heartbeat:
+	case HeartbeatKind:
 		return "Heartbeat"
-	case RespondCompleted:
+	case RespondCompletedKind:
 		return "RespondCompleted"
-	case RespondFailed:
+	case RespondFailedKind:
 		return "RespondFailed"
-	case RespondCanceled:
+	case RespondCanceledKind:
 		return "RespondCanceled"
-	case RequestCancel:
+	case RequestCancelKind:
 		return "RequestCancel"
-	case Terminate:
+	case TerminateKind:
 		return "Terminate"
-	case Pause:
+	case PauseKind:
 		return "Pause"
-	case Unpause:
+	case UnpauseKind:
 		return "Unpause"
-	case Reset:
+	case ResetKind:
 		return "Reset"
-	case UpdateOptions:
+	case UpdateOptionsKind:
 		return "UpdateOptions"
-	case ScheduleToStartElapses:
+	case ScheduleToStartElapsesKind:
 		return "ScheduleToStartElapses"
-	case ScheduleToCloseElapses:
+	case ScheduleToCloseElapsesKind:
 		return "ScheduleToCloseElapses"
-	case StartToCloseElapses:
+	case StartToCloseElapsesKind:
 		return "StartToCloseElapses"
-	case HeartbeatElapses:
+	case HeartbeatElapsesKind:
 		return "HeartbeatElapses"
-	case StartDelayElapses:
+	case StartDelayElapsesKind:
 		return "StartDelayElapses"
-	case BackoffElapses:
+	case BackoffElapsesKind:
 		return "BackoffElapses"
 	default:
 		return fmt.Sprintf("EventKind(%d)", k)
@@ -117,17 +117,17 @@ func EventLabel(e Event) string {
 		}
 	}
 	switch e.Kind {
-	case RespondFailed:
+	case RespondFailedKind:
 		flags = append(flags, fmt.Sprintf("retryable=%v", e.Retryable))
-	case Reset:
+	case ResetKind:
 		add(e.KeepPaused, "keepPaused")
 		add(e.RestoreOriginal, "restoreOriginal")
-	case Unpause:
+	case UnpauseKind:
 		add(e.ResetAttempts, "resetAttempts")
 		add(e.ResetHeartbeat, "resetHeartbeat")
-	case Pause, Terminate, RequestCancel:
+	case PauseKind, TerminateKind, RequestCancelKind:
 		add(e.SameRequestID, "sameRequestID")
-	case UpdateOptions:
+	case UpdateOptionsKind:
 		add(e.SetsStartDelay, "setsStartDelay")
 		add(e.RestoreOriginal, "restoreOriginal")
 	}

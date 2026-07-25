@@ -206,7 +206,7 @@ func (a *handle) update(fn func(*Activity, chasm.MutableContext) error) error {
 // and returns the reject error, nil on accept.
 func (a *handle) rpc(e model.Event) error {
 	switch e.Kind {
-	case model.Heartbeat:
+	case model.HeartbeatKind:
 		return a.update(func(act *Activity, mc chasm.MutableContext) error {
 			resp, err := act.RecordHeartbeat(mc, WithToken[*historyservice.RecordActivityTaskHeartbeatRequest]{
 				Token: a.token(),
@@ -218,7 +218,7 @@ func (a *handle) rpc(e model.Event) error {
 			a.lastHeartbeat = resp
 			return err
 		})
-	case model.RespondCompleted:
+	case model.RespondCompletedKind:
 		return a.update(func(act *Activity, mc chasm.MutableContext) error {
 			_, err := act.HandleCompleted(mc, RespondCompletedEvent{Token: a.token(), Request: &historyservice.RespondActivityTaskCompletedRequest{
 				NamespaceId:     testNamespaceID,
@@ -226,7 +226,7 @@ func (a *handle) rpc(e model.Event) error {
 			}})
 			return err
 		})
-	case model.RespondFailed:
+	case model.RespondFailedKind:
 		return a.update(func(act *Activity, mc chasm.MutableContext) error {
 			_, err := act.HandleFailed(mc, RespondFailedEvent{Token: a.token(), Request: &historyservice.RespondActivityTaskFailedRequest{
 				NamespaceId: testNamespaceID,
@@ -236,7 +236,7 @@ func (a *handle) rpc(e model.Event) error {
 			}})
 			return err
 		})
-	case model.RespondCanceled:
+	case model.RespondCanceledKind:
 		return a.update(func(act *Activity, mc chasm.MutableContext) error {
 			_, err := act.HandleCanceled(mc, RespondCancelledEvent{Token: a.token(), Request: &historyservice.RespondActivityTaskCanceledRequest{
 				NamespaceId:   testNamespaceID,
@@ -265,7 +265,7 @@ func (a *handle) dispatchable() bool {
 // realize applies one event to the activity and returns the reject error, nil on accept or no-op.
 func (a *handle) realize(e model.Event) error {
 	switch {
-	case e.Kind == model.Poll:
+	case e.Kind == model.PollKind:
 		if a.dispatchable() {
 			stamp := a.stamp()
 			return a.update(func(act *Activity, mc chasm.MutableContext) error {
@@ -277,10 +277,10 @@ func (a *handle) realize(e model.Event) error {
 			})
 		}
 		return nil // not dispatchable: poll finds nothing
-	case e.Kind == model.BackoffElapses:
+	case e.Kind == model.BackoffElapsesKind:
 		a.d.ts.Update(a.d.ts.Now().Add(backoffInterval + time.Second))
 		return nil
-	case e.Kind == model.StartToCloseElapses:
+	case e.Kind == model.StartToCloseElapsesKind:
 		a.advanceTo(a.timerDeadline(e.Kind))
 		handler, task := newStartToCloseTimeoutTaskHandler(), &activitypb.StartToCloseTimeoutTask{Stamp: a.stamp()}
 		return a.fireTimer(func(act *Activity, mc chasm.MutableContext) (bool, error) {
@@ -288,7 +288,7 @@ func (a *handle) realize(e model.Event) error {
 		}, func(act *Activity, mc chasm.MutableContext) error {
 			return handler.Execute(mc, act, chasm.TaskAttributes{}, task)
 		})
-	case e.Kind == model.HeartbeatElapses:
+	case e.Kind == model.HeartbeatElapsesKind:
 		deadline := a.timerDeadline(e.Kind)
 		a.advanceTo(deadline)
 		handler, task := newHeartbeatTimeoutTaskHandler(), &activitypb.HeartbeatTimeoutTask{Stamp: a.stamp()}
@@ -297,7 +297,7 @@ func (a *handle) realize(e model.Event) error {
 		}, func(act *Activity, mc chasm.MutableContext) error {
 			return handler.Execute(mc, act, chasm.TaskAttributes{}, task)
 		})
-	case e.Kind == model.ScheduleToCloseElapses:
+	case e.Kind == model.ScheduleToCloseElapsesKind:
 		a.advanceTo(a.timerDeadline(e.Kind))
 		stc := a.read(func(act *Activity, c chasm.Context) any { return act.GetScheduleToCloseStamp() }).(int32)
 		handler, task := newScheduleToCloseTimeoutTaskHandler(), &activitypb.ScheduleToCloseTimeoutTask{Stamp: stc}
@@ -318,7 +318,7 @@ func (a *handle) timerDeadline(kind model.EventKind) time.Time {
 	return a.read(func(act *Activity, c chasm.Context) any {
 		attempt := act.LastAttempt.Get(c)
 		switch kind {
-		case model.StartToCloseElapses:
+		case model.StartToCloseElapsesKind:
 			// StartedTime is carried across a reschedule, so gate on the attempt being in progress. Otherwise a
 			// backing-off attempt yields a stale deadline, advancing the clock for a timer its own Validate
 			// then rejects.
@@ -326,7 +326,7 @@ func (a *handle) timerDeadline(kind model.EventKind) time.Time {
 				return time.Time{}
 			}
 			return attempt.GetStartedTime().AsTime().Add(act.GetStartToCloseTimeout().AsDuration())
-		case model.HeartbeatElapses:
+		case model.HeartbeatElapsesKind:
 			if !act.hasAttemptInProgress() {
 				return time.Time{}
 			}
@@ -337,7 +337,7 @@ func (a *handle) timerDeadline(kind model.EventKind) time.Time {
 				}
 			}
 			return base.Add(act.GetHeartbeatTimeout().AsDuration())
-		case model.ScheduleToCloseElapses:
+		case model.ScheduleToCloseElapsesKind:
 			return act.scheduleToCloseDeadline()
 		default:
 			return time.Time{}
@@ -389,20 +389,20 @@ func rejectKind(err error) model.ErrorKind {
 // tier-3-only; being synchronous, the virtual clock buys them nothing.
 func (d *driver) candidateEvents() []model.Event {
 	events := []model.Event{
-		{Kind: model.Poll},
-		{Kind: model.Heartbeat},
-		{Kind: model.RespondCompleted},
-		{Kind: model.RespondFailed, Retryable: true},
-		{Kind: model.RespondFailed, Retryable: false},
-		{Kind: model.RespondCanceled},
-		{Kind: model.BackoffElapses},
-		{Kind: model.StartToCloseElapses},
+		{Kind: model.PollKind},
+		{Kind: model.HeartbeatKind},
+		{Kind: model.RespondCompletedKind},
+		{Kind: model.RespondFailedKind, Retryable: true},
+		{Kind: model.RespondFailedKind, Retryable: false},
+		{Kind: model.RespondCanceledKind},
+		{Kind: model.BackoffElapsesKind},
+		{Kind: model.StartToCloseElapsesKind},
 	}
 	if d.cfg.HasHeartbeat {
-		events = append(events, model.Event{Kind: model.HeartbeatElapses})
+		events = append(events, model.Event{Kind: model.HeartbeatElapsesKind})
 	}
 	if d.cfg.HasScheduleToClose {
-		events = append(events, model.Event{Kind: model.ScheduleToCloseElapses})
+		events = append(events, model.Event{Kind: model.ScheduleToCloseElapsesKind})
 	}
 	return events
 }
@@ -433,7 +433,7 @@ func (d *driver) verifyPath(path []model.Event) bool {
 // public Describe, task invalidation, and — for Poll — dispatch readiness against the model. It reports
 // only on the final edge. Parallel to saaHandle.apply.
 func (a *handle) apply(e model.Event, cur model.AbstractState, out model.Outcome, final bool) bool {
-	if e.Kind == model.Poll && cur.Status == model.Scheduled {
+	if e.Kind == model.PollKind && cur.Status == model.Scheduled {
 		wantDispatchable := cur.Dispatchability == model.Dispatchable
 		if a.dispatchable() != wantDispatchable {
 			if final {

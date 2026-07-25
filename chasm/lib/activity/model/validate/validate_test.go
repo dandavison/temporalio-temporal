@@ -19,9 +19,9 @@ var allSpecStatuses = []model.Status{
 }
 
 var allEventKinds = []model.EventKind{
-	model.Poll, model.Heartbeat, model.RespondCompleted, model.RespondFailed,
-	model.RespondCanceled, model.RequestCancel, model.Terminate, model.Pause,
-	model.Unpause, model.Reset, model.UpdateOptions,
+	model.PollKind, model.HeartbeatKind, model.RespondCompletedKind, model.RespondFailedKind,
+	model.RespondCanceledKind, model.RequestCancelKind, model.TerminateKind, model.PauseKind,
+	model.UnpauseKind, model.ResetKind, model.UpdateOptionsKind,
 }
 
 var cfgs = []model.Config{
@@ -37,11 +37,11 @@ func eventsFor(k model.EventKind) []model.Event {
 	bools := []bool{false, true}
 	var out []model.Event
 	switch k {
-	case model.RespondFailed:
+	case model.RespondFailedKind:
 		for _, r := range bools {
 			out = append(out, model.Event{Kind: k, Retryable: r})
 		}
-	case model.Reset:
+	case model.ResetKind:
 		for _, kp := range bools {
 			for _, ro := range bools {
 				for _, rh := range bools {
@@ -49,13 +49,13 @@ func eventsFor(k model.EventKind) []model.Event {
 				}
 			}
 		}
-	case model.Unpause:
+	case model.UnpauseKind:
 		for _, ra := range bools {
 			for _, rh := range bools {
 				out = append(out, model.Event{Kind: k, ResetAttempts: ra, ResetHeartbeat: rh})
 			}
 		}
-	case model.Pause, model.Terminate, model.RequestCancel:
+	case model.PauseKind, model.TerminateKind, model.RequestCancelKind:
 		for _, sr := range bools {
 			out = append(out, model.Event{Kind: k, SameRequestID: sr})
 		}
@@ -293,27 +293,27 @@ func specToProto(s model.Status) activitypb.ActivityExecutionStatus {
 
 func kindName(k model.EventKind) string {
 	switch k {
-	case model.Poll:
+	case model.PollKind:
 		return "Poll"
-	case model.Heartbeat:
+	case model.HeartbeatKind:
 		return "Heartbeat"
-	case model.RespondCompleted:
+	case model.RespondCompletedKind:
 		return "RespondCompleted"
-	case model.RespondFailed:
+	case model.RespondFailedKind:
 		return "RespondFailed"
-	case model.RespondCanceled:
+	case model.RespondCanceledKind:
 		return "RespondCanceled"
-	case model.RequestCancel:
+	case model.RequestCancelKind:
 		return "RequestCancel"
-	case model.Terminate:
+	case model.TerminateKind:
 		return "Terminate"
-	case model.Pause:
+	case model.PauseKind:
 		return "Pause"
-	case model.Unpause:
+	case model.UnpauseKind:
 		return "Unpause"
-	case model.Reset:
+	case model.ResetKind:
 		return "Reset"
-	case model.UpdateOptions:
+	case model.UpdateOptionsKind:
 		return "UpdateOptions"
 	default:
 		return fmt.Sprintf("EventKind(%d)", k)

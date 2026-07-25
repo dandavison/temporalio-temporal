@@ -161,15 +161,15 @@ func eventsFor(tier int, cfg model.Config) []model.Event {
 	switch tier {
 	case 2:
 		events := []model.Event{
-			{Kind: model.Poll}, {Kind: model.Heartbeat}, {Kind: model.RespondCompleted},
-			{Kind: model.RespondFailed, Retryable: true}, {Kind: model.RespondFailed, Retryable: false},
-			{Kind: model.RespondCanceled}, {Kind: model.BackoffElapses}, {Kind: model.StartToCloseElapses},
+			{Kind: model.PollKind}, {Kind: model.HeartbeatKind}, {Kind: model.RespondCompletedKind},
+			{Kind: model.RespondFailedKind, Retryable: true}, {Kind: model.RespondFailedKind, Retryable: false},
+			{Kind: model.RespondCanceledKind}, {Kind: model.BackoffElapsesKind}, {Kind: model.StartToCloseElapsesKind},
 		}
 		if cfg.HasHeartbeat {
-			events = append(events, model.Event{Kind: model.HeartbeatElapses})
+			events = append(events, model.Event{Kind: model.HeartbeatElapsesKind})
 		}
 		if cfg.HasScheduleToClose {
-			events = append(events, model.Event{Kind: model.ScheduleToCloseElapses})
+			events = append(events, model.Event{Kind: model.ScheduleToCloseElapsesKind})
 		}
 		return events
 	default:
@@ -180,27 +180,27 @@ func eventsFor(tier int, cfg model.Config) []model.Event {
 // tier3Events mirrors saaCandidateEvents(): worker RPCs + operator commands, no wall-clock.
 func tier3Events() []model.Event {
 	var out []model.Event
-	for _, k := range []model.EventKind{model.Poll, model.Heartbeat, model.RespondCompleted, model.RespondCanceled, model.UpdateOptions} {
+	for _, k := range []model.EventKind{model.PollKind, model.HeartbeatKind, model.RespondCompletedKind, model.RespondCanceledKind, model.UpdateOptionsKind} {
 		out = append(out, model.Event{Kind: k})
 	}
-	out = append(out, model.Event{Kind: model.UpdateOptions, SetsStartDelay: true})
+	out = append(out, model.Event{Kind: model.UpdateOptionsKind, SetsStartDelay: true})
 	for _, r := range []bool{false, true} {
-		out = append(out, model.Event{Kind: model.RespondFailed, Retryable: r})
+		out = append(out, model.Event{Kind: model.RespondFailedKind, Retryable: r})
 	}
 	for _, sr := range []bool{false, true} {
 		out = append(out,
-			model.Event{Kind: model.Pause, SameRequestID: sr},
-			model.Event{Kind: model.Terminate, SameRequestID: sr},
-			model.Event{Kind: model.RequestCancel, SameRequestID: sr},
+			model.Event{Kind: model.PauseKind, SameRequestID: sr},
+			model.Event{Kind: model.TerminateKind, SameRequestID: sr},
+			model.Event{Kind: model.RequestCancelKind, SameRequestID: sr},
 		)
 	}
 	for _, kp := range []bool{false, true} {
 		for _, ro := range []bool{false, true} {
-			out = append(out, model.Event{Kind: model.Reset, KeepPaused: kp, RestoreOriginal: ro})
+			out = append(out, model.Event{Kind: model.ResetKind, KeepPaused: kp, RestoreOriginal: ro})
 		}
 	}
 	for _, ra := range []bool{false, true} {
-		out = append(out, model.Event{Kind: model.Unpause, ResetAttempts: ra})
+		out = append(out, model.Event{Kind: model.UnpauseKind, ResetAttempts: ra})
 	}
 	return out
 }
