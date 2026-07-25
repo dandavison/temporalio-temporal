@@ -1,12 +1,10 @@
 package tests
 
-// Model-conformance engine for the standalone-activity surface. It builds on the model-free driver in
-// activity_standalone_driver.go: for each event it drives the corresponding action against a real
-// onebox server (via the driver) and checks the result against model.Transition(). The graph
-// traversal, the random-walk explorer, and the per-step trace checker live here, along with the
-// tuning knobs; below the "helpers" divider are fingerprints, event enumeration, error
-// classification, and failure formatting. The editable configs and test entry points are in
-// activity_standalone_conformance_test.go.
+// Model-conformance engine for the standalone-activity surface: it drives each event with the driver in
+// activity_standalone_driver.go and checks the result against model.Transition(). Holds the graph
+// traversal, the random-walk explorer, the per-step checker, and the tuning knobs; below the "helpers"
+// divider, event enumeration, error classification, and failure formatting. The configs and test entry
+// points are in activity_standalone_conformance_test.go.
 
 import (
 	"cmp"
@@ -28,9 +26,7 @@ import (
 
 // --- tuning knobs --------------------------------------------------------------------------
 
-// saaMaxDepth is the BFS depth cap. The default keeps CI fast; TEMPORAL_SAASPEC_MAX_DEPTH raises it
-// for deeper local verification. Cost grows with depth — mostly the per-Paused negative poll, which
-// TEMPORAL_SAASPEC_NO_NEGATIVE_POLL can disable (see applyPoll).
+// saaMaxDepth is the BFS depth cap, raised by TEMPORAL_SAASPEC_MAX_DEPTH.
 func saaMaxDepth() int {
 	if v := os.Getenv("TEMPORAL_SAASPEC_MAX_DEPTH"); v != "" {
 		if n, err := strconv.Atoi(v); err == nil && n > 0 {
@@ -40,10 +36,8 @@ func saaMaxDepth() int {
 	return 4
 }
 
-// saaSkipNegativePoll disables the ~3s "a Paused activity must not dispatch" long-poll — the
-// dominant cost of deep walks. Set TEMPORAL_SAASPEC_NO_NEGATIVE_POLL for fast deep runs; the
-// per-edge state check still verifies the Paused transition, only the matching-level assertion is
-// dropped.
+// saaSkipNegativePoll drops the ~3s "a Paused activity must not dispatch" long poll, the dominant cost
+// of deep walks. The per-edge state check still runs.
 func saaSkipNegativePoll() bool { return os.Getenv("TEMPORAL_SAASPEC_NO_NEGATIVE_POLL") != "" }
 
 func saaWalkSteps() int {
@@ -52,7 +46,7 @@ func saaWalkSteps() int {
 			return n
 		}
 	}
-	return 200 // a bare `go test` (90s per-test context) smoke; raise it with TEMPORAL_TEST_TIMEOUT for real exploration
+	return 200 // fits the default per-test context; raise it along with TEMPORAL_TEST_TIMEOUT
 }
 
 func saaWalkSeed() int64 {
@@ -81,7 +75,7 @@ func (h *saaHarness) traverse(t *testing.T) {
 
 	verifiedCells := map[saaCell]bool{}
 	skippedCells := map[saaCell]bool{}
-	// Fingerprint-granularity ledger (includes attempt-count bucket etc.) for the completeness check.
+	// Fingerprint-granularity ledger, for the completeness check.
 	verifiedFine := map[string]bool{}
 	skippedFine := map[string]bool{}
 
@@ -122,13 +116,11 @@ func (h *saaHarness) traverse(t *testing.T) {
 		frontier = next
 	}
 
-	// Coverage ledger. The only decided edges the traversal does not verify are worker RPCs reached
-	// on a path that never polled (no task token to send); surface those so the gap stays visible.
 	t.Logf("cfg %d: verified %d decided edges (%d distinct cells) across %d reachable states (depth<=%d)",
 		h.cfgIdx, edges, len(verifiedCells), states, maxDepth)
 
-	// Coverage detail (the no-token-skip ledger) prints only under TEMPORAL_SAASPEC_COMPLETENESS, so
-	// the default output is just the spec violations.
+	// The only decided edges the traversal cannot verify are worker RPCs on a path that never polled, so
+	// holds no task token.
 	if os.Getenv("TEMPORAL_SAASPEC_COMPLETENESS") != "" {
 		var unexercised []string
 		for c := range skippedCells {
@@ -146,9 +138,8 @@ func (h *saaHarness) traverse(t *testing.T) {
 	h.checkCompleteness(t, verifiedFine, skippedFine)
 }
 
-// checkCompleteness is an informational (never-failing) coverage report: it compares what this run
-// verified/skipped against the model's own reachable set (computed server-free to fixpoint, no depth
-// bound). Cells the model can reach but this run did not are what the depth cap left out.
+// checkCompleteness logs the cells the model can reach but this run did not — what the depth cap left
+// out. Informational; it never fails.
 func (h *saaHarness) checkCompleteness(t *testing.T, verifiedFine, skippedFine map[string]bool) {
 	if os.Getenv("TEMPORAL_SAASPEC_COMPLETENESS") == "" {
 		return
@@ -174,15 +165,14 @@ func (h *saaHarness) checkCompleteness(t *testing.T, verifiedFine, skippedFine m
 		h.cfgIdx, len(gaps), saaMaxDepth(), strings.Join(shown, "\n  "), suffix)
 }
 
-// verifyPath starts a fresh activity, replays the path (asserting only the final edge), and
-// aborts silently if a prefix edge diverges — that edge is reported when it is itself a final
-// edge of its own shorter path.
+// verifyPath starts a fresh activity, replays the path, and asserts only its final edge. A prefix edge
+// that diverges aborts the replay silently; that edge is reported when it is the final edge of its own
+// shorter path.
 func (h *saaHarness) verifyPath(t require.TestingT, path []model.Event) (saaApply, bool) {
 	a := h.start(t)
 	a.path = path
 	cur := model.Initial(h.cfg)
 
-	// The freshly started activity should match Initial(cfg).
 	obs, err := a.observed()
 	require.NoError(t, err)
 	if !cur.SameObserved(obs) {
@@ -228,23 +218,20 @@ func (a *saaHandle) apply(t require.TestingT, e model.Event, cur model.AbstractS
 	if saaIsWallClock(e.Kind) {
 		return a.applyWallClock(t, e, cur, out, final)
 	}
-	// Worker RPCs need a task token, held only after a poll. On a never-polled path there is no token,
-	// and an empty token yields a different error than the spec's NotFound, so the edge is not drivable
-	// here; the ledger records the skip.
+	// A worker RPC needs a task token, held only after a poll. An empty token yields a different error
+	// than the model's NotFound, so the edge is not drivable on a never-polled path.
 	if model.NeedsToken(e.Kind) && a.token == nil {
 		return saaSkippedNoToken
 	}
 	err := a.rpc(e)
 	if model.CarriesReqID(e.Kind) && out.Reject == model.NoError && out.Next.Status != cur.Status {
-		// This request established a new state; its id is the one a later SameRequestID reuses for the
-		// server's request-id idempotency. An intervening rejected/no-op request must not overwrite it.
+		// This request established a new state, so its id is the one a later SameRequestID reuses. An
+		// intervening rejected or no-op request must not overwrite it.
 		a.establishedReqID[e.Kind] = a.lastReqID
 	}
-	// Drop an established id once the activity leaves the region where the model still treats that op's
-	// SameRequestID replay as an idempotent no-op (probe the model, so this tracks the idempotency spec
-	// exactly — e.g. a keep-paused Reset preserves a pending Pause's id). Beyond that region the server
-	// would dedupe the stale, already-consumed id, but the model — which can't track id history —
-	// expects a fresh op, so a later SameRequestID must use a fresh id.
+	// Drop an established id once the model no longer treats that op's SameRequestID replay as an
+	// idempotent no-op, which is what probing it here determines. Beyond that region the server would
+	// dedupe the already-consumed id, while the model, which tracks no id history, expects a fresh op.
 	for k := range a.establishedReqID {
 		probe := model.Transition(a.h.cfg, out.Next, model.Event{Kind: k, SameRequestID: true})
 		if probe.Reject != model.NoError || !probe.Next.SameObserved(out.Next) {
@@ -292,8 +279,8 @@ func (a *saaHandle) verify(t require.TestingT, e model.Event, cur model.Abstract
 	return ok
 }
 
-// checkTaskInvalidation compares whether each raw stamp changed across the edge under test against the
-// model's per-transition invalidation bools. observed() has already refreshed cur/prev for this edge.
+// checkTaskInvalidation compares each raw stamp's change across the edge under test against the model's
+// per-transition invalidation bools. observed() has already refreshed cur/prev for this edge.
 func (a *saaHandle) checkTaskInvalidation(t require.TestingT, e model.Event, cur model.AbstractState, out model.Outcome) {
 	gotAttempt := a.curStamp != a.prevStamp
 	gotSTC := a.curSTCStamp != a.prevSTCStamp
@@ -307,12 +294,14 @@ func (a *saaHandle) checkTaskInvalidation(t require.TestingT, e model.Event, cur
 	}
 }
 
+// applyPoll drives a Poll and checks the dispatch against the model: a dispatchable activity must
+// dispatch a task, and a delayed or paused one must not.
 func (a *saaHandle) applyPoll(cur model.AbstractState, out model.Outcome, final bool, t require.TestingT) saaApply {
 	poll := model.Event{Kind: model.Poll}
 	switch {
 	case cur.Status == model.Scheduled && out.Next.Status == model.Started:
-		// Positive: a SCHEDULED+Dispatchable activity must be dispatched. The traces bound this
-		// deadline so "Dispatchable" means "dispatches promptly".
+		// A dispatchable activity must dispatch. The traces bound the deadline, so "Dispatchable" means
+		// "dispatches promptly".
 		timeout := cmp.Or(a.h.positivePollTimeout, saaPositivePollTimeout)
 		resp := a.pollForTask(t, timeout)
 		if resp == nil {
@@ -328,9 +317,8 @@ func (a *saaHandle) applyPoll(cur model.AbstractState, out model.Outcome, final 
 				a.edge(poll, cur.Status), resp.GetAttempt(), out.Next.AttemptCount, a.pathLine())
 		}
 	case cur.Status == model.Scheduled && cur.Dispatchability != model.Dispatchable:
-		// Delayed dispatch: a start_delay or backoff is still pending, so the poll finds no task. Verify
-		// with a negative poll, but only when the delay outlasts a valid long poll (not under the
-		// fast-backoff configs, where the state comparison below suffices).
+		// A start_delay or backoff is still pending, so the poll must find no task. Only worth a negative
+		// poll when the delay outlasts a valid long poll; otherwise the state comparison below suffices.
 		if dur := a.h.dispatchDelay(cur.Dispatchability); dur > saaPollTimeout {
 			if resp := a.pollForTask(t, saaPollTimeout); resp != nil {
 				if final {
@@ -341,10 +329,8 @@ func (a *saaHandle) applyPoll(cur model.AbstractState, out model.Outcome, final 
 			}
 		}
 	case cur.Status == model.Paused && !saaSkipNegativePoll():
-		// A PAUSED activity must not be dispatchable (Pause invalidated the pending dispatch task).
-		// The only status where a spurious dispatch is possible, so the only place we pay the
-		// full long-poll wait; the timeout must exceed MinLongPollTimeout. TEMPORAL_SAASPEC_NO_NEGATIVE_POLL
-		// disables it — the state check below still confirms Paused/dispatch.
+		// A PAUSED activity must not dispatch: Pause invalidated the pending dispatch task. The only status
+		// where a spurious dispatch is possible, so the only place worth the full long-poll wait.
 		if resp := a.pollForTask(t, saaPollTimeout); resp != nil {
 			if final {
 				t.Errorf("%s: model expected no advance but a task WAS dispatched\n%s",
@@ -353,7 +339,7 @@ func (a *saaHandle) applyPoll(cur model.AbstractState, out model.Outcome, final 
 			return saaMismatch
 		}
 	}
-	// Other statuses cannot dispatch, so skip the poll and rely on the state comparison below.
+	// No other status can dispatch, so the state comparison below suffices.
 	obs, err := a.observed()
 	require.NoError(t, err)
 	if final {
@@ -369,12 +355,9 @@ func (a *saaHandle) applyPoll(cur model.AbstractState, out model.Outcome, final 
 	return saaMismatch
 }
 
-// applyWallClock waits for a wall-clock event (a timeout or a dispatch-delay clock) to take effect,
-// then asserts the observed state equals Model.Next. When the model predicts an observable change it
-// polls until the state reaches that target (so a late timer is tolerated up to the window) rather than
-// reading once after a blind sleep; when it predicts no observable change — a stale/no-op timeout, or a
-// dispatch-delay elapse whose only effect is the latent readiness a later Poll verifies — the only way
-// to confirm the transition is to wait the window out and see nothing move.
+// applyWallClock waits for a wall-clock event to take effect, then asserts the observed state equals
+// out.Next. Where the model predicts an observable change it polls for that state; where it predicts
+// none, the only way to confirm is to wait the window out and see nothing move.
 func (a *saaHandle) applyWallClock(t require.TestingT, e model.Event, cur model.AbstractState, out model.Outcome, final bool) saaApply {
 	deadline := time.Now().Add(a.h.eventClock(e) + saaWallClockSettle)
 	if out.Next.SameObserved(cur) {
@@ -397,13 +380,8 @@ func (a *saaHandle) applyWallClock(t require.TestingT, e model.Event, cur model.
 	return saaMismatch
 }
 
-// The trace drivers live in activity_standalone_driver.go: driveTrace applies each event model-free,
-// and driveTraceWithModelConformanceChecking drives each event through apply (below), checking it against the
-// model. runTrace picks between them by whether a customizeStart hook injects config the model cannot
-// see.
-
-// checkDescribe asserts the public status and run state DescribeActivityExecution reports match
-// ExpectedDescribe.
+// checkDescribe asserts that the status, run state, and attempt DescribeActivityExecution reports match
+// model.ExpectedDescribe.
 func (a *saaHandle) checkDescribe(t require.TestingT, expected model.AbstractState) {
 	st, rs := model.ExpectedDescribe(expected)
 	resp, err := a.h.env.FrontendClient().DescribeActivityExecution(a.h.ctx, &workflowservice.DescribeActivityExecutionRequest{
@@ -426,15 +404,15 @@ func (a *saaHandle) checkDescribe(t require.TestingT, expected model.AbstractSta
 }
 
 // randomWalk drives one activity, picking a random applicable event each step and checking it against
-// Model(); on reaching a terminal state (or after a divergence) it starts a fresh activity and keeps
-// going until the step budget is spent. It reports the distinct states (by fingerprint) it covered.
+// model.Transition. On reaching a terminal state, or diverging, it restarts on a fresh activity, until
+// the step budget is spent.
 func (h *saaHarness) randomWalk(t *testing.T, rng *rand.Rand, maxSteps int) {
 	verbose := saaVerbose()
 	seen := map[string]bool{}
 	walks := 0
 
 	a, cur := h.walkStart(t)
-	var trace []model.Event // events driven since the last (re)start, so a divergence prints its path
+	var trace []model.Event // events driven since the last (re)start, for the divergence report
 	seen[model.Fingerprint(cur)] = true
 	walks++
 	if verbose {
@@ -465,10 +443,10 @@ func (h *saaHarness) randomWalk(t *testing.T, rng *rand.Rand, maxSteps int) {
 			cur = out.Next
 			seen[model.Fingerprint(cur)] = true
 		case saaSkippedNoToken:
-			trace = trace[:len(trace)-1] // event not driven; drop it from the segment trace
+			trace = trace[:len(trace)-1] // not driven, so not part of the trace
 		case saaMismatch:
-			// apply() already reported the divergence (with a.path = this trace); restart from a known
-			// state so the walk keeps exploring rather than compounding from a suspect one.
+			// apply() has already reported the divergence. Restart from a known state rather than compound
+			// from a suspect one.
 			a, cur = h.walkStart(t)
 			trace = nil
 			walks++
@@ -490,12 +468,10 @@ func (h *saaHarness) walkStart(t *testing.T) (*saaHandle, model.AbstractState) {
 	return a, cur
 }
 
-// pickWalkEvent chooses the next event. It strongly prefers non-terminal progress so the walk
-// wanders deep instead of restarting every few steps (terminal-reaching events like Terminate /
-// RespondCompleted end a walk immediately); it still occasionally takes any changing edge (maybe
-// terminal) or a reject/no-op so those are exercised in deep contexts too. Terminal edges are
-// covered exhaustively by the BFS; here depth is the goal. Events needing a task token we do not
-// hold are skipped (they would be un-drivable no-ops).
+// pickWalkEvent chooses the next event, strongly preferring one that makes non-terminal progress so the
+// walk goes deep rather than restarting every few steps. It still sometimes takes a terminal or a
+// reject/no-op edge, so those are exercised deep too. The BFS covers terminal edges exhaustively.
+// Events needing a task token the handle does not hold are skipped.
 func (h *saaHarness) pickWalkEvent(rng *rand.Rand, a *saaHandle, cur model.AbstractState) model.Event {
 	var applicable, changing, deep []model.Event
 	for _, e := range saaCandidateEvents() {
@@ -518,7 +494,7 @@ func (h *saaHarness) pickWalkEvent(rng *rand.Rand, a *saaHandle, cur model.Abstr
 	case len(applicable) > 0:
 		return applicable[rng.Intn(len(applicable))]
 	default:
-		return model.Event{Kind: model.Poll} // always applicable (needs no token)
+		return model.Event{Kind: model.Poll} // needs no token, so always applicable
 	}
 }
 
@@ -537,6 +513,8 @@ func saaStepDesc(cur model.AbstractState, e model.Event, out model.Outcome, res 
 	return desc
 }
 
+// saaCandidateEvents is the tier-3 event alphabet: the worker RPCs and the operator commands, with a
+// variant per outcome-affecting flag.
 func saaCandidateEvents() []model.Event {
 	var out []model.Event
 	simple := []model.EventKind{
@@ -545,8 +523,8 @@ func saaCandidateEvents() []model.Event {
 	for _, k := range simple {
 		out = append(out, model.Event{Kind: k})
 	}
-	// An update that changes start_delay: the model rejects it outside the StartDelayPending window
-	// (the only window it is mutable in), which is every state the RPC-only traversal reaches.
+	// start_delay is mutable only within the StartDelayPending window, so the model rejects this in every
+	// state the RPC-only traversal reaches.
 	out = append(out, model.Event{Kind: model.UpdateOptions, SetsStartDelay: true})
 	for _, r := range []bool{false, true} {
 		out = append(out, model.Event{Kind: model.RespondFailed, Retryable: r})
@@ -571,12 +549,12 @@ func saaCandidateEvents() []model.Event {
 
 // --- error / outcome classification --------------------------------------------------------
 
+// saaRejectKind classifies an RPC error as the model's ErrorKind. The FrontendClient returns
+// serviceerror types, so this matches on type rather than on gRPC status code.
 func saaRejectKind(err error) model.ErrorKind {
 	if err == nil {
 		return model.NoError
 	}
-	// The FrontendClient returns Temporal serviceerror types, so classify by type rather than by
-	// gRPC status code.
 	var nf *serviceerror.NotFound
 	var fp *serviceerror.FailedPrecondition
 	var ia *serviceerror.InvalidArgument
@@ -588,15 +566,14 @@ func saaRejectKind(err error) model.ErrorKind {
 	case errors.As(err, &ia):
 		return model.InvalidArgument
 	default:
-		return model.ErrorKind(-1) // unrecognized: will not match any predicted kind
+		return model.ErrorKind(-1) // unrecognized, so it matches no predicted kind
 	}
 }
 
 // --- failure reporting ---------------------------------------------------------------------
 //
-// A failure means the real server ("observed") disagreed with model.Transition ("expected") after one
-// event. Each report opens with a one-line summary of what diverged, then the path to the edge, then
-// a field-aligned diff.
+// A failure means the server ("observed") disagreed with model.Transition ("expected") after one event.
+// Each report is a one-line summary, the path to the edge, then a field-aligned diff.
 
 // edge names the event and the status it was driven from, e.g. "RespondFailed[retryable=true] from
 // Started".
@@ -637,8 +614,8 @@ func (a *saaHandle) flagsFailure(e model.Event, src model.Status, observed, expe
 }
 
 // saaPathString renders the event sequence that reached an edge, e.g.
-// "Schedule → Poll → RespondFailed[retryable=false]". The origin is labeled Schedule (the status the
-// StartActivityExecution RPC lands in), to avoid confusion with Started.
+// "Schedule → Poll → RespondFailed[retryable=false]". The origin is labeled Schedule, the status
+// StartActivityExecution lands in, rather than Started.
 func saaPathString(path []model.Event) string {
 	parts := make([]string, 0, len(path)+1)
 	parts = append(parts, "Schedule")
@@ -673,8 +650,8 @@ func saaFlagRows(observed, expected model.HeartbeatFlags) (rows [][3]string, agr
 	return saaSplit(fields)
 }
 
-// saaSplit partitions (field, observed, expected) triples into the ones that differ (rows) and the
-// ones that agree, the latter rendered as "field=value" so the report shows every field's value.
+// saaSplit partitions (field, observed, expected) triples into those that differ and those that agree,
+// the latter rendered as "field=value".
 func saaSplit(fields [][3]string) (rows [][3]string, agree []string) {
 	for _, f := range fields {
 		if f[1] != f[2] {

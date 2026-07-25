@@ -1,11 +1,10 @@
 package activity
 
-// Tier-2 (in-process) model-conformance explorer for the activity archetype. It drives the model's
-// event alphabet against a real in-memory CHASM engine (chasm/chasmtest) with a virtual clock, and
-// checks every step against the archetype model (chasm/lib/activity/model) — the same model the tier-3
-// onebox explorer in tests/ uses. Being in-process, it needs no server, takes no wall-clock waits
-// (timeouts and backoffs are realized by advancing clock.EventTimeSource), and can therefore run the
-// BFS graph traversal and random walk over states that are prohibitively slow at tier 3.
+// Tier-2 (in-process) model-conformance explorer for the activity archetype. It drives the event
+// alphabet of chasm/lib/activity/model against a real in-memory CHASM engine (chasm/chasmtest) with a
+// virtual clock, and checks every step against that model — the same model the tier-3 onebox explorer in
+// tests/ uses. Timeouts and backoffs are realized by advancing clock.EventTimeSource, so no wall-clock
+// waits, which is what makes the BFS traversal and random walk affordable over timeout-heavy states.
 
 import (
 	"context"
@@ -39,8 +38,8 @@ import (
 
 const inProcNS = "inproc-ns"
 
-// inProcExplorer is the tier-2 driver: a registry + in-memory engine + virtual clock shared across the
-// fresh activities each traversal/walk starts.
+// inProcExplorer is the tier-2 driver: a registry, an in-memory engine, and a virtual clock, shared
+// across the fresh activities a traversal or walk starts.
 type inProcExplorer struct {
 	t        *testing.T
 	ctx      context.Context
@@ -73,14 +72,14 @@ type inProcActivity struct {
 	x    *inProcExplorer
 	ref  chasm.ComponentRef
 	path []model.Event
-	// stamp deltas across the last observed() read, for task-invalidation checks.
+	// stamp deltas across the last observed() read; see apply.
 	prevStamp, curStamp       int32
 	prevSTCStamp, curSTCStamp int32
 	lastHeartbeat             *historyservice.RecordActivityTaskHeartbeatResponse
 }
 
-// backoffInterval is the retry backoff; realized by advancing the virtual clock, so it can be long
-// without slowing the test.
+// backoffInterval is the retry backoff. The virtual clock is advanced over it, so it costs nothing to
+// make it long.
 const backoffInterval = 30 * time.Second
 
 func (x *inProcExplorer) start() *inProcActivity {
@@ -105,7 +104,7 @@ func (x *inProcExplorer) start() *inProcActivity {
 	if x.cfg.HasHeartbeat {
 		req.HeartbeatTimeout = durationpb.New(10 * time.Minute)
 	}
-	// A unique run each start: delete any prior run so business-id reuse does not conflict.
+	// Terminate any prior run, so business-id reuse does not conflict.
 	key := chasm.ExecutionKey{NamespaceID: inProcNS, BusinessID: id}
 	result, err := chasm.StartExecution(x.ctx, key,
 		func(mc chasm.MutableContext, r *workflowservice.StartActivityExecutionRequest) (*Activity, error) {
@@ -125,7 +124,7 @@ func (x *inProcExplorer) start() *inProcActivity {
 	})}
 }
 
-// observed reads internal state back as the model's AbstractState, refreshing the stamp deltas.
+// observed is the activity's internal state as the model's AbstractState, refreshing the stamp deltas.
 func (a *inProcActivity) observed() model.AbstractState {
 	o, err := chasm.ReadComponent(a.x.ctx, a.ref, func(act *Activity, cctx chasm.Context, _ struct{}) (model.Observed, error) {
 		attempt := act.LastAttempt.Get(cctx)
@@ -146,7 +145,7 @@ func (a *inProcActivity) observed() model.AbstractState {
 	return model.Abstract(o)
 }
 
-// describe reads the public status + run state + attempt via the production Describe builder.
+// describe is the public status, run state, and attempt, via the production Describe builder.
 func (a *inProcActivity) describe() (enumspb.ActivityExecutionStatus, enumspb.PendingActivityState, int32) {
 	resp, err := chasm.ReadComponent(a.x.ctx, a.ref, func(act *Activity, cctx chasm.Context, req *activitypb.DescribeActivityExecutionRequest) (*activitypb.DescribeActivityExecutionResponse, error) {
 		return act.buildDescribeActivityExecutionResponse(cctx, req)
@@ -180,8 +179,8 @@ func (a *inProcActivity) update(fn func(*Activity, chasm.MutableContext) error) 
 	return err
 }
 
-// rpc realizes a non-poll, non-wall-clock event by invoking the production component method the
-// corresponding worker RPC would, and returns the reject error (nil on accept).
+// rpc realizes a non-Poll, non-wall-clock event by invoking the component method its worker RPC would,
+// and returns the reject error, nil on accept.
 func (a *inProcActivity) rpc(e model.Event) error {
 	switch e.Kind {
 	case model.Heartbeat:
@@ -228,8 +227,8 @@ func (a *inProcActivity) rpc(e model.Event) error {
 	}
 }
 
-// dispatchable reports whether a SCHEDULED attempt's dispatch time has arrived (poll would return a
-// task) — the tier-2 analog of a positive/negative poll, read directly instead of long-polled.
+// dispatchable reports whether a SCHEDULED attempt's dispatch time has arrived, so a poll would return a
+// task. The tier-2 analog of a positive or negative poll, read directly rather than long-polled.
 func (a *inProcActivity) dispatchable() bool {
 	return a.read(func(act *Activity, c chasm.Context) any {
 		if act.GetStatus() != activitypb.ACTIVITY_EXECUTION_STATUS_SCHEDULED {
@@ -240,7 +239,7 @@ func (a *inProcActivity) dispatchable() bool {
 	}).(bool)
 }
 
-// realize applies one event to the activity, returning the reject error (nil on accept / no-op).
+// realize applies one event to the activity and returns the reject error, nil on accept or no-op.
 func (a *inProcActivity) realize(e model.Event) error {
 	switch {
 	case e.Kind == model.Poll:
@@ -289,17 +288,17 @@ func (a *inProcActivity) realize(e model.Event) error {
 	}
 }
 
-// timerDeadline is the wall-clock instant the given timeout's timer is due, computed from current
-// state exactly as the transition that scheduled it did. Zero when the timer is not applicable in the
-// current state (e.g. a start/heartbeat timer while not started); firing then is a validated no-op.
+// timerDeadline is the instant the given timeout's timer is due, computed from current state exactly as
+// the transition that scheduled it did. Zero when the timer does not apply in the current state, such as
+// a start-to-close timer while not started; firing it then is a validated no-op.
 func (a *inProcActivity) timerDeadline(kind model.EventKind) time.Time {
 	return a.read(func(act *Activity, c chasm.Context) any {
 		attempt := act.LastAttempt.Get(c)
 		switch kind {
 		case model.StartToCloseElapses:
-			// Gate on the attempt being in progress, not merely on StartedTime being set: StartedTime is
-			// carried across a reschedule, so a backing-off attempt would otherwise yield a stale deadline
-			// and advance the clock for a timer that its own Validate then rejects.
+			// StartedTime is carried across a reschedule, so gate on the attempt being in progress. Otherwise a
+			// backing-off attempt yields a stale deadline, advancing the clock for a timer its own Validate
+			// then rejects.
 			if !act.hasAttemptInProgress() {
 				return time.Time{}
 			}
@@ -323,15 +322,15 @@ func (a *inProcActivity) timerDeadline(kind model.EventKind) time.Time {
 	}).(time.Time)
 }
 
-// advanceTo moves the virtual clock just past deadline, if that is in the future; a no-op otherwise so
-// an inapplicable timer is fired at the current instant (and rejected by its own Validate).
+// advanceTo moves the virtual clock just past deadline if that is in the future. Otherwise a no-op, so
+// an inapplicable timer fires at the current instant and is rejected by its own Validate.
 func (a *inProcActivity) advanceTo(deadline time.Time) {
 	if !deadline.IsZero() && deadline.After(a.x.ts.Now()) {
 		a.x.ts.Update(deadline.Add(time.Second))
 	}
 }
 
-// fireTimer runs a pure timeout task handler (Validate then Execute) as the task processor would.
+// fireTimer runs a pure timeout task handler, Validate then Execute, as the task processor would.
 func (a *inProcActivity) fireTimer(validate func(*Activity, chasm.MutableContext) (bool, error), execute func(*Activity, chasm.MutableContext) error) error {
 	return a.update(func(act *Activity, mc chasm.MutableContext) error {
 		if ok, err := validate(act, mc); err != nil || !ok {
@@ -362,11 +361,10 @@ func rejectKind(err error) model.ErrorKind {
 
 // --- conformance + explorers -----------------------------------------------------------------
 
-// candidateEvents is the tier-2 event alphabet: the worker RPCs plus the wall-clock timeouts/backoff
-// that are prohibitively slow at tier 3 but instant here. Operator commands are left to tier 3.
+// candidateEvents is the tier-2 event alphabet: the worker RPCs plus the wall-clock timeouts and
+// backoff, which are prohibitively slow at tier 3 but instant here. The operator commands are
+// tier-3-only; being synchronous, the virtual clock buys them nothing.
 func (x *inProcExplorer) candidateEvents() []model.Event {
-	// The worker RPCs plus the wall-clock events, all realized by advancing the virtual clock to the
-	// relevant deadline — including the timeouts, which are prohibitively slow to explore at tier 3.
 	events := []model.Event{
 		{Kind: model.Poll},
 		{Kind: model.Heartbeat},
@@ -386,9 +384,9 @@ func (x *inProcExplorer) candidateEvents() []model.Event {
 	return events
 }
 
-// verifyPath starts a fresh activity, replays path, and checks the final edge against the model. It
-// aborts silently on a prefix divergence (that edge is reported as a final edge of its own shorter
-// path). Returns whether the final edge verified.
+// verifyPath starts a fresh activity, replays path, and checks its final edge against the model. A
+// prefix divergence aborts the replay silently; that edge is reported when it is the final edge of its
+// own shorter path. Reports whether the final edge verified.
 func (x *inProcExplorer) verifyPath(path []model.Event) bool {
 	a := x.start()
 	a.path = path
@@ -408,10 +406,9 @@ func (x *inProcExplorer) verifyPath(path []model.Event) bool {
 	return true
 }
 
-// apply realizes e (whose predicted outcome from cur is out) and checks the observed reject kind,
-// state, and — for Poll — dispatch readiness against the model. Reports (only on the final edge).
-// Parallel to saaHandle.apply in the tier-3 spec harness; realize is the tier-2 union of tier-3's
-// rpc / applyPoll / applyWallClock realization.
+// apply realizes e, whose predicted outcome from cur is out, and checks the observed reject kind, state,
+// public Describe, task invalidation, and — for Poll — dispatch readiness against the model. It reports
+// only on the final edge. Parallel to saaHandle.apply.
 func (a *inProcActivity) apply(e model.Event, cur model.AbstractState, out model.Outcome, final bool) bool {
 	if e.Kind == model.Poll && cur.Status == model.Scheduled {
 		wantDispatchable := cur.Dispatchability == model.Dispatchable
@@ -437,9 +434,8 @@ func (a *inProcActivity) apply(e model.Event, cur model.AbstractState, out model
 		a.x.t.Errorf("%s from %s: state disagrees\n  observed=%s\n  model=   %s\n  path: %s",
 			model.EventLabel(e), cur.Status, model.Fingerprint(obs), model.Fingerprint(out.Next), pathString(a.path))
 	}
-	// Task invalidation: the attempt / schedule-to-close stamp bumping is the mechanism by which an
-	// edge invalidates the prior attempt's tasks, so compare the stamp delta across this edge (refreshed
-	// by observed() above) to the model's per-transition invalidation bools — as the tier-3 driver does.
+	// An edge invalidates the prior attempt's tasks by bumping a stamp, so compare the stamp delta across
+	// this edge, refreshed by observed() above, to the model's per-transition invalidation bools.
 	gotAttempt, gotSTC := a.curStamp != a.prevStamp, a.curSTCStamp != a.prevSTCStamp
 	if gotAttempt != out.AttemptTasksInvalidated {
 		a.x.t.Errorf("%s from %s: attempt-task invalidation disagrees — driver=%v model=%v\n  path: %s",
@@ -478,8 +474,8 @@ func joinArrows(parts []string) string {
 	return out
 }
 
-// traverse does a breadth-first walk of the model's reachable states, verifying every decided edge
-// against the in-process engine. Depth-bounded; the whole thing runs in-process with a virtual clock.
+// traverse does a depth-bounded breadth-first walk of the model's reachable states, verifying every
+// decided edge against the in-process engine.
 func (x *inProcExplorer) traverse(maxDepth int) {
 	type node struct {
 		path  []model.Event
@@ -515,10 +511,10 @@ func (x *inProcExplorer) traverse(maxDepth int) {
 }
 
 // randomWalk drives one activity, picking a random applicable event each step and checking it against
-// the model; on reaching a terminal state it restarts, until the step budget is spent.
+// the model. On reaching a terminal state it restarts, until the step budget is spent.
 func (x *inProcExplorer) randomWalk(rng *rand.Rand, steps int) {
-	// freshWalk starts an activity and seeds the stamp-delta baseline via observed(), so the first edge's
-	// invalidation check measures that edge's change and not the start.
+	// freshWalk seeds the stamp-delta baseline via observed(), so the first edge's invalidation check
+	// measures that edge and not the start.
 	freshWalk := func() (*inProcActivity, model.AbstractState) {
 		a := x.start()
 		cur := model.Initial(x.cfg)

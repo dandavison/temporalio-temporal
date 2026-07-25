@@ -1,26 +1,22 @@
 package tests
 
-// SAA↔WFA metrics parity. This test establishes, for the exhaustive catalog of activity metrics
-// (dandavison/log#275), which ones the standalone activity (SAA) surface emits and which ones the
-// workflow activity (WFA) surface emits. It drives one activity through each activity behavior on
-// both surfaces with the shared model-based drivers, captures the metrics each surface emits, prints
-// the full WFA-vs-SAA emission matrix, and asserts the two surfaces emit the same activity metrics
-// for each behavior.
+// SAA↔WFA metrics parity. For the exhaustive catalog of activity metrics (dandavison/log#275), this
+// establishes which ones each surface emits: it drives one activity through each behavior on both
+// surfaces, captures the metrics emitted, prints the WFA-vs-SAA emission matrix, and asserts that both
+// surfaces emit the same metrics with the same tag keys for each behavior.
 //
-// As with the other TestWFASAA* repros, there is no oracle: the equality assertion encodes the
-// intended contract (the same behavior should be observable the same way on both surfaces), and a
-// failure is useful signal — it can mean SAA is missing a metric, WFA is missing one, or the metric
-// belongs on only one surface by design. Two asymmetries are known-intended and excluded from the
-// equality assertion (see activityMetricCatalog): the deprecated activity_end_to_end_latency alias
-// (WFA-only; the new surface does not carry it) and activity_terminate (a workflow activity has no
-// individual terminate path, so the behavior is SAA-only and asserted on its own).
+// As with the other TestWFASAA* repros there is no oracle. The equality assertion encodes the intended
+// contract, that the same behavior is observable the same way on both surfaces, so a failure can mean
+// SAA is missing a metric, WFA is missing one, or the metric belongs on one surface by design.
 //
-// Not every catalog metric is reachable by driving one activity through raw worker/operator RPCs.
-// The shard/mutable-state aggregates (activity_info_count/size, total_activity_count), the eager-
-// execution counter (workflow-task path, disabled in the WFA helper), and the matching worker-
-// registry gauge (needs a registered worker, not raw polls) are not namespace-attributable to a
-// single driven activity; they are marked not-measured and shown in the matrix as such rather than
-// queried (the namespace capture rejects non-namespaced metrics).
+// Two asymmetries are intended and excluded from the equality assertion: the deprecated
+// activity_end_to_end_latency alias, and activity_terminate (a workflow activity has no individual
+// terminate path). See activityMetricCatalog.
+//
+// Not every catalog metric is attributable to a single driven activity through this harness. The
+// shard/mutable-state aggregates, the eager-execution counter, and the matching worker-registry gauge
+// are marked not-measured and only shown in the matrix; the namespace capture rejects non-namespaced
+// metrics.
 
 import (
 	"fmt"
@@ -36,12 +32,9 @@ import (
 	"go.temporal.io/server/common/testing/await"
 )
 
-// activityMetric is one entry in the exhaustive activity-metric catalog. measured marks whether this
-// test queries the metric (namespace-scoped and reachable by driving one activity); compared marks
-// whether the WFA and SAA emitted sets are asserted equal for it. compared ⊆ measured. The deprecated
-// e2e-latency alias and activity_terminate are measured but not compared (intended asymmetries); the
-// shard/mutable-state aggregates, the eager-execution counter, and the worker-registry gauge are not
-// measured (not attributable to a single activity through this harness) and only appear in the matrix.
+// activityMetric is one entry in the activity-metric catalog. measured marks whether this test queries
+// the metric; compared marks whether the WFA and SAA emitted sets are asserted equal for it.
+// compared ⊆ measured.
 type activityMetric struct {
 	name     string
 	measured bool
@@ -72,12 +65,11 @@ var activityMetricCatalog = []activityMetric{
 	{metrics.WorkerRegistryActivitySlotsUsed.Name(), false, false}, // matching worker registry; no real worker here
 }
 
-// activityMetricsScenario drives one activity behavior. maxAttempts sets the retry ceiling (so a
-// terminal outcome is actually terminal). saaOnly marks a behavior with no WFA analog. anchor is a
-// metric both surfaces emit at the end of the trace; when set, the driver waits for it before
-// snapshotting, to absorb the async gap between an observed timeout transition and its metric
-// emission. It is empty for traces whose final effect is a synchronous RPC (already committed on
-// return).
+// activityMetricsScenario drives one activity behavior. maxAttempts caps retries, so a terminal outcome
+// is actually terminal. saaOnly marks a behavior with no WFA analog. anchor is a metric both surfaces
+// emit at the end of the trace; when set, the driver waits for it before snapshotting, absorbing the
+// async gap between an observed timeout transition and its metric emission. It is empty for a trace
+// whose final effect is a synchronous RPC.
 type activityMetricsScenario struct {
 	name        string
 	trace       []model.Event
@@ -117,9 +109,8 @@ func (sc activityMetricsScenario) expectedTimeoutType() string {
 	}
 }
 
-// activityMetricSets holds, per surface, the metrics emitted for one scenario keyed by metric name,
-// with the tag map of a representative recording as the value (presence is key existence). wfa is nil
-// for a SAA-only scenario.
+// activityMetricSets holds, per surface, the metrics emitted for one scenario, keyed by name, with a
+// representative recording's tag map as the value. wfa is nil for a SAA-only scenario.
 type activityMetricSets struct {
 	wfa map[string]map[string]string
 	saa map[string]map[string]string
@@ -171,9 +162,7 @@ func (s *standaloneActivityTestSuite) wfaActivityMetrics(t *testing.T, env *stan
 }
 
 // captureActivityMetrics captures the activity metrics emitted while drive runs, scoped to the test
-// namespace, returning each emitted metric's representative tag map. The two surfaces share the
-// namespace but are captured in separate windows read back to back with their drive, so the window
-// alone separates them.
+// namespace. The two surfaces share the namespace, so it is the capture window that separates them.
 func (s *standaloneActivityTestSuite) captureActivityMetrics(t *testing.T, env *standaloneActivityEnv, sc activityMetricsScenario, drive func()) map[string]map[string]string {
 	capture := env.StartNamespaceMetricCapture()
 	drive()
@@ -196,7 +185,7 @@ func (s *standaloneActivityTestSuite) captureActivityMetrics(t *testing.T, env *
 	return emitted
 }
 
-// comparedSet restricts an emitted set to the names of metrics whose WFA/SAA parity is asserted.
+// comparedSet restricts an emitted set to the metrics whose WFA/SAA parity is asserted.
 func comparedSet(emitted map[string]map[string]string) map[string]bool {
 	out := make(map[string]bool)
 	for _, m := range activityMetricCatalog {
@@ -209,8 +198,8 @@ func comparedSet(emitted map[string]map[string]string) map[string]bool {
 	return out
 }
 
-// activityMetricsMatrix renders the exhaustive per-metric emission matrix: for each catalog metric,
-// whether WFA and/or SAA ever emitted it across the scenarios, followed by the per-scenario detail.
+// activityMetricsMatrix renders the per-metric emission matrix — whether WFA and SAA ever emitted each
+// catalog metric across the scenarios — followed by the per-scenario detail and the tag keys.
 func activityMetricsMatrix(observed map[string]activityMetricSets) string {
 	wfaAny := make(map[string]bool)
 	saaAny := make(map[string]bool)
@@ -294,11 +283,9 @@ func tagKeys(tags map[string]string) []string {
 	return keys
 }
 
-// assertActivityMetricLabels asserts the label conventions for each surface's activity metrics: every
-// metric carries the test namespace; the two timeout counters carry the timeout_type that fired; and a
-// metric both surfaces emit carries the same tag keys, so the same dashboards and aggregations work
-// regardless of surface. The last is where the operator commands diverge (WFA tags them with
-// activity_targeting_method and no task-queue scope, SAA with the full per-task-queue lifecycle set).
+// assertActivityMetricLabels asserts that every metric carries the test namespace, that the two timeout
+// counters carry the timeout_type that fired, and that a metric both surfaces emit carries the same tag
+// keys, so that one dashboard works for either surface.
 func assertActivityMetricLabels(t *testing.T, env *standaloneActivityEnv, sc activityMetricsScenario, sets activityMetricSets) {
 	checkTags := func(surface string, emitted map[string]map[string]string) {
 		for name, tags := range emitted {

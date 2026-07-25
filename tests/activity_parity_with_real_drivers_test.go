@@ -1,21 +1,20 @@
 package tests
 
-// SAA↔WFA parity repros. For each behavior at the intersection of the standalone activity (SAA) and
-// the workflow activity (WFA), a test drives the same trace through both surfaces as "WorkflowActivity"
-// and "StandaloneActivity" subtests and asserts the same public activity info. There is no oracle: the
-// asserted `want` encodes how the product should behave (not what either implementation happens to do),
-// and both subtests are checked against it. A failure on either subtest — or both — is useful signal:
-// it can mean SAA is wrong, WFA is wrong, or both. Never adjust a `want` to match observed behavior;
-// if the intended behavior is unclear, stop and resolve it rather than encoding an implementation.
+// SAA↔WFA parity repros. For each behavior at the intersection of the standalone activity (SAA) and the
+// workflow activity (WFA), a test drives the same trace through both surfaces as "WorkflowActivity" and
+// "StandaloneActivity" subtests, and asserts the same public activity info.
 //
-// These use the full model-based drivers — the standalone driver (activity_standalone_driver.go), the
-// workflow driver (activity_workflow_driver.go), driveTrace, and the archetype model
-// (chasm/lib/activity/model). The bug-fix branches carry the same repros in a halfway-house form
-// (ad-hoc per-surface drivers, no driveTrace/model) in a file of the same name; the two files are kept
-// reasonably parallel so migrating from one to the other is a small step.
+// There is no oracle. Each `want` encodes how the product should behave, not what either implementation
+// currently does, and both subtests are checked against it. A failure on either — or both — is useful
+// information. Never adjust a `want` to match observed behavior; if the intended behavior is unclear,
+// stop and resolve that instead.
 //
-// They live on standaloneActivityTestSuite because its env enables the standalone activity (WFA needs
-// nothing special); one SAA-enabled env drives both.
+// The drivers are activity_standalone_driver.go and activity_workflow_driver.go, over the event
+// vocabulary in chasm/lib/activity/model. main carries the same repros driven by small ad-hoc
+// per-surface drivers, in tests/activity_parity_test.go.
+//
+// These live on standaloneActivityTestSuite because its env enables the standalone activity. WFA needs
+// nothing special, so one SAA-enabled env drives both.
 
 import (
 	"testing"
@@ -30,15 +29,13 @@ import (
 	"go.temporal.io/server/common/testing/testcontext"
 )
 
-// TestWFASAAStartToCloseTimeout ports a slice of Test_ActivityTimeouts: a started attempt
-// exceeds its StartToClose timeout and, with no retries left, the activity ends TIMED_OUT. Both
-// subtests must reach the same terminal status AND the same TimeoutType.
+// TestWFASAAStartToCloseTimeout ports a slice of Test_ActivityTimeouts: a started attempt exceeds its
+// StartToClose timeout and, with no retries left, the activity ends TIMED_OUT with the StartToClose
+// TimeoutType.
 //
-// Fidelity vs the original: covered — terminal status and the StartToClose TimeoutType (the semantic
-// contract). Not covered: the other three timeout types (each is an additional scenario, not more
-// fidelity here) and the failure *message* (SAA carries a proto message; WFA's SDK TimeoutError
-// formats its own, so the strings differ by construction, not by behavior — the TimeoutType is the
-// stable cross-surface discriminant).
+// The failure message is deliberately not asserted: SAA carries a proto message and WFA's SDK
+// TimeoutError formats its own, so the strings differ by construction. TimeoutType is the stable
+// cross-surface discriminant.
 func (s *standaloneActivityTestSuite) TestWFASAAStartToCloseTimeout() {
 	env := s.newTestEnv()
 	trace := []model.Event{saaPoll, {Kind: model.StartToCloseElapses}}
@@ -56,11 +53,10 @@ func (s *standaloneActivityTestSuite) TestWFASAAStartToCloseTimeout() {
 	})
 }
 
-// TestWFASAAScheduleToCloseTimeout ports the schedule-to-close slice of Test_ActivityTimeouts
-// (fired-during-run): the activity is started, then its ScheduleToClose deadline elapses while it
-// runs, so it ends TIMED_OUT with the ScheduleToClose TimeoutType. Both subtests must reach the same
-// status and type. (A never-started activity that hits the deadline times out as ScheduleToStart
-// instead — on both surfaces — which is why the port polls first.)
+// TestWFASAAScheduleToCloseTimeout ports the schedule-to-close slice of Test_ActivityTimeouts: the
+// activity is started, then its ScheduleToClose deadline elapses while it runs, so it ends TIMED_OUT
+// with the ScheduleToClose TimeoutType. The trace polls first because a never-started activity that
+// hits the deadline times out as ScheduleToStart instead, on both surfaces.
 func (s *standaloneActivityTestSuite) TestWFASAAScheduleToCloseTimeout() {
 	env := s.newTestEnv()
 	trace := []model.Event{saaPoll, {Kind: model.ScheduleToCloseElapses}}
@@ -79,19 +75,18 @@ func (s *standaloneActivityTestSuite) TestWFASAAScheduleToCloseTimeout() {
 }
 
 // TestWFASAATimeoutPreservesUnderlyingFailureCause ports TestTimeoutPreservesUnderlyingFailureCause:
-// when retries are exhausted by a StartToClose timeout, or a schedule-to-close deadline closes a
-// backing-off activity, the terminal TimedOut failure chains the application failure that drove the
-// retries as its Cause (mutable_state_impl.go AddActivityTaskTimedOutEvent, temporalio/temporal#3667).
-// Both surfaces must chain the cause; a surface that drops it is wrong.
+// when a timeout closes an activity whose retries were driven by an application failure, the terminal
+// TimedOut failure must chain that application failure as its Cause, so an SDK can surface the real
+// failure. See mutable_state_impl.go AddActivityTaskTimedOutEvent and temporalio/temporal#3667.
 func (s *standaloneActivityTestSuite) TestWFASAATimeoutPreservesUnderlyingFailureCause() {
 	env := s.newTestEnv()
 
-	// The underlying application failure driven on attempt 1 (see saaFailure); the terminal timeout must
-	// chain it verbatim — both its Type and Message — as its Cause.
+	// The application failure driven on attempt 1; see saaFailure. The terminal timeout must chain it
+	// verbatim, both Type and Message.
 	wantCause := failureCause{Type: "drive", Message: "drive"}
 
-	// assertCausePreserved drives the trace on both surfaces and asserts each ends TIMED_OUT with the
-	// given timeout type, chaining wantCause.
+	// assertCausePreserved drives the trace on both surfaces and asserts each ends TIMED_OUT with the given
+	// timeout type, chaining wantCause.
 	assertCausePreserved := func(t *testing.T, maxAttempts int32, trace []model.Event, timeoutType enumspb.TimeoutType) {
 		want := activityTerminalProjection{Status: enumspb.ACTIVITY_EXECUTION_STATUS_TIMED_OUT, FailureType: timeoutType.String()}
 		t.Run("WorkflowActivity", func(t *testing.T) {
@@ -121,23 +116,21 @@ func (s *standaloneActivityTestSuite) TestWFASAATimeoutPreservesUnderlyingFailur
 	s.T().Run("StartToClose", func(t *testing.T) {
 		assertCausePreserved(t, 2, []model.Event{saaPoll, saaFailRetryably, saaPoll, {Kind: model.StartToCloseElapses}}, enumspb.TIMEOUT_TYPE_START_TO_CLOSE)
 	})
-	// Retries exhausted by a Heartbeat timeout on the final attempt: the attempt is started but never
-	// heartbeats, so it times out — chaining the same cause via the heartbeat-timeout code path.
+	// Retries exhausted by a Heartbeat timeout on the final attempt: the attempt starts but never
+	// heartbeats. A distinct code path that must chain the same cause.
 	s.T().Run("Heartbeat", func(t *testing.T) {
 		assertCausePreserved(t, 2, []model.Event{saaPoll, saaFailRetryably, saaPoll, {Kind: model.HeartbeatElapses}}, enumspb.TIMEOUT_TYPE_HEARTBEAT)
 	})
-	// Schedule-to-close deadline closes the activity while it backs off to retry — a distinct server
-	// code path that must also chain the cause.
+	// Schedule-to-close deadline closes the activity while it backs off to retry. A third code path.
 	s.T().Run("ScheduleToClose", func(t *testing.T) {
 		assertCausePreserved(t, 0, []model.Event{saaPoll, saaFailRetryably, {Kind: model.ScheduleToCloseElapses}}, enumspb.TIMEOUT_TYPE_SCHEDULE_TO_CLOSE)
 	})
 }
 
 // TestWFASAATimeoutTypeOnRetryDeadline ports the HeartbeatWithScheduleToClose slice of
-// Test_ActivityTimeouts: a heartbeat timeout fires on a started attempt, but the retry interval
-// cannot fit before the schedule-to-close deadline, so retries are given up and the terminal timeout
-// is reported as ScheduleToClose — not Heartbeat. The `want` encodes that intended behavior; both
-// surfaces must report the ScheduleToClose TimeoutType.
+// Test_ActivityTimeouts: a heartbeat timeout fires on a started attempt, but the retry interval cannot
+// fit before the schedule-to-close deadline, so retries are given up and the terminal timeout is
+// reported as ScheduleToClose rather than Heartbeat.
 func (s *standaloneActivityTestSuite) TestWFASAATimeoutTypeOnRetryDeadline() {
 	env := s.newTestEnv()
 	trace := []model.Event{saaPoll, {Kind: model.HeartbeatElapses}}
@@ -161,12 +154,10 @@ func (s *standaloneActivityTestSuite) TestWFASAATimeoutTypeOnRetryDeadline() {
 	})
 }
 
-// TestWFASAAQueuedRetryInterval covers the queued-but-not-started window (SCHEDULED, attempt 2, after
-// the backoff elapsed and the retry was dispatched to matching), using a non-constant backoff
-// (InitialInterval 5s, coefficient 2) so it is a distinct config from the constant-interval
-// retry-interval tests. The intended behavior is that no current retry interval is reported there —
-// nothing is backing off — so `want` leaves it nil; a surface that leaks any interval (the served one,
-// or a prospectively recomputed one) fails here.
+// TestWFASAAQueuedRetryInterval covers the queued-but-not-started window: SCHEDULED on attempt 2, after
+// the backoff elapsed and the retry was dispatched to Matching. Nothing is backing off there, so no
+// current retry interval should be reported. Uses a non-constant backoff, so it is a distinct config
+// from the constant-interval tests.
 
 func (s *standaloneActivityTestSuite) TestWFASAAQueuedRetryInterval() {
 	env := s.newTestEnv()
@@ -190,11 +181,10 @@ func (s *standaloneActivityTestSuite) TestWFASAAQueuedRetryInterval() {
 	})
 }
 
-// TestWFASAAHeartBeat ports the core of TestActivityHeartBeatWorkflow_Success: a worker polls
-// the activity and heartbeats a checkpoint payload; the checkpoint round-trips (readable while
-// running); then the worker completes it and the activity ends COMPLETED. Both subtests must observe
-// the same heartbeat detail and the same terminal status. (The original also asserts the exact
-// workflow history-event shape, which is not part of the shared contract.)
+// TestWFASAAHeartBeat ports the core of TestActivityHeartBeatWorkflow_Success: a worker polls the
+// activity and heartbeats a checkpoint payload, the checkpoint is readable while it runs, then the
+// worker completes it. The original also asserts the workflow history-event shape, which is not part of
+// the cross-surface contract.
 var heartbeatWant = []byte(`"hb"`) // == saaHeartbeatDetails
 
 func (s *standaloneActivityTestSuite) TestWFASAAHeartBeat() {
@@ -220,15 +210,10 @@ func (s *standaloneActivityTestSuite) TestWFASAAHeartBeat() {
 	})
 }
 
-// TestWFASAARetry ports the core of TestWFASAARetry (functional test) to the equivalence
-// framework: an attempt fails retryably, the backoff elapses, the next attempt fails non-retryably, and
-// the activity ends FAILED with the application failure type. Both subtests must reach the same
-// terminal status AND the same failure type.
-//
-// Fidelity vs the original: covered — the retryable-then-non-retryable -> FAILED path and the terminal
-// application failure type. Not covered: the original's second activity (a schedule-to-start timeout on
-// a no-worker queue — a separate scenario) and its assertions on workflow history-event shape, which is
-// not part of the shared cross-surface contract.
+// TestWFASAARetry: an attempt fails retryably, the backoff elapses, the next attempt fails
+// non-retryably, and the activity ends FAILED with the application failure type. The original also
+// covers a schedule-to-start timeout on a no-worker queue (a separate scenario here) and asserts the
+// workflow history-event shape.
 func (s *standaloneActivityTestSuite) TestWFASAARetry() {
 	env := s.newTestEnv()
 	trace := []model.Event{saaPoll, saaFailRetryably, saaBackoffDelayElapse, saaPoll, saaFailNonRetryably}
@@ -247,8 +232,8 @@ func (s *standaloneActivityTestSuite) TestWFASAARetry() {
 }
 
 // TestWFASAAHeartbeatTimeout ports the core of TestActivityHeartBeatWorkflow_Timeout: a started attempt
-// heartbeats nothing within its HeartbeatTimeout and, with no retries left, the activity ends TIMED_OUT
-// with the Heartbeat TimeoutType. Both subtests must reach the same status and type.
+// heartbeats nothing within its HeartbeatTimeout and, with no retries left, ends TIMED_OUT with the
+// Heartbeat TimeoutType.
 func (s *standaloneActivityTestSuite) TestWFASAAHeartbeatTimeout() {
 	env := s.newTestEnv()
 	trace := []model.Event{saaPoll, {Kind: model.HeartbeatElapses}}
@@ -266,15 +251,11 @@ func (s *standaloneActivityTestSuite) TestWFASAAHeartbeatTimeout() {
 	})
 }
 
-// TestWFASAACancel ports the core of TestTryActivityCancellationFromWorkflow: a running
-// activity is cancel-requested, the worker acknowledges (RespondActivityTaskCanceled), and the activity
-// ends CANCELED. Both subtests must reach CANCELED. The RequestCancel
-// event realizes differently per surface — SAA's direct RequestCancelActivityExecution RPC vs WFA's
-// workflow-driven cancel (signal -> RequestCancelActivity) — which is exactly the driver's job to hide.
-//
-// Fidelity vs the original: covered — the cancel-then-acknowledge -> CANCELED path. Not covered: the
-// original also asserts the workflow observed the cancellation (workflow-level, not the activity's
-// cross-surface contract).
+// TestWFASAACancel ports the core of TestTryActivityCancellationFromWorkflow: a running activity is
+// cancel-requested, the worker acknowledges with RespondActivityTaskCanceled, and the activity ends
+// CANCELED. The RequestCancel event realizes differently per surface — SAA's direct
+// RequestCancelActivityExecution RPC vs WFA's signal-then-RequestCancelActivity — which is what the
+// drivers hide. The original also asserts that the workflow observed the cancellation.
 func (s *standaloneActivityTestSuite) TestWFASAACancel() {
 	env := s.newTestEnv()
 	trace := []model.Event{saaPoll, {Kind: model.RequestCancel}, {Kind: model.RespondCanceled}}
@@ -290,8 +271,8 @@ func (s *standaloneActivityTestSuite) TestWFASAACancel() {
 	})
 }
 
-// retryAfterFail: attempt 1 fails retryably, the backoff elapses, attempt 2 starts. The activity is
-// then running its second attempt — no pending retry — so there is no current retry interval and no
+// TestWFASAARetryAfterFail: attempt 1 fails retryably, the backoff elapses, attempt 2 starts. The
+// activity is then running, with no pending retry, so there is no current retry interval and no
 // next-attempt schedule time.
 
 func (s *standaloneActivityTestSuite) TestWFASAARetryAfterFail() {
@@ -316,10 +297,9 @@ func (s *standaloneActivityTestSuite) TestWFASAARetryAfterFail() {
 	})
 }
 
-// backingOff: attempt 1 fails retryably, and we observe during the backoff window (before it elapses,
-// so the next dispatch is still in the future). The retry is genuinely pending, so both the current
-// retry interval and the next-attempt schedule time are populated — the case where C5 says the two
-// products agree. The long interval keeps the window open across the describe. Expected fully green.
+// TestWFASAABackingOff: attempt 1 fails retryably and is observed during the backoff window, so the next
+// dispatch is still in the future. The retry is pending, so both the current retry interval and the
+// next-attempt schedule time are populated. The long interval keeps the window open across the describe.
 
 func (s *standaloneActivityTestSuite) TestWFASAABackingOff() {
 	env := s.newTestEnv()
@@ -344,10 +324,9 @@ func (s *standaloneActivityTestSuite) TestWFASAABackingOff() {
 	})
 }
 
-// nextRetryDelayOverride: the worker fails with a next_retry_delay that overrides the policy backoff
-// (policy 5s, override 30s); observed during the override-length window. Both products must honor the
-// override identically — the resulting current retry interval is 30s, not the policy's 5s. Expected
-// fully green.
+// TestWFASAANextRetryDelayOverride: the worker fails with a next_retry_delay that overrides the policy
+// backoff, observed during the override-length window. The reported current retry interval must be the
+// override, not the policy's interval.
 func (s *standaloneActivityTestSuite) TestWFASAANextRetryDelayOverride() {
 	env := s.newTestEnv()
 	nextRetryDelayOverride := 30 * time.Second
@@ -373,9 +352,8 @@ func (s *standaloneActivityTestSuite) TestWFASAANextRetryDelayOverride() {
 	})
 }
 
-// firstAttemptStarted: a worker polls the first attempt, which is now running. No attempt has failed,
-// so there is no current retry interval and no next-attempt schedule time. The baseline running-state
-// equivalence. Expected fully green.
+// TestWFASAAFirstAttemptStarted: a worker polls the first attempt, which is now running. No attempt has
+// failed, so there is no current retry interval and no next-attempt schedule time.
 func (s *standaloneActivityTestSuite) TestWFASAAFirstAttemptStarted() {
 	env := s.newTestEnv()
 	trace := []model.Event{saaPoll}
@@ -399,15 +377,13 @@ func (s *standaloneActivityTestSuite) TestWFASAAFirstAttemptStarted() {
 }
 
 // TestWFASAANextAttemptScheduleTimeAndCurrentRetryInterval sweeps NextAttemptScheduleTime and
-// CurrentRetryInterval across the activity lifecycle. Each scenario drives the same trace through both
-// surfaces and asserts the same intended public info. The intended behavior in the running-attempt
-// scenarios is that no pending-retry metadata is reported (a running attempt is not a pending retry).
-// StartDelayPending is standalone-only (WFA has no per-activity start delay).
+// CurrentRetryInterval across the activity lifecycle. A running attempt is not a pending retry, so the
+// running-attempt scenarios report neither. StartDelayPending is SAA-only.
 func (s *standaloneActivityTestSuite) TestWFASAANextAttemptScheduleTimeAndCurrentRetryInterval() {
 	env := s.newTestEnv()
 	t := s.T()
 
-	// both drives a trace through both surfaces, asserting each reports the intended want.
+	// both drives a trace through both surfaces, asserting each reports want.
 	both := func(t *testing.T, maxAttempts int32, retryInterval time.Duration, trace []model.Event, want activityInfoProjection) {
 		t.Run("WorkflowActivity", func(t *testing.T) {
 			h := newWFAHarness(t, env, maxAttempts)
@@ -421,7 +397,7 @@ func (s *standaloneActivityTestSuite) TestWFASAANextAttemptScheduleTimeAndCurren
 		})
 	}
 
-	// First attempt within its start delay: the dispatch is pending in the future and is not a retry.
+	// First attempt within its start delay: the dispatch is pending in the future, and is not a retry.
 	t.Run("StartDelayPending", func(t *testing.T) {
 		info := s.driveTrace(t, env, saaTrace{trace: []model.Event{}, startDelayed: true}).describe(t).GetInfo()
 		require.Equal(t, enumspb.PENDING_ACTIVITY_STATE_SCHEDULED, info.GetRunState())
@@ -436,29 +412,27 @@ func (s *standaloneActivityTestSuite) TestWFASAANextAttemptScheduleTimeAndCurren
 			activityInfoProjection{State: enumspb.PENDING_ACTIVITY_STATE_STARTED, Attempt: 1})
 	})
 
-	// Backing off before the retry dispatches: the retry is genuinely pending, so both the interval and
-	// the next-attempt schedule time are populated. The case where the two products agree.
+	// Backing off before the retry dispatches: the retry is pending, so both the interval and the
+	// next-attempt schedule time are populated.
 	t.Run("BackingOffBeforeRetry", func(t *testing.T) {
 		both(t, 3, saaDelayWindow, []model.Event{saaPoll, saaFailRetryably},
 			activityInfoProjection{State: enumspb.PENDING_ACTIVITY_STATE_SCHEDULED, Attempt: 2, CurrentRetryInterval: saaDelayWindow, NextAttemptScheduleSet: true})
 	})
 
-	// Retry dispatched to matching but not yet polled: schedulable now, not backing off, so there is no
-	// current retry interval and no future dispatch time. current_retry_interval is meaningful only while
-	// a retry is genuinely pending in the future.
+	// Retry dispatched to Matching but not yet polled: schedulable now, not backing off, so no current
+	// retry interval and no future dispatch time.
 	t.Run("RetryQueuedNotStarted", func(t *testing.T) {
 		both(t, 3, saaDelayWindow, []model.Event{saaPoll, saaFailRetryably, saaBackoffDelayElapse},
 			activityInfoProjection{State: enumspb.PENDING_ACTIVITY_STATE_SCHEDULED, Attempt: 2})
 	})
 
-	// Retry attempt running with a further retry permitted: nothing pending (C5 — SAA leaks the backoff's
-	// metadata here).
+	// Retry attempt running with a further retry permitted: nothing pending.
 	t.Run("RetryAttemptRunning", func(t *testing.T) {
 		both(t, 3, saaDelayWindow, []model.Event{saaPoll, saaFailRetryably, saaBackoffDelayElapse, saaPoll},
 			activityInfoProjection{State: enumspb.PENDING_ACTIVITY_STATE_STARTED, Attempt: 2})
 	})
 
-	// Final attempt running with no retry remaining: nothing pending (C5 — SAA leaks metadata here too).
+	// Final attempt running with no retry remaining: nothing pending.
 	t.Run("FinalAttemptRunning", func(t *testing.T) {
 		both(t, 2, saaDelayWindow, []model.Event{saaPoll, saaFailRetryably, saaBackoffDelayElapse, saaPoll},
 			activityInfoProjection{State: enumspb.PENDING_ACTIVITY_STATE_STARTED, Attempt: 2})
@@ -480,30 +454,27 @@ func (s *standaloneActivityTestSuite) TestWFASAANextAttemptScheduleTimeAndCurren
 		})
 	})
 
-	// Paused while backing off (before the retry dispatches). There is no next attempt set to occur, and
-	// it's not appropriate to report the current retry interval since dispatch will not occur while paused.
+	// Paused while backing off, before the retry dispatches. No dispatch will occur while paused, so there
+	// is neither a next attempt scheduled nor a current retry interval to report.
 	t.Run("PausedBeforeDispatch", func(t *testing.T) {
 		both(t, 3, saaDelayWindow, []model.Event{saaPoll, saaFailRetryably, saaPause},
 			activityInfoProjection{State: enumspb.PENDING_ACTIVITY_STATE_PAUSED, Attempt: 2})
 	})
 
-	// Paused after the backoff elapsed and the retry was dispatched to Matching. No dispatch occurs while
-	// paused, so there is no next-attempt schedule time; and as with RetryQueuedNotStarted there is no
-	// current retry interval (nothing is backing off).
+	// Paused after the backoff elapsed and the retry was dispatched to Matching. As above, no
+	// next-attempt schedule time; and as in RetryQueuedNotStarted, nothing is backing off.
 	t.Run("PausedAfterDispatch", func(t *testing.T) {
 		both(t, 3, saaDelayWindow, []model.Event{saaPoll, saaFailRetryably, saaBackoffDelayElapse, saaPause},
 			activityInfoProjection{State: enumspb.PENDING_ACTIVITY_STATE_PAUSED, Attempt: 2})
 	})
 }
 
-// The remainder of this file is one-sided SAA driver-based coverage — behaviors that have no WFA
-// counterpart (worker-side validation, per-activity start delay, and the SAA-only operator commands
-// pause/unpause/reset/update-options), or that are configured through customizeStart, which injects
-// start-time config the model cannot see and so only exists on the SAA surface. They use the same
-// standalone driver, driveTrace, and archetype model as the parity repros above.
+// The rest of this file is one-sided SAA coverage: behavior with no WFA counterpart (worker-side
+// validation, per-activity start delay, the SAA-only operator commands), or config injected through
+// customizeStart, which exists only on the SAA driver.
 
-// saaTraceBudget raises the parent test's context budget: the declarative trace subtests pay real
-// wall-clock waits, so a group can run a few minutes past the default per-test timeout.
+// saaTraceBudget is the context budget for a group of declarative traces. They pay real wall-clock
+// waits, so a group can run a few minutes past the default per-test timeout.
 func saaTraceBudget() time.Duration {
 	const floor = 8 * time.Minute
 	if d := testcontext.DefaultTimeout(); d > floor {
@@ -512,31 +483,28 @@ func saaTraceBudget() time.Duration {
 	return floor
 }
 
-// driveTrace drives one declared trace on its own harness and returns a handle at the reached state, so
-// the caller can issue further RPCs and assert on the outcome. It checks conformance to the model at
-// every step unless a customizeStart hook injects config the model cannot see.
+// driveTrace drives one declared trace on its own harness and returns a handle at the reached state. It
+// checks conformance to the model at every step, unless customizeStart is set.
 func (s *standaloneActivityTestSuite) driveTrace(t *testing.T, env *standaloneActivityEnv, tr saaTrace) *saaHandle {
 	h := newSAAHarness(t, env, tr.config())
 	h.startDelay = tr.startDelay()
 	h.retryInterval = tr.retryInterval
 	h.nextRetryDelay = tr.nextRetryDelay
 	h.customizeStart = tr.customizeStart
-	// A timeout's *Elapses event in the script is the signal to configure that timeout short.
 	h.shortTimeout = saaTimeoutIn(tr.trace)
-	// "Dispatchable" must mean "dispatches promptly", so bound the positive poll below the delay
-	// window — that is how a reset that discards a backoff (immediate) is told from still-delayed.
+	// Bound the positive poll below the delay window, so that "Dispatchable" means "dispatches promptly".
+	// That is what distinguishes a reset which discards a backoff from one which is still delayed.
 	h.positivePollTimeout = saaPollTimeout
-	// A customizeStart hook injects start-time config the model cannot see, so conformance checking
-	// would diverge; drive model-free and leave assertions to the caller. Otherwise check every step.
+	// customizeStart injects config the model cannot see, so drive model-free and leave the assertions to
+	// the caller.
 	if tr.customizeStart != nil {
 		return h.driveTrace(t, tr.trace)
 	}
 	return h.driveTraceWithModelConformanceChecking(t, tr.trace)
 }
 
-// TestSAAWorkerMustSendApplicationFailure: a worker completing an attempt with RespondActivityTaskFailed
-// must send an ApplicationFailureInfo failure; a server failure is rejected. SAA-only (worker-side RPC
-// validation, no WFA analog at this surface). The driver only takes the activity to a started attempt.
+// TestSAAWorkerMustSendApplicationFailure: a worker failing an attempt must send an
+// ApplicationFailureInfo failure, and a server failure is rejected. SAA-only worker-side RPC validation.
 func (s *standaloneActivityTestSuite) TestSAAWorkerMustSendApplicationFailure() {
 	env := s.newTestEnv()
 	a := s.driveTrace(s.T(), env, saaTrace{trace: []model.Event{saaPoll}, maxAttempts: 3})
@@ -552,12 +520,10 @@ func (s *standaloneActivityTestSuite) TestSAAWorkerMustSendApplicationFailure() 
 	require.ErrorContains(s.T(), err, "Failure must have ApplicationFailureInfo")
 }
 
-// TestWFASAANonRetryableTimeout ports TestParityNonRetryableTimeout: a StartToClose or Heartbeat
-// timeout whose type is named in RetryPolicy.NonRetryableErrorTypes must fail the activity terminally
-// (TIMED_OUT) when it fires, rather than retrying (finding B2). Both surfaces must end TIMED_OUT; a
-// divergence in either reveals a bug in that surface. The non-retryable timeout type is set through the WFA driver's
-// nonRetryableErrorTypes knob and, on SAA, through customizeStart (which the model cannot see, so the
-// SAA side drives model-free).
+// TestWFASAANonRetryableTimeout ports TestParityNonRetryableTimeout: a StartToClose or Heartbeat timeout
+// whose type is named in RetryPolicy.NonRetryableErrorTypes must fail the activity terminally when it
+// fires, rather than retrying. The type is set via the WFA driver's nonRetryableErrorTypes and, on SAA,
+// via customizeStart.
 func (s *standaloneActivityTestSuite) TestWFASAANonRetryableTimeout() {
 	env := s.newTestEnv()
 	t := s.T()
@@ -591,9 +557,9 @@ func (s *standaloneActivityTestSuite) TestWFASAANonRetryableTimeout() {
 	})
 }
 
-// TestStartDelay_Declarative drives the start-delay scenarios, each an explicitly named subtest with
-// its trace declared inline. It only drives (no assertions yet); see driveTrace. SAA-only (WFA has no
-// per-activity start delay).
+// TestStartDelay_Declarative drives the start-delay scenarios, each a named subtest with its trace
+// declared inline. Each step is model-checked by driveTrace; there are no further assertions. SAA-only:
+// WFA has no per-activity start delay.
 func (s *standaloneActivityTestSuite) TestStartDelay_Declarative() {
 	testcontext.For(s.T(), testcontext.WithTimeout(saaTraceBudget()))
 	env := s.newTestEnv()
@@ -635,8 +601,8 @@ func (s *standaloneActivityTestSuite) TestStartDelay_Declarative() {
 	})
 }
 
-// TestBackoff_Declarative drives the retry-backoff scenarios (drive only; no assertions yet). SAA-only
-// (exercises the operator commands pause/unpause/reset/update-options during a backoff).
+// TestBackoff_Declarative drives the retry-backoff scenarios, including the operator commands during a
+// backoff. Model-checked by driveTrace.
 func (s *standaloneActivityTestSuite) TestBackoff_Declarative() {
 	testcontext.For(s.T(), testcontext.WithTimeout(saaTraceBudget()))
 	env := s.newTestEnv()
@@ -686,8 +652,8 @@ func (s *standaloneActivityTestSuite) TestBackoff_Declarative() {
 	})
 }
 
-// TestTimeout_Declarative drives the activity-timeout scenarios (drive only; no assertions yet). SAA-only
-// (the start-delay and paused variants have no WFA counterpart).
+// TestTimeout_Declarative drives the activity-timeout scenarios, including the start-delay and paused
+// variants that have no WFA counterpart. Model-checked by driveTrace.
 func (s *standaloneActivityTestSuite) TestTimeout_Declarative() {
 	testcontext.For(s.T(), testcontext.WithTimeout(saaTraceBudget()))
 	env := s.newTestEnv()

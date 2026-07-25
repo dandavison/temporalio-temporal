@@ -75,8 +75,8 @@ func srcState(cfg model.Config, st model.Status, keepPaused bool, count int32) m
 	return s
 }
 
-// evalModel calls Model, classifying an "unreachable" assertion panic separately from any other
-// (unexpected) panic instead of crashing the enumeration.
+// evalModel calls Transition, classifying an "unreachable" assertion panic separately from any other
+// panic rather than crashing the enumeration.
 type verdict int
 
 const (
@@ -103,9 +103,9 @@ func evalModel(cfg model.Config, s model.AbstractState, e model.Event) (out mode
 
 // --- checks --------------------------------------------------------------------------------
 
-// TestModelDecisionCoverage asserts Model is total over the RPC domain: every (status, event)
-// cell either returns an Outcome or is an explicit unreachable assertion (the pre-creation
-// Unspecified status). Any other panic is a bug in Model or here and fails the test.
+// TestModelDecisionCoverage asserts Transition is total over the RPC domain: every (status, event) cell
+// either returns an Outcome or is an explicit unreachable assertion, which is the pre-creation
+// Unspecified status. Any other panic fails the test.
 type cell struct {
 	status model.Status
 	kind   model.EventKind
@@ -142,13 +142,13 @@ func TestModelDecisionCoverage(t *testing.T) {
 	t.Logf("distinct (status,event) covered: %d", len(decidedCells))
 }
 
-// TestModelEdgesReachableInCode asserts that every status change the spec accepts can actually
-// be produced by the code: if Model moves the activity from A to a different status B, then B
-// must be reachable from A by following one or more declared transitions.
+// TestModelEdgesReachableInCode asserts that every status change the model accepts can be produced by
+// the code: if Transition moves the activity from A to a different status B, then B must be reachable
+// from A by following one or more declared transitions.
 func TestModelEdgesReachableInCode(t *testing.T) {
 	reach := codeReachability()
 
-	// Deduplicate reported failures so one missing edge is not printed hundreds of times.
+	// Deduplicate, so one missing edge is not printed hundreds of times.
 	reported := map[[2]model.Status]bool{}
 
 	for _, cfg := range cfgs {
@@ -173,7 +173,7 @@ func TestModelEdgesReachableInCode(t *testing.T) {
 							dst := specToProto(out.Next.Status)
 							if !reach[src][dst] {
 								reported[key] = true
-								t.Errorf("spec accepts %s --%s--> %s, but the code cannot reach %s from %s via any transition path",
+								t.Errorf("model accepts %s --%s--> %s, but the code cannot reach %s from %s via any transition path",
 									st, kindName(k), out.Next.Status, out.Next.Status, st)
 							}
 						}
@@ -213,9 +213,9 @@ var codeTransitions = []codeTransition{
 	{"ResetAttemptFailedToScheduled", activity.TransitionResetAttemptFailedToScheduled},
 }
 
-// codeAdjacency reads Sources and Destination off each transition by reflection (the fields are
-// exported; the transitions' event type parameters differ and many are unexported, so reflection
-// is the uniform way to read them).
+// codeAdjacency reads Sources and Destination off each transition by reflection. The fields are
+// exported, but the transitions' event type parameters differ and many are unexported, so reflection is
+// the only uniform way to read them.
 func codeAdjacency() map[activitypb.ActivityExecutionStatus][]activitypb.ActivityExecutionStatus {
 	adj := map[activitypb.ActivityExecutionStatus][]activitypb.ActivityExecutionStatus{}
 	for _, ct := range codeTransitions {

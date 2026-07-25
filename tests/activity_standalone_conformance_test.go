@@ -1,13 +1,10 @@
 package tests
 
-// Model-based conformance entry points for the standalone-activity (SAA) product surface.
-// model.Transition is the specification — a total function Transition(cfg, state, event) -> Outcome —
-// and these tests drive a real onebox server through the same event alphabet, asserting the server
-// conforms to the model at every step. The wall-clock scenarios (timeouts, dispatch delays) are checked
-// by the declarative trace tests (Test{StartDelay,Backoff,Timeout}_Declarative in
-// activity_parity_with_real_drivers_test.go), which model-check each step via driveTrace; the exhaustive RPC-graph and
-// random-walk explorers are here. The engine that drives and checks each event is in
-// activity_standalone_conformance.go, built on the driver in activity_standalone_driver.go.
+// Model-based conformance entry points for the standalone-activity (SAA) surface. model.Transition is
+// the specification; these tests drive a real onebox server through the same event alphabet and assert
+// it conforms at every step. The RPC-graph and random-walk explorers are here; the wall-clock scenarios
+// are covered by Test{StartDelay,Backoff,Timeout}_Declarative in
+// activity_parity_with_real_drivers_test.go. The engine is in activity_standalone_conformance.go.
 
 import (
 	"math/rand"
@@ -28,21 +25,19 @@ func (s *standaloneActivityTestSuite) TestConformance() {
 var saaTraversalConfigs = []model.Config{
 	{}, // no schedule-to-close, unlimited attempts
 	{HasScheduleToClose: true, HasScheduleToStart: true, HasHeartbeat: true, MaxAttempts: 3},
-	// Retries exhaust after the first attempt, so the RespondFailed exhaustion boundary
-	// (retryable failure with no retries left -> Failed) is reached at depth 2 rather than
-	// past the depth bound. See the completeness check.
+	// Retries exhaust after the first attempt, putting the retryable-failure-with-no-retries-left edge at
+	// depth 2 rather than past the depth bound.
 	{MaxAttempts: 1},
-	// Start-delay window: the activity stays StartDelayPending for the whole traversal (no RPC event
-	// leaves that state), so this crosses the operator commands (pause/unpause/reset/update/cancel/
-	// terminate) with the start-delay window and verifies via the per-Poll negative poll that none of
-	// them dispatches early. The second adds schedule-to-close so its window-invalidation is exercised.
+	// No RPC event leaves StartDelayPending, so the activity stays in the start-delay window for the whole
+	// traversal: this crosses every operator command with that window, and the per-Poll negative poll
+	// checks that none of them dispatches early. The second adds schedule-to-close.
 	{HasStartDelay: true},
 	{HasStartDelay: true, HasScheduleToClose: true},
 }
 
-// saaConformanceContextBudget is TestConformance's overall context deadline. DefaultTimeout already
-// reflects TEMPORAL_TEST_TIMEOUT, so take the larger of it and a floor generous enough for the combined
-// explorers at their default depths.
+// saaConformanceContextBudget is TestConformance's overall context deadline: the larger of
+// DefaultTimeout (which reflects TEMPORAL_TEST_TIMEOUT) and a floor that fits both explorers at their
+// default depths.
 func saaConformanceContextBudget() time.Duration {
 	const floor = 8 * time.Minute
 	if d := testcontext.DefaultTimeout(); d > floor {
@@ -51,18 +46,17 @@ func saaConformanceContextBudget() time.Duration {
 	return floor
 }
 
-// conformanceRPCGraphTraversal walks the transition graph that model.Transition describes and verifies every
-// edge against a real onebox server. From each reachable state it tries every event, replays the path
-// from a fresh activity, drives the event as a real RPC, reads the internal state back with
-// ReadComponent, and asserts:
-//   - the resulting internal state equals Transition().Next exactly (all observable fields);
-//   - each stamp's change across the edge matches Transition()'s AttemptTasksInvalidated / ScheduleToCloseTaskInvalidated;
+// conformanceRPCGraphTraversal walks the graph model.Transition describes, verifying every edge against a
+// real server. From each reachable state it tries every event, replaying the path on a fresh activity,
+// and asserts:
+//   - the resulting internal state equals Transition().Next in every observable field;
+//   - each stamp's change matches Transition()'s AttemptTasksInvalidated / ScheduleToCloseTaskInvalidated;
 //   - the RPC's accept/reject outcome matches Transition().Reject;
 //   - for a heartbeat, the response flags equal ExpectedHeartbeatFlags.
 //
-// model.Transition is total over the RPC event alphabet; a cell it does not handle panics and fails
-// the run. Timeouts are configured long (hours) so none fires mid-scenario; retry backoff is short so
-// retries can be traversed. Timeout timing is checked by the traces, not here.
+// model.Transition is total over the RPC alphabet, so a cell it does not handle panics and fails the run.
+// Timeouts are configured long so none fires mid-scenario; the retry backoff is short so retries can be
+// traversed.
 func (s *standaloneActivityTestSuite) conformanceRPCGraphTraversal(t *testing.T) {
 	env := s.newTestEnv()
 	for i, cfg := range saaTraversalConfigs {
@@ -71,22 +65,19 @@ func (s *standaloneActivityTestSuite) conformanceRPCGraphTraversal(t *testing.T)
 		h := newSAAHarness(t, env, cfg)
 		h.cfgIdx = i
 		if cfg.HasStartDelay {
-			// Keep the first-dispatch window open for the whole traversal so the activity stays
-			// StartDelayPending (the model never leaves that state via an RPC event), letting the BFS
-			// cross the operator commands with the start-delay window.
+			// Keep the first-dispatch window open for the whole traversal, so the activity stays
+			// StartDelayPending.
 			h.startDelay = time.Hour
 		}
 		h.traverse(t)
 	}
 }
 
-// conformanceRandomWalk drives one activity forward through randomly chosen events — no replay, no
-// backtracking, no state dedup. Where the graph traversal is exhaustive but depth-bounded, this
-// reaches deep, long interaction sequences the bounded BFS structurally never visits, at ~one RPC per
-// step. Every step is checked against model.Transition (via the same apply()), so a divergence is
-// caught the same way; the walk is deterministic in its seed (logged), so any failure reproduces
-// exactly with TEMPORAL_SAASPEC_WALK_SEED. Deep runs need a raised budget: TEMPORAL_TEST_TIMEOUT and
-// the go test -timeout. Set TEMPORAL_SAASPEC_NO_NEGATIVE_POLL=1 to skip the ~3s Paused negative poll.
+// conformanceRandomWalk drives one activity forward through randomly chosen events: no replay, no
+// backtracking, no state dedup, ~one RPC per step. It reaches the long interaction sequences the
+// depth-bounded traversal structurally never visits. Every step is checked against model.Transition via
+// the same apply(). The walk is deterministic in its seed, which is logged, so a failure reproduces with
+// TEMPORAL_SAASPEC_WALK_SEED. Deep runs need a raised TEMPORAL_TEST_TIMEOUT and go test -timeout.
 func (s *standaloneActivityTestSuite) conformanceRandomWalk(t *testing.T) {
 	env := s.newTestEnv()
 	seed, steps := saaWalkSeed(), saaWalkSteps()
@@ -96,9 +87,8 @@ func (s *standaloneActivityTestSuite) conformanceRandomWalk(t *testing.T) {
 		h := newSAAHarness(t, env, cfg) // subtest-scoped budget; see conformanceRPCGraphTraversal
 		h.cfgIdx = i
 		if cfg.HasStartDelay {
-			// Keep the first-dispatch window open for the whole walk so the activity stays
-			// StartDelayPending (no RPC event leaves it); the walk explores operator commands in the
-			// window and, unlike the BFS, re-polls post-operation states (catching early re-dispatch).
+			// Keep the first-dispatch window open for the whole walk. Unlike the BFS, the walk re-polls
+			// post-operation states, so it catches an early re-dispatch.
 			h.startDelay = time.Hour
 		}
 		// Independent, reproducible RNG stream per config.

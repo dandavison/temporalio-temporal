@@ -1,7 +1,6 @@
-// Command graph enumerates the activity behavior-model's reachable state graph: the fixpoint of
-// model.Transition from model.Initial(cfg), following non-reject edges, with states identified by
-// model.Fingerprint. It is a development/inspection tool for the same graph the tier-2 and tier-3
-// explorers traverse; it drives no server and imports only the model.
+// Command graph enumerates the activity model's reachable state graph: the fixpoint of model.Transition
+// from model.Initial(cfg), following non-reject edges, with states identified by model.Fingerprint. An
+// inspection tool for the same graph the tier-2 and tier-3 explorers traverse. It drives no server.
 //
 // Usage:
 //
@@ -118,8 +117,8 @@ func buildGraph(cfg model.Config, events []model.Event) graph {
 }
 
 // printSkeleton collapses the reachable graphs of the given configs to the status level: the union of
-// status --eventKind--> destStatus over every non-reject edge. This is the semantic transition
-// relation, free of the fingerprint inflation from count buckets, reset flags, and dispatchability.
+// status --eventKind--> destStatus over every non-reject edge, without the fingerprint inflation from
+// count buckets, reset flags, and dispatchability.
 func printSkeleton(tier int, cfgs []model.Config) {
 	rel := map[string]bool{}
 	for _, cfg := range cfgs {
@@ -154,11 +153,10 @@ func printSkeleton(tier int, cfgs []model.Config) {
 		len(lines), len(cfgs), indent(lines))
 }
 
-// eventsFor is the event alphabet an explorer tier drives for a given config, mirroring the
-// candidate-event sets in the tier-2 (chasm/lib/activity/activity_conformance_test.go) and tier-3
-// (tests/activity_standalone_conformance.go) explorers. The tier-2 timeout events must be gated on
-// config: the model's timeout functions drive to TimedOut unconditionally, so the explorers exclude
-// an unconfigured timeout's event rather than let it fire.
+// eventsFor is the event alphabet an explorer tier drives for a given config. Mirrors the candidate-event
+// sets in chasm/lib/activity/activity_conformance_test.go (tier 2) and
+// tests/activity_standalone_conformance.go (tier 3). The model's timeout functions drive to TimedOut
+// unconditionally, so the tier-2 timeout events are gated on config rather than left to fire.
 func eventsFor(tier int, cfg model.Config) []model.Event {
 	switch tier {
 	case 2:
@@ -207,8 +205,8 @@ func tier3Events() []model.Event {
 	return out
 }
 
-// tierConfigs is the config set each tier's explorer sweeps: tier-3 mirrors saaTraversalConfigs
-// (tests/activity_standalone_conformance_test.go), tier-2 the in-process configs (activity_conformance_test.go).
+// tierConfigs is the config set each tier's explorer sweeps. Mirrors saaTraversalConfigs (tier 3) and the
+// in-process configs in activity_conformance_test.go (tier 2).
 func tierConfigs(tier int) ([]model.Config, bool) {
 	switch tier {
 	case 2:

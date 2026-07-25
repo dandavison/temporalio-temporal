@@ -1,9 +1,8 @@
 package tests
 
 // Driver for standalone-activity (SAA) tests: starts an activity and drives it through a scripted
-// sequence of events (a trace), realizing each event as the corresponding frontend RPC / poll /
-// wall-clock wait. It does not make assertions about behavior. The event DSL is the archetype model
-// package (chasm/lib/activity/model); this file is the SAA adapter that realizes it.
+// sequence of events (a trace), realizing each event as a frontend RPC, a poll, or a wall-clock wait.
+// It makes no assertions. The event vocabulary is chasm/lib/activity/model.
 
 import (
 	"cmp"
@@ -39,30 +38,22 @@ type saaHarness struct {
 	cfgIdx     int
 	numStarted int
 	idBase     string // activity-id prefix, unique per harness
-	// shortTimeout, set to one of the timeout *Elapses kinds, makes that timeout short at Start so a
-	// trace can fire it. Zero (Poll) leaves all timeouts long.
-	shortTimeout model.EventKind
-	startDelay   time.Duration // StartActivityExecutionRequest.StartDelay
-	// retryInterval is the RetryPolicy InitialInterval; 0 => saaDefaultRetryInterval.
-	retryInterval time.Duration
-	// backoffCoefficient is the RetryPolicy BackoffCoefficient; 0 => 1.0 (constant interval).
-	backoffCoefficient float64
-	// maxRetryInterval is the RetryPolicy MaximumInterval; 0 => the InitialInterval.
-	maxRetryInterval time.Duration
-	// nextRetryDelay overrides the policy backoff via ApplicationFailureInfo.NextRetryDelay on RespondFailed.
-	nextRetryDelay time.Duration
-	// scheduleToClose, when >0, sets a finite ScheduleToCloseTimeout (overriding the long default) so a
-	// trace can make a retry fail to fit before the deadline.
-	scheduleToClose time.Duration
-	// positivePollTimeout bounds a "must dispatch" poll; 0 => saaPositivePollTimeout.
-	positivePollTimeout time.Duration
-	// customizeStart mutates the StartActivityExecutionRequest before it is sent — the seam for niche
-	// start-time config the harness stays ignorant of.
+
+	shortTimeout        model.EventKind // this timeout is configured short at Start; zero leaves all timeouts long
+	startDelay          time.Duration   // StartActivityExecutionRequest.StartDelay
+	retryInterval       time.Duration   // RetryPolicy InitialInterval; 0 => saaDefaultRetryInterval
+	backoffCoefficient  float64         // RetryPolicy BackoffCoefficient; 0 => 1.0 (constant interval)
+	maxRetryInterval    time.Duration   // RetryPolicy MaximumInterval; 0 => the InitialInterval
+	nextRetryDelay      time.Duration   // ApplicationFailureInfo.NextRetryDelay sent with RespondFailed
+	scheduleToClose     time.Duration   // ScheduleToCloseTimeout, overriding the long default
+	positivePollTimeout time.Duration   // bounds a "must dispatch" poll; 0 => saaPositivePollTimeout
+
+	// customizeStart mutates the StartActivityExecutionRequest before it is sent.
 	customizeStart func(*workflowservice.StartActivityExecutionRequest)
 }
 
-// newSAAHarness builds a harness for one test, with its own activity-id prefix and the test-scoped
-// context. The caller sets any timing knobs it needs on the result.
+// newSAAHarness builds a harness with the test-scoped context and its own activity-id prefix. The
+// caller sets whichever timing knobs it needs on the result.
 func newSAAHarness(t *testing.T, env *standaloneActivityEnv, cfg model.Config) *saaHarness {
 	return &saaHarness{
 		env:    env,
@@ -80,20 +71,18 @@ const saaDefaultRetryInterval = 200 * time.Millisecond
 // saaPositivePollTimeout bounds a poll that must find a task.
 const saaPositivePollTimeout = 10 * time.Second
 
-// saaWallClockSettle is slack added to a wall-clock event's clock: the driver polls for the event's
-// effect up to (window + settle) rather than sleeping the window blindly, so a timer firing a little
-// late is tolerated instead of racing a single post-sleep read.
+// saaWallClockSettle is slack added to a wall-clock event's window when waiting for its effect.
 const saaWallClockSettle = 2 * time.Second
 
 // saaPollInterval is the gap between reads when polling for a wall-clock event's effect.
 const saaPollInterval = 100 * time.Millisecond
 
-// saaPollTimeout bounds a poll: just above common.MinLongPollTimeout, so a "must not dispatch" poll
-// genuinely reaches matching (below the floor the frontend rejects it, making the check vacuous).
+// saaPollTimeout is a poll timeout above common.MinLongPollTimeout, the floor below which the frontend
+// rejects the poll rather than reaching matching.
 const saaPollTimeout = common.MinLongPollTimeout + time.Second
 
-// saaHandle is a handle to one activity instance: the token last dispatched to it plus the ids to
-// address it, so a caller can issue further RPCs and read its state back.
+// saaHandle is a handle to one activity instance: the ids that address it, plus the token last
+// dispatched to it.
 type saaHandle struct {
 	h             *saaHarness
 	activityID    string
@@ -101,22 +90,20 @@ type saaHandle struct {
 	runID         string
 	token         []byte
 	lastHeartbeat *workflowservice.RecordActivityTaskHeartbeatResponse
-	// establishedReqID[kind] is the request id that established the current idempotent state for an
-	// operator command; a SameRequestID event reuses it. lastReqID is the id of the most recent operator
-	// RPC, promoted into establishedReqID by apply when that RPC changes state.
+	// establishedReqID[kind] is the request id that established the current state for an operator
+	// command; a SameRequestID event reuses it. lastReqID is the most recent operator RPC's id, promoted
+	// into establishedReqID by apply when that RPC changes state.
 	establishedReqID map[model.EventKind]string
 	lastReqID        string
 	path             []model.Event // events driven to reach the edge under test, for failure reports
 
-	// Raw stamps read across the edge under test. observed() shifts cur->prev on each read, so their
-	// inequality is the stamp bump across the last edge (see checkTaskInvalidation).
+	// Raw stamps, shifted cur->prev by each observed() read; see checkTaskInvalidation.
 	prevStamp, curStamp       int32
 	prevSTCStamp, curSTCStamp int32
 }
 
-// driveTrace runs a trace on a fresh activity, realizing each event against the server, and returns a
-// handle at the reached state. Model-free: each RPC must succeed, a poll captures the dispatched token,
-// a wall-clock event waits out its window.
+// driveTrace runs a trace on a fresh activity and returns a handle at the reached state. Model-free:
+// each RPC must succeed.
 func (h *saaHarness) driveTrace(t require.TestingT, trace []model.Event) *saaHandle {
 	a := h.start(t)
 	for _, e := range trace {
@@ -142,15 +129,10 @@ func (a *saaHandle) driveEvent(t require.TestingT, e model.Event) {
 	}
 }
 
-// awaitWallClock blocks until a wall-clock event's effect is visible, preferring the server's long-poll
-// to client-side polling. It reads only the frontend surface (no internal state), so it works for
-// functional tests that build the harness with just a frontend client. The deadline is window + settle:
-// a firing effect returns early, a genuine no-op waits it out.
-//
-// A timeout fires a state transition, so it blocks on a DescribeActivityExecution long-poll that wakes
-// when the execution's transition-history version advances. A dispatch-delay elapse (start-delay or
-// backoff) bumps no version — the dispatch time simply passes — so a long-poll would never wake; it is
-// detected by the read-time projection flip (NextAttemptScheduleTime clearing as the dispatch time passes).
+// awaitWallClock blocks until a wall-clock event's effect is visible on the frontend surface, or until
+// (window + settle) has passed. A timeout advances the execution's transition-history version, so it is
+// waited for with a long poll. A dispatch-delay elapse advances no version — the dispatch time simply
+// passes — so it is detected by the read-time NextAttemptScheduleTime flip instead.
 func (a *saaHandle) awaitWallClock(t require.TestingT, e model.Event) {
 	deadline := time.Now().Add(a.h.eventClock(e) + saaWallClockSettle)
 	if e.Kind == model.StartDelayElapses || e.Kind == model.BackoffElapses {
@@ -160,10 +142,9 @@ func (a *saaHandle) awaitWallClock(t require.TestingT, e model.Event) {
 	a.awaitStateTransition(t, deadline)
 }
 
-// awaitStateTransition blocks on a DescribeActivityExecution long-poll until the execution's
-// transition-history version advances past the current state (or the deadline). Passing the token from a
-// prior Describe makes the server hold the request until the state changes; it returns a full response on
-// a transition and an empty one when its long-poll window expires, so an empty response means "resubmit".
+// awaitStateTransition long-polls DescribeActivityExecution until the execution's transition-history
+// version advances past the token's, or the deadline passes. An empty response means the server's
+// long-poll window expired, so resubmit.
 func (a *saaHandle) awaitStateTransition(t require.TestingT, deadline time.Time) {
 	token := a.describe(t).GetLongPollToken()
 	for time.Now().Before(deadline) {
@@ -175,14 +156,12 @@ func (a *saaHandle) awaitStateTransition(t require.TestingT, deadline time.Time)
 		})
 		require.NoError(t, err)
 		if resp.GetInfo() != nil {
-			return // a non-empty response means the state advanced (a transition occurred)
+			return // non-empty: the state advanced
 		}
 	}
 }
 
-// awaitProjectionChange client-side-polls the public projection until it changes (or the deadline). Used
-// for dispatch-delay elapses, whose only effect is the read-time NextAttemptScheduleTime flip — no
-// transition-history advance for a long-poll to wake on.
+// awaitProjectionChange polls the public projection until it changes, or the deadline passes.
 func (a *saaHandle) awaitProjectionChange(t require.TestingT, deadline time.Time) {
 	before := a.projection(t)
 	for a.projection(t) == before && time.Now().Before(deadline) {
@@ -190,10 +169,9 @@ func (a *saaHandle) awaitProjectionChange(t require.TestingT, deadline time.Time
 	}
 }
 
-// driveTraceWithModelConformanceChecking drives a trace like driveTrace but checks conformance to the
-// model at every step: after Start the observed state must equal model.Initial(cfg), then each event's
-// outcome is predicted with model.Transition and verified via apply (see the spec harness). Use it
-// whenever the config is fully modeled (no customizeStart the model cannot see).
+// driveTraceWithModelConformanceChecking drives a trace like driveTrace, additionally checking each
+// step against model.Transition (see apply). The state after Start must equal model.Initial(cfg).
+// Requires a config the model can see in full, so no customizeStart.
 func (h *saaHarness) driveTraceWithModelConformanceChecking(t *testing.T, trace []model.Event) *saaHandle {
 	a := h.start(t)
 	a.path = trace
@@ -216,7 +194,7 @@ func (h *saaHarness) start(t require.TestingT) *saaHandle {
 		require.Fail(t, "saaHarness misconfigured: cfg.HasStartDelay requires startDelay > 0")
 	}
 	h.numStarted++
-	// cfgIdx keeps the ids distinct across the per-config harnesses an explorer sweeps.
+	// cfgIdx keeps ids distinct across the per-config harnesses an explorer sweeps.
 	id := fmt.Sprintf("%s-%d-%d", h.idBase, h.cfgIdx, h.numStarted)
 	resp, err := h.env.FrontendClient().StartActivityExecution(h.ctx, h.startRequest(id, id))
 	require.NoError(t, err)
@@ -270,9 +248,8 @@ func (h *saaHarness) startRequest(activityID, taskQueue string) *workflowservice
 	return req
 }
 
-// describe returns the DescribeActivityExecution response, the public surface a functional test
-// asserts on. Outcome / last failure / heartbeat details are included so a caller can assert on a
-// closed activity's result or a running one's checkpoint.
+// describe returns the DescribeActivityExecution response, including the outcome, the last failure, and
+// the heartbeat details.
 func (a *saaHandle) describe(t require.TestingT) *workflowservice.DescribeActivityExecutionResponse {
 	resp, err := a.h.env.FrontendClient().DescribeActivityExecution(a.h.ctx, &workflowservice.DescribeActivityExecutionRequest{
 		Namespace:               a.h.env.Namespace().String(),
@@ -286,14 +263,14 @@ func (a *saaHandle) describe(t require.TestingT) *workflowservice.DescribeActivi
 	return resp
 }
 
-// projection reads the activity's public info back as the shared activityInfoProjection (defined in
-// activity_workflow_driver.go). Parallel to wfaHandle.projection.
+// projection is the activity's public info as an activityInfoProjection. Parallel to
+// wfaHandle.projection.
 func (a *saaHandle) projection(t require.TestingT) activityInfoProjection {
 	return projectSAA(a.describe(t).GetInfo())
 }
 
-// terminal reports the terminal state as the shared activityTerminalProjection: status from Info, the
-// failure discriminant from the terminal Outcome. Parallel to wfaHandle.terminal.
+// terminal is the terminal status from Info plus the failure discriminant from the Outcome. Parallel to
+// wfaHandle.terminal.
 func (a *saaHandle) terminal(t require.TestingT) activityTerminalProjection {
 	resp := a.describe(t)
 	return activityTerminalProjection{
@@ -302,21 +279,20 @@ func (a *saaHandle) terminal(t require.TestingT) activityTerminalProjection {
 	}
 }
 
-// terminalCause reports the underlying failure a terminal timeout chains as its Cause, as the shared
-// failureCause (empty if none). Parallel to wfaHandle.terminalCause.
+// terminalCause is the failure the terminal outcome chains as its Cause, empty if there is none.
+// Parallel to wfaHandle.terminalCause.
 func (a *saaHandle) terminalCause(t require.TestingT) failureCause {
 	cause := a.describe(t).GetOutcome().GetFailure().GetCause()
 	return failureCause{Type: saaFailureType(cause), Message: cause.GetMessage()}
 }
 
-// heartbeatDetails reports the last heartbeat checkpoint, as the first payload's raw bytes. Parallel
-// to wfaHandle.heartbeatDetails.
+// heartbeatDetails is the last heartbeat checkpoint, as the first payload's raw bytes. Parallel to
+// wfaHandle.heartbeatDetails.
 func (a *saaHandle) heartbeatDetails(t require.TestingT) []byte {
 	return firstPayloadData(a.describe(t).GetInfo().GetHeartbeatDetails())
 }
 
-// saaHeartbeatDetails is the fixed checkpoint payload the drivers send with a Heartbeat event, so a
-// test can assert it round-trips identically on both surfaces.
+// saaHeartbeatDetails is the checkpoint payload both drivers send with a Heartbeat event.
 var saaHeartbeatDetails = &commonpb.Payloads{Payloads: []*commonpb.Payload{{
 	Metadata: map[string][]byte{"encoding": []byte("json/plain")},
 	Data:     []byte(`"hb"`),
@@ -329,8 +305,7 @@ func firstPayloadData(p *commonpb.Payloads) []byte {
 	return nil
 }
 
-// saaFailureType extracts the failure discriminant a caller compares across surfaces: the application
-// failure Type, the TimeoutType string, or "" if neither.
+// saaFailureType is the application failure Type, the TimeoutType string, or "" for neither.
 func saaFailureType(f *failurepb.Failure) string {
 	if app := f.GetApplicationFailureInfo(); app != nil {
 		return app.GetType()
@@ -350,8 +325,8 @@ func projectSAA(i *apiactivitypb.ActivityExecutionInfo) activityInfoProjection {
 	}
 }
 
-// observed reads the activity's internal state back via ReadComponent, as the model's AbstractState.
-// It shifts cur->prev for the raw stamps so callers can compare the stamp change across the last edge.
+// observed is the activity's internal state as the model's AbstractState. It shifts the raw stamps
+// cur->prev, so a caller can compare the stamp change across the last edge.
 func (a *saaHandle) observed() (model.AbstractState, error) {
 	o, err := a.readObserved()
 	if err != nil {
@@ -362,8 +337,7 @@ func (a *saaHandle) observed() (model.AbstractState, error) {
 	return model.Abstract(o), nil
 }
 
-// observedRaw reads the internal state without shifting the stamp baseline observed() maintains, so it
-// is safe to call in a polling loop (see awaitObservedMatch).
+// observedRaw is observed without the stamp shift, for use in a polling loop.
 func (a *saaHandle) observedRaw() (model.AbstractState, error) {
 	o, err := a.readObserved()
 	if err != nil {
@@ -372,9 +346,7 @@ func (a *saaHandle) observedRaw() (model.AbstractState, error) {
 	return model.Abstract(o), nil
 }
 
-// awaitObservedMatch polls the internal state (without shifting the stamp baseline) until it matches
-// want, or the deadline passes. Used by the model-conformance layer, where the model supplies the exact
-// target state to wait for.
+// awaitObservedMatch polls the internal state until it matches want, or the deadline passes.
 func (a *saaHandle) awaitObservedMatch(want model.AbstractState, deadline time.Time) {
 	for {
 		if obs, err := a.observedRaw(); err == nil && want.SameObserved(obs) {
@@ -387,7 +359,7 @@ func (a *saaHandle) awaitObservedMatch(want model.AbstractState, deadline time.T
 	}
 }
 
-// rpc performs the RPC for a non-Poll, non-wall-clock event and returns its error.
+// rpc performs the frontend RPC for a non-Poll, non-wall-clock event and returns its error.
 func (a *saaHandle) rpc(e model.Event) error {
 	fc := a.h.env.FrontendClient()
 	ns := a.h.env.Namespace().String()
@@ -466,9 +438,8 @@ func (a *saaHandle) updateOptions(e model.Event) error {
 	return err
 }
 
-// reqID returns the request id for an operator command. A SameRequestID event reuses the id that
-// established the current state for that command kind; otherwise a fresh id. The chosen id is recorded
-// as lastReqID and promoted to establishedReqID by apply when the RPC changes state.
+// reqID is the request id for an operator command: the id that established the current state for that
+// command kind if the event is a SameRequestID replay, else a fresh one. It is recorded as lastReqID.
 func (a *saaHandle) reqID(e model.Event) string {
 	id := uuid.NewString()
 	if e.SameRequestID {
@@ -488,8 +459,8 @@ func (a *saaHandle) pollForTask(t require.TestingT, timeout time.Duration) *work
 		TaskQueue: &taskqueuepb.TaskQueue{Name: a.taskQueue},
 		Identity:  "worker",
 	})
-	// Matching signals "waited, found nothing" with an empty response and a nil error, so a genuine
-	// no-task result never surfaces as an error; any error means the poll did not complete cleanly.
+	// Matching signals "waited, found nothing" with an empty response and a nil error, so any error
+	// means the poll did not complete cleanly.
 	if err != nil {
 		if a.h.ctx.Err() != nil {
 			return nil // teardown
@@ -505,13 +476,12 @@ func (a *saaHandle) pollForTask(t require.TestingT, timeout time.Duration) *work
 		return nil
 	}
 	if resp.GetActivityId() == "" {
-		return nil // matching's authoritative "waited, no task available"
+		return nil // no task available
 	}
 	return resp
 }
 
-// eventClock is how long the clock behind a wall-clock event takes to elapse: a timeout is short, a
-// dispatch delay lasts dispatchDelay.
+// eventClock is how long the clock behind a wall-clock event takes to elapse.
 func (h *saaHarness) eventClock(e model.Event) time.Duration {
 	switch e.Kind {
 	case model.StartDelayElapses:
@@ -523,8 +493,7 @@ func (h *saaHarness) eventClock(e model.Event) time.Duration {
 	}
 }
 
-// dispatchDelay is how long the harness configured the pending delay to last; a worker next_retry_delay
-// overrides the policy interval for a backoff.
+// dispatchDelay is how long the harness configured the pending delay to last.
 func (h *saaHarness) dispatchDelay(d model.Dispatchability) time.Duration {
 	switch d {
 	case model.StartDelayPending:
@@ -536,8 +505,7 @@ func (h *saaHarness) dispatchDelay(d model.Dispatchability) time.Duration {
 	}
 }
 
-// effectiveRetryInterval is the RetryPolicy InitialInterval the harness starts activities with, and so
-// how long a retry backs off for.
+// effectiveRetryInterval is the RetryPolicy InitialInterval the harness starts activities with.
 func (h *saaHarness) effectiveRetryInterval() time.Duration {
 	return cmp.Or(h.retryInterval, saaDefaultRetryInterval)
 }
@@ -578,8 +546,7 @@ func (a *saaHandle) readObserved() (model.Observed, error) {
 	}, struct{}{})
 }
 
-// saaIsWallClock reports whether an event fires on wall-clock time (the four timeouts and the two
-// dispatch-delay windows) rather than synchronously like an RPC.
+// saaIsWallClock reports whether an event fires on wall-clock time rather than synchronously.
 func saaIsWallClock(k model.EventKind) bool {
 	switch k {
 	case model.ScheduleToStartElapses, model.ScheduleToCloseElapses, model.StartToCloseElapses,
@@ -590,8 +557,8 @@ func saaIsWallClock(k model.EventKind) bool {
 	}
 }
 
-// saaTimeoutIn returns the timeout whose *Elapses event a trace fires (zero if none) — the signal to
-// configure that timeout short at Start. Traces fire at most one timeout, as their final event.
+// saaTimeoutIn is the timeout whose *Elapses event a trace fires, zero if none. A trace fires at most
+// one, as its final event.
 func saaTimeoutIn(trace []model.Event) model.EventKind {
 	for _, e := range trace {
 		switch e.Kind {
@@ -616,23 +583,21 @@ func saaFailure(retryable bool, nextRetryDelay time.Duration) *failurepb.Failure
 
 // --- traces --------------------------------------------------------------------------------
 //
-// A trace is an event sequence run once on one fresh activity. The timing knobs configure the activity
-// and how long the driver waits; writing a timeout's *Elapses event into the script is what makes the
-// harness configure that timeout short so it fires.
+// A trace is an event sequence run once on one fresh activity. Writing a timeout's *Elapses event into
+// the sequence is what makes the harness configure that timeout short, so that it fires.
 
 type saaTrace struct {
 	trace          []model.Event
-	maxAttempts    int32         // RetryPolicy MaximumAttempts (0 = unlimited); the rest of Config is derived (see config)
-	startDelayed   bool          // activity created with a start_delay; the window length is derived (see startDelay)
-	retryInterval  time.Duration // RetryPolicy interval; how long the driver waits for BackoffElapses
-	nextRetryDelay time.Duration // worker-supplied next_retry_delay override of the policy backoff
-	// customizeStart mutates the StartActivityExecutionRequest before it is sent — the seam for niche,
-	// start-time config the harness does not model (see saaHarness.customizeStart).
+	maxAttempts    int32         // RetryPolicy MaximumAttempts (0 = unlimited)
+	startDelayed   bool          // activity created with a start_delay; see startDelay for the window length
+	retryInterval  time.Duration // RetryPolicy InitialInterval
+	nextRetryDelay time.Duration // worker-supplied next_retry_delay
+	// customizeStart mutates the StartActivityExecutionRequest before it is sent.
 	customizeStart func(*workflowservice.StartActivityExecutionRequest)
 }
 
-// config derives the model Config from the trace. Only MaxAttempts is free; the timeout flags are
-// implied by which timeouts the trace fires.
+// config is the model Config the trace implies: MaxAttempts, plus a timeout flag per timeout the trace
+// fires.
 func (tr saaTrace) config() model.Config {
 	cfg := model.Config{MaxAttempts: tr.maxAttempts, HasStartDelay: tr.startDelayed}
 	for _, e := range tr.trace {
@@ -648,8 +613,8 @@ func (tr saaTrace) config() model.Config {
 	return cfg
 }
 
-// startDelay is the activity's start_delay: short (a real wait) when the trace fires StartDelayElapses,
-// otherwise long enough to stay open for the whole trace. Zero when not start-delayed.
+// startDelay is the activity's start_delay: short when the trace fires StartDelayElapses, otherwise
+// long enough to stay open for the whole trace. Zero when not start-delayed.
 func (tr saaTrace) startDelay() time.Duration {
 	if !tr.startDelayed {
 		return 0
@@ -662,8 +627,8 @@ func (tr saaTrace) startDelay() time.Duration {
 	return saaLongStartDelay
 }
 
-// saaDelayWindow is long enough to outlast a valid negative long poll (> the long-poll minimum), so
-// "not dispatchable yet" is observable during a start-delay or backoff window.
+// saaDelayWindow is a dispatch-delay window long enough to outlast a valid negative long poll, so that
+// "not dispatchable yet" is observable within it.
 const saaDelayWindow = 5 * time.Second
 
 // saaLongStartDelay keeps a first attempt in its start-delay window for the whole trace.
