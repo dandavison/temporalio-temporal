@@ -97,6 +97,10 @@ type inProcActivity struct {
 // make it long.
 const backoffInterval = 30 * time.Second
 
+// startDelayInterval is the first-dispatch delay when cfg.HasStartDelay is set, long enough that the
+// first dispatch is always still in the future.
+const startDelayInterval = time.Hour
+
 func (x *inProcExplorer) start() *inProcActivity {
 	x.ts.Update(x.nowStart) // fresh activities all start at the same virtual instant
 	x.counter++
@@ -118,6 +122,9 @@ func (x *inProcExplorer) start() *inProcActivity {
 	}
 	if x.cfg.HasHeartbeat {
 		req.HeartbeatTimeout = durationpb.New(10 * time.Minute)
+	}
+	if x.cfg.HasStartDelay {
+		req.StartDelay = durationpb.New(startDelayInterval)
 	}
 	// Terminate any prior run, so business-id reuse does not conflict.
 	key := chasm.ExecutionKey{NamespaceID: inProcNS, BusinessID: id}

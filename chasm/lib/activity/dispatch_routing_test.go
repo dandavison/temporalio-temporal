@@ -12,13 +12,17 @@ package activity
 
 import (
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/require"
+	apiactivitypb "go.temporal.io/api/activity/v1" //nolint:importas
 	"go.temporal.io/api/workflowservice/v1"
 	"go.temporal.io/server/chasm"
 	"go.temporal.io/server/chasm/lib/activity/gen/activitypb/v1"
 	"go.temporal.io/server/chasm/lib/activity/model"
 	"go.temporal.io/server/service/history/tasks"
+	"google.golang.org/protobuf/types/known/durationpb"
+	"google.golang.org/protobuf/types/known/fieldmaskpb"
 )
 
 func TestDispatchRouting(t *testing.T) {
@@ -45,6 +49,15 @@ func TestDispatchRouting(t *testing.T) {
 		require.Equal(t, routing{transfer: 1}, newInProcExplorer(t, model.Config{MaxAttempts: 3}).start().routed())
 	})
 
+	// The other negative control, and the one the routing decision is most delicately balanced on:
+	// TransitionScheduled asks whether the dispatch is still in the future, so a start delay is the only
+	// thing keeping a first dispatch off the transfer queue. Route it immediate and start_delay stops
+	// deferring anything at all.
+	t.Run("initial schedule within a start delay", func(t *testing.T) {
+		a := newInProcExplorer(t, model.Config{MaxAttempts: 3, HasStartDelay: true}).start()
+		require.Equal(t, routing{timer: 1}, a.routed(), "a first dispatch still inside its start delay must remain a timer task")
+	})
+
 	// The negative control: a dispatch the server is meant to defer must stay a timer task, or a retry
 	// backoff would not be honored at all.
 	t.Run("retry with a backoff still to wait out", func(t *testing.T) {
@@ -69,6 +82,21 @@ func TestDispatchRouting(t *testing.T) {
 	t.Run("reset mid-backoff", func(t *testing.T) {
 		a := backedOff(t)
 		require.Equal(t, routing{transfer: 1}, a.dispatchRouting(func() { a.reset(t) }))
+	})
+
+	// Updating options while SCHEDULED reissues the dispatch, which is a sixth site making the same
+	// routing decision — and the only one that reaches it through reissueDispatchAndScheduleToStart.
+	t.Run("update options once the backoff has elapsed", func(t *testing.T) {
+		a := dispatchable(t)
+		require.Equal(t, routing{transfer: 1}, a.dispatchRouting(func() { a.updateOptions(t) }))
+	})
+
+	// Unlike reset, updating options does not discard the pending backoff, so the reissued dispatch is
+	// still in the future and must stay a timer task.
+	t.Run("update options mid-backoff", func(t *testing.T) {
+		a := backedOff(t)
+		require.Equal(t, routing{timer: 1}, a.dispatchRouting(func() { a.updateOptions(t) }),
+			"reissuing a dispatch that is still to wait out its backoff must not make it immediate")
 	})
 }
 
@@ -127,6 +155,21 @@ func (a *inProcActivity) unpause(t *testing.T) {
 		_, err := act.handleUnpauseRequested(mc, &activitypb.UnpauseActivityExecutionRequest{
 			NamespaceId:     inProcNS,
 			FrontendRequest: &workflowservice.UnpauseActivityExecutionRequest{Identity: "operator"},
+		})
+		return err
+	}))
+}
+
+// updateOptions applies a minimal, always-valid options update: re-setting the heartbeat timeout.
+func (a *inProcActivity) updateOptions(t *testing.T) {
+	require.NoError(t, a.update(func(act *Activity, mc chasm.MutableContext) error {
+		_, err := act.UpdateActivityExecutionOptions(mc, &activitypb.UpdateActivityExecutionOptionsRequest{
+			NamespaceId: inProcNS,
+			FrontendRequest: &workflowservice.UpdateActivityExecutionOptionsRequest{
+				Identity:        "operator",
+				ActivityOptions: &apiactivitypb.ActivityOptions{HeartbeatTimeout: durationpb.New(time.Hour)},
+				UpdateMask:      &fieldmaskpb.FieldMask{Paths: []string{"heartbeat_timeout"}},
+			},
 		})
 		return err
 	}))
