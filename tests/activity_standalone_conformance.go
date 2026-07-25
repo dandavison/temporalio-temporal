@@ -65,7 +65,7 @@ func saaVerbose() bool { return os.Getenv("TEMPORAL_SAASPEC_VERBOSE") != "" }
 
 // traverse does a breadth-first walk of the model's reachable states, verifying every decided
 // edge against the server.
-func (d *saaDriver) traverse(t *testing.T) {
+func (d *saaDriverDeclarative) traverse(t *testing.T) {
 	type node struct {
 		path  []model.Event
 		state model.AbstractState
@@ -141,7 +141,7 @@ func (d *saaDriver) traverse(t *testing.T) {
 
 // checkCompleteness logs the cells the model can reach but this run did not — what the depth cap left
 // out. Informational; it never fails.
-func (d *saaDriver) checkCompleteness(t *testing.T, verifiedFine, skippedFine map[string]bool) {
+func (d *saaDriverDeclarative) checkCompleteness(t *testing.T, verifiedFine, skippedFine map[string]bool) {
 	if os.Getenv("TEMPORAL_SAASPEC_COMPLETENESS") == "" {
 		return
 	}
@@ -169,7 +169,7 @@ func (d *saaDriver) checkCompleteness(t *testing.T, verifiedFine, skippedFine ma
 // verifyPath starts a fresh activity, replays the path, and asserts only its final edge. A prefix edge
 // that diverges aborts the replay silently; that edge is reported when it is the final edge of its own
 // shorter path.
-func (d *saaDriver) verifyPath(t require.TestingT, path []model.Event) (saaApply, bool) {
+func (d *saaDriverDeclarative) verifyPath(t require.TestingT, path []model.Event) (saaApply, bool) {
 	a := d.start(t)
 	a.path = path
 	cur := model.Initial(d.cfg)
@@ -470,7 +470,7 @@ func (a *saaHandle) checkDescribe(t require.TestingT, expected model.AbstractSta
 // randomWalk drives one activity, picking a random applicable event each step and checking it against
 // model.Transition. On reaching a terminal state, or diverging, it restarts on a fresh activity, until
 // the step budget is spent.
-func (d *saaDriver) randomWalk(t *testing.T, rng *rand.Rand, maxSteps int) {
+func (d *saaDriverDeclarative) randomWalk(t *testing.T, rng *rand.Rand, maxSteps int) {
 	verbose := saaVerbose()
 	seen := map[string]bool{}
 	walks := 0
@@ -521,7 +521,7 @@ func (d *saaDriver) randomWalk(t *testing.T, rng *rand.Rand, maxSteps int) {
 }
 
 // walkStart begins a fresh activity and asserts it matches Initial(cfg).
-func (d *saaDriver) walkStart(t *testing.T) (*saaHandle, model.AbstractState) {
+func (d *saaDriverDeclarative) walkStart(t *testing.T) (*saaHandle, model.AbstractState) {
 	a := d.start(t)
 	cur := model.Initial(d.cfg)
 	obs, err := a.observed()
@@ -536,7 +536,7 @@ func (d *saaDriver) walkStart(t *testing.T) (*saaHandle, model.AbstractState) {
 // walk goes deep rather than restarting every few steps. It still sometimes takes a terminal or a
 // reject/no-op edge, so those are exercised deep too. The BFS covers terminal edges exhaustively.
 // Events needing a task token the handle does not hold are skipped.
-func (d *saaDriver) pickWalkEvent(rng *rand.Rand, a *saaHandle, cur model.AbstractState) model.Event {
+func (d *saaDriverDeclarative) pickWalkEvent(rng *rand.Rand, a *saaHandle, cur model.AbstractState) model.Event {
 	var applicable, changing, deep []model.Event
 	for _, e := range saaCandidateEvents() {
 		if model.NeedsToken(e.Kind) && a.token == nil {

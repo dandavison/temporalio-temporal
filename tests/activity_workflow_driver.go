@@ -66,7 +66,7 @@ func projectWFA(p *workflowpb.PendingActivityInfo) activityInfoProjection {
 
 // --- driver --------------------------------------------------------------------------------
 
-type wfaDriver struct {
+type wfaDriverDeclarative struct {
 	env                *standaloneActivityEnv
 	ctx                context.Context
 	maxAttempts        int32         // RetryPolicy MaximumAttempts (0 = unlimited)
@@ -75,30 +75,30 @@ type wfaDriver struct {
 	maxRetryInterval   time.Duration // RetryPolicy MaximumInterval; 0 => retryInterval
 	nextRetryDelay     time.Duration // ApplicationFailureInfo.NextRetryDelay sent with RespondFailed
 
-	shortTimeout        model.EventKind // this timeout is configured short at schedule time; mirrors saaDriver.shortTimeout
-	scheduleToClose     time.Duration   // ScheduleToClose deadline; mirrors saaDriver.scheduleToClose
+	shortTimeout        model.EventKind // this timeout is configured short at schedule time; mirrors saaDriverDeclarative.shortTimeout
+	scheduleToClose     time.Duration   // ScheduleToClose deadline; mirrors saaDriverDeclarative.scheduleToClose
 	positivePollTimeout time.Duration   // bounds a "must dispatch" poll; 0 => saaPositivePollTimeout
 
 	// nonRetryableErrorTypes are the RetryPolicy's NonRetryableErrorTypes. A timeout type is named via
-	// retrypolicy.TimeoutFailureTypePrefix. The WFA analog of saaDriver.customizeStart.
+	// retrypolicy.TimeoutFailureTypePrefix. The WFA analog of saaDriverDeclarative.customizeStart.
 	nonRetryableErrorTypes []string
 }
 
-// newWFADriver builds a driver with the test-scoped context. The caller sets whichever timing knobs it
+// newWFADriverDeclarative builds a driver with the test-scoped context. The caller sets whichever timing knobs it
 // needs on the result.
-func newWFADriver(t *testing.T, env *standaloneActivityEnv, maxAttempts int32) *wfaDriver {
-	return &wfaDriver{env: env, ctx: testcontext.For(t), maxAttempts: maxAttempts}
+func newWFADriverDeclarative(t *testing.T, env *standaloneActivityEnv, maxAttempts int32) *wfaDriverDeclarative {
+	return &wfaDriverDeclarative{env: env, ctx: testcontext.For(t), maxAttempts: maxAttempts}
 }
 
 // effectiveRetryInterval is the RetryPolicy InitialInterval the driver schedules activities with.
-func (d *wfaDriver) effectiveRetryInterval() time.Duration {
+func (d *wfaDriverDeclarative) effectiveRetryInterval() time.Duration {
 	return cmp.Or(d.retryInterval, saaDefaultRetryInterval)
 }
 
 // wfaHandle is a handle to one workflow-scheduled activity: the ids that address it and the workflow
 // that owns it, plus the token last dispatched to it.
 type wfaHandle struct {
-	d          *wfaDriver
+	d          *wfaDriverDeclarative
 	run        sdkclient.WorkflowRun
 	workflowID string
 	runID      string
@@ -166,8 +166,8 @@ func wfaOneActivityWorkflow(ctx workflow.Context, p wfaActivityParams) error {
 }
 
 // driveTrace runs a trace on a fresh workflow-scheduled activity and returns a handle at the reached
-// state. Model-free, parallel to saaDriver.driveTrace.
-func (d *wfaDriver) driveTrace(t *testing.T, trace []model.Event) *wfaHandle {
+// state. Model-free, parallel to saaDriverDeclarative.driveTrace.
+func (d *wfaDriverDeclarative) driveTrace(t *testing.T, trace []model.Event) *wfaHandle {
 	a := d.start(t)
 	for _, e := range trace {
 		a.driveEvent(t, e)
@@ -228,14 +228,14 @@ func (a *wfaHandle) pendingSnapshot(t require.TestingT) (activityInfoProjection,
 
 // eventClock is how long the clock behind a wall-clock event takes to elapse. WFA has no per-activity
 // start delay, so the only dispatch delay is a retry backoff.
-func (d *wfaDriver) eventClock(e model.Event) time.Duration {
+func (d *wfaDriverDeclarative) eventClock(e model.Event) time.Duration {
 	if e.Kind == model.BackoffElapsesKind {
 		return cmp.Or(d.nextRetryDelay, d.effectiveRetryInterval())
 	}
 	return saaShortTimeout // the four timeouts
 }
 
-func (d *wfaDriver) start(t *testing.T) *wfaHandle {
+func (d *wfaDriverDeclarative) start(t *testing.T) *wfaHandle {
 	wfTQ := testcore.RandomizeStr("wfa-wf")
 	actTQ := testcore.RandomizeStr("wfa-act")
 	const actID = "act"
@@ -248,7 +248,7 @@ func (d *wfaDriver) start(t *testing.T) *wfaHandle {
 	t.Cleanup(w.Stop)
 
 	// dur is short for the one timeout under test and long otherwise, so no other timeout fires
-	// mid-scenario. Mirrors saaDriver.startRequest.
+	// mid-scenario. Mirrors saaDriverDeclarative.startRequest.
 	dur := func(k model.EventKind) time.Duration {
 		if d.shortTimeout == k {
 			return saaShortTimeout
@@ -389,7 +389,7 @@ func (a *wfaHandle) rpc(e model.Event) error {
 	case model.UpdateOptionsKind:
 		return a.updateOptions(e)
 	default:
-		return fmt.Errorf("wfaDriver: unhandled event kind %v", e.Kind)
+		return fmt.Errorf("wfaDriverDeclarative: unhandled event kind %v", e.Kind)
 	}
 }
 
@@ -427,7 +427,7 @@ func (a *wfaHandle) waitForCancelRequested() error {
 		}
 		time.Sleep(100 * time.Millisecond)
 	}
-	return fmt.Errorf("wfaDriver: activity %q did not reach CANCEL_REQUESTED after signal", a.activityID)
+	return fmt.Errorf("wfaDriverDeclarative: activity %q did not reach CANCEL_REQUESTED after signal", a.activityID)
 }
 
 // heartbeatDetails is the last heartbeat checkpoint, as the first payload's raw bytes. Readable only

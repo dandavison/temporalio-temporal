@@ -30,7 +30,7 @@ import (
 
 // --- driver --------------------------------------------------------------------------------
 
-type saaDriver struct {
+type saaDriverDeclarative struct {
 	env        *standaloneActivityEnv
 	ctx        context.Context
 	chasmCtx   context.Context // memoized by chasmContext
@@ -52,10 +52,10 @@ type saaDriver struct {
 	customizeStart func(*workflowservice.StartActivityExecutionRequest)
 }
 
-// newSAADriver builds a driver with the test-scoped context and its own activity-id prefix. The
+// newSAADriverDeclarative builds a driver with the test-scoped context and its own activity-id prefix. The
 // caller sets whichever timing knobs it needs on the result.
-func newSAADriver(t *testing.T, env *standaloneActivityEnv, cfg model.Config) *saaDriver {
-	return &saaDriver{
+func newSAADriverDeclarative(t *testing.T, env *standaloneActivityEnv, cfg model.Config) *saaDriverDeclarative {
+	return &saaDriverDeclarative{
 		env:    env,
 		ctx:    testcontext.For(t),
 		cfg:    cfg,
@@ -84,7 +84,7 @@ const saaPollTimeout = common.MinLongPollTimeout + time.Second
 // saaHandle is a handle to one activity instance: the ids that address it, plus the token last
 // dispatched to it.
 type saaHandle struct {
-	d             *saaDriver
+	d             *saaDriverDeclarative
 	activityID    string
 	taskQueue     string
 	runID         string
@@ -104,7 +104,7 @@ type saaHandle struct {
 
 // driveTrace runs a trace on a fresh activity and returns a handle at the reached state. Model-free:
 // each RPC must succeed.
-func (d *saaDriver) driveTrace(t require.TestingT, trace []model.Event) *saaHandle {
+func (d *saaDriverDeclarative) driveTrace(t require.TestingT, trace []model.Event) *saaHandle {
 	a := d.start(t)
 	for _, e := range trace {
 		a.driveEvent(t, e)
@@ -194,7 +194,7 @@ func (a *saaHandle) awaitDispatchTimePassed(t require.TestingT, e model.Event, d
 // driveTraceWithModelConformanceChecking drives a trace like driveTrace, additionally checking each
 // step against model.Transition (see apply). The state after Start must equal model.Initial(cfg).
 // Requires a config the model can see in full, so no customizeStart.
-func (d *saaDriver) driveTraceWithModelConformanceChecking(t *testing.T, trace []model.Event) *saaHandle {
+func (d *saaDriverDeclarative) driveTraceWithModelConformanceChecking(t *testing.T, trace []model.Event) *saaHandle {
 	a := d.start(t)
 	a.path = trace
 	cur := model.Initial(d.cfg)
@@ -211,7 +211,7 @@ func (d *saaDriver) driveTraceWithModelConformanceChecking(t *testing.T, trace [
 	return a
 }
 
-func (d *saaDriver) start(t require.TestingT) *saaHandle {
+func (d *saaDriverDeclarative) start(t require.TestingT) *saaHandle {
 	d.requireConsistentConfig(t)
 	d.numStarted++
 	// cfgIdx keeps ids distinct across the per-config drivers an explorer sweeps.
@@ -221,7 +221,7 @@ func (d *saaDriver) start(t require.TestingT) *saaHandle {
 	return &saaHandle{d: d, activityID: id, taskQueue: id, runID: resp.RunId, establishedReqID: map[model.EventKind]string{}}
 }
 
-func (d *saaDriver) startRequest(activityID, taskQueue string) *workflowservice.StartActivityExecutionRequest {
+func (d *saaDriverDeclarative) startRequest(activityID, taskQueue string) *workflowservice.StartActivityExecutionRequest {
 	long := durationpb.New(time.Hour)
 	dur := func(k model.EventKind) *durationpb.Duration {
 		if d.shortTimeout == k {
@@ -435,7 +435,7 @@ func (a *saaHandle) rpc(e model.Event) error {
 	case model.UpdateOptionsKind:
 		return a.updateOptions(e)
 	default:
-		return fmt.Errorf("saaDriver: unhandled event kind %v", e.Kind)
+		return fmt.Errorf("saaDriverDeclarative: unhandled event kind %v", e.Kind)
 	}
 }
 
@@ -486,12 +486,12 @@ func (a *saaHandle) pollForTask(t require.TestingT, timeout time.Duration) *work
 			return nil // teardown
 		}
 		if deadline, ok := a.d.ctx.Deadline(); ok && time.Until(deadline) < common.MinLongPollTimeout {
-			t.Errorf("saaDriver: test context budget exhausted before the poll could run (%.1fs left, need >= %s). "+
+			t.Errorf("saaDriverDeclarative: test context budget exhausted before the poll could run (%.1fs left, need >= %s). "+
 				"Raise TEMPORAL_TEST_TIMEOUT and `go test -timeout`.\n  %v",
 				time.Until(deadline).Seconds(), common.MinLongPollTimeout, err)
 			return nil
 		}
-		t.Errorf("saaDriver bug: PollActivityTaskQueue did not complete cleanly (poll timeout must be >= "+
+		t.Errorf("saaDriverDeclarative bug: PollActivityTaskQueue did not complete cleanly (poll timeout must be >= "+
 			"MinLongPollTimeout; only an empty response with a nil error means \"no task\"): %v", err)
 		return nil
 	}
@@ -502,7 +502,7 @@ func (a *saaHandle) pollForTask(t require.TestingT, timeout time.Duration) *work
 }
 
 // eventClock is how long the clock behind a wall-clock event takes to elapse.
-func (d *saaDriver) eventClock(e model.Event) time.Duration {
+func (d *saaDriverDeclarative) eventClock(e model.Event) time.Duration {
 	switch e.Kind {
 	case model.StartDelayElapsesKind:
 		return d.dispatchDelay(model.StartDelayPending)
@@ -514,7 +514,7 @@ func (d *saaDriver) eventClock(e model.Event) time.Duration {
 }
 
 // dispatchDelay is how long the driver configured the pending delay to last.
-func (d *saaDriver) dispatchDelay(disp model.Dispatchability) time.Duration {
+func (d *saaDriverDeclarative) dispatchDelay(disp model.Dispatchability) time.Duration {
 	switch disp {
 	case model.StartDelayPending:
 		return d.startDelay
@@ -526,20 +526,20 @@ func (d *saaDriver) dispatchDelay(disp model.Dispatchability) time.Duration {
 }
 
 // effectiveRetryInterval is the RetryPolicy InitialInterval the driver starts activities with.
-func (d *saaDriver) effectiveRetryInterval() time.Duration {
+func (d *saaDriverDeclarative) effectiveRetryInterval() time.Duration {
 	return cmp.Or(d.retryInterval, saaDefaultRetryInterval)
 }
 
 // requireConsistentConfig fails unless cfg and the timing knobs describe the same activity. cfg is what
 // the model reasons about and the knobs are what startRequest sends, so a disagreement means the test is
 // asserting against an activity nobody configured.
-func (d *saaDriver) requireConsistentConfig(t require.TestingT) {
+func (d *saaDriverDeclarative) requireConsistentConfig(t require.TestingT) {
 	requireBoth := func(flag bool, knobSet bool, flagName, knobName string) {
 		if flag && !knobSet {
-			require.Fail(t, fmt.Sprintf("saaDriver misconfigured: cfg.%s requires %s", flagName, knobName))
+			require.Fail(t, fmt.Sprintf("saaDriverDeclarative misconfigured: cfg.%s requires %s", flagName, knobName))
 		}
 		if knobSet && !flag {
-			require.Fail(t, fmt.Sprintf("saaDriver misconfigured: %s requires cfg.%s, or the model cannot "+
+			require.Fail(t, fmt.Sprintf("saaDriverDeclarative misconfigured: %s requires cfg.%s, or the model cannot "+
 				"see it", knobName, flagName))
 		}
 	}
@@ -548,7 +548,7 @@ func (d *saaDriver) requireConsistentConfig(t require.TestingT) {
 	// meaningful. The reverse does not hold: a set flag with no knob configures that timeout long, which is
 	// how a trace leaves a timeout alive without firing it.
 	if d.scheduleToClose > 0 && !d.cfg.HasScheduleToClose {
-		require.Fail(t, "saaDriver misconfigured: scheduleToClose requires cfg.HasScheduleToClose, or "+
+		require.Fail(t, "saaDriverDeclarative misconfigured: scheduleToClose requires cfg.HasScheduleToClose, or "+
 			"startRequest drops it")
 	}
 	// Shortening a timeout so a trace can fire it requires that timeout to be configured at all.
@@ -562,14 +562,14 @@ func (d *saaDriver) requireConsistentConfig(t require.TestingT) {
 		{model.HeartbeatElapsesKind, d.cfg.HasHeartbeat, "HasHeartbeat"},
 	} {
 		if d.shortTimeout == c.kind && !c.flag {
-			require.Fail(t, fmt.Sprintf("saaDriver misconfigured: shortTimeout=%s requires cfg.%s, or that "+
+			require.Fail(t, fmt.Sprintf("saaDriverDeclarative misconfigured: shortTimeout=%s requires cfg.%s, or that "+
 				"timeout is never configured and the event cannot fire", model.KindName(c.kind), c.flagName))
 		}
 	}
 }
 
 // chasmContext is the context ReadComponent needs to read internal component state, memoized.
-func (d *saaDriver) chasmContext() (context.Context, error) {
+func (d *saaDriverDeclarative) chasmContext() (context.Context, error) {
 	if d.chasmCtx == nil {
 		ctx, err := d.env.GetTestCluster().Host().ChasmContext(d.ctx)
 		if err != nil {

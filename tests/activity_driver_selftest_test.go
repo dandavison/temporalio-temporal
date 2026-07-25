@@ -60,7 +60,7 @@ func (s *standaloneActivityTestSuite) TestSAADriverReportsUnrealizedWallClockEve
 	s.T().Run("BackoffElapses", func(t *testing.T) {
 		drive := func(customize func(*workflowservice.StartActivityExecutionRequest)) []string {
 			return recordDriverReports(func(rt require.TestingT) {
-				d := newSAADriver(t, env, model.Config{MaxAttempts: 3})
+				d := newSAADriverDeclarative(t, env, model.Config{MaxAttempts: 3})
 				d.retryInterval = time.Second // the window the driver will wait out
 				d.customizeStart = customize
 				d.driveTrace(rt, []model.Event{model.Poll, model.FailRetryably, model.BackoffElapses})
@@ -80,7 +80,7 @@ func (s *standaloneActivityTestSuite) TestSAADriverReportsUnrealizedWallClockEve
 	s.T().Run("StartToCloseElapses", func(t *testing.T) {
 		drive := func(customize func(*workflowservice.StartActivityExecutionRequest)) []string {
 			return recordDriverReports(func(rt require.TestingT) {
-				d := newSAADriver(t, env, model.Config{MaxAttempts: 1})
+				d := newSAADriverDeclarative(t, env, model.Config{MaxAttempts: 1})
 				d.shortTimeout = model.StartToCloseElapsesKind // the window the driver will wait out
 				d.customizeStart = customize
 				d.driveTrace(rt, []model.Event{model.Poll, model.StartToCloseElapses})
@@ -98,7 +98,7 @@ func (s *standaloneActivityTestSuite) TestSAADriverReportsUnrealizedWallClockEve
 }
 
 // TestSAADriverRejectsInconsistentConfig requires the driver to refuse a configuration in which the
-// activity it starts and the model.Config it reports do not describe the same activity. saaDriver takes
+// activity it starts and the model.Config it reports do not describe the same activity. saaDriverDeclarative takes
 // its start-time config from two places — the model.Config flags and the timing knobs — and nothing
 // relates them, so a knob can be silently dropped (a scheduleToClose with no HasScheduleToClose) or a
 // timeout can be configured that the model does not know about (a startDelay with no HasStartDelay).
@@ -111,31 +111,31 @@ func (s *standaloneActivityTestSuite) TestSAADriverRejectsInconsistentConfig() {
 	for _, tc := range []struct {
 		name  string
 		cfg   model.Config
-		knobs func(*saaDriver)
+		knobs func(*saaDriverDeclarative)
 		why   string
 	}{
 		{
 			name:  "scheduleToCloseWithoutConfigFlag",
 			cfg:   model.Config{MaxAttempts: 1},
-			knobs: func(d *saaDriver) { d.scheduleToClose = 10 * time.Second },
+			knobs: func(d *saaDriverDeclarative) { d.scheduleToClose = 10 * time.Second },
 			why:   "startRequest drops scheduleToClose unless cfg.HasScheduleToClose is set",
 		},
 		{
 			name:  "shortHeartbeatTimeoutWithoutConfigFlag",
 			cfg:   model.Config{MaxAttempts: 1},
-			knobs: func(d *saaDriver) { d.shortTimeout = model.HeartbeatElapsesKind },
+			knobs: func(d *saaDriverDeclarative) { d.shortTimeout = model.HeartbeatElapsesKind },
 			why:   "no heartbeat timeout is configured at all, so a HeartbeatElapses event can never fire",
 		},
 		{
 			name:  "startDelayWithoutConfigFlag",
 			cfg:   model.Config{MaxAttempts: 1},
-			knobs: func(d *saaDriver) { d.startDelay = time.Hour },
+			knobs: func(d *saaDriverDeclarative) { d.startDelay = time.Hour },
 			why:   "the activity is start-delayed but the model believes it is immediately dispatchable",
 		},
 	} {
 		s.T().Run(tc.name, func(t *testing.T) {
 			reports := recordDriverReports(func(rt require.TestingT) {
-				d := newSAADriver(t, env, tc.cfg)
+				d := newSAADriverDeclarative(t, env, tc.cfg)
 				tc.knobs(d)
 				d.start(rt)
 			})
@@ -147,7 +147,7 @@ func (s *standaloneActivityTestSuite) TestSAADriverRejectsInconsistentConfig() {
 	// pass this test.
 	s.T().Run("consistentConfigIsAccepted", func(t *testing.T) {
 		reports := recordDriverReports(func(rt require.TestingT) {
-			d := newSAADriver(t, env, model.Config{MaxAttempts: 1, HasScheduleToClose: true, HasHeartbeat: true})
+			d := newSAADriverDeclarative(t, env, model.Config{MaxAttempts: 1, HasScheduleToClose: true, HasHeartbeat: true})
 			d.scheduleToClose = 10 * time.Second
 			d.shortTimeout = model.HeartbeatElapsesKind
 			d.start(rt)
@@ -176,7 +176,7 @@ func (s *standaloneActivityTestSuite) TestSAADriverBlamesItselfWhenItOutrunsTheD
 	// is what runs the negative poll, and returns everything the driver reported.
 	negativePoll := func(t *testing.T, customize func(*workflowservice.StartActivityExecutionRequest)) []string {
 		return recordDriverReports(func(rt require.TestingT) {
-			d := newSAADriver(t, env, model.Config{MaxAttempts: 1, HasStartDelay: true})
+			d := newSAADriverDeclarative(t, env, model.Config{MaxAttempts: 1, HasStartDelay: true})
 			d.startDelay = time.Hour
 			d.customizeStart = customize
 			a := d.start(rt)

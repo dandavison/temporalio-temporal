@@ -147,7 +147,7 @@ func (s *standaloneActivityTestSuite) TestWFASAAMetricsParity() {
 
 func (s *standaloneActivityTestSuite) saaActivityMetrics(t *testing.T, env *standaloneActivityEnv, sc activityMetricsScenario) map[string]map[string]string {
 	return s.captureActivityMetrics(t, env, sc, func() {
-		d := newSAADriver(t, env, model.Config{MaxAttempts: sc.maxAttempts})
+		d := newSAADriverDeclarative(t, env, model.Config{MaxAttempts: sc.maxAttempts})
 		d.shortTimeout = saaTimeoutIn(sc.trace)
 		d.driveTrace(t, sc.trace)
 	})
@@ -155,7 +155,7 @@ func (s *standaloneActivityTestSuite) saaActivityMetrics(t *testing.T, env *stan
 
 func (s *standaloneActivityTestSuite) wfaActivityMetrics(t *testing.T, env *standaloneActivityEnv, sc activityMetricsScenario) map[string]map[string]string {
 	return s.captureActivityMetrics(t, env, sc, func() {
-		d := newWFADriver(t, env, sc.maxAttempts)
+		d := newWFADriverDeclarative(t, env, sc.maxAttempts)
 		d.shortTimeout = saaTimeoutIn(sc.trace)
 		d.driveTrace(t, sc.trace)
 	})
