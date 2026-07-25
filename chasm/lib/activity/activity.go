@@ -1049,7 +1049,7 @@ func (a *Activity) unpause(
 	}
 	ctx.AddTask(
 		a,
-		chasm.TaskAttributes{ScheduledTime: dispatchTime},
+		a.taskAttributes(ctx, dispatchTime),
 		a.newActivityDispatchTask(ctx))
 }
 
@@ -1108,7 +1108,7 @@ func (a *Activity) reset(ctx chasm.MutableContext, event resetEvent) {
 	}
 	ctx.AddTask(
 		a,
-		chasm.TaskAttributes{ScheduledTime: dispatchTime},
+		a.taskAttributes(ctx, dispatchTime),
 		a.newActivityDispatchTask(ctx),
 	)
 	a.emitOnResetMetrics(event.handler)
@@ -1398,6 +1398,16 @@ func (a *Activity) firstDispatchTime() time.Time {
 	return a.ScheduleTime.AsTime().Add(a.GetStartDelay().AsDuration())
 }
 
+// taskAttributes routes a task that is already due through the immediate queue. A timer task will
+// not execute before now + TimerProcessorMaxTimeShift (~1s), so scheduling an already-due task as a
+// timer delays it for no reason.
+func (a *Activity) taskAttributes(ctx chasm.Context, scheduledTime time.Time) chasm.TaskAttributes {
+	if scheduledTime.After(ctx.Now(a)) {
+		return chasm.TaskAttributes{ScheduledTime: scheduledTime}
+	}
+	return chasm.TaskAttributes{}
+}
+
 func (a *Activity) newActivityDispatchTask(ctx chasm.Context) *activitypb.ActivityDispatchTask {
 	dispatchReason := activitypb.DISPATCH_REASON_IMMEDIATE
 	if a.GetFirstAttemptStartedTime() != nil {
@@ -1449,7 +1459,7 @@ func (a *Activity) reissueDispatchAndScheduleToStart(ctx chasm.MutableContext, a
 	attempt.DispatchTime = timestamppb.New(dispatchTime)
 	ctx.AddTask(
 		a,
-		chasm.TaskAttributes{ScheduledTime: dispatchTime},
+		a.taskAttributes(ctx, dispatchTime),
 		a.newActivityDispatchTask(ctx),
 	)
 	if timeout := a.GetScheduleToStartTimeout().AsDuration(); timeout > 0 {
