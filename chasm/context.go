@@ -266,6 +266,9 @@ func (c *mutableCtx) AddTask(
 	attributes TaskAttributes,
 	payload any,
 ) {
+	if !attributes.ScheduledTime.After(c.Now(component)) {
+		attributes.ScheduledTime = TaskScheduledTimeImmediate
+	}
 	c.root.AddTask(component, attributes, payload)
 }
 
