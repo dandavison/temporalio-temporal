@@ -48,7 +48,7 @@ type (
 		backend   *chasm.MockNodeBackend
 		root      chasm.RootComponent
 		requestID string
-		// commitTransition advances the backend's committed transition count. See closeTransaction.
+		// commitTransition advances the backend's committed transition count.
 		commitTransition func()
 	}
 
@@ -517,9 +517,7 @@ func (e *Engine) newExecution(key chasm.ExecutionKey) *execution {
 	)
 
 	backend := &chasm.MockNodeBackend{
-		// NextTransitionCount is the count the in-flight transaction will commit as. The real backend
-		// derives it from committed state, so it is stable however many times the tree asks within one
-		// transaction; closeTransaction advances it.
+		// NextTransitionCount is the count the in-flight transaction will commit as.
 		HandleNextTransitionCount: func() int64 {
 			bsMu.Lock()
 			defer bsMu.Unlock()
@@ -579,8 +577,7 @@ func (e *Engine) newExecution(key chasm.ExecutionKey) *execution {
 	}
 }
 
-// closeTransaction closes the execution's transaction and commits its transition count, so the next
-// transaction sees this one as committed state.
+// closeTransaction closes the execution's transaction and commits its transition count.
 func (x *execution) closeTransaction() error {
 	if _, err := x.node.CloseTransaction(); err != nil {
 		return err
@@ -616,9 +613,6 @@ func (e *Engine) updateComponentInExecution(
 	ref chasm.ComponentRef,
 	updateFn func(chasm.MutableContext, chasm.Component) error,
 ) ([]byte, error) {
-	// Resolve through the mutable context: that is what marks the node dirty, so the transaction
-	// re-serializes it and advances its versioned transition. A node left clean has any task the update
-	// added silently dropped at close.
 	mutableCtx := chasm.NewMutableContext(ctx, execution.node)
 	component, err := execution.node.Component(mutableCtx, ref)
 	if err != nil {
