@@ -18,7 +18,7 @@ import (
 
 // TestTasksArePhysicallyGenerated: a task a component adds must reach the backend as a physical task, in
 // the category its TaskAttributes imply, whether it was added while starting the execution or while
-// updating it. Engine.Tasks is the only window a test has onto what the queue processors would be handed.
+// updating it.
 func TestTasksArePhysicallyGenerated(t *testing.T) {
 	const ttl = time.Hour
 
