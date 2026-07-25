@@ -616,13 +616,15 @@ func (e *Engine) updateComponentInExecution(
 	ref chasm.ComponentRef,
 	updateFn func(chasm.MutableContext, chasm.Component) error,
 ) ([]byte, error) {
-	chasmCtx := chasm.NewContext(ctx, execution.node)
-	component, err := execution.node.Component(chasmCtx, ref)
+	// Resolve through the mutable context: that is what marks the node dirty, so the transaction
+	// re-serializes it and advances its versioned transition. A node left clean has any task the update
+	// added silently dropped at close.
+	mutableCtx := chasm.NewMutableContext(ctx, execution.node)
+	component, err := execution.node.Component(mutableCtx, ref)
 	if err != nil {
 		return nil, err
 	}
 
-	mutableCtx := chasm.NewMutableContext(ctx, execution.node)
 	if err := updateFn(mutableCtx, component); err != nil {
 		return nil, err
 	}
