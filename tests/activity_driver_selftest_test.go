@@ -13,6 +13,7 @@ package tests
 
 import (
 	"fmt"
+	"strings"
 	"testing"
 	"time"
 
@@ -153,4 +154,40 @@ func (s *standaloneActivityTestSuite) TestSAAHarnessRejectsInconsistentConfig() 
 		})
 		require.Empty(t, reports, "a consistent configuration must be accepted")
 	})
+}
+
+// TestSAADriverAttributesAnUnexpectedDispatch requires the negative poll — the check that a delayed
+// activity does not dispatch — to distinguish two situations it previously reported identically, as a
+// product divergence:
+//
+//   - the activity dispatched before it was due, which is a product bug
+//   - the delay window closed before or during the check, so the task it saw was legitimately
+//     dispatched and the check simply outlived what it was checking
+//
+// The second is a harness failure and must say so. Reporting it as "a task WAS dispatched" sends the
+// reader looking for a product bug that is not there.
+//
+// Injected via customizeStart, which strips the start delay the harness believes it configured, so the
+// activity is immediately dispatchable while the model still expects a pending first dispatch.
+func (s *standaloneActivityTestSuite) TestSAADriverAttributesAnUnexpectedDispatch() {
+	env := s.newTestEnv()
+	t := s.T()
+
+	reports := recordDriverReports(func(rt require.TestingT) {
+		h := newSAAHarness(t, env, model.Config{HasStartDelay: true})
+		h.startDelay = time.Hour // the model believes the first dispatch is an hour away
+		h.customizeStart = func(req *workflowservice.StartActivityExecutionRequest) {
+			req.StartDelay = nil // ... but the server dispatches at once
+		}
+		a := h.start(rt)
+		cur := model.Initial(h.cfg)
+		a.apply(rt, model.Event{Kind: model.Poll}, cur, model.Transition(h.cfg, cur, model.Event{Kind: model.Poll}), true)
+	})
+
+	require.NotEmpty(t, reports, "the driver must report that its no-dispatch check did not hold")
+	joined := strings.Join(reports, "\n")
+	require.Contains(t, joined, "harness:",
+		"an unexpected dispatch that was not early must be attributed to the harness, not the product")
+	require.NotContains(t, joined, "a task WAS dispatched",
+		"this must not be reported as a product divergence")
 }

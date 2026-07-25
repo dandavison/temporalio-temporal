@@ -320,10 +320,32 @@ func (a *saaHandle) applyPoll(cur model.AbstractState, out model.Outcome, final 
 		// A start_delay or backoff is still pending, so the poll must find no task. Only worth a negative
 		// poll when the delay outlasts a valid long poll; otherwise the state comparison below suffices.
 		if dur := a.h.dispatchDelay(cur.Dispatchability); dur > saaPollTimeout {
+			// The check is only meaningful while the dispatch is genuinely still pending. Read the due time
+			// first, so that a task arriving can be attributed: dispatched before it was due is a product
+			// divergence, dispatched after is this check having outlived the window it was checking.
+			due, pending := a.pendingDispatchTime(t)
+			if !pending {
+				if final {
+					t.Errorf("%s: harness: the %s window had already closed when the negative poll ran, so "+
+						"\"must not dispatch\" was never checked. Widen the window or drive fewer steps before it.\n%s",
+						a.edge(poll, cur.Status), cur.Dispatchability, a.pathLine())
+				}
+				return saaMismatch
+			}
 			if resp := a.pollForTask(t, saaPollTimeout); resp != nil {
 				if final {
-					t.Errorf("%s: model expected no dispatch (%s pending) but a task WAS dispatched (attempt %d)\n%s",
-						a.edge(poll, cur.Status), cur.Dispatchability, resp.GetAttempt(), a.pathLine())
+					if started := resp.GetStartedTime().AsTime(); started.Before(due) {
+						t.Errorf("%s: model expected no dispatch (%s pending) but a task WAS dispatched "+
+							"(attempt %d) %v BEFORE it was due (due=%s started=%s)\n%s",
+							a.edge(poll, cur.Status), cur.Dispatchability, resp.GetAttempt(),
+							due.Sub(started).Round(time.Millisecond), due.Format(time.RFC3339Nano),
+							started.Format(time.RFC3339Nano), a.pathLine())
+					} else {
+						t.Errorf("%s: harness: the %s window closed while the negative poll was waiting, so the "+
+							"task it received was legitimately dispatched (due=%s started=%s). Widen the window.\n%s",
+							a.edge(poll, cur.Status), cur.Dispatchability, due.Format(time.RFC3339Nano),
+							resp.GetStartedTime().AsTime().Format(time.RFC3339Nano), a.pathLine())
+					}
 				}
 				return saaMismatch
 			}

@@ -289,6 +289,16 @@ func (a *saaHandle) projection(t require.TestingT) activityInfoProjection {
 	return projectSAA(a.describe(t).GetInfo())
 }
 
+// pendingDispatchTime is when the next attempt is due to dispatch, and whether one is pending at all. A
+// dispatch pending in the future is what makes the activity not dispatchable now.
+func (a *saaHandle) pendingDispatchTime(t require.TestingT) (time.Time, bool) {
+	next := a.describe(t).GetInfo().GetNextAttemptScheduleTime()
+	if next == nil {
+		return time.Time{}, false
+	}
+	return next.AsTime(), true
+}
+
 // terminal is the terminal status from Info plus the failure discriminant from the Outcome. Parallel to
 // wfaHandle.terminal.
 func (a *saaHandle) terminal(t require.TestingT) activityTerminalProjection {
