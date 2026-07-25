@@ -28,7 +28,6 @@ import (
 	"go.temporal.io/server/chasm/lib/activity/model"
 	"go.temporal.io/server/common/retrypolicy"
 	"go.temporal.io/server/common/testing/testcontext"
-	"go.temporal.io/server/tests/testcore"
 )
 
 // TestWFASAAStartToCloseTimeout ports a slice of Test_ActivityTimeouts: a started attempt
@@ -46,11 +45,13 @@ func (s *standaloneActivityTestSuite) TestWFASAAStartToCloseTimeout() {
 	want := activityTerminalProjection{Status: enumspb.ACTIVITY_EXECUTION_STATUS_TIMED_OUT, FailureType: enumspb.TIMEOUT_TYPE_START_TO_CLOSE.String()}
 
 	s.T().Run("WorkflowActivity", func(t *testing.T) {
-		h := &wfaHarness{env: env, ctx: testcontext.For(t), maxAttempts: 1, shortTimeout: saaTimeoutIn(trace)}
+		h := newWFAHarness(t, env, 1)
+		h.shortTimeout = saaTimeoutIn(trace)
 		require.Equal(t, want, h.driveTrace(t, trace).terminal(t))
 	})
 	s.T().Run("StandaloneActivity", func(t *testing.T) {
-		h := &saaHarness{env: env, ctx: testcontext.For(t), idBase: testcore.RandomizeStr(t.Name()), cfg: model.Config{MaxAttempts: 1}, shortTimeout: saaTimeoutIn(trace)}
+		h := newSAAHarness(t, env, model.Config{MaxAttempts: 1})
+		h.shortTimeout = saaTimeoutIn(trace)
 		require.Equal(t, want, h.driveTrace(t, trace).terminal(t))
 	})
 }
@@ -66,11 +67,13 @@ func (s *standaloneActivityTestSuite) TestWFASAAScheduleToCloseTimeout() {
 	want := activityTerminalProjection{Status: enumspb.ACTIVITY_EXECUTION_STATUS_TIMED_OUT, FailureType: enumspb.TIMEOUT_TYPE_SCHEDULE_TO_CLOSE.String()}
 
 	s.T().Run("WorkflowActivity", func(t *testing.T) {
-		h := &wfaHarness{env: env, ctx: testcontext.For(t), maxAttempts: 1, shortTimeout: saaTimeoutIn(trace)}
+		h := newWFAHarness(t, env, 1)
+		h.shortTimeout = saaTimeoutIn(trace)
 		require.Equal(t, want, h.driveTrace(t, trace).terminal(t))
 	})
 	s.T().Run("StandaloneActivity", func(t *testing.T) {
-		h := &saaHarness{env: env, ctx: testcontext.For(t), idBase: testcore.RandomizeStr(t.Name()), cfg: model.Config{MaxAttempts: 1, HasScheduleToClose: true}, shortTimeout: saaTimeoutIn(trace)}
+		h := newSAAHarness(t, env, model.Config{MaxAttempts: 1, HasScheduleToClose: true})
+		h.shortTimeout = saaTimeoutIn(trace)
 		require.Equal(t, want, h.driveTrace(t, trace).terminal(t))
 	})
 }
@@ -92,7 +95,8 @@ func (s *standaloneActivityTestSuite) TestWFASAATimeoutPreservesUnderlyingFailur
 	assertCausePreserved := func(t *testing.T, maxAttempts int32, trace []model.Event, timeoutType enumspb.TimeoutType) {
 		want := activityTerminalProjection{Status: enumspb.ACTIVITY_EXECUTION_STATUS_TIMED_OUT, FailureType: timeoutType.String()}
 		t.Run("WorkflowActivity", func(t *testing.T) {
-			h := &wfaHarness{env: env, ctx: testcontext.For(t), maxAttempts: maxAttempts, retryInterval: 200 * time.Millisecond, shortTimeout: saaTimeoutIn(trace)}
+			h := newWFAHarness(t, env, maxAttempts)
+			h.shortTimeout = saaTimeoutIn(trace)
 			a := h.driveTrace(t, trace)
 			require.Equal(t, want, a.terminal(t))
 			require.Equal(t, wantCause, a.terminalCause(t), "the terminal timeout must chain the underlying application failure as its Cause")
@@ -105,7 +109,8 @@ func (s *standaloneActivityTestSuite) TestWFASAATimeoutPreservesUnderlyingFailur
 			case enumspb.TIMEOUT_TYPE_HEARTBEAT:
 				cfg.HasHeartbeat = true
 			}
-			h := &saaHarness{env: env, ctx: testcontext.For(t), idBase: testcore.RandomizeStr(t.Name()), cfg: cfg, shortTimeout: saaTimeoutIn(trace)}
+			h := newSAAHarness(t, env, cfg)
+			h.shortTimeout = saaTimeoutIn(trace)
 			a := h.driveTrace(t, trace)
 			require.Equal(t, want, a.terminal(t))
 			require.Equal(t, wantCause, a.terminalCause(t), "the terminal timeout must chain the underlying application failure as its Cause")
@@ -141,11 +146,17 @@ func (s *standaloneActivityTestSuite) TestWFASAATimeoutTypeOnRetryDeadline() {
 	want := activityTerminalProjection{Status: enumspb.ACTIVITY_EXECUTION_STATUS_TIMED_OUT, FailureType: enumspb.TIMEOUT_TYPE_SCHEDULE_TO_CLOSE.String()}
 
 	s.T().Run("WorkflowActivity", func(t *testing.T) {
-		h := &wfaHarness{env: env, ctx: testcontext.For(t), maxAttempts: 2, retryInterval: retryInterval, scheduleToClose: scheduleToClose, shortTimeout: saaTimeoutIn(trace)}
+		h := newWFAHarness(t, env, 2)
+		h.retryInterval = retryInterval
+		h.scheduleToClose = scheduleToClose
+		h.shortTimeout = saaTimeoutIn(trace)
 		require.Equal(t, want, h.driveTrace(t, trace).terminal(t))
 	})
 	s.T().Run("StandaloneActivity", func(t *testing.T) {
-		h := &saaHarness{env: env, ctx: testcontext.For(t), idBase: testcore.RandomizeStr(t.Name()), cfg: model.Config{MaxAttempts: 2, HasHeartbeat: true, HasScheduleToClose: true}, retryInterval: retryInterval, scheduleToClose: scheduleToClose, shortTimeout: saaTimeoutIn(trace)}
+		h := newSAAHarness(t, env, model.Config{MaxAttempts: 2, HasHeartbeat: true, HasScheduleToClose: true})
+		h.retryInterval = retryInterval
+		h.scheduleToClose = scheduleToClose
+		h.shortTimeout = saaTimeoutIn(trace)
 		require.Equal(t, want, h.driveTrace(t, trace).terminal(t))
 	})
 }
@@ -164,26 +175,17 @@ func (s *standaloneActivityTestSuite) TestWFASAAQueuedRetryInterval() {
 	want := activityInfoProjection{State: enumspb.PENDING_ACTIVITY_STATE_SCHEDULED, Attempt: 2}
 
 	s.T().Run("WorkflowActivity", func(t *testing.T) {
-		h := &wfaHarness{
-			env:                env,
-			ctx:                testcontext.For(t),
-			maxAttempts:        3,
-			retryInterval:      initialInterval,
-			backoffCoefficient: 2.0,
-			maxRetryInterval:   maxInterval,
-		}
+		h := newWFAHarness(t, env, 3)
+		h.retryInterval = initialInterval
+		h.backoffCoefficient = 2.0
+		h.maxRetryInterval = maxInterval
 		require.Equal(t, want, h.driveTrace(t, trace).projection(t))
 	})
 	s.T().Run("StandaloneActivity", func(t *testing.T) {
-		h := &saaHarness{
-			env:                env,
-			ctx:                testcontext.For(t),
-			idBase:             testcore.RandomizeStr(t.Name()),
-			cfg:                model.Config{MaxAttempts: 3},
-			retryInterval:      initialInterval,
-			backoffCoefficient: 2.0,
-			maxRetryInterval:   maxInterval,
-		}
+		h := newSAAHarness(t, env, model.Config{MaxAttempts: 3})
+		h.retryInterval = initialInterval
+		h.backoffCoefficient = 2.0
+		h.maxRetryInterval = maxInterval
 		require.Equal(t, want, h.driveTrace(t, trace).projection(t))
 	})
 }
@@ -201,14 +203,16 @@ func (s *standaloneActivityTestSuite) TestWFASAAHeartBeat() {
 	want := activityTerminalProjection{Status: enumspb.ACTIVITY_EXECUTION_STATUS_COMPLETED}
 
 	s.T().Run("WorkflowActivity", func(t *testing.T) {
-		h := &wfaHarness{env: env, ctx: testcontext.For(t), maxAttempts: 3, retryInterval: 2 * time.Second}
+		h := newWFAHarness(t, env, 3)
+		h.retryInterval = 2 * time.Second
 		a := h.driveTrace(t, trace)
 		require.Equal(t, heartbeatWant, a.heartbeatDetails(t))
 		a.driveEvent(t, model.Event{Kind: model.RespondCompleted})
 		require.Equal(t, want, a.terminal(t))
 	})
 	s.T().Run("StandaloneActivity", func(t *testing.T) {
-		h := &saaHarness{env: env, ctx: testcontext.For(t), idBase: testcore.RandomizeStr(t.Name()), cfg: model.Config{MaxAttempts: 3}, retryInterval: 2 * time.Second}
+		h := newSAAHarness(t, env, model.Config{MaxAttempts: 3})
+		h.retryInterval = 2 * time.Second
 		a := h.driveTrace(t, trace)
 		require.Equal(t, heartbeatWant, a.heartbeatDetails(t))
 		a.driveEvent(t, model.Event{Kind: model.RespondCompleted})
@@ -231,11 +235,13 @@ func (s *standaloneActivityTestSuite) TestWFASAARetry() {
 	want := activityTerminalProjection{Status: enumspb.ACTIVITY_EXECUTION_STATUS_FAILED, FailureType: "drive"}
 
 	s.T().Run("WorkflowActivity", func(t *testing.T) {
-		h := &wfaHarness{env: env, ctx: testcontext.For(t), maxAttempts: 3, retryInterval: 2 * time.Second}
+		h := newWFAHarness(t, env, 3)
+		h.retryInterval = 2 * time.Second
 		require.Equal(t, want, h.driveTrace(t, trace).terminal(t))
 	})
 	s.T().Run("StandaloneActivity", func(t *testing.T) {
-		h := &saaHarness{env: env, ctx: testcontext.For(t), idBase: testcore.RandomizeStr(t.Name()), cfg: model.Config{MaxAttempts: 3}, retryInterval: 2 * time.Second}
+		h := newSAAHarness(t, env, model.Config{MaxAttempts: 3})
+		h.retryInterval = 2 * time.Second
 		require.Equal(t, want, h.driveTrace(t, trace).terminal(t))
 	})
 }
@@ -249,11 +255,13 @@ func (s *standaloneActivityTestSuite) TestWFASAAHeartbeatTimeout() {
 	want := activityTerminalProjection{Status: enumspb.ACTIVITY_EXECUTION_STATUS_TIMED_OUT, FailureType: enumspb.TIMEOUT_TYPE_HEARTBEAT.String()}
 
 	s.T().Run("WorkflowActivity", func(t *testing.T) {
-		h := &wfaHarness{env: env, ctx: testcontext.For(t), maxAttempts: 1, shortTimeout: saaTimeoutIn(trace)}
+		h := newWFAHarness(t, env, 1)
+		h.shortTimeout = saaTimeoutIn(trace)
 		require.Equal(t, want, h.driveTrace(t, trace).terminal(t))
 	})
 	s.T().Run("StandaloneActivity", func(t *testing.T) {
-		h := &saaHarness{env: env, ctx: testcontext.For(t), idBase: testcore.RandomizeStr(t.Name()), cfg: model.Config{MaxAttempts: 1, HasHeartbeat: true}, shortTimeout: saaTimeoutIn(trace)}
+		h := newSAAHarness(t, env, model.Config{MaxAttempts: 1, HasHeartbeat: true})
+		h.shortTimeout = saaTimeoutIn(trace)
 		require.Equal(t, want, h.driveTrace(t, trace).terminal(t))
 	})
 }
@@ -273,11 +281,11 @@ func (s *standaloneActivityTestSuite) TestWFASAACancel() {
 	want := activityTerminalProjection{Status: enumspb.ACTIVITY_EXECUTION_STATUS_CANCELED}
 
 	s.T().Run("WorkflowActivity", func(t *testing.T) {
-		h := &wfaHarness{env: env, ctx: testcontext.For(t), maxAttempts: 1}
+		h := newWFAHarness(t, env, 1)
 		require.Equal(t, want, h.driveTrace(t, trace).terminal(t))
 	})
 	s.T().Run("StandaloneActivity", func(t *testing.T) {
-		h := &saaHarness{env: env, ctx: testcontext.For(t), idBase: testcore.RandomizeStr(t.Name()), cfg: model.Config{MaxAttempts: 1}}
+		h := newSAAHarness(t, env, model.Config{MaxAttempts: 1})
 		require.Equal(t, want, h.driveTrace(t, trace).terminal(t))
 	})
 }
@@ -297,11 +305,13 @@ func (s *standaloneActivityTestSuite) TestWFASAARetryAfterFail() {
 	}
 
 	s.T().Run("WorkflowActivity", func(t *testing.T) {
-		h := &wfaHarness{env: env, ctx: testcontext.For(t), maxAttempts: 3, retryInterval: 2 * time.Second}
+		h := newWFAHarness(t, env, 3)
+		h.retryInterval = 2 * time.Second
 		require.Equal(t, want, h.driveTrace(t, trace).projection(t))
 	})
 	s.T().Run("StandaloneActivity", func(t *testing.T) {
-		h := &saaHarness{env: env, ctx: testcontext.For(t), idBase: testcore.RandomizeStr(t.Name()), cfg: model.Config{MaxAttempts: 3}, retryInterval: 2 * time.Second}
+		h := newSAAHarness(t, env, model.Config{MaxAttempts: 3})
+		h.retryInterval = 2 * time.Second
 		require.Equal(t, want, h.driveTrace(t, trace).projection(t))
 	})
 }
@@ -323,11 +333,13 @@ func (s *standaloneActivityTestSuite) TestWFASAABackingOff() {
 	}
 
 	s.T().Run("WorkflowActivity", func(t *testing.T) {
-		h := &wfaHarness{env: env, ctx: testcontext.For(t), maxAttempts: 3, retryInterval: backingOffInterval}
+		h := newWFAHarness(t, env, 3)
+		h.retryInterval = backingOffInterval
 		require.Equal(t, want, h.driveTrace(t, trace).projection(t))
 	})
 	s.T().Run("StandaloneActivity", func(t *testing.T) {
-		h := &saaHarness{env: env, ctx: testcontext.For(t), idBase: testcore.RandomizeStr(t.Name()), cfg: model.Config{MaxAttempts: 3}, retryInterval: backingOffInterval}
+		h := newSAAHarness(t, env, model.Config{MaxAttempts: 3})
+		h.retryInterval = backingOffInterval
 		require.Equal(t, want, h.driveTrace(t, trace).projection(t))
 	})
 }
@@ -348,11 +360,15 @@ func (s *standaloneActivityTestSuite) TestWFASAANextRetryDelayOverride() {
 	}
 
 	s.T().Run("WorkflowActivity", func(t *testing.T) {
-		h := &wfaHarness{env: env, ctx: testcontext.For(t), maxAttempts: 3, retryInterval: 5 * time.Second, nextRetryDelay: nextRetryDelayOverride}
+		h := newWFAHarness(t, env, 3)
+		h.retryInterval = 5 * time.Second
+		h.nextRetryDelay = nextRetryDelayOverride
 		require.Equal(t, want, h.driveTrace(t, trace).projection(t))
 	})
 	s.T().Run("StandaloneActivity", func(t *testing.T) {
-		h := &saaHarness{env: env, ctx: testcontext.For(t), idBase: testcore.RandomizeStr(t.Name()), cfg: model.Config{MaxAttempts: 3}, retryInterval: 5 * time.Second, nextRetryDelay: nextRetryDelayOverride}
+		h := newSAAHarness(t, env, model.Config{MaxAttempts: 3})
+		h.retryInterval = 5 * time.Second
+		h.nextRetryDelay = nextRetryDelayOverride
 		require.Equal(t, want, h.driveTrace(t, trace).projection(t))
 	})
 }
@@ -371,11 +387,13 @@ func (s *standaloneActivityTestSuite) TestWFASAAFirstAttemptStarted() {
 	}
 
 	s.T().Run("WorkflowActivity", func(t *testing.T) {
-		h := &wfaHarness{env: env, ctx: testcontext.For(t), maxAttempts: 3, retryInterval: 2 * time.Second}
+		h := newWFAHarness(t, env, 3)
+		h.retryInterval = 2 * time.Second
 		require.Equal(t, want, h.driveTrace(t, trace).projection(t))
 	})
 	s.T().Run("StandaloneActivity", func(t *testing.T) {
-		h := &saaHarness{env: env, ctx: testcontext.For(t), idBase: testcore.RandomizeStr(t.Name()), cfg: model.Config{MaxAttempts: 3}, retryInterval: 2 * time.Second}
+		h := newSAAHarness(t, env, model.Config{MaxAttempts: 3})
+		h.retryInterval = 2 * time.Second
 		require.Equal(t, want, h.driveTrace(t, trace).projection(t))
 	})
 }
@@ -392,11 +410,13 @@ func (s *standaloneActivityTestSuite) TestWFASAANextAttemptScheduleTimeAndCurren
 	// both drives a trace through both surfaces, asserting each reports the intended want.
 	both := func(t *testing.T, maxAttempts int32, retryInterval time.Duration, trace []model.Event, want activityInfoProjection) {
 		t.Run("WorkflowActivity", func(t *testing.T) {
-			h := &wfaHarness{env: env, ctx: testcontext.For(t), maxAttempts: maxAttempts, retryInterval: retryInterval}
+			h := newWFAHarness(t, env, maxAttempts)
+			h.retryInterval = retryInterval
 			require.Equal(t, want, h.driveTrace(t, trace).projection(t))
 		})
 		t.Run("StandaloneActivity", func(t *testing.T) {
-			h := &saaHarness{env: env, ctx: testcontext.For(t), idBase: testcore.RandomizeStr(t.Name()), cfg: model.Config{MaxAttempts: maxAttempts}, retryInterval: retryInterval}
+			h := newSAAHarness(t, env, model.Config{MaxAttempts: maxAttempts})
+			h.retryInterval = retryInterval
 			require.Equal(t, want, h.driveTrace(t, trace).projection(t))
 		})
 	}
@@ -449,11 +469,13 @@ func (s *standaloneActivityTestSuite) TestWFASAANextAttemptScheduleTimeAndCurren
 		trace := []model.Event{saaPoll, saaFailRetryably, saaBackoffDelayElapse, saaPoll, saaComplete}
 		want := activityTerminalProjection{Status: enumspb.ACTIVITY_EXECUTION_STATUS_COMPLETED}
 		t.Run("WorkflowActivity", func(t *testing.T) {
-			h := &wfaHarness{env: env, ctx: testcontext.For(t), maxAttempts: 3, retryInterval: saaDelayWindow}
+			h := newWFAHarness(t, env, 3)
+			h.retryInterval = saaDelayWindow
 			require.Equal(t, want, h.driveTrace(t, trace).terminal(t))
 		})
 		t.Run("StandaloneActivity", func(t *testing.T) {
-			h := &saaHarness{env: env, ctx: testcontext.For(t), idBase: testcore.RandomizeStr(t.Name()), cfg: model.Config{MaxAttempts: 3}, retryInterval: saaDelayWindow}
+			h := newSAAHarness(t, env, model.Config{MaxAttempts: 3})
+			h.retryInterval = saaDelayWindow
 			require.Equal(t, want, h.driveTrace(t, trace).terminal(t))
 		})
 	})
@@ -490,26 +512,20 @@ func saaTraceBudget() time.Duration {
 	return floor
 }
 
-// driveTrace drives one declared trace on its own harness (a unique activity-id namespace via idBase)
-// and returns a handle at the reached state, so the caller can issue further RPCs and assert on the
-// outcome. It checks conformance to the model at every step unless a customizeStart hook injects
-// config the model cannot see.
+// driveTrace drives one declared trace on its own harness and returns a handle at the reached state, so
+// the caller can issue further RPCs and assert on the outcome. It checks conformance to the model at
+// every step unless a customizeStart hook injects config the model cannot see.
 func (s *standaloneActivityTestSuite) driveTrace(t *testing.T, env *standaloneActivityEnv, tr saaTrace) *saaHandle {
-	ctx := testcontext.For(t)
-	chasmCtx, err := env.GetTestCluster().Host().ChasmContext(ctx)
-	require.NoError(t, err)
-	h := &saaHarness{
-		env: env, ctx: ctx, chasmCtx: chasmCtx, nsID: env.NamespaceID().String(),
-		idBase:     testcore.RandomizeStr(t.Name()),
-		cfg:        tr.config(),
-		startDelay: tr.startDelay(), retryInterval: tr.retryInterval, nextRetryDelay: tr.nextRetryDelay,
-		// A timeout's *Elapses event in the script is the signal to configure that timeout short.
-		shortTimeout: saaTimeoutIn(tr.trace),
-		// "Dispatchable" must mean "dispatches promptly", so bound the positive poll below the delay
-		// window — that is how a reset that discards a backoff (immediate) is told from still-delayed.
-		positivePollTimeout: saaPollTimeout,
-		customizeStart:      tr.customizeStart,
-	}
+	h := newSAAHarness(t, env, tr.config())
+	h.startDelay = tr.startDelay()
+	h.retryInterval = tr.retryInterval
+	h.nextRetryDelay = tr.nextRetryDelay
+	h.customizeStart = tr.customizeStart
+	// A timeout's *Elapses event in the script is the signal to configure that timeout short.
+	h.shortTimeout = saaTimeoutIn(tr.trace)
+	// "Dispatchable" must mean "dispatches promptly", so bound the positive poll below the delay
+	// window — that is how a reset that discards a backoff (immediate) is told from still-delayed.
+	h.positivePollTimeout = saaPollTimeout
 	// A customizeStart hook injects start-time config the model cannot see, so conformance checking
 	// would diverge; drive model-free and leave assertions to the caller. Otherwise check every step.
 	if tr.customizeStart != nil {
@@ -550,18 +566,17 @@ func (s *standaloneActivityTestSuite) TestWFASAANonRetryableTimeout() {
 		trace := []model.Event{saaPoll, {Kind: elapse}}
 		nonRetryableType := retrypolicy.TimeoutFailureTypePrefix + timeoutType.String()
 		t.Run("WorkflowActivity", func(t *testing.T) {
-			h := &wfaHarness{env: env, ctx: testcontext.For(t), maxAttempts: 3, shortTimeout: saaTimeoutIn(trace), nonRetryableErrorTypes: []string{nonRetryableType}}
+			h := newWFAHarness(t, env, 3)
+			h.shortTimeout = saaTimeoutIn(trace)
+			h.nonRetryableErrorTypes = []string{nonRetryableType}
 			require.Equalf(t, enumspb.ACTIVITY_EXECUTION_STATUS_TIMED_OUT, h.driveTrace(t, trace).terminal(t).Status,
 				"a %s timeout marked non-retryable must fail the activity terminally, not retry it", timeoutType)
 		})
 		t.Run("StandaloneActivity", func(t *testing.T) {
-			h := &saaHarness{
-				env: env, ctx: testcontext.For(t), idBase: testcore.RandomizeStr(t.Name()),
-				cfg:          model.Config{MaxAttempts: 3, HasHeartbeat: elapse == model.HeartbeatElapses},
-				shortTimeout: saaTimeoutIn(trace),
-				customizeStart: func(req *workflowservice.StartActivityExecutionRequest) {
-					req.RetryPolicy.NonRetryableErrorTypes = []string{nonRetryableType}
-				},
+			h := newSAAHarness(t, env, model.Config{MaxAttempts: 3, HasHeartbeat: elapse == model.HeartbeatElapses})
+			h.shortTimeout = saaTimeoutIn(trace)
+			h.customizeStart = func(req *workflowservice.StartActivityExecutionRequest) {
+				req.RetryPolicy.NonRetryableErrorTypes = []string{nonRetryableType}
 			}
 			require.Equalf(t, enumspb.ACTIVITY_EXECUTION_STATUS_TIMED_OUT, h.driveTrace(t, trace).terminal(t).Status,
 				"a %s timeout marked non-retryable must fail the activity terminally, not retry it", timeoutType)

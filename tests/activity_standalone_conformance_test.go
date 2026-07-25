@@ -14,7 +14,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/stretchr/testify/require"
 	"go.temporal.io/server/chasm/lib/activity/model"
 	"go.temporal.io/server/common/testing/testcontext"
 )
@@ -66,23 +65,11 @@ func saaConformanceContextBudget() time.Duration {
 // retries can be traversed. Timeout timing is checked by the traces, not here.
 func (s *standaloneActivityTestSuite) conformanceRPCGraphTraversal(t *testing.T) {
 	env := s.newTestEnv()
-	// testcontext.For(t), not s.Context(): the suite context is memoized once per suite test, so all
-	// TestConformance subtests would otherwise share a single budget. Anchoring on the subtest t gives each
-	// explorer its own budget.
-	ctx := testcontext.For(t)
-
-	chasmCtx, err := env.GetTestCluster().Host().ChasmContext(ctx)
-	require.NoError(t, err)
-
 	for i, cfg := range saaTraversalConfigs {
-		h := &saaHarness{
-			env:      env,
-			ctx:      ctx,
-			chasmCtx: chasmCtx,
-			nsID:     env.NamespaceID().String(),
-			cfg:      cfg,
-			cfgIdx:   i,
-		}
+		// newSAAHarness anchors on the subtest t, not s.T(): the suite context is memoized once per suite
+		// test, so all TestConformance subtests would otherwise share a single budget.
+		h := newSAAHarness(t, env, cfg)
+		h.cfgIdx = i
 		if cfg.HasStartDelay {
 			// Keep the first-dispatch window open for the whole traversal so the activity stays
 			// StartDelayPending (the model never leaves that state via an RPC event), letting the BFS
@@ -102,19 +89,12 @@ func (s *standaloneActivityTestSuite) conformanceRPCGraphTraversal(t *testing.T)
 // the go test -timeout. Set TEMPORAL_SAASPEC_NO_NEGATIVE_POLL=1 to skip the ~3s Paused negative poll.
 func (s *standaloneActivityTestSuite) conformanceRandomWalk(t *testing.T) {
 	env := s.newTestEnv()
-	ctx := testcontext.For(t) // subtest-scoped budget; see conformanceRPCGraphTraversal
-
-	chasmCtx, err := env.GetTestCluster().Host().ChasmContext(ctx)
-	require.NoError(t, err)
-
 	seed, steps := saaWalkSeed(), saaWalkSteps()
 	t.Logf("random walk: seed=%d steps=%d/cfg (override TEMPORAL_SAASPEC_WALK_SEED / _WALK_STEPS)", seed, steps)
 
 	for i, cfg := range saaTraversalConfigs {
-		h := &saaHarness{
-			env: env, ctx: ctx, chasmCtx: chasmCtx, nsID: env.NamespaceID().String(),
-			cfg: cfg, cfgIdx: i,
-		}
+		h := newSAAHarness(t, env, cfg) // subtest-scoped budget; see conformanceRPCGraphTraversal
+		h.cfgIdx = i
 		if cfg.HasStartDelay {
 			// Keep the first-dispatch window open for the whole walk so the activity stays
 			// StartDelayPending (no RPC event leaves it); the walk explores operator commands in the

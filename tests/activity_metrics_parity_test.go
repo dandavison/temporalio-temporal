@@ -23,7 +23,6 @@ package tests
 // queried (the namespace capture rejects non-namespaced metrics).
 
 import (
-	"context"
 	"fmt"
 	"sort"
 	"strings"
@@ -35,8 +34,6 @@ import (
 	"go.temporal.io/server/chasm/lib/activity/model"
 	"go.temporal.io/server/common/metrics"
 	"go.temporal.io/server/common/testing/await"
-	"go.temporal.io/server/common/testing/testcontext"
-	"go.temporal.io/server/tests/testcore"
 )
 
 // activityMetric is one entry in the exhaustive activity-metric catalog. measured marks whether this
@@ -158,18 +155,17 @@ func (s *standaloneActivityTestSuite) TestWFASAAMetricsParity() {
 }
 
 func (s *standaloneActivityTestSuite) saaActivityMetrics(t *testing.T, env *standaloneActivityEnv, sc activityMetricsScenario) map[string]map[string]string {
-	return s.captureActivityMetrics(t, env, sc, func(ctx context.Context) {
-		h := &saaHarness{
-			env: env, ctx: ctx, idBase: testcore.RandomizeStr(t.Name()),
-			cfg: model.Config{MaxAttempts: sc.maxAttempts}, shortTimeout: saaTimeoutIn(sc.trace),
-		}
+	return s.captureActivityMetrics(t, env, sc, func() {
+		h := newSAAHarness(t, env, model.Config{MaxAttempts: sc.maxAttempts})
+		h.shortTimeout = saaTimeoutIn(sc.trace)
 		h.driveTrace(t, sc.trace)
 	})
 }
 
 func (s *standaloneActivityTestSuite) wfaActivityMetrics(t *testing.T, env *standaloneActivityEnv, sc activityMetricsScenario) map[string]map[string]string {
-	return s.captureActivityMetrics(t, env, sc, func(ctx context.Context) {
-		h := &wfaHarness{env: env, ctx: ctx, maxAttempts: sc.maxAttempts, shortTimeout: saaTimeoutIn(sc.trace)}
+	return s.captureActivityMetrics(t, env, sc, func() {
+		h := newWFAHarness(t, env, sc.maxAttempts)
+		h.shortTimeout = saaTimeoutIn(sc.trace)
 		h.driveTrace(t, sc.trace)
 	})
 }
@@ -178,9 +174,9 @@ func (s *standaloneActivityTestSuite) wfaActivityMetrics(t *testing.T, env *stan
 // namespace, returning each emitted metric's representative tag map. The two surfaces share the
 // namespace but are captured in separate windows read back to back with their drive, so the window
 // alone separates them.
-func (s *standaloneActivityTestSuite) captureActivityMetrics(t *testing.T, env *standaloneActivityEnv, sc activityMetricsScenario, drive func(context.Context)) map[string]map[string]string {
+func (s *standaloneActivityTestSuite) captureActivityMetrics(t *testing.T, env *standaloneActivityEnv, sc activityMetricsScenario, drive func()) map[string]map[string]string {
 	capture := env.StartNamespaceMetricCapture()
-	drive(testcontext.For(t))
+	drive()
 
 	if sc.anchor != "" {
 		await.RequireTrue(t, func() bool {

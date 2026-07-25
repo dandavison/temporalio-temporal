@@ -10,6 +10,7 @@ package tests
 // only WFA-specific parts are that the activity is scheduled by a workflow and observed through it.
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"fmt"
@@ -28,6 +29,7 @@ import (
 	sdkworker "go.temporal.io/sdk/worker"
 	"go.temporal.io/sdk/workflow"
 	"go.temporal.io/server/chasm/lib/activity/model"
+	"go.temporal.io/server/common/testing/testcontext"
 	"go.temporal.io/server/tests/testcore"
 	"google.golang.org/protobuf/types/known/durationpb"
 	"google.golang.org/protobuf/types/known/fieldmaskpb"
@@ -70,7 +72,7 @@ type wfaHarness struct {
 	env                *standaloneActivityEnv
 	ctx                context.Context
 	maxAttempts        int32         // RetryPolicy MaximumAttempts (0 = unlimited)
-	retryInterval      time.Duration // RetryPolicy InitialInterval; how long the driver waits for BackoffElapses
+	retryInterval      time.Duration // RetryPolicy InitialInterval; 0 => saaDefaultRetryInterval
 	backoffCoefficient float64       // RetryPolicy BackoffCoefficient; 0 => 1.0 (constant interval)
 	maxRetryInterval   time.Duration // RetryPolicy MaximumInterval; 0 => retryInterval
 	nextRetryDelay     time.Duration // ApplicationFailureInfo.NextRetryDelay injected into RespondFailed
@@ -80,12 +82,24 @@ type wfaHarness struct {
 	// scheduleToClose, when >0, sets a finite ScheduleToClose deadline so a trace can make a retry fail
 	// to fit before it (mirrors saaHarness.scheduleToClose).
 	scheduleToClose time.Duration
-	// positivePollTimeout bounds a "must dispatch" poll; 0 => 10s.
+	// positivePollTimeout bounds a "must dispatch" poll; 0 => saaPositivePollTimeout.
 	positivePollTimeout time.Duration
 	// nonRetryableErrorTypes marks failure types non-retryable in the RetryPolicy; a timeout type is named
 	// via retrypolicy.TimeoutFailureTypePrefix, so a matching timeout fails the activity instead of
 	// retrying. The WFA analog of saaHarness.customizeStart setting NonRetryableErrorTypes.
 	nonRetryableErrorTypes []string
+}
+
+// newWFAHarness builds a harness for one test with the test-scoped context. The caller sets any timing
+// knobs it needs on the result.
+func newWFAHarness(t *testing.T, env *standaloneActivityEnv, maxAttempts int32) *wfaHarness {
+	return &wfaHarness{env: env, ctx: testcontext.For(t), maxAttempts: maxAttempts}
+}
+
+// effectiveRetryInterval is the RetryPolicy InitialInterval the harness schedules activities with, and
+// so how long a retry backs off for. Kept in one place so the driver waits for the interval it configured.
+func (h *wfaHarness) effectiveRetryInterval() time.Duration {
+	return cmp.Or(h.retryInterval, saaDefaultRetryInterval)
 }
 
 // wfaHandle is a handle to one workflow-scheduled activity: the token last dispatched to it plus the
@@ -170,21 +184,17 @@ func (h *wfaHarness) driveTrace(t *testing.T, trace []model.Event) *wfaHandle {
 	return a
 }
 
-// driveEvent advances the activity by one event: a poll captures the dispatched token, a wall-clock
-// event is waited out, any other event is its worker RPC (which must succeed). Parallel to
-// saaHandle.driveEvent.
+// driveEvent advances the activity by one event. Parallel to saaHandle.driveEvent.
 func (a *wfaHandle) driveEvent(t require.TestingT, e model.Event) {
 	h := a.h
 	switch {
 	case e.Kind == model.Poll:
-		timeout := 10 * time.Second
-		if h.positivePollTimeout > 0 {
-			timeout = h.positivePollTimeout
-		}
-		if resp := a.pollForTask(t, timeout); resp != nil {
+		// A poll captures the dispatched task token.
+		if resp := a.pollForTask(t, cmp.Or(h.positivePollTimeout, saaPositivePollTimeout)); resp != nil {
 			a.token = resp.GetTaskToken()
 		}
 	case saaIsWallClock(e.Kind):
+		// A wall-clock event is realized by waiting out its configured window.
 		a.awaitWallClock(e)
 	default:
 		require.NoError(t, a.rpc(e))
@@ -227,7 +237,7 @@ func (a *wfaHandle) pendingSnapshot() (activityInfoProjection, bool) {
 // retry interval, a timeout under test is configured short. (WFA has no per-activity start delay.)
 func (h *wfaHarness) eventClock(e model.Event) time.Duration {
 	if e.Kind == model.BackoffElapses {
-		return h.retryInterval
+		return cmp.Or(h.nextRetryDelay, h.effectiveRetryInterval())
 	}
 	return saaShortTimeout // the four timeouts
 }
@@ -256,7 +266,7 @@ func (h *wfaHarness) start(t *testing.T) *wfaHandle {
 	params := wfaActivityParams{
 		ActivityTQ: actTQ, ActivityID: actID,
 		StartToClose:  dur(model.StartToCloseElapses),
-		RetryInterval: h.retryInterval, BackoffCoefficient: h.backoffCoefficient, MaxInterval: h.maxRetryInterval,
+		RetryInterval: h.effectiveRetryInterval(), BackoffCoefficient: h.backoffCoefficient, MaxInterval: h.maxRetryInterval,
 		MaxAttempts:            h.maxAttempts,
 		NonRetryableErrorTypes: h.nonRetryableErrorTypes,
 	}
@@ -326,7 +336,7 @@ func (a *wfaHandle) pollForTask(t require.TestingT, timeout time.Duration) *work
 	defer cancel()
 	resp, err := a.h.env.FrontendClient().PollActivityTaskQueue(ctx, &workflowservice.PollActivityTaskQueueRequest{
 		Namespace: a.h.env.Namespace().String(),
-		TaskQueue: &taskqueuepb.TaskQueue{Name: a.activityTQ, Kind: enumspb.TASK_QUEUE_KIND_NORMAL},
+		TaskQueue: &taskqueuepb.TaskQueue{Name: a.activityTQ},
 		Identity:  "worker",
 	})
 	require.NoError(t, err)

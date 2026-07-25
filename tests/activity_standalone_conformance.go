@@ -9,6 +9,7 @@ package tests
 // activity_standalone_conformance_test.go.
 
 import (
+	"cmp"
 	"errors"
 	"fmt"
 	"math/rand"
@@ -312,10 +313,7 @@ func (a *saaHandle) applyPoll(cur model.AbstractState, out model.Outcome, final 
 	case cur.Status == model.Scheduled && out.Next.Status == model.Started:
 		// Positive: a SCHEDULED+Dispatchable activity must be dispatched. The traces bound this
 		// deadline so "Dispatchable" means "dispatches promptly".
-		timeout := 10 * time.Second
-		if a.h.positivePollTimeout > 0 {
-			timeout = a.h.positivePollTimeout
-		}
+		timeout := cmp.Or(a.h.positivePollTimeout, saaPositivePollTimeout)
 		resp := a.pollForTask(t, timeout)
 		if resp == nil {
 			if final {

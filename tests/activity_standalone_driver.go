@@ -6,6 +6,7 @@ package tests
 // package (chasm/lib/activity/model); this file is the SAA adapter that realizes it.
 
 import (
+	"cmp"
 	"context"
 	"fmt"
 	"testing"
@@ -15,7 +16,6 @@ import (
 	"github.com/stretchr/testify/require"
 	apiactivitypb "go.temporal.io/api/activity/v1"
 	commonpb "go.temporal.io/api/common/v1"
-	enumspb "go.temporal.io/api/enums/v1"
 	failurepb "go.temporal.io/api/failure/v1"
 	taskqueuepb "go.temporal.io/api/taskqueue/v1"
 	"go.temporal.io/api/workflowservice/v1"
@@ -23,6 +23,8 @@ import (
 	"go.temporal.io/server/chasm/lib/activity"
 	"go.temporal.io/server/chasm/lib/activity/model"
 	"go.temporal.io/server/common"
+	"go.temporal.io/server/common/testing/testcontext"
+	"go.temporal.io/server/tests/testcore"
 	"google.golang.org/protobuf/types/known/durationpb"
 	"google.golang.org/protobuf/types/known/fieldmaskpb"
 )
@@ -30,20 +32,18 @@ import (
 // --- driver --------------------------------------------------------------------------------
 
 type saaHarness struct {
-	env      *standaloneActivityEnv
-	ctx      context.Context
-	chasmCtx context.Context // for ReadComponent (observed)
-	nsID     string
-	cfg      model.Config
-	cfgIdx   int
-	counter  int
-	// activity-id prefix so subtests don't collide; empty falls back to a cfgIdx-based prefix.
-	idBase string
+	env        *standaloneActivityEnv
+	ctx        context.Context
+	chasmCtx   context.Context // memoized by chasmContext
+	cfg        model.Config
+	cfgIdx     int
+	numStarted int
+	idBase     string // activity-id prefix, unique per harness
 	// shortTimeout, set to one of the timeout *Elapses kinds, makes that timeout short at Start so a
 	// trace can fire it. Zero (Poll) leaves all timeouts long.
 	shortTimeout model.EventKind
 	startDelay   time.Duration // StartActivityExecutionRequest.StartDelay
-	// retryInterval is the RetryPolicy InitialInterval; 0 => a short default backoff.
+	// retryInterval is the RetryPolicy InitialInterval; 0 => saaDefaultRetryInterval.
 	retryInterval time.Duration
 	// backoffCoefficient is the RetryPolicy BackoffCoefficient; 0 => 1.0 (constant interval).
 	backoffCoefficient float64
@@ -54,14 +54,31 @@ type saaHarness struct {
 	// scheduleToClose, when >0, sets a finite ScheduleToCloseTimeout (overriding the long default) so a
 	// trace can make a retry fail to fit before the deadline.
 	scheduleToClose time.Duration
-	// positivePollTimeout bounds a "must dispatch" poll; 0 => 10s.
+	// positivePollTimeout bounds a "must dispatch" poll; 0 => saaPositivePollTimeout.
 	positivePollTimeout time.Duration
 	// customizeStart mutates the StartActivityExecutionRequest before it is sent — the seam for niche
 	// start-time config the harness stays ignorant of.
 	customizeStart func(*workflowservice.StartActivityExecutionRequest)
 }
 
+// newSAAHarness builds a harness for one test, with its own activity-id prefix and the test-scoped
+// context. The caller sets any timing knobs it needs on the result.
+func newSAAHarness(t *testing.T, env *standaloneActivityEnv, cfg model.Config) *saaHarness {
+	return &saaHarness{
+		env:    env,
+		ctx:    testcontext.For(t),
+		cfg:    cfg,
+		idBase: testcore.RandomizeStr(t.Name()),
+	}
+}
+
 const saaShortTimeout = 2 * time.Second
+
+// saaDefaultRetryInterval is the RetryPolicy InitialInterval when a harness sets none.
+const saaDefaultRetryInterval = 200 * time.Millisecond
+
+// saaPositivePollTimeout bounds a poll that must find a task.
+const saaPositivePollTimeout = 10 * time.Second
 
 // saaWallClockSettle is slack added to a wall-clock event's clock: the driver polls for the event's
 // effect up to (window + settle) rather than sleeping the window blindly, so a timer firing a little
@@ -108,20 +125,17 @@ func (h *saaHarness) driveTrace(t require.TestingT, trace []model.Event) *saaHan
 	return a
 }
 
-// driveEvent advances the activity by one event: a poll captures the dispatched token, a wall-clock
-// event is waited out, any other event is its RPC (which must succeed).
+// driveEvent advances the activity by one event.
 func (a *saaHandle) driveEvent(t require.TestingT, e model.Event) {
 	h := a.h
 	switch {
 	case e.Kind == model.Poll:
-		timeout := 10 * time.Second
-		if h.positivePollTimeout > 0 {
-			timeout = h.positivePollTimeout
-		}
-		if resp := a.pollForTask(t, timeout); resp != nil {
+		// A poll captures the dispatched task token.
+		if resp := a.pollForTask(t, cmp.Or(h.positivePollTimeout, saaPositivePollTimeout)); resp != nil {
 			a.token = resp.GetTaskToken()
 		}
 	case saaIsWallClock(e.Kind):
+		// A wall-clock event is realized by waiting out its configured window.
 		a.awaitWallClock(t, e)
 	default:
 		require.NoError(t, a.rpc(e))
@@ -201,12 +215,9 @@ func (h *saaHarness) start(t require.TestingT) *saaHandle {
 	if h.cfg.HasStartDelay && h.startDelay <= 0 {
 		require.Fail(t, "saaHarness misconfigured: cfg.HasStartDelay requires startDelay > 0")
 	}
-	h.counter++
-	base := h.idBase
-	if base == "" {
-		base = fmt.Sprintf("saaexp-%d", h.cfgIdx)
-	}
-	id := fmt.Sprintf("%s-%d", base, h.counter)
+	h.numStarted++
+	// cfgIdx keeps the ids distinct across the per-config harnesses an explorer sweeps.
+	id := fmt.Sprintf("%s-%d-%d", h.idBase, h.cfgIdx, h.numStarted)
 	resp, err := h.env.FrontendClient().StartActivityExecution(h.ctx, h.startRequest(id, id))
 	require.NoError(t, err)
 	return &saaHandle{h: h, activityID: id, taskQueue: id, runID: resp.RunId, establishedReqID: map[model.EventKind]string{}}
@@ -220,18 +231,7 @@ func (h *saaHarness) startRequest(activityID, taskQueue string) *workflowservice
 		}
 		return long
 	}
-	interval := 200 * time.Millisecond
-	if h.retryInterval > 0 {
-		interval = h.retryInterval
-	}
-	coefficient := 1.0
-	if h.backoffCoefficient > 0 {
-		coefficient = h.backoffCoefficient
-	}
-	maxInterval := interval
-	if h.maxRetryInterval > 0 {
-		maxInterval = h.maxRetryInterval
-	}
+	retryInterval := h.effectiveRetryInterval()
 	req := &workflowservice.StartActivityExecutionRequest{
 		Namespace:           h.env.Namespace().String(),
 		ActivityId:          activityID,
@@ -241,9 +241,9 @@ func (h *saaHarness) startRequest(activityID, taskQueue string) *workflowservice
 		TaskQueue:           &taskqueuepb.TaskQueue{Name: taskQueue},
 		StartToCloseTimeout: dur(model.StartToCloseElapses),
 		RetryPolicy: &commonpb.RetryPolicy{
-			InitialInterval:    durationpb.New(interval),
-			BackoffCoefficient: coefficient,
-			MaximumInterval:    durationpb.New(maxInterval),
+			InitialInterval:    durationpb.New(retryInterval),
+			BackoffCoefficient: cmp.Or(h.backoffCoefficient, 1.0),
+			MaximumInterval:    durationpb.New(cmp.Or(h.maxRetryInterval, retryInterval)),
 			MaximumAttempts:    h.cfg.MaxAttempts,
 		},
 		RequestId: uuid.NewString(),
@@ -353,7 +353,7 @@ func projectSAA(i *apiactivitypb.ActivityExecutionInfo) activityInfoProjection {
 // observed reads the activity's internal state back via ReadComponent, as the model's AbstractState.
 // It shifts cur->prev for the raw stamps so callers can compare the stamp change across the last edge.
 func (a *saaHandle) observed() (model.AbstractState, error) {
-	o, err := saaReadObserved(a.h.chasmCtx, a.h.nsID, a.activityID, a.runID)
+	o, err := a.readObserved()
 	if err != nil {
 		return model.AbstractState{}, err
 	}
@@ -363,10 +363,9 @@ func (a *saaHandle) observed() (model.AbstractState, error) {
 }
 
 // observedRaw reads the internal state without shifting the stamp baseline observed() maintains, so it
-// is safe to call in a polling loop (see awaitObservedMatch). Model-conformance-only: it reads internal
-// component state, so it requires chasmCtx.
+// is safe to call in a polling loop (see awaitObservedMatch).
 func (a *saaHandle) observedRaw() (model.AbstractState, error) {
-	o, err := saaReadObserved(a.h.chasmCtx, a.h.nsID, a.activityID, a.runID)
+	o, err := a.readObserved()
 	if err != nil {
 		return model.AbstractState{}, err
 	}
@@ -486,7 +485,7 @@ func (a *saaHandle) pollForTask(t require.TestingT, timeout time.Duration) *work
 	defer cancel()
 	resp, err := a.h.env.FrontendClient().PollActivityTaskQueue(ctx, &workflowservice.PollActivityTaskQueueRequest{
 		Namespace: a.h.env.Namespace().String(),
-		TaskQueue: &taskqueuepb.TaskQueue{Name: a.taskQueue, Kind: enumspb.TASK_QUEUE_KIND_NORMAL},
+		TaskQueue: &taskqueuepb.TaskQueue{Name: a.taskQueue},
 		Identity:  "worker",
 	})
 	// Matching signals "waited, found nothing" with an empty response and a nil error, so a genuine
@@ -531,18 +530,38 @@ func (h *saaHarness) dispatchDelay(d model.Dispatchability) time.Duration {
 	case model.StartDelayPending:
 		return h.startDelay
 	case model.BackoffPending:
-		if h.nextRetryDelay > 0 {
-			return h.nextRetryDelay
-		}
-		return h.retryInterval
+		return cmp.Or(h.nextRetryDelay, h.effectiveRetryInterval())
 	default:
 		return 0
 	}
 }
 
-func saaReadObserved(chasmCtx context.Context, nsID, activityID, runID string) (model.Observed, error) {
+// effectiveRetryInterval is the RetryPolicy InitialInterval the harness starts activities with, and so
+// how long a retry backs off for.
+func (h *saaHarness) effectiveRetryInterval() time.Duration {
+	return cmp.Or(h.retryInterval, saaDefaultRetryInterval)
+}
+
+// chasmContext is the context ReadComponent needs to read internal component state, memoized.
+func (h *saaHarness) chasmContext() (context.Context, error) {
+	if h.chasmCtx == nil {
+		ctx, err := h.env.GetTestCluster().Host().ChasmContext(h.ctx)
+		if err != nil {
+			return nil, err
+		}
+		h.chasmCtx = ctx
+	}
+	return h.chasmCtx, nil
+}
+
+// readObserved reads the activity's internal component state.
+func (a *saaHandle) readObserved() (model.Observed, error) {
+	chasmCtx, err := a.h.chasmContext()
+	if err != nil {
+		return model.Observed{}, err
+	}
 	ref := chasm.NewComponentRef[*activity.Activity](chasm.ExecutionKey{
-		NamespaceID: nsID, BusinessID: activityID, RunID: runID,
+		NamespaceID: a.h.env.NamespaceID().String(), BusinessID: a.activityID, RunID: a.runID,
 	})
 	return chasm.ReadComponent(chasmCtx, ref, func(act *activity.Activity, cctx chasm.Context, _ struct{}) (model.Observed, error) {
 		attempt := act.LastAttempt.Get(cctx)
