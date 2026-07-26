@@ -1,12 +1,10 @@
 package tests
 
 // Self-tests for the activity drivers: when a scripted event's effect never arrives, the driver must
-// say so. Without this, a trace can silently fail to reach the state it scripts and the test goes on to
-// assert against whatever state it did reach.
+// say so, rather than leaving the test to assert against whatever state it did reach.
 //
 // Each case injects a mismatch between what the driver believes it configured and what the server
-// actually got, via customizeStart — the documented escape hatch for start-time config the driver does
-// not model. So the injection does not depend on any current driver defect.
+// actually got, via customizeStart, and is paired with an uninjected control.
 //
 // The driver reports through the require.TestingT it is handed, so these tests hand it a recorder and
 // assert on what it recorded, rather than failing themselves.
@@ -48,8 +46,7 @@ func recordDriverReports(drive func(require.TestingT)) (failures []string) {
 }
 
 // TestSAADriverReportsUnrealizedWallClockEvents drives a trace whose wall-clock event provably cannot
-// take effect inside the window the driver waits, and requires the driver to report it. Each case is
-// paired with an uninjected control, so a check that always fails cannot pass these tests.
+// take effect inside the window the driver waits, and requires the driver to report it.
 func (s *standaloneActivityTestSuite) TestSAADriverReportsUnrealizedWallClockEvents() {
 	env := s.newTestEnv()
 
@@ -98,13 +95,9 @@ func (s *standaloneActivityTestSuite) TestSAADriverReportsUnrealizedWallClockEve
 }
 
 // TestSAADriverRejectsInconsistentConfig requires the driver to refuse a configuration in which the
-// activity it starts and the model.Config it reports do not describe the same activity. saaDriverDeclarative takes
-// its start-time config from two places — the model.Config flags and the timing knobs — and nothing
-// relates them, so a knob can be silently dropped (a scheduleToClose with no HasScheduleToClose) or a
-// timeout can be configured that the model does not know about (a startDelay with no HasStartDelay).
-//
-// Both directions are driver bugs that surface as product findings: a parity test whose SAA side
-// silently lacks a timeout its WFA side has fails on SAA and reads as a divergence.
+// activity it starts and the model.Config it reports do not describe the same activity: a knob that
+// startRequest then drops (a scheduleToClose with no HasScheduleToClose), or a timeout the model does
+// not know about (a startDelay with no HasStartDelay).
 func (s *standaloneActivityTestSuite) TestSAADriverRejectsInconsistentConfig() {
 	env := s.newTestEnv()
 
@@ -143,8 +136,7 @@ func (s *standaloneActivityTestSuite) TestSAADriverRejectsInconsistentConfig() {
 		})
 	}
 
-	// Control: a consistent configuration must start cleanly, so a check that rejects everything cannot
-	// pass this test.
+	// Control: a consistent configuration must start cleanly.
 	s.T().Run("consistentConfigIsAccepted", func(t *testing.T) {
 		reports := recordDriverReports(func(rt require.TestingT) {
 			d := newSAADriverDeclarative(t, env, model.Config{MaxAttempts: 1, HasScheduleToClose: true, HasHeartbeat: true})
@@ -157,23 +149,16 @@ func (s *standaloneActivityTestSuite) TestSAADriverRejectsInconsistentConfig() {
 }
 
 // TestSAADriverBlamesItselfWhenItOutrunsTheDispatchWindow requires the negative poll to blame the
-// driver, not the product, when it can no longer make its check.
+// driver, not the product, when the dispatch window it meant to check has already closed. A task found
+// then was dispatched legitimately, and reporting it as a product divergence costs an investigation.
 //
-// The negative poll asserts that a start-delayed or backing-off activity dispatches nothing. It decides
-// whether to run from the delay the driver configured, not from how much of the window is actually
-// left, so it assumes little time has passed since the delay began. Nothing enforces that: under load
-// the window can close first, and the poll then finds a task that was dispatched entirely legitimately
-// and reports it as a product divergence. Such a finding at least announces itself, unlike a missed one,
-// but it costs an investigation, invites a fix to a product that is behaving correctly, and teaches
-// everyone to read a red parity test as flake.
-//
-// Injected here by shortening the real start delay to nothing while the driver still believes it is an
-// hour, which puts the poll in exactly the position a slow machine would.
+// Injected by shortening the real start delay to nothing while the driver still believes it is an hour,
+// which puts the poll in the position a slow machine would.
 func (s *standaloneActivityTestSuite) TestSAADriverBlamesItselfWhenItOutrunsTheDispatchWindow() {
 	env := s.newTestEnv()
 
-	// negativePoll drives the one Poll of a start-delayed activity through the model-checking path, which
-	// is what runs the negative poll, and returns everything the driver reported.
+	// negativePoll drives the one Poll of a start-delayed activity through the model-checking path, and
+	// returns everything the driver reported.
 	negativePoll := func(t *testing.T, customize func(*workflowservice.StartActivityExecutionRequest)) []string {
 		return recordDriverReports(func(rt require.TestingT) {
 			d := newSAADriverDeclarative(t, env, model.Config{MaxAttempts: 1, HasStartDelay: true})
@@ -204,9 +189,9 @@ func (s *standaloneActivityTestSuite) TestSAADriverBlamesItselfWhenItOutrunsTheD
 	})
 }
 
-// TestAdjudicateDispatch pins how a negative poll tells a product defect from its own window closing.
-// Removing the timing margin rests on this: a task found while the window was still open is still
-// reported as the product dispatching early, and only one found after the window closed is excused.
+// TestAdjudicateDispatch pins how a negative poll tells a product defect from its own window closing: a
+// task found while the window was still open is the product dispatching early; one found after the
+// window closed is excused.
 func TestAdjudicateDispatch(t *testing.T) {
 	dispatchTime := time.Date(2020, 1, 1, 0, 0, 10, 0, time.UTC)
 	for _, tc := range []struct {

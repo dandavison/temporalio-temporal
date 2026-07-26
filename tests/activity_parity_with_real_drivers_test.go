@@ -5,13 +5,11 @@ package tests
 // "StandaloneActivity" subtests, and asserts the same public activity info.
 //
 // There is no oracle. Each `want` encodes how the product should behave, not what either implementation
-// currently does, and both subtests are checked against it. A failure on either — or both — is useful
-// information. Never adjust a `want` to match observed behavior; if the intended behavior is unclear,
-// stop and resolve that instead.
+// currently does, and both subtests are checked against it. Never adjust a `want` to match observed
+// behavior; if the intended behavior is unclear, stop and resolve that instead.
 //
 // The drivers are activity_standalone_driver.go and activity_workflow_driver.go, over the event
-// vocabulary in chasm/lib/activity/model. main carries the same repros driven by small ad-hoc
-// per-surface drivers, in tests/activity_parity_test.go.
+// vocabulary in chasm/lib/activity/model.
 //
 // These live on standaloneActivityTestSuite because its env enables the standalone activity. WFA needs
 // nothing special, so one SAA-enabled env drives both.
@@ -33,9 +31,8 @@ import (
 // StartToClose timeout and, with no retries left, the activity ends TIMED_OUT with the StartToClose
 // TimeoutType.
 //
-// The failure message is deliberately not asserted: SAA carries a proto message and WFA's SDK
-// TimeoutError formats its own, so the strings differ by construction. TimeoutType is the stable
-// cross-surface discriminant.
+// The failure message differs by construction — SAA carries a proto message, WFA's SDK TimeoutError
+// formats its own — so TimeoutType is the cross-surface discriminant.
 func (s *standaloneActivityTestSuite) TestWFASAAStartToCloseTimeout() {
 	env := s.newTestEnv()
 	trace := []model.Event{model.Poll, model.StartToCloseElapses}
@@ -183,8 +180,7 @@ func (s *standaloneActivityTestSuite) TestWFASAAQueuedRetryInterval() {
 
 // TestWFASAAHeartBeat ports the core of TestActivityHeartBeatWorkflow_Success: a worker polls the
 // activity and heartbeats a checkpoint payload, the checkpoint is readable while it runs, then the
-// worker completes it. The original also asserts the workflow history-event shape, which is not part of
-// the cross-surface contract.
+// worker completes it.
 var heartbeatWant = []byte(`"hb"`) // == saaHeartbeatDetails
 
 func (s *standaloneActivityTestSuite) TestWFASAAHeartBeat() {
@@ -211,9 +207,7 @@ func (s *standaloneActivityTestSuite) TestWFASAAHeartBeat() {
 }
 
 // TestWFASAARetry: an attempt fails retryably, the backoff elapses, the next attempt fails
-// non-retryably, and the activity ends FAILED with the application failure type. The original also
-// covers a schedule-to-start timeout on a no-worker queue (a separate scenario here) and asserts the
-// workflow history-event shape.
+// non-retryably, and the activity ends FAILED with the application failure type.
 func (s *standaloneActivityTestSuite) TestWFASAARetry() {
 	env := s.newTestEnv()
 	trace := []model.Event{model.Poll, model.FailRetryably, model.BackoffElapses, model.Poll, model.FailNonRetryably}
@@ -254,8 +248,8 @@ func (s *standaloneActivityTestSuite) TestWFASAAHeartbeatTimeout() {
 // TestWFASAACancel ports the core of TestTryActivityCancellationFromWorkflow: a running activity is
 // cancel-requested, the worker acknowledges with RespondActivityTaskCanceled, and the activity ends
 // CANCELED. The RequestCancel event realizes differently per surface — SAA's direct
-// RequestCancelActivityExecution RPC vs WFA's signal-then-RequestCancelActivity — which is what the
-// drivers hide. The original also asserts that the workflow observed the cancellation.
+// RequestCancelActivityExecution RPC vs WFA's signal-then-RequestCancelActivity — which the drivers
+// hide.
 func (s *standaloneActivityTestSuite) TestWFASAACancel() {
 	env := s.newTestEnv()
 	trace := []model.Event{model.Poll, model.RequestCancel, {Type: model.RespondCanceledType}}
@@ -461,17 +455,11 @@ func (s *standaloneActivityTestSuite) TestWFASAANextAttemptScheduleTimeAndCurren
 			activityInfoProjection{State: enumspb.PENDING_ACTIVITY_STATE_PAUSED, Attempt: 2})
 	})
 
-	// Paused after the backoff elapsed and the retry was dispatched to Matching. As above, no
-	// next-attempt schedule time; and as in RetryQueuedNotStarted, nothing is backing off.
-	//
-	// This `want` is necessarily identical to PausedBeforeDispatch's: diffing the whole of
-	// ActivityExecutionInfo and PendingActivityInfo between the two states, over repeated runs to
-	// separate signal from run-to-run noise, turns up no field that distinguishes them on either
-	// surface. So the two subtests differ only in the state they reach, which the driver verifies (it
-	// requires BackoffElapses to clear the pending dispatch time), not in what they assert. The
-	// behavioral difference — whether an unpause dispatches at once or waits out the rest of the
-	// backoff — is observable, and is covered by the backoff/pause-{before,after}-dispatch-then-unpause
-	// traces.
+	// Paused after the backoff elapsed and the retry was dispatched to Matching. No field of
+	// ActivityExecutionInfo or PendingActivityInfo distinguishes this from PausedBeforeDispatch on either
+	// surface, so the two subtests differ in the state they reach, not in what they assert. The
+	// behavioral difference — whether an unpause dispatches at once — is covered by the
+	// backoff/pause-{before,after}-dispatch-then-unpause traces.
 	t.Run("PausedAfterDispatch", func(t *testing.T) {
 		both(t, 3, saaDelayWindow, []model.Event{model.Poll, model.FailRetryably, model.BackoffElapses, model.Pause},
 			activityInfoProjection{State: enumspb.PENDING_ACTIVITY_STATE_PAUSED, Attempt: 2})
@@ -502,7 +490,6 @@ func (s *standaloneActivityTestSuite) driveTrace(t *testing.T, env *standaloneAc
 	d.customizeStart = tr.customizeStart
 	d.shortTimeout = saaTimeoutIn(tr.trace)
 	// Bound the positive poll below the delay window, so that "Dispatchable" means "dispatches promptly".
-	// That is what distinguishes a reset which discards a backoff from one which is still delayed.
 	d.positivePollTimeout = saaPollTimeout
 	// customizeStart injects config the model cannot see, so drive model-free and leave the assertions to
 	// the caller.
@@ -641,8 +628,7 @@ func (s *standaloneActivityTestSuite) TestBackoff_Declarative() {
 		})
 	})
 	// The counterpart: paused after the backoff already elapsed, so the unpause must dispatch at once
-	// rather than impose a fresh window. This is the only observable difference between the two paused
-	// states — see PausedAfterDispatch.
+	// rather than impose a fresh window.
 	t.Run("backoff/pause-after-dispatch-then-unpause", func(t *testing.T) {
 		s.driveTrace(t, env, saaTrace{
 			trace:         []model.Event{model.Poll, model.FailRetryably, model.BackoffElapses, model.Pause, {Type: model.UnpauseType}, model.Poll},

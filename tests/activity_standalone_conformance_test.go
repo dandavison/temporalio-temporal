@@ -60,7 +60,7 @@ func saaConformanceContextBudget() time.Duration {
 func (s *standaloneActivityTestSuite) conformanceRPCGraphTraversal(t *testing.T) {
 	env := s.newTestEnv()
 	for i, cfg := range saaTraversalConfigs {
-		// newSAADriver anchors on the subtest t, not s.T(): the suite context is memoized once per suite
+		// The driver anchors on the subtest t, not s.T(): the suite context is memoized once per suite
 		// test, so all TestConformance subtests would otherwise share a single budget.
 		d := newSAADriverDeclarative(t, env, cfg)
 		d.cfgIdx = i

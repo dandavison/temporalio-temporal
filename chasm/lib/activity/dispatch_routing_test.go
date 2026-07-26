@@ -7,8 +7,7 @@ package activity
 // now + TimerProcessorMaxTimeShift (~1s) when its task key is assigned, so routing a due dispatch through
 // the timer queue delays it by that much.
 //
-// These assertions are on the physical category rather than on the TaskAttributes the transition passed, so
-// they hold whether the routing decision is made here or by the framework.
+// The assertions are on the physical category, not on the TaskAttributes the transition passed.
 
 import (
 	"testing"
@@ -49,7 +48,6 @@ func TestDispatchRouting(t *testing.T) {
 		require.Equal(t, routing{transfer: 1}, newDriver(t, model.Config{MaxAttempts: 3}).start().routed())
 	})
 
-	// The other negative control, and the one the routing decision is most delicately balanced on:
 	// TransitionScheduled asks whether the dispatch is still in the future, so a start delay is the only
 	// thing keeping a first dispatch off the transfer queue. Route it immediate and start_delay stops
 	// deferring anything at all.
@@ -58,8 +56,8 @@ func TestDispatchRouting(t *testing.T) {
 		require.Equal(t, routing{timer: 1}, a.routed(), "a first dispatch still inside its start delay must remain a timer task")
 	})
 
-	// The negative control: a dispatch the server is meant to defer must stay a timer task, or a retry
-	// backoff would not be honored at all.
+	// A dispatch the server is meant to defer must stay a timer task, or a retry backoff would not be
+	// honored at all.
 	t.Run("retry with a backoff still to wait out", func(t *testing.T) {
 		a := polled(t)
 		require.Equal(t, routing{timer: 1}, a.dispatchRouting(func() {
@@ -84,8 +82,8 @@ func TestDispatchRouting(t *testing.T) {
 		require.Equal(t, routing{transfer: 1}, a.dispatchRouting(func() { a.reset(t) }))
 	})
 
-	// Updating options while SCHEDULED reissues the dispatch, which is a sixth site making the same
-	// routing decision — and the only one that reaches it through reissueDispatchAndScheduleToStart.
+	// Updating options while SCHEDULED reissues the dispatch, the only site that reaches the routing
+	// decision through reissueDispatchAndScheduleToStart.
 	t.Run("update options once the backoff has elapsed", func(t *testing.T) {
 		a := dispatchable(t)
 		require.Equal(t, routing{transfer: 1}, a.dispatchRouting(func() { a.updateOptions(t) }))

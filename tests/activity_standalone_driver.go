@@ -2,7 +2,7 @@ package tests
 
 // Driver for standalone-activity (SAA) tests: starts an activity and drives it through a scripted
 // sequence of events (a trace), realizing each event as a frontend RPC, a poll, or a wall-clock wait.
-// It makes no assertions. The event vocabulary is chasm/lib/activity/model.
+// The event vocabulary is chasm/lib/activity/model.
 
 import (
 	"cmp"
@@ -52,8 +52,7 @@ type saaDriverDeclarative struct {
 	customizeStart func(*workflowservice.StartActivityExecutionRequest)
 }
 
-// newSAADriverDeclarative builds a driver with the test-scoped context and its own activity-id prefix. The
-// caller sets whichever timing knobs it needs on the result.
+// newSAADriverDeclarative builds a driver with the test-scoped context and its own activity-id prefix.
 func newSAADriverDeclarative(t *testing.T, env *standaloneActivityEnv, cfg model.Config) *saaDriverDeclarative {
 	return &saaDriverDeclarative{
 		env:    env,
@@ -129,11 +128,10 @@ func (a *saaHandle) driveEvent(t require.TestingT, e model.Event) {
 	}
 }
 
-// awaitWallClock blocks until a wall-clock event's effect is visible on the frontend surface, and reports
-// a failure if it is not visible within (window + settle). A timeout advances the execution's
-// transition-history version, so it is waited for with a long poll. A dispatch-delay elapse advances no
-// version — the dispatch time simply passes — so it is detected by the read-time
-// NextAttemptScheduleTime flip instead.
+// awaitWallClock blocks until a wall-clock event's effect is visible, and fails if it is not within
+// (window + settle). A timeout advances the transition-history version, so it is waited for with a long
+// poll; a dispatch-delay elapse advances no version, so it is detected by NextAttemptScheduleTime
+// clearing.
 func (a *saaHandle) awaitWallClock(t require.TestingT, e model.Event) {
 	deadline := time.Now().Add(a.d.eventClock(e) + saaWallClockSettle)
 	if saaIsDispatchDelay(e.Type) {
@@ -143,10 +141,9 @@ func (a *saaHandle) awaitWallClock(t require.TestingT, e model.Event) {
 	a.awaitStateTransition(t, e, deadline)
 }
 
-// awaitStateTransition long-polls DescribeActivityExecution until the execution's transition-history
-// version advances past the token's, and fails if none does by the deadline. An empty response means the
-// server's long-poll window expired, so resubmit. Each long poll is bounded by the deadline so that a
-// server window longer than the deadline cannot overrun it.
+// awaitStateTransition long-polls DescribeActivityExecution until the transition-history version
+// advances past the token's, and fails if none does by the deadline. An empty response means the
+// server's long-poll window expired, so resubmit. Each poll is bounded by the deadline.
 func (a *saaHandle) awaitStateTransition(t require.TestingT, e model.Event, deadline time.Time) {
 	token := a.describe(t).GetLongPollToken()
 	for time.Now().Before(deadline) {
@@ -172,9 +169,8 @@ func (a *saaHandle) awaitStateTransition(t require.TestingT, e model.Event, dead
 		"effect. Last observed: %+v", model.EventLabel(e), a.d.eventClock(e)+saaWallClockSettle, a.projection(t))
 }
 
-// awaitDispatchTimePassed polls the public projection until the pending dispatch time has passed, which
-// is how a start-delay or retry-backoff window elapsing is observable, and fails if it has not by the
-// deadline.
+// awaitDispatchTimePassed polls the public projection until the pending dispatch time has passed, and
+// fails if it has not by the deadline.
 func (a *saaHandle) awaitDispatchTimePassed(t require.TestingT, e model.Event, deadline time.Time) {
 	for {
 		p := a.projection(t)
@@ -283,14 +279,12 @@ func (a *saaHandle) describe(t require.TestingT) *workflowservice.DescribeActivi
 	return resp
 }
 
-// projection is the activity's public info as an activityInfoProjection. Parallel to
-// wfaHandle.projection.
+// projection is the activity's public info as an activityInfoProjection.
 func (a *saaHandle) projection(t require.TestingT) activityInfoProjection {
 	return projectSAA(a.describe(t).GetInfo())
 }
 
-// terminal is the terminal status from Info plus the failure discriminant from the Outcome. Parallel to
-// wfaHandle.terminal.
+// terminal is the terminal status from Info plus the failure discriminant from the Outcome.
 func (a *saaHandle) terminal(t require.TestingT) activityTerminalProjection {
 	resp := a.describe(t)
 	return activityTerminalProjection{
@@ -300,14 +294,12 @@ func (a *saaHandle) terminal(t require.TestingT) activityTerminalProjection {
 }
 
 // terminalCause is the failure the terminal outcome chains as its Cause, empty if there is none.
-// Parallel to wfaHandle.terminalCause.
 func (a *saaHandle) terminalCause(t require.TestingT) failureCause {
 	cause := a.describe(t).GetOutcome().GetFailure().GetCause()
 	return failureCause{Type: saaFailureType(cause), Message: cause.GetMessage()}
 }
 
-// heartbeatDetails is the last heartbeat checkpoint, as the first payload's raw bytes. Parallel to
-// wfaHandle.heartbeatDetails.
+// heartbeatDetails is the last heartbeat checkpoint, as the first payload's raw bytes.
 func (a *saaHandle) heartbeatDetails(t require.TestingT) []byte {
 	return firstPayloadData(a.describe(t).GetInfo().GetHeartbeatDetails())
 }
@@ -530,9 +522,7 @@ func (d *saaDriverDeclarative) effectiveRetryInterval() time.Duration {
 	return cmp.Or(d.retryInterval, saaDefaultRetryInterval)
 }
 
-// requireConsistentConfig fails unless cfg and the timing knobs describe the same activity. cfg is what
-// the model reasons about and the knobs are what startRequest sends, so a disagreement means the test is
-// asserting against an activity nobody configured.
+// requireConsistentConfig fails unless cfg and the timing knobs describe the same activity.
 func (d *saaDriverDeclarative) requireConsistentConfig(t require.TestingT) {
 	requireBoth := func(flag bool, knobSet bool, flagName, knobName string) {
 		if flag && !knobSet {
@@ -544,9 +534,8 @@ func (d *saaDriverDeclarative) requireConsistentConfig(t require.TestingT) {
 		}
 	}
 	requireBoth(d.cfg.HasStartDelay, d.startDelay > 0, "HasStartDelay", "startDelay")
-	// A timeout knob only reaches the request when its cfg flag is set, so the flag is what makes the knob
-	// meaningful. The reverse does not hold: a set flag with no knob configures that timeout long, which is
-	// how a trace leaves a timeout alive without firing it.
+	// A timeout knob only reaches the request when its cfg flag is set. The reverse does not hold: a set
+	// flag with no knob configures that timeout long.
 	if d.scheduleToClose > 0 && !d.cfg.HasScheduleToClose {
 		require.Fail(t, "saaDriverDeclarative misconfigured: scheduleToClose requires cfg.HasScheduleToClose, or "+
 			"startRequest drops it")
@@ -615,9 +604,9 @@ func saaIsWallClock(k model.EventType) bool {
 	}
 }
 
-// saaIsDispatchDelay reports whether an event is a dispatch-delay window elapsing, as opposed to a
-// timeout. A dispatch delay advances no transition-history version; its effect is the pending dispatch
-// time passing.
+// saaIsDispatchDelay reports whether an event is a dispatch-delay window elapsing rather than a timeout.
+// A dispatch delay advances no transition-history version; its effect is the pending dispatch time
+// passing.
 func saaIsDispatchDelay(k model.EventType) bool {
 	return k == model.StartDelayElapsesType || k == model.BackoffElapsesType
 }

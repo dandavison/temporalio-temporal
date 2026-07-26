@@ -220,12 +220,8 @@ const (
 )
 
 // negativePoll checks that a pending dispatch window dispatches nothing, bounding the poll by what the
-// server says is left of the window rather than by the delay the driver configured, which assumes no
-// time has passed since it began.
-//
-// A task it does find is adjudicated by comparing two observed times — whether the dispatch time had
-// arrived by the time the poll returned — so no margin is needed to keep the poll inside the window. A
-// poll that straddles the boundary establishes nothing rather than blaming the product.
+// server says is left of the window. A task it does find is adjudicated by whether the dispatch time had
+// arrived by the time the poll returned; a poll that straddles the boundary establishes nothing.
 func (a *saaHandle) negativePoll(t require.TestingT) (negativePollResult, *workflowservice.PollActivityTaskQueueResponse) {
 	next := a.describe(t).GetInfo().GetNextAttemptScheduleTime()
 	if next == nil {
@@ -277,8 +273,8 @@ func (a *saaHandle) apply(t require.TestingT, e model.Event, cur model.AbstractS
 		a.establishedReqID[e.Type] = a.lastReqID
 	}
 	// Drop an established id once the model no longer treats that op's SameRequestID replay as an
-	// idempotent no-op, which is what probing it here determines. Beyond that region the server would
-	// dedupe the already-consumed id, while the model, which tracks no id history, expects a fresh op.
+	// idempotent no-op: beyond that the server dedupes the consumed id, while the model, which tracks no
+	// id history, expects a fresh op.
 	for k := range a.establishedReqID {
 		probe := model.Transition(a.d.cfg, out.Next, model.Event{Type: k, SameRequestID: true})
 		if probe.Reject != model.NoError || !probe.Next.SameObserved(out.Next) {
@@ -386,8 +382,7 @@ func (a *saaHandle) applyPoll(cur model.AbstractState, out model.Outcome, final 
 			}
 		}
 	case cur.Status == model.Paused && !saaSkipNegativePoll():
-		// A PAUSED activity must not dispatch: Pause invalidated the pending dispatch task. The only status
-		// where a spurious dispatch is possible, so the only place worth the full long-poll wait.
+		// A PAUSED activity must not dispatch: Pause invalidated the pending dispatch task.
 		if resp := a.pollForTask(t, saaPollTimeout); resp != nil {
 			if final {
 				t.Errorf("%s: model expected no advance but a task WAS dispatched\n%s",
@@ -421,8 +416,7 @@ func (a *saaHandle) applyWallClock(t require.TestingT, e model.Event, cur model.
 	case saaIsDispatchDelay(e.Type) && out.Next.Dispatchability == model.Dispatchable &&
 		cur.Dispatchability != model.Dispatchable:
 		// The delay elapsing is not visible in the component state the oracle compares — Dispatchability is
-		// masked out of SameObserved — so assert the public dispatch time passing instead. Otherwise this
-		// edge would be a sleep that verifies nothing.
+		// masked out of SameObserved — so assert the public dispatch time passing instead.
 		a.awaitDispatchTimePassed(t, e, deadline)
 	case out.Next.SameObserved(cur):
 		time.Sleep(time.Until(deadline))
@@ -509,8 +503,7 @@ func (d *saaDriverDeclarative) randomWalk(t *testing.T, rng *rand.Rand, maxSteps
 		case saaSkippedNoToken:
 			trace = trace[:len(trace)-1] // not driven, so not part of the trace
 		case saaMismatch:
-			// apply() has already reported the divergence. Restart from a known state rather than compound
-			// from a suspect one.
+			// apply() has already reported the divergence; restart from a known state.
 			a, cur = d.walkStart(t)
 			trace = nil
 			walks++
@@ -534,8 +527,8 @@ func (d *saaDriverDeclarative) walkStart(t *testing.T) (*saaHandle, model.Abstra
 
 // pickWalkEvent chooses the next event, strongly preferring one that makes non-terminal progress so the
 // walk goes deep rather than restarting every few steps. It still sometimes takes a terminal or a
-// reject/no-op edge, so those are exercised deep too. The BFS covers terminal edges exhaustively.
-// Events needing a task token the handle does not hold are skipped.
+// reject/no-op edge, so those are exercised deep too. Events needing a task token the handle does not
+// hold are skipped.
 func (d *saaDriverDeclarative) pickWalkEvent(rng *rand.Rand, a *saaHandle, cur model.AbstractState) model.Event {
 	var applicable, changing, deep []model.Event
 	for _, e := range saaCandidateEvents() {

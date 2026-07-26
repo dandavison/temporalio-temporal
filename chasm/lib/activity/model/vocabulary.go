@@ -240,9 +240,7 @@ func mapStatus(s activitypb.ActivityExecutionStatus) Status {
 	}
 }
 
-// Canonical Event values for the variants tests drive most, so a trace reads as a sequence of names
-// rather than of struct literals. Types whose flags matter get one value per variant. These take the
-// short names because traces are where they are read; the EventType of the same name is suffixed.
+// Canonical Event values for the variants frequently used in traces
 var (
 	Poll                = Event{Type: PollType}
 	Complete            = Event{Type: RespondCompletedType}

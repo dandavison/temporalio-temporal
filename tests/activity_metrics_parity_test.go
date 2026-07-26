@@ -5,9 +5,8 @@ package tests
 // surfaces, captures the metrics emitted, prints the WFA-vs-SAA emission matrix, and asserts that both
 // surfaces emit the same metrics with the same tag keys for each behavior.
 //
-// As with the other TestWFASAA* repros there is no oracle. The equality assertion encodes the intended
-// contract, that the same behavior is observable the same way on both surfaces, so a failure can mean
-// SAA is missing a metric, WFA is missing one, or the metric belongs on one surface by design.
+// There is no oracle. The equality assertion encodes the intended contract, so a failure can mean SAA is
+// missing a metric, WFA is missing one, or the metric belongs on one surface by design.
 //
 // Two asymmetries are intended and excluded from the equality assertion: the deprecated
 // activity_end_to_end_latency alias, and activity_terminate (a workflow activity has no individual

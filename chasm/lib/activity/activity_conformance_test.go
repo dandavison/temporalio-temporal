@@ -1,11 +1,10 @@
 package activity
 
 // Model-conformance explorer for the activity archetype, one tier below the onebox one in tests/. It
-// drives the event
-// alphabet of chasm/lib/activity/model against a real in-memory CHASM engine (chasm/chasmtest) with a
-// virtual clock, and checks every step against that model — the same model the tier-3 onebox explorer in
-// tests/ uses. Timeouts and backoffs are realized by advancing clock.EventTimeSource, so no wall-clock
-// waits, which is what makes the BFS traversal and random walk affordable over timeout-heavy states.
+// drives the event alphabet of chasm/lib/activity/model against a real in-memory CHASM engine
+// (chasm/chasmtest) with a virtual clock, and checks every step against that model. Timeouts and
+// backoffs are realized by advancing clock.EventTimeSource, so the BFS traversal and random walk pay no
+// wall-clock waits.
 
 import (
 	"context"
@@ -56,12 +55,9 @@ func newDriver(t *testing.T, cfg model.Config) *driver {
 	nsReg.EXPECT().GetNamespaceName(gomock.Any()).Return(namespace.Name(testNamespaceID), nil).AnyTimes()
 	registry := chasm.NewRegistry(log.NewNoopLogger())
 	require.NoError(t, registry.Register(&chasm.CoreLibrary{}))
-	// The full library, not the component-only one: closing a transaction validates every task the
-	// transitions added, and an unregistered task type is a hard error there. The task handlers are only
-	// ever constructed, never executed — the driver fires timers itself, and no side-effect task runs.
 	config := ConfigProvider(dynamicconfig.NewNoopCollection())
 	require.NoError(t, registry.Register(newLibrary(
-		nil, // gRPC handler, unused: nothing here serves the activity service
+		nil,
 		newActivityDispatchTaskHandler(activityDispatchTaskHandlerOptions{}),
 		newScheduleToStartTimeoutTaskHandler(),
 		newScheduleToCloseTimeoutTaskHandler(),
@@ -94,8 +90,7 @@ type handle struct {
 	lastHeartbeat             *historyservice.RecordActivityTaskHeartbeatResponse
 }
 
-// backoffInterval is the retry backoff. The virtual clock is advanced over it, so it costs nothing to
-// make it long.
+// backoffInterval is the retry backoff. The virtual clock is advanced over it, so it can be long.
 const backoffInterval = 30 * time.Second
 
 // startDelayInterval is the first-dispatch delay when cfg.HasStartDelay is set, long enough that the
@@ -250,8 +245,8 @@ func (a *handle) rpc(e model.Event) error {
 	}
 }
 
-// dispatchable reports whether a SCHEDULED attempt's dispatch time has arrived, so a poll would return a
-// task. The tier-2 analog of a positive or negative poll, read directly rather than long-polled.
+// dispatchable reports whether a SCHEDULED attempt's dispatch time has arrived, so that a poll
+// would return a task.
 func (a *handle) dispatchable() bool {
 	return a.read(func(act *Activity, c chasm.Context) any {
 		if act.GetStatus() != activitypb.ACTIVITY_EXECUTION_STATUS_SCHEDULED {
@@ -386,7 +381,7 @@ func rejectKind(err error) model.ErrorKind {
 
 // candidateEvents is the tier-2 event alphabet: the worker RPCs plus the wall-clock timeouts and
 // backoff, which are prohibitively slow at tier 3 but instant here. The operator commands are
-// tier-3-only; being synchronous, the virtual clock buys them nothing.
+// tier-3-only.
 func (d *driver) candidateEvents() []model.Event {
 	events := []model.Event{
 		{Type: model.PollType},
@@ -431,7 +426,7 @@ func (d *driver) verifyPath(path []model.Event) bool {
 
 // apply realizes e, whose predicted outcome from cur is out, and checks the observed reject kind, state,
 // public Describe, task invalidation, and — for Poll — dispatch readiness against the model. It reports
-// only on the final edge. Parallel to saaHandle.apply.
+// only on the final edge.
 func (a *handle) apply(e model.Event, cur model.AbstractState, out model.Outcome, final bool) bool {
 	if e.Type == model.PollType && cur.Status == model.Scheduled {
 		wantDispatchable := cur.Dispatchability == model.Dispatchable

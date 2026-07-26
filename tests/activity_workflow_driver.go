@@ -2,9 +2,7 @@ package tests
 
 // Driver for workflow-activity (WFA) tests, parallel to the standalone-activity driver in
 // activity_standalone_driver.go: it drives an activity scheduled by a workflow through the same
-// scripted event sequence, and observes it via DescribeWorkflowExecution. Driving the same trace
-// through both drivers and comparing the public activity info is how SAA↔WFA equivalence is checked.
-// Neither surface is an oracle; both are asserted against a shared want.
+// scripted event sequence, and observes it via DescribeWorkflowExecution.
 //
 // The worker-facing RPCs (poll / respond) are the same frontend APIs the SAA driver uses. The
 // WFA-specific parts are that the activity is scheduled by a workflow and observed through it.
@@ -41,15 +39,13 @@ import (
 // activity_parity_test.go.
 
 // activityTerminalProjection is the terminal status plus the failure discriminant a user sees: the
-// application failure Type for FAILED, the TimeoutType string for TIMED_OUT, empty otherwise. See the
-// two terminal() methods.
+// application failure Type for FAILED, the TimeoutType string for TIMED_OUT, empty otherwise.
 type activityTerminalProjection struct {
 	Status      enumspb.ActivityExecutionStatus
 	FailureType string
 }
 
-// failureCause is the Type and Message of the failure a terminal outcome chains as its Cause. See the
-// two terminalCause() methods.
+// failureCause is the Type and Message of the failure a terminal outcome chains as its Cause.
 type failureCause struct {
 	Type    string
 	Message string
@@ -75,17 +71,16 @@ type wfaDriverDeclarative struct {
 	maxRetryInterval   time.Duration // RetryPolicy MaximumInterval; 0 => retryInterval
 	nextRetryDelay     time.Duration // ApplicationFailureInfo.NextRetryDelay sent with RespondFailed
 
-	shortTimeout        model.EventType // this timeout is configured short at schedule time; mirrors saaDriverDeclarative.shortTimeout
-	scheduleToClose     time.Duration   // ScheduleToClose deadline; mirrors saaDriverDeclarative.scheduleToClose
+	shortTimeout        model.EventType // this timeout is configured short at schedule time
+	scheduleToClose     time.Duration   // ScheduleToClose deadline
 	positivePollTimeout time.Duration   // bounds a "must dispatch" poll; 0 => saaPositivePollTimeout
 
 	// nonRetryableErrorTypes are the RetryPolicy's NonRetryableErrorTypes. A timeout type is named via
-	// retrypolicy.TimeoutFailureTypePrefix. The WFA analog of saaDriverDeclarative.customizeStart.
+	// retrypolicy.TimeoutFailureTypePrefix.
 	nonRetryableErrorTypes []string
 }
 
-// newWFADriverDeclarative builds a driver with the test-scoped context. The caller sets whichever timing knobs it
-// needs on the result.
+// newWFADriverDeclarative builds a driver with the test-scoped context.
 func newWFADriverDeclarative(t *testing.T, env *standaloneActivityEnv, maxAttempts int32) *wfaDriverDeclarative {
 	return &wfaDriverDeclarative{env: env, ctx: testcontext.For(t), maxAttempts: maxAttempts}
 }
@@ -121,15 +116,14 @@ type wfaActivityParams struct {
 	NonRetryableErrorTypes []string
 }
 
-// wfaCancelSignal makes the helper workflow cancel the activity. A workflow activity is cancelled by
-// its workflow rather than by a direct RPC; see wfaHandle.rpc's RequestCancel case.
+// wfaCancelSignal makes the helper workflow cancel the activity, which is how a workflow activity is
+// cancelled rather than by a direct RPC.
 const wfaCancelSignal = "cancel"
 
 // wfaOneActivityWorkflow schedules a single activity with the given options on its own task queue and
-// waits for it to finish. No worker executes the activity — the test drives it with raw worker RPCs —
-// so the workflow stays running while the test polls and responds. WaitForCancellation makes the
-// workflow wait for the worker's RespondActivityTaskCanceled, so a cancelled activity reaches CANCELED
-// before the workflow closes.
+// waits for it to finish. No worker executes the activity — the test drives it with raw worker RPCs.
+// WaitForCancellation makes the workflow wait for RespondActivityTaskCanceled, so a cancelled activity
+// reaches CANCELED before the workflow closes.
 func wfaOneActivityWorkflow(ctx workflow.Context, p wfaActivityParams) error {
 	coefficient := p.BackoffCoefficient
 	if coefficient == 0 {
@@ -166,7 +160,7 @@ func wfaOneActivityWorkflow(ctx workflow.Context, p wfaActivityParams) error {
 }
 
 // driveTrace runs a trace on a fresh workflow-scheduled activity and returns a handle at the reached
-// state. Model-free, parallel to saaDriverDeclarative.driveTrace.
+// state. Model-free.
 func (d *wfaDriverDeclarative) driveTrace(t *testing.T, trace []model.Event) *wfaHandle {
 	a := d.start(t)
 	for _, e := range trace {
@@ -175,7 +169,7 @@ func (d *wfaDriverDeclarative) driveTrace(t *testing.T, trace []model.Event) *wf
 	return a
 }
 
-// driveEvent advances the activity by one event. Parallel to saaHandle.driveEvent.
+// driveEvent advances the activity by one event.
 func (a *wfaHandle) driveEvent(t require.TestingT, e model.Event) {
 	d := a.d
 	switch {
@@ -193,9 +187,9 @@ func (a *wfaHandle) driveEvent(t require.TestingT, e model.Event) {
 }
 
 // awaitWallClock blocks until a wall-clock event's effect shows up in the workflow's view of the
-// activity, and reports a failure if it does not within (window + settle). The effect is a change in the
-// pending-activity projection, or the activity leaving the pending set. WFA has no long-poll Describe, so
-// unlike saaHandle.awaitWallClock this polls.
+// activity, and fails if it does not within (window + settle). The effect is a change in the
+// pending-activity projection, or the activity leaving the pending set. WFA has no long-poll Describe,
+// so this polls.
 func (a *wfaHandle) awaitWallClock(t require.TestingT, e model.Event) {
 	before, beforePending := a.pendingSnapshot(t)
 	deadline := time.Now().Add(a.d.eventClock(e) + saaWallClockSettle)
@@ -213,8 +207,7 @@ func (a *wfaHandle) awaitWallClock(t require.TestingT, e model.Event) {
 }
 
 // pendingSnapshot is the activity's pending-activity projection, and whether it is currently pending. A
-// Describe error is reported rather than reported as absence, which awaitWallClock would read as the
-// activity having closed.
+// Describe error is reported rather than treated as absence.
 func (a *wfaHandle) pendingSnapshot(t require.TestingT) (activityInfoProjection, bool) {
 	resp, err := a.d.env.SdkClient().DescribeWorkflowExecution(a.d.ctx, a.workflowID, a.runID)
 	require.NoError(t, err)
@@ -248,7 +241,7 @@ func (d *wfaDriverDeclarative) start(t *testing.T) *wfaHandle {
 	t.Cleanup(w.Stop)
 
 	// dur is short for the one timeout under test and long otherwise, so no other timeout fires
-	// mid-scenario. Mirrors saaDriverDeclarative.startRequest.
+	// mid-scenario.
 	dur := func(k model.EventType) time.Duration {
 		if d.shortTimeout == k {
 			return saaShortTimeout
@@ -284,7 +277,6 @@ func (d *wfaDriverDeclarative) start(t *testing.T) *wfaHandle {
 
 // terminal waits for the activity to reach a terminal state and reports it. A workflow activity's
 // terminal outcome is not in PendingActivities, so it is read from the workflow-result error's cause.
-// Parallel to saaHandle.terminal.
 func (a *wfaHandle) terminal(t require.TestingT) activityTerminalProjection {
 	err := a.run.Get(a.d.ctx, nil)
 	if err == nil {
@@ -308,7 +300,7 @@ func (a *wfaHandle) terminal(t require.TestingT) activityTerminalProjection {
 }
 
 // terminalCause is the failure the terminal outcome chains as its Cause, empty if there is none. The
-// SDK surfaces it via TimeoutError.Unwrap(). Parallel to saaHandle.terminalCause.
+// SDK surfaces it via TimeoutError.Unwrap().
 func (a *wfaHandle) terminalCause(_ require.TestingT) failureCause {
 	var toErr *temporal.TimeoutError
 	if errors.As(a.run.Get(a.d.ctx, nil), &toErr) {
@@ -335,9 +327,8 @@ func (a *wfaHandle) pollForTask(t require.TestingT, timeout time.Duration) *work
 	return resp
 }
 
-// rpc performs the frontend RPC for a non-Poll, non-wall-clock event and returns its error. Parallel to
-// saaHandle.rpc: the operator commands are the same *Execution APIs with WorkflowId set. Cancel is the
-// exception; see RequestCancel below.
+// rpc performs the frontend RPC for a non-Poll, non-wall-clock event and returns its error. The operator
+// commands are the same *Execution APIs with WorkflowId set; cancel is the exception, see below.
 func (a *wfaHandle) rpc(e model.Event) error {
 	fc := a.d.env.FrontendClient()
 	ns := a.d.env.Namespace().String()
@@ -363,8 +354,8 @@ func (a *wfaHandle) rpc(e model.Event) error {
 		})
 		return err
 	case model.RequestCancelType:
-		// WFA cancel comes from the workflow, so signal it, then wait for CANCEL_REQUESTED. SAA's direct
-		// RequestCancelActivityExecution RPC is synchronous; waiting here makes the two comparable.
+		// WFA cancel comes from the workflow, so signal it, then wait for CANCEL_REQUESTED, which SAA's
+		// RequestCancelActivityExecution reaches synchronously.
 		if err := a.d.env.SdkClient().SignalWorkflow(a.d.ctx, a.workflowID, a.runID, wfaCancelSignal, nil); err != nil {
 			return err
 		}
@@ -431,7 +422,7 @@ func (a *wfaHandle) waitForCancelRequested() error {
 }
 
 // heartbeatDetails is the last heartbeat checkpoint, as the first payload's raw bytes. Readable only
-// while the activity is still pending. Parallel to saaHandle.heartbeatDetails.
+// while the activity is still pending.
 func (a *wfaHandle) heartbeatDetails(t require.TestingT) []byte {
 	resp, err := a.d.env.SdkClient().DescribeWorkflowExecution(a.d.ctx, a.workflowID, a.runID)
 	require.NoError(t, err)
@@ -444,8 +435,7 @@ func (a *wfaHandle) heartbeatDetails(t require.TestingT) []byte {
 	return nil
 }
 
-// projection is the activity's pending-activity info as an activityInfoProjection. Parallel to
-// saaHandle.projection.
+// projection is the activity's pending-activity info as an activityInfoProjection.
 func (a *wfaHandle) projection(t require.TestingT) activityInfoProjection {
 	resp, err := a.d.env.SdkClient().DescribeWorkflowExecution(a.d.ctx, a.workflowID, a.runID)
 	require.NoError(t, err)

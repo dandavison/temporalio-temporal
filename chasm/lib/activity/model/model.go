@@ -42,7 +42,7 @@ func reject(s AbstractState, k ErrorKind) Outcome { return Outcome{Next: s, Reje
 
 // Transition is the model's total transition function: given the config, the current abstract state,
 // and an event, it returns the Outcome (resulting state, reject kind, task-invalidation flags) the
-// model requires. It is named for its kinship with the code's activity.Transition* descriptors.
+// model requires.
 func Transition(cfg Config, s AbstractState, e Event) Outcome {
 	if s.Status == Unspecified {
 		panic("unreachable: no event is driven from the pre-creation zero value")
