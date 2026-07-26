@@ -326,6 +326,12 @@ func (a *saaHandle) terminal(t require.TestingT) activityTerminalProjection {
 	}
 }
 
+// terminalCause is the failure the terminal outcome chains as its Cause, empty if there is none.
+func (a *saaHandle) terminalCause(t require.TestingT) failureCause {
+	cause := a.describe(t).GetOutcome().GetFailure().GetCause()
+	return failureCause{Type: saaFailureType(cause), Message: cause.GetMessage()}
+}
+
 // saaFailureType is the application failure Type, the TimeoutType string, or "" for neither.
 func saaFailureType(f *failurepb.Failure) string {
 	if app := f.GetApplicationFailureInfo(); app != nil {

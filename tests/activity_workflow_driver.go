@@ -45,6 +45,12 @@ type activityTerminalProjection struct {
 	FailureType string
 }
 
+// failureCause is the Type and Message of the failure a terminal outcome chains as its Cause.
+type failureCause struct {
+	Type    string
+	Message string
+}
+
 func projectWFA(p *workflowpb.PendingActivityInfo) activityInfoProjection {
 	return activityInfoProjection{
 		State:                  p.GetState(),
@@ -292,6 +298,19 @@ func (a *wfaHandle) terminal(t require.TestingT) activityTerminalProjection {
 	default:
 		return activityTerminalProjection{Status: enumspb.ACTIVITY_EXECUTION_STATUS_FAILED}
 	}
+}
+
+// terminalCause is the failure the terminal outcome chains as its Cause, empty if there is none. The
+// SDK surfaces it via TimeoutError.Unwrap().
+func (a *wfaHandle) terminalCause(_ require.TestingT) failureCause {
+	var toErr *temporal.TimeoutError
+	if errors.As(a.run.Get(a.d.ctx, nil), &toErr) {
+		var appErr *temporal.ApplicationError
+		if errors.As(toErr.Unwrap(), &appErr) {
+			return failureCause{Type: appErr.Type(), Message: appErr.Message()}
+		}
+	}
+	return failureCause{}
 }
 
 func (a *wfaHandle) pollForTask(t require.TestingT, timeout time.Duration) *workflowservice.PollActivityTaskQueueResponse {

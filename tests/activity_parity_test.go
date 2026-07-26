@@ -192,3 +192,49 @@ func (s *activityParityTestSuite) TestParityCurrentRetryInterval() {
 			})
 	})
 }
+
+// TestParityTimeoutPreservesUnderlyingFailureCause: when a timeout closes an activity whose retries were
+// driven by an application failure, the terminal TimedOut failure must chain that application failure as
+// its Cause, so an SDK can surface the real failure. See mutable_state_impl.go
+// AddActivityTaskTimedOutEvent and temporalio/temporal#3667.
+func (s *activityParityTestSuite) TestParityTimeoutPreservesUnderlyingFailureCause() {
+	env := newActivityParityEnv(s.T())
+
+	// The application failure driven on attempt 1; see activityFailure. The terminal timeout must chain it
+	// verbatim, both Type and Message.
+	wantCause := failureCause{Type: "drive", Message: "drive"}
+
+	// assertCausePreserved drives the trace on both surfaces and asserts each ends TIMED_OUT with the given
+	// timeout type, chaining wantCause.
+	assertCausePreserved := func(t *testing.T, cfg activityConfig, trace []model.Event, timeoutType enumspb.TimeoutType) {
+		expected := activityTerminalProjection{Status: enumspb.ACTIVITY_EXECUTION_STATUS_TIMED_OUT, FailureType: timeoutType.String()}
+		const chained = "the terminal timeout must chain the underlying application failure as its Cause"
+		t.Run("WorkflowActivity", func(t *testing.T) {
+			a := newWFADriver(t, env, cfg).driveTrace(t, trace)
+			require.Equal(t, expected, a.terminal(t))
+			require.Equal(t, wantCause, a.terminalCause(t), chained)
+		})
+		t.Run("StandaloneActivity", func(t *testing.T) {
+			a := newSAADriver(t, env, cfg).driveTrace(t, trace)
+			require.Equal(t, expected, a.terminal(t))
+			require.Equal(t, wantCause, a.terminalCause(t), chained)
+		})
+	}
+
+	// Retries exhausted by a StartToClose timeout on the final attempt (attempt 1 failed retryably).
+	s.T().Run("StartToClose", func(t *testing.T) {
+		assertCausePreserved(t, activityConfig{MaxAttempts: 2, StartToClose: activityShortTimeout},
+			[]model.Event{model.Poll, model.FailRetryably, model.Poll, model.StartToCloseElapses}, enumspb.TIMEOUT_TYPE_START_TO_CLOSE)
+	})
+	// Retries exhausted by a Heartbeat timeout on the final attempt: the attempt starts but never
+	// heartbeats. A distinct code path that must chain the same cause.
+	s.T().Run("Heartbeat", func(t *testing.T) {
+		assertCausePreserved(t, activityConfig{MaxAttempts: 2, Heartbeat: activityShortTimeout},
+			[]model.Event{model.Poll, model.FailRetryably, model.Poll, model.HeartbeatElapses}, enumspb.TIMEOUT_TYPE_HEARTBEAT)
+	})
+	// Schedule-to-close deadline closes the activity while it backs off to retry. A third code path.
+	s.T().Run("ScheduleToClose", func(t *testing.T) {
+		assertCausePreserved(t, activityConfig{ScheduleToClose: activityShortTimeout},
+			[]model.Event{model.Poll, model.FailRetryably, model.ScheduleToCloseElapses}, enumspb.TIMEOUT_TYPE_SCHEDULE_TO_CLOSE)
+	})
+}
