@@ -1,11 +1,7 @@
 package tests
 
-// Driver for workflow-activity (WFA) tests, parallel to the standalone-activity driver in
-// activity_standalone_driver.go: it drives an activity scheduled by a workflow through the same
-// scripted event sequence, and observes it via DescribeWorkflowExecution.
-//
-// The worker-facing RPCs (poll / respond) are the same frontend APIs the SAA driver uses. The
-// WFA-specific parts are that the activity is scheduled by a workflow and observed through it.
+// Driver for workflow-activity (WFA) tests: it drives an activity scheduled by a workflow through a
+// sequence of events (a 'trace'), and observes it via DescribeWorkflowExecution.
 
 import (
 	"cmp"
@@ -73,7 +69,7 @@ type wfaDriver struct {
 	ctx context.Context
 	cfg activityConfig
 
-	positivePollTimeout time.Duration // bounds a "must dispatch" poll; 0 => driverPositivePollTimeout
+	positivePollTimeout time.Duration // bounds a "must dispatch" poll; 0 => activityDriverPositivePollTimeout
 }
 
 // newWFADriver builds a driver with the test-scoped context. cfg.StartDelay is ignored: a
@@ -108,8 +104,8 @@ type wfaActivityParams struct {
 	NonRetryableErrorTypes []string
 }
 
-// driverCancelRequestedTimeout bounds the wait for a signalled cancel to reach the activity.
-const driverCancelRequestedTimeout = 10 * time.Second
+// activityDriverCancelRequestedTimeout bounds the wait for a signalled cancel to reach the activity.
+const activityDriverCancelRequestedTimeout = 10 * time.Second
 
 // wfaCancelSignal makes the helper workflow cancel the activity, which is how a workflow activity is
 // cancelled rather than by a direct RPC.
@@ -170,7 +166,7 @@ func (a *wfaHandle) driveEvent(t require.TestingT, e model.Event) {
 	switch {
 	case e.Type == model.PollType:
 		// A poll captures the dispatched task token.
-		if resp := a.pollForTask(t, cmp.Or(d.positivePollTimeout, driverPositivePollTimeout)); resp != nil {
+		if resp := a.pollForTask(t, cmp.Or(d.positivePollTimeout, activityDriverPositivePollTimeout)); resp != nil {
 			a.token = resp.GetTaskToken()
 		}
 	case isWallClockEvent(e.Type):
@@ -187,16 +183,16 @@ func (a *wfaHandle) driveEvent(t require.TestingT, e model.Event) {
 // so this polls.
 func (a *wfaHandle) awaitWallClock(t require.TestingT, e model.Event) {
 	before, beforePending := a.pendingSnapshot(t)
-	deadline := time.Now().Add(a.d.cfg.window(e) + driverWallClockSettle)
+	deadline := time.Now().Add(a.d.cfg.window(e) + activityDriverWallClockSettle)
 	changed := func() bool {
 		now, nowPending := a.pendingSnapshot(t)
 		return nowPending != beforePending || (nowPending && now != before)
 	}
-	if driverPollUntil(deadline, changed) {
+	if activityDriverPollUntil(deadline, changed) {
 		return
 	}
 	t.Errorf("%s: the activity did not change within %s of driving the event, so the event did not "+
-		"take effect. Last observed: %+v", e, a.d.cfg.window(e)+driverWallClockSettle, before)
+		"take effect. Last observed: %+v", e, a.d.cfg.window(e)+activityDriverWallClockSettle, before)
 }
 
 // pendingSnapshot is the activity's pending-activity projection, and whether it is currently pending. A
@@ -389,7 +385,7 @@ func (a *wfaHandle) waitForCancelRequested() error {
 		}
 		return false
 	}
-	if driverPollUntil(time.Now().Add(driverCancelRequestedTimeout), cancelRequested) {
+	if activityDriverPollUntil(time.Now().Add(activityDriverCancelRequestedTimeout), cancelRequested) {
 		return describeErr
 	}
 	return fmt.Errorf("wfaDriver: activity %q did not reach CANCEL_REQUESTED after signal", a.activityID)

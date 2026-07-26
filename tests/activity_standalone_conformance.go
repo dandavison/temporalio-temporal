@@ -360,7 +360,7 @@ func (a *saaHandle) applyPoll(cur model.AbstractState, out model.Outcome, final 
 	case cur.Status == model.Scheduled && out.Next.Status == model.Started:
 		// A dispatchable activity must dispatch. The traces bound the deadline, so "Dispatchable" means
 		// "dispatches promptly".
-		timeout := cmp.Or(a.d.positivePollTimeout, driverPositivePollTimeout)
+		timeout := cmp.Or(a.d.positivePollTimeout, activityDriverPositivePollTimeout)
 		resp := a.pollForTask(t, timeout)
 		if resp == nil {
 			if final {
@@ -426,7 +426,7 @@ func (a *saaHandle) applyPoll(cur model.AbstractState, out model.Outcome, final 
 // out.Next. Where the model predicts an observable change it polls for that state; where it predicts
 // none, the only way to confirm is to wait the window out and see nothing move.
 func (a *saaHandle) applyWallClock(t require.TestingT, e model.Event, cur model.AbstractState, out model.Outcome, final bool) saaApply {
-	deadline := time.Now().Add(a.d.cfg.window(e) + driverWallClockSettle)
+	deadline := time.Now().Add(a.d.cfg.window(e) + activityDriverWallClockSettle)
 	switch {
 	case isDispatchDelayEvent(e.Type) && out.Next.Dispatchability == model.Dispatchable &&
 		cur.Dispatchability != model.Dispatchable:
@@ -822,7 +822,7 @@ func (a *saaHandle) observedRaw() (model.AbstractState, error) {
 
 // awaitObservedMatch polls the internal state until it matches expected, or the deadline passes.
 func (a *saaHandle) awaitObservedMatch(expected model.AbstractState, deadline time.Time) {
-	driverPollUntil(deadline, func() bool {
+	activityDriverPollUntil(deadline, func() bool {
 		obs, err := a.observedRaw()
 		return err == nil && expected.SameObserved(obs)
 	})
