@@ -26,7 +26,7 @@ type Outcome struct {
 	Reject                         ErrorKind
 	AttemptTasksInvalidated        bool // this transition invalidates the pending attempt dispatch/timer tasks
 	ScheduleToCloseTaskInvalidated bool // this transition restarts/invalidates the schedule-to-close timer
-	Inert                          bool // the event could not occur here: a clock that is not running. See Possible.
+	Impossible                     bool // the event could not occur here: a clock that is not running. See Possible.
 }
 
 // Initial is the state immediately after a successful StartActivityExecution.
@@ -39,7 +39,7 @@ func Initial(cfg Config) AbstractState {
 }
 
 func noop(s AbstractState) Outcome                { return Outcome{Next: s, Reject: NoError} }
-func inert(s AbstractState) Outcome               { return Outcome{Next: s, Reject: NoError, Inert: true} }
+func impossible(s AbstractState) Outcome          { return Outcome{Next: s, Reject: NoError, Impossible: true} }
 func reject(s AbstractState, k ErrorKind) Outcome { return Outcome{Next: s, Reject: k} }
 
 // Transition is the model's total transition function: given the config, the current abstract state,
@@ -359,7 +359,7 @@ func updateOptions(cfg Config, s AbstractState, e Event) Outcome {
 // start_delay or retry backoff effectively pushes it back.
 func scheduleToStartElapses(cfg Config, s AbstractState, _ Event) Outcome {
 	if !cfg.HasScheduleToStart || s.Status != Scheduled || s.Dispatchability != Dispatchable {
-		return inert(s)
+		return impossible(s)
 	}
 	n := s
 	n.Status = TimedOut
@@ -372,7 +372,7 @@ func scheduleToStartElapses(cfg Config, s AbstractState, _ Event) Outcome {
 // activity — is not suspended while paused.
 func scheduleToCloseElapses(cfg Config, s AbstractState, _ Event) Outcome {
 	if !cfg.HasScheduleToClose || s.Dispatchability == StartDelayPending {
-		return inert(s)
+		return impossible(s)
 	}
 	n := s
 	n.Status = TimedOut
@@ -386,7 +386,7 @@ func startToCloseElapses(cfg Config, s AbstractState, _ Event) Outcome {
 }
 func heartbeatElapses(cfg Config, s AbstractState, _ Event) Outcome {
 	if !cfg.HasHeartbeat {
-		return inert(s)
+		return impossible(s)
 	}
 	return attemptTimedOut(cfg, s)
 }
@@ -396,7 +396,7 @@ func heartbeatElapses(cfg Config, s AbstractState, _ Event) Outcome {
 // (a Paused activity stays Paused but now dispatches on unpause).
 func startDelayElapses(cfg Config, s AbstractState, _ Event) Outcome {
 	if !cfg.HasStartDelay || s.Dispatchability != StartDelayPending {
-		return inert(s)
+		return impossible(s)
 	}
 	n := s
 	n.Dispatchability = Dispatchable
@@ -407,7 +407,7 @@ func startDelayElapses(cfg Config, s AbstractState, _ Event) Outcome {
 // The product behavior is that the delayed retry dispatch becomes available; symmetric to startDelayElapses.
 func backoffElapses(_ Config, s AbstractState, _ Event) Outcome {
 	if s.Dispatchability != BackoffPending {
-		return inert(s)
+		return impossible(s)
 	}
 	n := s
 	n.Dispatchability = Dispatchable
@@ -431,9 +431,11 @@ func terminalOutcome(s AbstractState, e Event) Outcome {
 			return noop(s) // idempotent only from Terminated
 		}
 		return reject(s, FailedPrecondition)
-	case PollType, ScheduleToStartElapsesType, ScheduleToCloseElapsesType, StartToCloseElapsesType,
+	case PollType:
+		return noop(s) // a poll can always be made; a closed activity just has nothing to dispatch
+	case ScheduleToStartElapsesType, ScheduleToCloseElapsesType, StartToCloseElapsesType,
 		HeartbeatElapsesType, StartDelayElapsesType, BackoffElapsesType:
-		return inert(s) // the activity has closed, so no clock is running and nothing dispatches
+		return impossible(s) // the activity has closed, so no clock is running
 	default:
 		panic("model: unhandled event type in terminalOutcome")
 	}
@@ -464,7 +466,7 @@ func attemptTimedOut(cfg Config, s AbstractState) Outcome {
 		n.Status = TimedOut
 		return Outcome{Next: n}
 	case Scheduled, Paused:
-		return inert(s) // no running attempt, so neither per-attempt clock is running
+		return impossible(s) // no running attempt, so neither per-attempt clock is running
 	default:
 		panic("model does not handle a per-attempt timeout while in status " + s.Status.String())
 	}
