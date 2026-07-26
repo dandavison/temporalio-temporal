@@ -41,12 +41,12 @@ func CarriesReqID(k EventType) bool {
 // Possible reports whether event type t makes sense in state s. This is not whether the state
 // machine would accept it: a client can always send an RPC, and a rejection is an occurrence a
 // trace may legitimately assert. A clock event, though, cannot occur unless its clock is running.
-// This is already decided by its transition function, so we call that to answer the question.
+// This is already decided by its transition function, so we use that.
 func Possible(cfg Config, s AbstractState, t EventType) bool {
 	if !isClockEvent(t) {
 		return true
 	}
-	return Transition(cfg, s, Event{Type: t}).Next != s
+	return !Transition(cfg, s, Event{Type: t}).Inert
 }
 
 // ValidateTrace walks trace from Initial(cfg) and reports the first event that is not Possible in the
