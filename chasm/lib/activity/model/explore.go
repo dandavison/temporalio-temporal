@@ -38,6 +38,29 @@ func CarriesReqID(k EventType) bool {
 	}
 }
 
+// Possible reports whether event type t can occur in state s. This is not whether the state machine
+// would accept it: a client can always send an RPC, and a rejection is an occurrence a trace may
+// legitimately assert. A clock event, though, cannot occur unless its clock is running, which is what
+// its transition function already decides — so this asks that function rather than restating the
+// conditions and leaving the model with two accounts of when a clock runs.
+func Possible(cfg Config, s AbstractState, t EventType) bool {
+	return !Transition(cfg, s, Event{Type: t}).Impossible
+}
+
+// ValidateTrace walks trace from Initial(cfg) and reports the first event that is not Possible in the
+// state it would be driven from.
+func ValidateTrace(cfg Config, trace []Event) error {
+	s := Initial(cfg)
+	for i, e := range trace {
+		if !Possible(cfg, s, e.Type) {
+			return fmt.Errorf("trace[%d] %s cannot occur in %v/%v: its clock is not running there. Remove "+
+				"it, or drive the events that start its clock first", i, e, s.Status, s.Dispatchability)
+		}
+		s = Transition(cfg, s, e).Next
+	}
+	return nil
+}
+
 // Reachable computes, purely from Transition (no driver), every (state, event) cell reachable from
 // Initial(cfg) by following non-reject edges to fixpoint (states deduped by Fingerprint).
 func Reachable(cfg Config, events []Event) map[string]bool {

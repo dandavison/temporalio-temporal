@@ -27,18 +27,21 @@ import (
 	"go.temporal.io/server/tests/testcore"
 	"google.golang.org/protobuf/types/known/durationpb"
 	"google.golang.org/protobuf/types/known/fieldmaskpb"
-	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
-// --- shared observable projections ---------------------------------------------------------
+// --- the activity info both surfaces expose --------------------------------------------------
 
-// activityInfoProjection is the retry-scheduling contract both surfaces expose. See the two
-// projection() methods.
-type activityInfoProjection struct {
-	State                  enumspb.PendingActivityState
-	Attempt                int32
-	CurrentRetryInterval   time.Duration
-	NextAttemptScheduleSet bool
+// activityInfo is user-visible activity state projected out of the two different messages that
+// carry it: SAA's ActivityExecutionInfo and WFA's PendingActivityInfo.
+//
+// CurrentRetryInterval is rounded to the second, because WFA derives it by subtracting two stored
+// timestamps while SAA stores it exactly. NextAttemptScheduleTime is reduced to whether it is set
+// to facilitate test assertions.
+type activityInfo struct {
+	RunState                   enumspb.PendingActivityState
+	Attempt                    int32
+	CurrentRetryInterval       time.Duration
+	NextAttemptScheduleTimeSet bool
 }
 
 // activityTerminalProjection is the terminal status plus the failure discriminant a user sees: the
@@ -54,12 +57,12 @@ type failureCause struct {
 	Message string
 }
 
-func projectWFA(p *workflowpb.PendingActivityInfo) activityInfoProjection {
-	return activityInfoProjection{
-		State:                  p.GetState(),
-		Attempt:                p.GetAttempt(),
-		CurrentRetryInterval:   p.GetCurrentRetryInterval().AsDuration().Round(time.Second),
-		NextAttemptScheduleSet: p.GetNextAttemptScheduleTime() != nil,
+func wfaActivityInfo(p *workflowpb.PendingActivityInfo) activityInfo {
+	return activityInfo{
+		RunState:                   p.GetState(),
+		Attempt:                    p.GetAttempt(),
+		CurrentRetryInterval:       p.GetCurrentRetryInterval().AsDuration().Round(time.Second),
+		NextAttemptScheduleTimeSet: p.GetNextAttemptScheduleTime() != nil,
 	}
 }
 
@@ -154,6 +157,8 @@ func wfaOneActivityWorkflow(ctx workflow.Context, p wfaActivityParams) error {
 // driveTrace runs a trace on a fresh workflow-scheduled activity and returns a handle at the reached
 // state. Model-free.
 func (d *wfaDriver) driveTrace(t *testing.T, trace []model.Event) *wfaHandle {
+	d.cfg = d.cfg.forTrace(trace)
+	validateTrace(t, d.cfg, trace)
 	a := d.start(t)
 	for _, e := range trace {
 		a.driveEvent(t, e)
@@ -208,16 +213,16 @@ func (a *wfaHandle) awaitWallClock(t require.TestingT, e model.Event) {
 // passed, and fails if it has not. The deadline is the server's own NextAttemptScheduleTime; see
 // saaHandle.awaitDispatchTimePassed.
 func (a *wfaHandle) awaitDispatchTimePassed(t require.TestingT, e model.Event) {
-	next := a.nextAttemptScheduleTime(t)
+	next := a.pendingActivity(t).GetNextAttemptScheduleTime()
 	if next == nil {
 		return // the dispatch time has already passed, or the activity is no longer pending
 	}
 	deadline := next.AsTime().Add(activityDriverWallClockSettle)
-	var p activityInfoProjection
+	var p activityInfo
 	dispatched := func() bool {
 		var pending bool
 		p, pending = a.pendingSnapshot(t)
-		return !pending || !p.NextAttemptScheduleSet
+		return !pending || !p.NextAttemptScheduleTimeSet
 	}
 	if activityDriverPollUntil(deadline, dispatched) {
 		return
@@ -227,26 +232,26 @@ func (a *wfaHandle) awaitDispatchTimePassed(t require.TestingT, e model.Event) {
 }
 
 // nextAttemptScheduleTime is when the server will dispatch the pending attempt, nil if none is pending.
-func (a *wfaHandle) nextAttemptScheduleTime(t require.TestingT) *timestamppb.Timestamp {
+// pendingActivity is the activity's entry in the workflow's pending set, nil once it is no longer
+// pending. A Describe error is reported rather than treated as absence.
+func (a *wfaHandle) pendingActivity(t require.TestingT) *workflowpb.PendingActivityInfo {
 	resp, err := a.d.env.SdkClient().DescribeWorkflowExecution(a.d.ctx, a.workflowID, a.runID)
 	require.NoError(t, err)
 	for _, pa := range resp.GetPendingActivities() {
 		if pa.GetActivityId() == a.activityID {
-			return pa.GetNextAttemptScheduleTime()
+			return pa
 		}
 	}
 	return nil
 }
 
-func (a *wfaHandle) pendingSnapshot(t require.TestingT) (activityInfoProjection, bool) {
-	resp, err := a.d.env.SdkClient().DescribeWorkflowExecution(a.d.ctx, a.workflowID, a.runID)
-	require.NoError(t, err)
-	for _, pa := range resp.GetPendingActivities() {
-		if pa.GetActivityId() == a.activityID {
-			return projectWFA(pa), true
-		}
+// pendingSnapshot is the activity's info, and whether it is currently pending.
+func (a *wfaHandle) pendingSnapshot(t require.TestingT) (activityInfo, bool) {
+	pa := a.pendingActivity(t)
+	if pa == nil {
+		return activityInfo{}, false
 	}
-	return activityInfoProjection{}, false
+	return wfaActivityInfo(pa), true
 }
 
 func (d *wfaDriver) start(t *testing.T) *wfaHandle {
@@ -304,6 +309,11 @@ func (a *wfaHandle) terminal(t require.TestingT) activityTerminalProjection {
 	default:
 		return activityTerminalProjection{Status: enumspb.ACTIVITY_EXECUTION_STATUS_FAILED}
 	}
+}
+
+// terminalStatus is the terminal status alone, for a test that asserts nothing about the failure.
+func (a *wfaHandle) terminalStatus(t require.TestingT) enumspb.ActivityExecutionStatus {
+	return a.terminal(t).Status
 }
 
 // terminalCause is the failure the terminal outcome chains as its Cause, empty if there is none. The
@@ -446,15 +456,9 @@ func (a *wfaHandle) heartbeatDetails(t require.TestingT) []byte {
 	return nil
 }
 
-// projection is the activity's pending-activity info as an activityInfoProjection.
-func (a *wfaHandle) projection(t require.TestingT) activityInfoProjection {
-	resp, err := a.d.env.SdkClient().DescribeWorkflowExecution(a.d.ctx, a.workflowID, a.runID)
-	require.NoError(t, err)
-	for _, pa := range resp.GetPendingActivities() {
-		if pa.GetActivityId() == a.activityID {
-			return projectWFA(pa)
-		}
-	}
-	require.FailNowf(t, "no pending activity", "activity %q not pending; workflow may have closed", a.activityID)
-	return activityInfoProjection{}
+// activityInfo is the activity's PendingActivityInfo, projected.
+func (a *wfaHandle) activityInfo(t require.TestingT) activityInfo {
+	p, pending := a.pendingSnapshot(t)
+	require.Truef(t, pending, "activity %q not pending; workflow may have closed", a.activityID)
+	return p
 }

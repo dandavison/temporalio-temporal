@@ -26,6 +26,7 @@ type Outcome struct {
 	Reject                         ErrorKind
 	AttemptTasksInvalidated        bool // this transition invalidates the pending attempt dispatch/timer tasks
 	ScheduleToCloseTaskInvalidated bool // this transition restarts/invalidates the schedule-to-close timer
+	Impossible                     bool // the event could not occur here: a clock that is not running. See Possible.
 }
 
 // Initial is the state immediately after a successful StartActivityExecution.
@@ -38,6 +39,7 @@ func Initial(cfg Config) AbstractState {
 }
 
 func noop(s AbstractState) Outcome                { return Outcome{Next: s, Reject: NoError} }
+func impossible(s AbstractState) Outcome          { o := noop(s); o.Impossible = true; return o }
 func reject(s AbstractState, k ErrorKind) Outcome { return Outcome{Next: s, Reject: k} }
 
 // Transition is the model's total transition function: given the config, the current abstract state,
@@ -355,9 +357,9 @@ func updateOptions(cfg Config, s AbstractState, e Event) Outcome {
 // scheduleToStartElapses represents the end of the nominal schedule-to-start timeout configured by
 // the driver. The product behavior is that the timeout starts counting from dispatch time, so a
 // start_delay or retry backoff effectively pushes it back.
-func scheduleToStartElapses(_ Config, s AbstractState, _ Event) Outcome {
-	if s.Status != Scheduled || s.Dispatchability != Dispatchable {
-		return noop(s)
+func scheduleToStartElapses(cfg Config, s AbstractState, _ Event) Outcome {
+	if !cfg.HasScheduleToStart || s.Status != Scheduled || s.Dispatchability != Dispatchable {
+		return impossible(s)
 	}
 	n := s
 	n.Status = TimedOut
@@ -368,9 +370,9 @@ func scheduleToStartElapses(_ Config, s AbstractState, _ Event) Outcome {
 // the driver. The product behavior is that the deadline is anchored at first-dispatch time
 // (schedule_time + start_delay), so it does not run during a start_delay, and — unlike a workflow
 // activity — is not suspended while paused.
-func scheduleToCloseElapses(_ Config, s AbstractState, _ Event) Outcome {
-	if s.Dispatchability == StartDelayPending {
-		return noop(s)
+func scheduleToCloseElapses(cfg Config, s AbstractState, _ Event) Outcome {
+	if !cfg.HasScheduleToClose || s.Dispatchability == StartDelayPending {
+		return impossible(s)
 	}
 	n := s
 	n.Status = TimedOut
@@ -383,15 +385,18 @@ func startToCloseElapses(cfg Config, s AbstractState, _ Event) Outcome {
 	return attemptTimedOut(cfg, s)
 }
 func heartbeatElapses(cfg Config, s AbstractState, _ Event) Outcome {
+	if !cfg.HasHeartbeat {
+		return impossible(s)
+	}
 	return attemptTimedOut(cfg, s)
 }
 
 // startDelayElapses represents the end of the nominal start_delay window configured by the driver.
 // The product behavior is that the delayed first dispatch becomes available; the status is unchanged
 // (a Paused activity stays Paused but now dispatches on unpause).
-func startDelayElapses(_ Config, s AbstractState, _ Event) Outcome {
-	if s.Dispatchability != StartDelayPending {
-		return noop(s)
+func startDelayElapses(cfg Config, s AbstractState, _ Event) Outcome {
+	if !cfg.HasStartDelay || s.Dispatchability != StartDelayPending {
+		return impossible(s)
 	}
 	n := s
 	n.Dispatchability = Dispatchable
@@ -402,7 +407,7 @@ func startDelayElapses(_ Config, s AbstractState, _ Event) Outcome {
 // The product behavior is that the delayed retry dispatch becomes available; symmetric to startDelayElapses.
 func backoffElapses(_ Config, s AbstractState, _ Event) Outcome {
 	if s.Dispatchability != BackoffPending {
-		return noop(s)
+		return impossible(s)
 	}
 	n := s
 	n.Dispatchability = Dispatchable
@@ -426,9 +431,11 @@ func terminalOutcome(s AbstractState, e Event) Outcome {
 			return noop(s) // idempotent only from Terminated
 		}
 		return reject(s, FailedPrecondition)
-	case PollType, ScheduleToStartElapsesType, ScheduleToCloseElapsesType, StartToCloseElapsesType,
+	case PollType:
+		return noop(s) // a poll can always be made; a closed activity just has nothing to dispatch
+	case ScheduleToStartElapsesType, ScheduleToCloseElapsesType, StartToCloseElapsesType,
 		HeartbeatElapsesType, StartDelayElapsesType, BackoffElapsesType:
-		return noop(s) // no running attempt or dispatch; the event is stale
+		return impossible(s) // the activity has closed, so no clock is running
 	default:
 		panic("model: unhandled event type in terminalOutcome")
 	}
@@ -459,8 +466,7 @@ func attemptTimedOut(cfg Config, s AbstractState) Outcome {
 		n.Status = TimedOut
 		return Outcome{Next: n}
 	case Scheduled, Paused:
-		// TODO(dan): should this be impossible?
-		return noop(s) // no running attempt: timer is stale
+		return impossible(s) // no running attempt, so neither per-attempt clock is running
 	default:
 		panic("model does not handle a per-attempt timeout while in status " + s.Status.String())
 	}

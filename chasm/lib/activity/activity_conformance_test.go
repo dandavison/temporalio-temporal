@@ -380,6 +380,11 @@ func rejectKind(err error) model.ErrorKind {
 // --- conformance + explorers -----------------------------------------------------------------
 
 // candidateEvents is the event alphabet: the worker RPCs plus the wall-clock timeouts and backoff.
+//
+// A timeout the config omits is left out rather than left to model.Possible to reject, because this
+// explorer realizes a timeout by constructing its task and firing it. Nothing scheduled that task, so
+// an unconfigured timeout would fire anyway and the server would time the attempt out — a divergence
+// manufactured by the explorer.
 func (d *driver) candidateEvents() []model.Event {
 	events := []model.Event{
 		{Type: model.PollType},
@@ -396,6 +401,19 @@ func (d *driver) candidateEvents() []model.Event {
 	}
 	if d.cfg.HasScheduleToClose {
 		events = append(events, model.Event{Type: model.ScheduleToCloseElapsesType})
+	}
+	return events
+}
+
+// possibleEvents is the alphabet restricted to what can occur in state s, so a walk spends its steps on
+// events that do something rather than on clocks that are not running. The traversal deliberately does
+// not filter: driving a clock that is stopped is how it checks that a stale timer is invalidated.
+func (d *driver) possibleEvents(s model.AbstractState) []model.Event {
+	var events []model.Event
+	for _, e := range d.candidateEvents() {
+		if model.Possible(d.cfg, s, e.Type) {
+			events = append(events, e)
+		}
 	}
 	return events
 }
@@ -546,7 +564,7 @@ func (d *driver) randomWalk(rng *rand.Rand, steps int) {
 			trace = nil
 			continue
 		}
-		events := d.candidateEvents()
+		events := d.possibleEvents(cur)
 		e := events[rng.Intn(len(events))]
 		trace = append(trace, e)
 		a.path = trace

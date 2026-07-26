@@ -329,7 +329,7 @@ func (a *saaHandle) verify(t require.TestingT, e model.Event, cur model.Abstract
 			t.Errorf("%s", a.rejectFailure(e, cur.Status, gotKind, out.Reject, rpcErr))
 		}
 		if !out.Next.SameObserved(obs) {
-			t.Errorf("%s", a.stateFailure(e, cur.Status, obs, out.Next))
+			t.Errorf("%s", a.stateFailure(e, cur, obs, out.Next))
 		}
 		a.checkDescribe(t, out.Next)
 		a.checkTaskInvalidation(t, e, cur, out)
@@ -411,7 +411,7 @@ func (a *saaHandle) applyPoll(cur model.AbstractState, out model.Outcome, final 
 	require.NoError(t, err)
 	if final {
 		if !out.Next.SameObserved(obs) {
-			t.Errorf("%s", a.stateFailure(poll, cur.Status, obs, out.Next))
+			t.Errorf("%s", a.stateFailure(poll, cur, obs, out.Next))
 		}
 		a.checkDescribe(t, out.Next)
 		a.checkTaskInvalidation(t, poll, cur, out)
@@ -442,7 +442,7 @@ func (a *saaHandle) applyWallClock(t require.TestingT, e model.Event, cur model.
 	require.NoError(t, err)
 	if final {
 		if !out.Next.SameObserved(obs) {
-			t.Errorf("%s", a.stateFailure(e, cur.Status, obs, out.Next))
+			t.Errorf("%s", a.stateFailure(e, cur, obs, out.Next))
 		}
 		a.checkDescribe(t, out.Next)
 		a.checkTaskInvalidation(t, e, cur, out)
@@ -542,12 +542,12 @@ func (d *saaDriver) walkStart(t *testing.T) (*saaHandle, model.AbstractState) {
 
 // pickWalkEvent chooses the next event, strongly preferring one that makes non-terminal progress so the
 // walk goes deep rather than restarting every few steps. It still sometimes takes a terminal or a
-// reject/no-op edge, so those are exercised deep too. Events needing a task token the handle does not
-// hold are skipped.
+// reject/no-op edge, so those are exercised deep too. Events that cannot occur in the current state,
+// or that need a task token the handle does not hold, are skipped.
 func (d *saaDriver) pickWalkEvent(rng *rand.Rand, a *saaHandle, cur model.AbstractState) model.Event {
 	var applicable, changing, deep []model.Event
 	for _, e := range saaCandidateEvents() {
-		if model.NeedsToken(e.Type) && a.token == nil {
+		if !model.Possible(d.cfg.modelConfig(), cur, e.Type) || (model.NeedsToken(e.Type) && a.token == nil) {
 			continue
 		}
 		applicable = append(applicable, e)
@@ -657,15 +657,21 @@ func (a *saaHandle) pathLine() string {
 	return "  path: " + saaPathString(a.path)
 }
 
-// stateFailure reports that the persisted state after an event disagreed with the model.
-func (a *saaHandle) stateFailure(e model.Event, src model.Status, observed, expected model.AbstractState) string {
+// stateFailure reports that the persisted state after an event disagreed with the model. An event that
+// cannot occur is a legitimate edge to drive here, unlike in a trace: the model expects it to change
+// nothing, and the failure is that the server changed something.
+func (a *saaHandle) stateFailure(e model.Event, cur model.AbstractState, observed, expected model.AbstractState) string {
 	var summary string
-	if observed.Status != expected.Status {
+	switch {
+	case !model.Possible(a.d.cfg.modelConfig(), cur, e.Type):
+		summary = fmt.Sprintf("%s cannot occur in %s, so the model expected no change; server saw %s",
+			e, cur.Status, observed.Status)
+	case observed.Status != expected.Status:
 		summary = fmt.Sprintf("model expected %s, server saw %s", expected.Status, observed.Status)
-	} else {
+	default:
 		summary = fmt.Sprintf("status %s agrees but persisted state differs", observed.Status)
 	}
-	return fmt.Sprintf("%s: %s\n%s\n%s", a.edge(e, src), summary, a.pathLine(), saaStateDiff(observed, expected))
+	return fmt.Sprintf("%s: %s\n%s\n%s", a.edge(e, cur.Status), summary, a.pathLine(), saaStateDiff(observed, expected))
 }
 
 // rejectFailure reports that the RPC's accept/reject outcome disagreed with the model.
@@ -880,19 +886,7 @@ type saaTrace struct {
 // config is the activity the trace implies: cfg, plus a short window for each timeout the trace fires
 // so that it can, and the start delay when the trace needs one.
 func (tr saaTrace) config() activityConfig {
-	c := tr.cfg
-	for _, e := range tr.trace {
-		switch e.Type {
-		case model.ScheduleToStartElapsesType:
-			c.ScheduleToStart = activityShortTimeout
-		case model.ScheduleToCloseElapsesType:
-			c.ScheduleToClose = activityShortTimeout
-		case model.StartToCloseElapsesType:
-			c.StartToClose = activityShortTimeout
-		case model.HeartbeatElapsesType:
-			c.Heartbeat = activityShortTimeout
-		}
-	}
+	c := tr.cfg.forTrace(tr.trace)
 	c.StartDelay = tr.startDelay()
 	return c
 }
@@ -914,6 +908,3 @@ func (tr saaTrace) startDelay() time.Duration {
 // activityDelayWindow is a dispatch-delay window long enough to outlast a valid negative long poll, so that
 // "not dispatchable yet" is observable within it.
 const activityDelayWindow = 5 * time.Second
-
-// activityLongStartDelay keeps a first attempt in its start-delay window for the whole trace.
-const activityLongStartDelay = time.Hour

@@ -1,6 +1,10 @@
 package model
 
-import "testing"
+import (
+	"fmt"
+	"strings"
+	"testing"
+)
 
 // Smoke tests over a few worked examples; the graph traversal checks the whole graph.
 
@@ -178,5 +182,86 @@ func TestResetDuringBackoffDispatchesImmediately(t *testing.T) {
 	}
 	if !pollable(cfg, out.Next) {
 		t.Fatalf("a poll after reset-during-backoff must dispatch immediately")
+	}
+}
+
+func TestPossible(t *testing.T) {
+	// The configs a case names its state under; the state is reached by driving events from Initial.
+	var (
+		plain  = Config{MaxAttempts: 3}
+		full   = Config{MaxAttempts: 3, HasScheduleToClose: true, HasScheduleToStart: true, HasHeartbeat: true}
+		delay  = Config{MaxAttempts: 3, HasStartDelay: true}
+		polled = func(cfg Config) AbstractState { return Transition(cfg, Initial(cfg), Poll).Next }
+	)
+
+	cases := []struct {
+		name  string
+		cfg   Config
+		state AbstractState
+		event EventType
+		want  bool
+	}{
+		{"schedule-to-start awaiting first dispatch", full, Initial(full), ScheduleToStartElapsesType, true},
+		{"schedule-to-start not configured", plain, Initial(plain), ScheduleToStartElapsesType, false},
+		{"schedule-to-start once started", full, polled(full), ScheduleToStartElapsesType, false},
+		{"schedule-to-start on a retry", full, backedOffRetry(t, full), ScheduleToStartElapsesType, false},
+
+		{"schedule-to-close while running", full, polled(full), ScheduleToCloseElapsesType, true},
+		{"schedule-to-close not configured", plain, polled(plain), ScheduleToCloseElapsesType, false},
+		{"schedule-to-close once closed", full, Transition(full, polled(full), Complete).Next, ScheduleToCloseElapsesType, false},
+
+		{"start-to-close while started", plain, polled(plain), StartToCloseElapsesType, true},
+		{"start-to-close while cancel requested", plain, Transition(plain, polled(plain), RequestCancel).Next, StartToCloseElapsesType, true},
+		{"start-to-close while scheduled", plain, Initial(plain), StartToCloseElapsesType, false},
+
+		{"heartbeat while started", full, polled(full), HeartbeatElapsesType, true},
+		{"heartbeat not configured", plain, polled(plain), HeartbeatElapsesType, false},
+		{"heartbeat while scheduled", full, Initial(full), HeartbeatElapsesType, false},
+
+		{"start delay within the window", delay, Initial(delay), StartDelayElapsesType, true},
+		{"start delay not configured", plain, Initial(plain), StartDelayElapsesType, false},
+		{"start delay already elapsed", delay, Transition(delay, Initial(delay), StartDelayElapses).Next, StartDelayElapsesType, false},
+
+		{"backoff between attempts", plain, backedOffRetry(t, plain), BackoffElapsesType, true},
+		{"backoff while started", plain, polled(plain), BackoffElapsesType, false},
+		{"backoff on the first attempt", plain, Initial(plain), BackoffElapsesType, false},
+
+		{"an RPC is always possible", plain, Transition(plain, polled(plain), Complete).Next, PollType, true},
+		{"an RPC it will reject is possible", plain, Initial(plain), RespondCompletedType, true},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			if got := Possible(c.cfg, c.state, c.event); got != c.want {
+				t.Fatalf("Possible(%s in %v/%v) = %v, want %v", c.event, c.state.Status, c.state.Dispatchability, got, c.want)
+			}
+		})
+	}
+}
+
+func TestValidateTrace(t *testing.T) {
+	cases := []struct {
+		name    string
+		cfg     Config
+		trace   []Event
+		wantIdx int // index of the first impossible event; -1 if the trace is valid
+	}{
+		{"poll", Config{}, []Event{Poll}, -1},
+		{"retry", Config{MaxAttempts: 3}, []Event{Poll, FailRetryably, BackoffElapses, Poll, Complete}, -1},
+		{"heartbeat timeout", Config{HasHeartbeat: true}, []Event{Poll, HeartbeatElapses}, -1},
+		{"heartbeat timeout unconfigured", Config{MaxAttempts: 3}, []Event{Poll, HeartbeatElapses}, 1},
+		{"attempt already ended", Config{HasHeartbeat: true}, []Event{Poll, HeartbeatElapses, StartToCloseElapses}, 2},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			err := ValidateTrace(c.cfg, c.trace)
+			switch {
+			case c.wantIdx < 0 && err != nil:
+				t.Fatalf("valid trace rejected: %v", err)
+			case c.wantIdx >= 0 && err == nil:
+				t.Fatalf("trace[%d] cannot occur, but the trace was accepted", c.wantIdx)
+			case c.wantIdx >= 0 && !strings.HasPrefix(err.Error(), fmt.Sprintf("trace[%d] %s ", c.wantIdx, c.trace[c.wantIdx])):
+				t.Fatalf("error does not name the offending event trace[%d] %s: %v", c.wantIdx, c.trace[c.wantIdx], err)
+			}
+		})
 	}
 }
