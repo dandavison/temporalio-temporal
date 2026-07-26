@@ -542,12 +542,12 @@ func (d *saaDriver) walkStart(t *testing.T) (*saaHandle, model.AbstractState) {
 
 // pickWalkEvent chooses the next event, strongly preferring one that makes non-terminal progress so the
 // walk goes deep rather than restarting every few steps. It still sometimes takes a terminal or a
-// reject/no-op edge, so those are exercised deep too. Events needing a task token the handle does not
-// hold are skipped.
+// reject/no-op edge, so those are exercised deep too. Events that cannot occur in the current state,
+// or that need a task token the handle does not hold, are skipped.
 func (d *saaDriver) pickWalkEvent(rng *rand.Rand, a *saaHandle, cur model.AbstractState) model.Event {
 	var applicable, changing, deep []model.Event
 	for _, e := range saaCandidateEvents() {
-		if model.NeedsToken(e.Type) && a.token == nil {
+		if !model.Possible(d.cfg.modelConfig(), cur, e.Type) || (model.NeedsToken(e.Type) && a.token == nil) {
 			continue
 		}
 		applicable = append(applicable, e)

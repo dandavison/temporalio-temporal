@@ -355,8 +355,8 @@ func updateOptions(cfg Config, s AbstractState, e Event) Outcome {
 // scheduleToStartElapses represents the end of the nominal schedule-to-start timeout configured by
 // the driver. The product behavior is that the timeout starts counting from dispatch time, so a
 // start_delay or retry backoff effectively pushes it back.
-func scheduleToStartElapses(_ Config, s AbstractState, _ Event) Outcome {
-	if s.Status != Scheduled || s.Dispatchability != Dispatchable {
+func scheduleToStartElapses(cfg Config, s AbstractState, _ Event) Outcome {
+	if !cfg.HasScheduleToStart || s.Status != Scheduled || s.Dispatchability != Dispatchable {
 		return noop(s)
 	}
 	n := s
@@ -368,8 +368,8 @@ func scheduleToStartElapses(_ Config, s AbstractState, _ Event) Outcome {
 // the driver. The product behavior is that the deadline is anchored at first-dispatch time
 // (schedule_time + start_delay), so it does not run during a start_delay, and — unlike a workflow
 // activity — is not suspended while paused.
-func scheduleToCloseElapses(_ Config, s AbstractState, _ Event) Outcome {
-	if s.Dispatchability == StartDelayPending {
+func scheduleToCloseElapses(cfg Config, s AbstractState, _ Event) Outcome {
+	if !cfg.HasScheduleToClose || s.Dispatchability == StartDelayPending {
 		return noop(s)
 	}
 	n := s
@@ -383,14 +383,17 @@ func startToCloseElapses(cfg Config, s AbstractState, _ Event) Outcome {
 	return attemptTimedOut(cfg, s)
 }
 func heartbeatElapses(cfg Config, s AbstractState, _ Event) Outcome {
+	if !cfg.HasHeartbeat {
+		return noop(s)
+	}
 	return attemptTimedOut(cfg, s)
 }
 
 // startDelayElapses represents the end of the nominal start_delay window configured by the driver.
 // The product behavior is that the delayed first dispatch becomes available; the status is unchanged
 // (a Paused activity stays Paused but now dispatches on unpause).
-func startDelayElapses(_ Config, s AbstractState, _ Event) Outcome {
-	if s.Dispatchability != StartDelayPending {
+func startDelayElapses(cfg Config, s AbstractState, _ Event) Outcome {
+	if !cfg.HasStartDelay || s.Dispatchability != StartDelayPending {
 		return noop(s)
 	}
 	n := s

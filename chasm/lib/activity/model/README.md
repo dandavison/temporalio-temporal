@@ -12,7 +12,9 @@ model will let the two be checked for equivalence.
 - `model.go` — the transition rules (`Transition`, `Initial`, the per-event functions) and the
   response predictors.
 - `explore.go` — pure graph helpers shared by the explorers (`Fingerprint`, `Reachable`, `CellKey`,
-  `NeedsToken`, `CarriesReqID`) and the `String` methods for `EventType` and `Event`.
+  `NeedsToken`, `CarriesReqID`), which events can occur in a state (`Possible`: a clock event cannot
+  occur unless its clock is running) and the trace check built on it (`ValidateTrace`), and the
+  `String` methods for `EventType` and `Event`.
 - `validate/` — static checks *validating the model* against the product state-machine code, no
   server. (Distinct from conformance testing below, which checks a running server against the model.)
 
