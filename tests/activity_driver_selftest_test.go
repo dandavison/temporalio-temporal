@@ -146,7 +146,7 @@ func TestAdjudicateDispatch(t *testing.T) {
 	for _, tc := range []struct {
 		name        string
 		polledUntil time.Time
-		want        negativePollResult
+		expected    negativePollResult
 	}{
 		{"well inside the window", dispatchTime.Add(-5 * time.Second), dispatchedEarly},
 		{"just inside the window", dispatchTime.Add(-time.Nanosecond), dispatchedEarly},
@@ -154,7 +154,7 @@ func TestAdjudicateDispatch(t *testing.T) {
 		{"after the window closed", dispatchTime.Add(5 * time.Second), windowOutrun},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			require.Equal(t, tc.want, adjudicateDispatch(tc.polledUntil, dispatchTime))
+			require.Equal(t, tc.expected, adjudicateDispatch(tc.polledUntil, dispatchTime))
 		})
 	}
 }

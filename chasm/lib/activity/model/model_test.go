@@ -6,9 +6,9 @@ import "testing"
 
 func TestInitial(t *testing.T) {
 	got := Initial(Config{HasScheduleToClose: true})
-	want := AbstractState{Status: Scheduled, AttemptCount: 1, DispatchTimeSet: true}
-	if got != want {
-		t.Fatalf("Initial: got %+v want %+v", got, want)
+	expected := AbstractState{Status: Scheduled, AttemptCount: 1, DispatchTimeSet: true}
+	if got != expected {
+		t.Fatalf("Initial: got %+v want %+v", got, expected)
 	}
 }
 

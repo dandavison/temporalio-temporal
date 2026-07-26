@@ -669,9 +669,9 @@ func (a *saaHandle) stateFailure(e model.Event, src model.Status, observed, expe
 }
 
 // rejectFailure reports that the RPC's accept/reject outcome disagreed with the model.
-func (a *saaHandle) rejectFailure(e model.Event, src model.Status, got, want model.ErrorKind, err error) string {
+func (a *saaHandle) rejectFailure(e model.Event, src model.Status, got, expected model.ErrorKind, err error) string {
 	msg := fmt.Sprintf("%s: server %s, model expected %s\n%s",
-		a.edge(e, src), saaOutcomeDesc(got), saaOutcomeDesc(want), a.pathLine())
+		a.edge(e, src), saaOutcomeDesc(got), saaOutcomeDesc(expected), a.pathLine())
 	if err != nil {
 		msg += fmt.Sprintf("\n  server error: %v", err)
 	}
@@ -820,10 +820,10 @@ func (a *saaHandle) observedRaw() (model.AbstractState, error) {
 	return model.Abstract(o), nil
 }
 
-// awaitObservedMatch polls the internal state until it matches want, or the deadline passes.
-func (a *saaHandle) awaitObservedMatch(want model.AbstractState, deadline time.Time) {
+// awaitObservedMatch polls the internal state until it matches expected, or the deadline passes.
+func (a *saaHandle) awaitObservedMatch(expected model.AbstractState, deadline time.Time) {
 	for {
-		if obs, err := a.observedRaw(); err == nil && want.SameObserved(obs) {
+		if obs, err := a.observedRaw(); err == nil && expected.SameObserved(obs) {
 			return
 		}
 		if !time.Now().Before(deadline) {
