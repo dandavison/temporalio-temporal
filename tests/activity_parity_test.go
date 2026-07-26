@@ -321,11 +321,17 @@ func (s *activityParityTestSuite) TestParityBackoffCoefficient() {
 		MaxAttempts: 4, RetryInterval: initialInterval, BackoffCoefficient: 2.0, MaxRetryInterval: maxInterval,
 	}
 
+	// Elapsing the longer second backoff also exercises the driver's wait, which must take its deadline
+	// from the server rather than from the configured interval.
 	s.T().Run("WorkflowActivity", func(t *testing.T) {
-		require.Equal(t, expected, newWFADriver(t, env, cfg).driveTrace(t, trace).projection(t))
+		a := newWFADriver(t, env, cfg).driveTrace(t, trace)
+		require.Equal(t, expected, a.projection(t))
+		a.driveEvent(t, model.BackoffElapses)
 	})
 	s.T().Run("StandaloneActivity", func(t *testing.T) {
-		require.Equal(t, expected, newSAADriver(t, env, cfg).driveTrace(t, trace).projection(t))
+		a := newSAADriver(t, env, cfg).driveTrace(t, trace)
+		require.Equal(t, expected, a.projection(t))
+		a.driveEvent(t, model.BackoffElapses)
 	})
 }
 
