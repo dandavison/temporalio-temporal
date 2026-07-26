@@ -329,7 +329,7 @@ func (a *saaHandle) verify(t require.TestingT, e model.Event, cur model.Abstract
 			t.Errorf("%s", a.rejectFailure(e, cur.Status, gotKind, out.Reject, rpcErr))
 		}
 		if !out.Next.SameObserved(obs) {
-			t.Errorf("%s", a.stateFailure(e, cur.Status, obs, out.Next))
+			t.Errorf("%s", a.stateFailure(e, cur, obs, out.Next))
 		}
 		a.checkDescribe(t, out.Next)
 		a.checkTaskInvalidation(t, e, cur, out)
@@ -411,7 +411,7 @@ func (a *saaHandle) applyPoll(cur model.AbstractState, out model.Outcome, final 
 	require.NoError(t, err)
 	if final {
 		if !out.Next.SameObserved(obs) {
-			t.Errorf("%s", a.stateFailure(poll, cur.Status, obs, out.Next))
+			t.Errorf("%s", a.stateFailure(poll, cur, obs, out.Next))
 		}
 		a.checkDescribe(t, out.Next)
 		a.checkTaskInvalidation(t, poll, cur, out)
@@ -442,7 +442,7 @@ func (a *saaHandle) applyWallClock(t require.TestingT, e model.Event, cur model.
 	require.NoError(t, err)
 	if final {
 		if !out.Next.SameObserved(obs) {
-			t.Errorf("%s", a.stateFailure(e, cur.Status, obs, out.Next))
+			t.Errorf("%s", a.stateFailure(e, cur, obs, out.Next))
 		}
 		a.checkDescribe(t, out.Next)
 		a.checkTaskInvalidation(t, e, cur, out)
@@ -657,15 +657,21 @@ func (a *saaHandle) pathLine() string {
 	return "  path: " + saaPathString(a.path)
 }
 
-// stateFailure reports that the persisted state after an event disagreed with the model.
-func (a *saaHandle) stateFailure(e model.Event, src model.Status, observed, expected model.AbstractState) string {
+// stateFailure reports that the persisted state after an event disagreed with the model. An event that
+// cannot occur is a legitimate edge to drive here, unlike in a trace: the model expects it to change
+// nothing, and the failure is that the server changed something.
+func (a *saaHandle) stateFailure(e model.Event, cur model.AbstractState, observed, expected model.AbstractState) string {
 	var summary string
-	if observed.Status != expected.Status {
+	switch {
+	case !model.Possible(a.d.cfg.modelConfig(), cur, e.Type):
+		summary = fmt.Sprintf("%s cannot occur in %s, so the model expected no change; server saw %s",
+			e, cur.Status, observed.Status)
+	case observed.Status != expected.Status:
 		summary = fmt.Sprintf("model expected %s, server saw %s", expected.Status, observed.Status)
-	} else {
+	default:
 		summary = fmt.Sprintf("status %s agrees but persisted state differs", observed.Status)
 	}
-	return fmt.Sprintf("%s: %s\n%s\n%s", a.edge(e, src), summary, a.pathLine(), saaStateDiff(observed, expected))
+	return fmt.Sprintf("%s: %s\n%s\n%s", a.edge(e, cur.Status), summary, a.pathLine(), saaStateDiff(observed, expected))
 }
 
 // rejectFailure reports that the RPC's accept/reject outcome disagreed with the model.
