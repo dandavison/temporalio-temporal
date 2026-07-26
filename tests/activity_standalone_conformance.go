@@ -880,19 +880,7 @@ type saaTrace struct {
 // config is the activity the trace implies: cfg, plus a short window for each timeout the trace fires
 // so that it can, and the start delay when the trace needs one.
 func (tr saaTrace) config() activityConfig {
-	c := tr.cfg
-	for _, e := range tr.trace {
-		switch e.Type {
-		case model.ScheduleToStartElapsesType:
-			c.ScheduleToStart = activityShortTimeout
-		case model.ScheduleToCloseElapsesType:
-			c.ScheduleToClose = activityShortTimeout
-		case model.StartToCloseElapsesType:
-			c.StartToClose = activityShortTimeout
-		case model.HeartbeatElapsesType:
-			c.Heartbeat = activityShortTimeout
-		}
-	}
+	c := tr.cfg.forTrace(tr.trace)
 	c.StartDelay = tr.startDelay()
 	return c
 }

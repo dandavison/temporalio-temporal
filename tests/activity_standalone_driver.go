@@ -15,6 +15,7 @@ import (
 	"github.com/stretchr/testify/require"
 	apiactivitypb "go.temporal.io/api/activity/v1"
 	commonpb "go.temporal.io/api/common/v1"
+	enumspb "go.temporal.io/api/enums/v1"
 	failurepb "go.temporal.io/api/failure/v1"
 	taskqueuepb "go.temporal.io/api/taskqueue/v1"
 	"go.temporal.io/api/workflowservice/v1"
@@ -33,9 +34,12 @@ import (
 // test describes a single activity rather than two that might differ.
 //
 // Every field is the value it names. A zero duration leaves that option unset, which for a timeout
-// means it never fires; the exceptions are noted. A trace that fires a timeout must therefore
-// configure it: writing model.HeartbeatElapses into a trace requires a Heartbeat here, and the
-// duration set is the window the driver waits out.
+// means it never fires; the exceptions are noted.
+//
+// Timeouts are usually left unset: forTrace gives a short window to each one the trace fires, so
+// writing model.HeartbeatElapses is itself the statement that this activity has a heartbeat timeout.
+// Set one explicitly only to say something the trace cannot — that it exists without firing, or that
+// its exact duration is what the test is about.
 type activityConfig struct {
 	MaxAttempts            int32         // RetryPolicy MaximumAttempts; 0 = unlimited
 	RetryInterval          time.Duration // RetryPolicy InitialInterval; 0 => activityDefaultRetryInterval
@@ -76,6 +80,25 @@ func (c activityConfig) retryInterval() time.Duration {
 }
 func (c activityConfig) startToClose() time.Duration {
 	return cmp.Or(c.StartToClose, activityLongTimeout)
+}
+
+// forTrace is the config with a short window for each timeout the trace fires, so that it can. A
+// timeout the author set is left alone: only they can say how long a timeout that the trace does not
+// fire should be, or that a fired one has a duration the test depends on.
+func (c activityConfig) forTrace(trace []model.Event) activityConfig {
+	for _, e := range trace {
+		switch e.Type {
+		case model.ScheduleToStartElapsesType:
+			c.ScheduleToStart = cmp.Or(c.ScheduleToStart, activityShortTimeout)
+		case model.ScheduleToCloseElapsesType:
+			c.ScheduleToClose = cmp.Or(c.ScheduleToClose, activityShortTimeout)
+		case model.StartToCloseElapsesType:
+			c.StartToClose = cmp.Or(c.StartToClose, activityShortTimeout)
+		case model.HeartbeatElapsesType:
+			c.Heartbeat = cmp.Or(c.Heartbeat, activityShortTimeout)
+		}
+	}
+	return c
 }
 
 // window is how long the clock behind a wall-clock event takes to elapse, from the option that event
@@ -183,6 +206,8 @@ type saaHandle struct {
 // driveTrace runs a trace on a fresh activity and returns a handle at the reached state. Model-free:
 // each RPC must succeed.
 func (d *saaDriver) driveTrace(t require.TestingT, trace []model.Event) *saaHandle {
+	d.cfg = d.cfg.forTrace(trace)
+	validateTrace(t, d.cfg, trace)
 	a := d.start(t)
 	for _, e := range trace {
 		a.driveEvent(t, e)
@@ -246,7 +271,7 @@ func (a *saaHandle) awaitStateTransition(t require.TestingT, e model.Event, dead
 		}
 	}
 	t.Errorf("%s: the activity did not transition within %s of driving the event, so the event did not take "+
-		"effect. Last observed: %+v", e, a.d.cfg.window(e)+activityDriverWallClockSettle, a.projection(t))
+		"effect. Last observed: %+v", e, a.d.cfg.window(e)+activityDriverWallClockSettle, a.activityInfo(t))
 }
 
 // awaitDispatchTimePassed polls the public projection until the pending dispatch time has passed, and
@@ -260,8 +285,8 @@ func (a *saaHandle) awaitDispatchTimePassed(t require.TestingT, e model.Event) {
 		return // the dispatch time has already passed
 	}
 	deadline := next.AsTime().Add(activityDriverWallClockSettle)
-	p := projectSAA(info)
-	if activityDriverPollUntil(deadline, func() bool { p = a.projection(t); return !p.NextAttemptScheduleSet }) {
+	p := saaActivityInfo(info)
+	if activityDriverPollUntil(deadline, func() bool { p = a.activityInfo(t); return !p.NextAttemptScheduleTimeSet }) {
 		return
 	}
 	t.Errorf("%s: a dispatch is still pending %s after the time the server scheduled it for, so the "+
@@ -344,9 +369,9 @@ func (a *saaHandle) describe(t require.TestingT) *workflowservice.DescribeActivi
 	return resp
 }
 
-// projection is the activity's public info as an activityInfoProjection.
-func (a *saaHandle) projection(t require.TestingT) activityInfoProjection {
-	return projectSAA(a.describe(t).GetInfo())
+// activityInfo is the activity's ActivityExecutionInfo, projected.
+func (a *saaHandle) activityInfo(t require.TestingT) activityInfo {
+	return saaActivityInfo(a.describe(t).GetInfo())
 }
 
 // terminal is the terminal status from Info plus the failure discriminant from the Outcome.
@@ -356,6 +381,11 @@ func (a *saaHandle) terminal(t require.TestingT) activityTerminalProjection {
 		Status:      resp.GetInfo().GetStatus(),
 		FailureType: saaFailureType(resp.GetOutcome().GetFailure()),
 	}
+}
+
+// terminalStatus is the terminal status alone, for a test that asserts nothing about the failure.
+func (a *saaHandle) terminalStatus(t require.TestingT) enumspb.ActivityExecutionStatus {
+	return a.terminal(t).Status
 }
 
 // terminalCause is the failure the terminal outcome chains as its Cause, empty if there is none.
@@ -390,7 +420,7 @@ func (a *saaHandle) awaitTerminal(t require.TestingT) *workflowservice.DescribeA
 		}
 	}
 	t.Errorf("the activity did not reach a terminal status within %s of the trace finishing. Last observed: %+v",
-		activityDriverTerminalTimeout, a.projection(t))
+		activityDriverTerminalTimeout, a.activityInfo(t))
 	return a.describe(t)
 }
 
@@ -423,12 +453,12 @@ func saaFailureType(f *failurepb.Failure) string {
 	return ""
 }
 
-func projectSAA(i *apiactivitypb.ActivityExecutionInfo) activityInfoProjection {
-	return activityInfoProjection{
-		State:                  i.GetRunState(),
-		Attempt:                i.GetAttempt(),
-		CurrentRetryInterval:   i.GetCurrentRetryInterval().AsDuration().Round(time.Second),
-		NextAttemptScheduleSet: i.GetNextAttemptScheduleTime() != nil,
+func saaActivityInfo(i *apiactivitypb.ActivityExecutionInfo) activityInfo {
+	return activityInfo{
+		RunState:                   i.GetRunState(),
+		Attempt:                    i.GetAttempt(),
+		CurrentRetryInterval:       i.GetCurrentRetryInterval().AsDuration().Round(time.Second),
+		NextAttemptScheduleTimeSet: i.GetNextAttemptScheduleTime() != nil,
 	}
 }
 
@@ -552,6 +582,34 @@ func (a *saaHandle) pollForTask(t require.TestingT, timeout time.Duration) *work
 		return nil // no task available
 	}
 	return resp
+}
+
+// timeoutType is the TimeoutType a timeout-elapse event reports when it fires,
+// TIMEOUT_TYPE_UNSPECIFIED for any other event. The model names no API types, so the correspondence
+// lives here.
+func timeoutType(e model.Event) enumspb.TimeoutType {
+	switch e.Type {
+	case model.ScheduleToStartElapsesType:
+		return enumspb.TIMEOUT_TYPE_SCHEDULE_TO_START
+	case model.ScheduleToCloseElapsesType:
+		return enumspb.TIMEOUT_TYPE_SCHEDULE_TO_CLOSE
+	case model.StartToCloseElapsesType:
+		return enumspb.TIMEOUT_TYPE_START_TO_CLOSE
+	case model.HeartbeatElapsesType:
+		return enumspb.TIMEOUT_TYPE_HEARTBEAT
+	default:
+		return enumspb.TIMEOUT_TYPE_UNSPECIFIED
+	}
+}
+
+// validateTrace rejects a trace no activity could produce: one that drives an event when the clock
+// behind it is not running. Config is passed after forTrace, so a timeout the trace fires is
+// configured by then and only the state conditions remain to be checked.
+//
+// Only driveTrace validates. driveTraceWithModelConformanceChecking drives stopped clocks on purpose,
+// to assert the server does nothing, and the model already predicts that.
+func validateTrace(t require.TestingT, cfg activityConfig, trace []model.Event) {
+	require.NoError(t, model.ValidateTrace(cfg.modelConfig(), trace))
 }
 
 // isWallClockEvent reports whether an event fires on wall-clock time rather than synchronously.
