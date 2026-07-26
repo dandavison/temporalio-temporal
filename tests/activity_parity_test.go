@@ -85,10 +85,10 @@ func (s *activityParityTestSuite) TestParityNonRetryableTimeout() {
 	}
 
 	s.T().Run("StartToClose", func(t *testing.T) {
-		both(t, activityConfig{StartToClose: saaShortTimeout}, model.StartToCloseElapses, enumspb.TIMEOUT_TYPE_START_TO_CLOSE)
+		both(t, activityConfig{StartToClose: activityShortTimeout}, model.StartToCloseElapses, enumspb.TIMEOUT_TYPE_START_TO_CLOSE)
 	})
 	s.T().Run("Heartbeat", func(t *testing.T) {
-		both(t, activityConfig{Heartbeat: saaShortTimeout}, model.HeartbeatElapses, enumspb.TIMEOUT_TYPE_HEARTBEAT)
+		both(t, activityConfig{Heartbeat: activityShortTimeout}, model.HeartbeatElapses, enumspb.TIMEOUT_TYPE_HEARTBEAT)
 	})
 }
 

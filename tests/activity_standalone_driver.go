@@ -37,13 +37,13 @@ import (
 // duration set is the window the driver waits out.
 type activityConfig struct {
 	MaxAttempts            int32         // RetryPolicy MaximumAttempts; 0 = unlimited
-	RetryInterval          time.Duration // RetryPolicy InitialInterval; 0 => saaDefaultRetryInterval
+	RetryInterval          time.Duration // RetryPolicy InitialInterval; 0 => activityDefaultRetryInterval
 	BackoffCoefficient     float64       // RetryPolicy BackoffCoefficient; 0 => 1.0 (constant interval)
 	MaxRetryInterval       time.Duration // RetryPolicy MaximumInterval; 0 => RetryInterval
 	NextRetryDelay         time.Duration // ApplicationFailureInfo.NextRetryDelay sent with RespondFailed
 	NonRetryableErrorTypes []string      // RetryPolicy NonRetryableErrorTypes
 
-	StartToClose    time.Duration // 0 => saaLongTimeout, so it does not fire
+	StartToClose    time.Duration // 0 => activityLongTimeout, so it does not fire
 	ScheduleToClose time.Duration
 	ScheduleToStart time.Duration
 	Heartbeat       time.Duration
@@ -53,16 +53,18 @@ type activityConfig struct {
 // activityParityDefaultInput is the payload the drivers start activities with. Its content is never asserted on.
 var activityParityDefaultInput = payloads.EncodeString("Input")
 
-// saaLongTimeout is a timeout long enough not to fire during a test.
-const saaLongTimeout = time.Hour
+// activityLongTimeout is a timeout long enough not to fire during a test.
+const activityLongTimeout = time.Hour
 
-// saaShortTimeout is a timeout short enough for a trace to wait out.
-const saaShortTimeout = 2 * time.Second
+// activityShortTimeout is a timeout short enough for a trace to wait out.
+const activityShortTimeout = 2 * time.Second
 
 func (c activityConfig) retryInterval() time.Duration {
-	return cmp.Or(c.RetryInterval, saaDefaultRetryInterval)
+	return cmp.Or(c.RetryInterval, activityDefaultRetryInterval)
 }
-func (c activityConfig) startToClose() time.Duration { return cmp.Or(c.StartToClose, saaLongTimeout) }
+func (c activityConfig) startToClose() time.Duration {
+	return cmp.Or(c.StartToClose, activityLongTimeout)
+}
 
 // window is how long the clock behind a wall-clock event takes to elapse, from the option that event
 // fires on. Zero for an event whose option is not configured, which no trace should drive.
@@ -96,7 +98,7 @@ type saaDriver struct {
 	numStarted int
 	idBase     string // activity-id prefix, unique per driver
 
-	positivePollTimeout time.Duration // bounds a "must dispatch" poll; 0 => saaPositivePollTimeout
+	positivePollTimeout time.Duration // bounds a "must dispatch" poll; 0 => driverPositivePollTimeout
 
 	// customizeStart mutates the StartActivityExecutionRequest before it is sent.
 	customizeStart func(*workflowservice.StartActivityExecutionRequest)
@@ -112,17 +114,17 @@ func newSAADriver(t *testing.T, env *testcore.TestEnv, cfg activityConfig) *saaD
 	}
 }
 
-// saaDefaultRetryInterval is the RetryPolicy InitialInterval when a driver sets none.
-const saaDefaultRetryInterval = 200 * time.Millisecond
+// activityDefaultRetryInterval is the RetryPolicy InitialInterval when a driver sets none.
+const activityDefaultRetryInterval = 200 * time.Millisecond
 
-// saaPositivePollTimeout bounds a poll that must find a task.
-const saaPositivePollTimeout = 10 * time.Second
+// driverPositivePollTimeout bounds a poll that must find a task.
+const driverPositivePollTimeout = 10 * time.Second
 
-// saaWallClockSettle is slack added to a wall-clock event's window when waiting for its effect.
-const saaWallClockSettle = 2 * time.Second
+// driverWallClockSettle is slack added to a wall-clock event's window when waiting for its effect.
+const driverWallClockSettle = 2 * time.Second
 
-// saaPollInterval is the gap between reads when polling for a wall-clock event's effect.
-const saaPollInterval = 100 * time.Millisecond
+// driverPollInterval is the gap between reads when polling for a wall-clock event's effect.
+const driverPollInterval = 100 * time.Millisecond
 
 // saaHandle is a handle to one activity instance: the ids that address it, plus the token last
 // dispatched to it.
@@ -161,10 +163,10 @@ func (a *saaHandle) driveEvent(t require.TestingT, e model.Event) {
 	switch {
 	case e.Type == model.PollType:
 		// A poll captures the dispatched task token.
-		if resp := a.pollForTask(t, cmp.Or(d.positivePollTimeout, saaPositivePollTimeout)); resp != nil {
+		if resp := a.pollForTask(t, cmp.Or(d.positivePollTimeout, driverPositivePollTimeout)); resp != nil {
 			a.token = resp.GetTaskToken()
 		}
-	case saaIsWallClock(e.Type):
+	case isWallClockEvent(e.Type):
 		// A wall-clock event is realized by waiting out its configured window.
 		a.awaitWallClock(t, e)
 	default:
@@ -177,8 +179,8 @@ func (a *saaHandle) driveEvent(t require.TestingT, e model.Event) {
 // poll; a dispatch-delay elapse advances no version, so it is detected by NextAttemptScheduleTime
 // clearing.
 func (a *saaHandle) awaitWallClock(t require.TestingT, e model.Event) {
-	deadline := time.Now().Add(a.d.cfg.window(e) + saaWallClockSettle)
-	if saaIsDispatchDelay(e.Type) {
+	deadline := time.Now().Add(a.d.cfg.window(e) + driverWallClockSettle)
+	if isDispatchDelayEvent(e.Type) {
 		a.awaitDispatchTimePassed(t, e, deadline)
 		return
 	}
@@ -210,7 +212,7 @@ func (a *saaHandle) awaitStateTransition(t require.TestingT, e model.Event, dead
 		}
 	}
 	t.Errorf("%s: the activity did not transition within %s of driving the event, so the event did not take "+
-		"effect. Last observed: %+v", model.EventLabel(e), a.d.cfg.window(e)+saaWallClockSettle, a.projection(t))
+		"effect. Last observed: %+v", model.EventLabel(e), a.d.cfg.window(e)+driverWallClockSettle, a.projection(t))
 }
 
 // awaitDispatchTimePassed polls the public projection until the pending dispatch time has passed, and
@@ -224,10 +226,10 @@ func (a *saaHandle) awaitDispatchTimePassed(t require.TestingT, e model.Event, d
 		if !time.Now().Before(deadline) {
 			t.Errorf("%s: a dispatch is still pending in the future %s after driving the event, so the "+
 				"window did not elapse. Last observed: %+v",
-				model.EventLabel(e), a.d.cfg.window(e)+saaWallClockSettle, p)
+				model.EventLabel(e), a.d.cfg.window(e)+driverWallClockSettle, p)
 			return
 		}
-		time.Sleep(saaPollInterval)
+		time.Sleep(driverPollInterval)
 	}
 }
 
@@ -331,7 +333,7 @@ func (a *saaHandle) rpc(e model.Event) error {
 	switch e.Type {
 	case model.RespondFailedType:
 		_, err := fc.RespondActivityTaskFailed(a.d.ctx, &workflowservice.RespondActivityTaskFailedRequest{
-			Namespace: ns, TaskToken: a.token, Identity: "worker", Failure: saaFailure(e.Retryable, a.d.cfg.NextRetryDelay),
+			Namespace: ns, TaskToken: a.token, Identity: "worker", Failure: activityFailure(e.Retryable, a.d.cfg.NextRetryDelay),
 		})
 		return err
 	case model.PauseType:
@@ -374,8 +376,8 @@ func (a *saaHandle) pollForTask(t require.TestingT, timeout time.Duration) *work
 	return resp
 }
 
-// saaIsWallClock reports whether an event fires on wall-clock time rather than synchronously.
-func saaIsWallClock(k model.EventType) bool {
+// isWallClockEvent reports whether an event fires on wall-clock time rather than synchronously.
+func isWallClockEvent(k model.EventType) bool {
 	switch k {
 	case model.ScheduleToStartElapsesType, model.ScheduleToCloseElapsesType, model.StartToCloseElapsesType,
 		model.HeartbeatElapsesType, model.StartDelayElapsesType, model.BackoffElapsesType:
@@ -385,14 +387,14 @@ func saaIsWallClock(k model.EventType) bool {
 	}
 }
 
-// saaIsDispatchDelay reports whether an event is a dispatch-delay window elapsing rather than a timeout.
+// isDispatchDelayEvent reports whether an event is a dispatch-delay window elapsing rather than a timeout.
 // A dispatch delay advances no transition-history version; its effect is the pending dispatch time
 // passing.
-func saaIsDispatchDelay(k model.EventType) bool {
+func isDispatchDelayEvent(k model.EventType) bool {
 	return k == model.StartDelayElapsesType || k == model.BackoffElapsesType
 }
 
-func saaFailure(retryable bool, nextRetryDelay time.Duration) *failurepb.Failure {
+func activityFailure(retryable bool, nextRetryDelay time.Duration) *failurepb.Failure {
 	info := &failurepb.ApplicationFailureInfo{Type: "drive", NonRetryable: !retryable}
 	if nextRetryDelay > 0 {
 		info.NextRetryDelay = durationpb.New(nextRetryDelay)
