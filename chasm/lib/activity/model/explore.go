@@ -53,9 +53,8 @@ func ValidateTrace(cfg Config, trace []Event) error {
 	s := Initial(cfg)
 	for i, e := range trace {
 		if !Possible(cfg, s, e.Type) {
-			return fmt.Errorf("trace[%d] %s cannot occur in %v/%v: its clock is not running there. A trace "+
-				"names events that occur; driving one that cannot, to check that nothing happens, is what the "+
-				"conformance explorers do", i, e, s.Status, s.Dispatchability)
+			return fmt.Errorf("trace[%d] %s cannot occur in %v/%v: its clock is not running there. Remove "+
+				"it, or drive the events that start its clock first", i, e, s.Status, s.Dispatchability)
 		}
 		s = Transition(cfg, s, e).Next
 	}
