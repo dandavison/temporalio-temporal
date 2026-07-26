@@ -109,9 +109,7 @@ type saaDriver struct {
 	cfg        activityConfig
 	cfgIdx     int
 	numStarted int
-	// idBase is the activity-id prefix. Several drivers can share one *testing.T, and so one
-	// namespace, so it is randomized rather than derived from the test name alone.
-	idBase string
+	idBase     string // activity-id prefix; the test's namespace is its own, so its name suffices
 
 	positivePollTimeout time.Duration // bounds a "must dispatch" poll; 0 => activityDriverPositivePollTimeout
 
@@ -125,7 +123,7 @@ func newSAADriver(t *testing.T, env *testcore.TestEnv, cfg activityConfig) *saaD
 		env:    env,
 		ctx:    testcontext.For(t),
 		cfg:    cfg,
-		idBase: testcore.RandomizeStr(t.Name()),
+		idBase: t.Name(),
 	}
 }
 

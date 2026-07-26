@@ -48,8 +48,6 @@ func recordDriverReports(drive func(require.TestingT)) (failures []string) {
 // TestSAADriverReportsUnrealizedWallClockEvents drives a trace whose wall-clock event provably cannot
 // take effect inside the window the driver waits, and requires the driver to report it.
 func (s *activityParityTestSuite) TestSAADriverReportsUnrealizedWallClockEvents() {
-	env := newActivityParityEnv(s.T())
-
 	// realRetryInterval and realStartToClose are far longer than the windows the driver derives below,
 	// so the corresponding event cannot possibly have taken effect when the driver moves on.
 	const realRetryInterval, realStartToClose = 30 * time.Second, 30 * time.Second
@@ -57,7 +55,7 @@ func (s *activityParityTestSuite) TestSAADriverReportsUnrealizedWallClockEvents(
 	s.T().Run("BackoffElapses", func(t *testing.T) {
 		drive := func(customize func(*workflowservice.StartActivityExecutionRequest)) []string {
 			return recordDriverReports(func(rt require.TestingT) {
-				d := newSAADriver(t, env, activityConfig{
+				d := newSAADriver(t, newActivityParityEnv(t), activityConfig{
 					MaxAttempts:   3,
 					RetryInterval: time.Second, // the window the driver will wait out
 				})
@@ -79,7 +77,7 @@ func (s *activityParityTestSuite) TestSAADriverReportsUnrealizedWallClockEvents(
 	s.T().Run("StartToCloseElapses", func(t *testing.T) {
 		drive := func(customize func(*workflowservice.StartActivityExecutionRequest)) []string {
 			return recordDriverReports(func(rt require.TestingT) {
-				d := newSAADriver(t, env, activityConfig{
+				d := newSAADriver(t, newActivityParityEnv(t), activityConfig{
 					MaxAttempts:  1,
 					StartToClose: activityShortTimeout, // the window the driver will wait out
 				})
@@ -105,13 +103,11 @@ func (s *activityParityTestSuite) TestSAADriverReportsUnrealizedWallClockEvents(
 // Injected by shortening the real start delay to nothing while the driver still believes it is an hour,
 // which puts the poll in the position a slow machine would.
 func (s *activityParityTestSuite) TestSAADriverBlamesItselfWhenItOutrunsTheDispatchWindow() {
-	env := newActivityParityEnv(s.T())
-
 	// negativePoll drives the one Poll of a start-delayed activity through the model-checking path, and
 	// returns everything the driver reported.
 	negativePoll := func(t *testing.T, customize func(*workflowservice.StartActivityExecutionRequest)) []string {
 		return recordDriverReports(func(rt require.TestingT) {
-			d := newSAADriver(t, env, activityConfig{MaxAttempts: 1, StartDelay: activityLongStartDelay})
+			d := newSAADriver(t, newActivityParityEnv(t), activityConfig{MaxAttempts: 1, StartDelay: activityLongStartDelay})
 			d.customizeStart = customize
 			a := d.start(rt)
 			_, err := a.observed() // seed the stamp baseline, as the model-checking driver does after Start
