@@ -12,26 +12,27 @@ model will let the two be checked for equivalence.
 - `model.go` — the transition rules (`Transition`, `Initial`, the per-event functions) and the
   response predictors.
 - `explore.go` — pure graph helpers shared by the explorers (`Fingerprint`, `Reachable`, `CellKey`,
-  `NeedsToken`, `EventTypeName`, `EventLabel`).
+  `NeedsToken`, `CarriesReqID`) and the `String` methods for `EventType` and `Event`.
 - `validate/` — static checks *validating the model* against the product state-machine code, no
   server. (Distinct from conformance testing below, which checks a running server against the model.)
 
 The model is exercised at three tiers, cheapest first. Tiers 2 and 3 are conformance testing (a
 running implementation vs the model); tier 1 is static model validation. All three use the *same* model.
 
-## Everything on this branch, in one go
+This file is the point of truth for how to run any of it.
 
-Runs every test this branch adds — the model tier 1, the in-process tier 2, and the onebox tier 3
-(RPC graph traversal + random walk, SAA↔WFA equivalence, and the wall-clock declarative traces). The
-tier-3 leg needs `-tags test_dep` and takes a couple of minutes; the first two are ~1s each.
+## Everything, in one go
+
+Tiers 1 and 2 are ~1s each. The tier-3 leg needs `-tags test_dep` and takes a couple of minutes.
 
 ```bash
 export TEMPORAL_TEST_LOG_LEVEL=ERROR TEMPORAL_TEST_LOG_STACKTRACE_LEVEL=off
-go test -count=1 ./chasm/lib/activity/model/... &&                                    # tier 1
-go test -count=1 -run TestConformance ./chasm/lib/activity/ &&                         # tier 2
-go test -tags test_dep -count=1 \
-  -run 'TestStandaloneActivityTestSuite/(TestConformance|TestWFASAA|TestSAA|Test.*_Declarative)' ./tests/  # tier 3
+go test -count=1 ./chasm/lib/activity/... &&                                   # tiers 1 and 2
+go test -count=1 -tags test_dep -run TestActivityParityTestSuite ./tests/       # tier 3
 ```
+
+A passing suite test prints nothing. Add `-v` and read the `--- PASS` / `--- FAIL` lines to see which
+ran. `-count=1` skips the test cache.
 
 ## Tier 1 — no server (~1s): model unit tests + static model validation
 
@@ -41,12 +42,12 @@ unexpected panics), and `validate.TestModelEdgesReachableInCode` (every status c
 accepts is reachable via the code's declared transitions).
 
 ```bash
-go test ./chasm/lib/activity/model/...
+go test -count=1 ./chasm/lib/activity/model/...
 ```
 
 ## Tier 2 — in-process (~1s): model-conformance explorers over a real in-memory engine
 
-`TestConformance` (in package `activity`, `activity_conformance_test.go`) runs the BFS graph traversal and
+`TestConformance` (package `activity`, `activity_conformance_test.go`) runs the BFS graph traversal and
 random walk against a real in-memory CHASM engine (`chasm/chasmtest`) with a virtual clock
 (`clock.EventTimeSource`). Each event is realized by the production component method its worker RPC
 invokes (`HandleStarted`/`HandleFailed`/`HandleCompleted`/`HandleCanceled`/`RecordHeartbeat`) via
@@ -59,36 +60,39 @@ wall-clock behavior that is prohibitively slow to explore at tier 3. Operator co
 (pause/cancel/terminate/unpause/reset/update-options) are explored at tier 3.
 
 ```bash
-go test -run TestConformance -count=1 -v ./chasm/lib/activity/
+go test -count=1 -run TestConformance ./chasm/lib/activity/
+```
+
+The same package holds `TestDispatchRouting`, which pins which physical queue an `ActivityDispatchTask`
+lands on — a due dispatch must go to the transfer queue, since a timer task's fire time is floored at
+`now + TimerProcessorMaxTimeShift` (~1s).
+
+```bash
+go test -count=1 -run TestDispatchRouting ./chasm/lib/activity/
 ```
 
 ## Tier 3 — onebox (real server, real timers)
 
-In the commands below, `-count=1` skips the test cache and `-v` shows per-subtest logs. Prefix with
-`TEMPORAL_TEST_LOG_LEVEL=ERROR TEMPORAL_TEST_LOG_STACKTRACE_LEVEL=off` to quiet logger noise. The SAA
-driver and model-conformance engine live in `tests/` (`activity_standalone_driver.go`,
-`activity_standalone_conformance.go`, `activity_standalone_conformance_test.go`); the parallel WFA
-driver is `activity_workflow_driver.go`, and the real-driver SAA↔WFA tests are
-`activity_parity_with_real_drivers_test.go` (behavior) and `activity_metrics_parity_test.go` (metric
-emission and tag keys).
+Everything at tier 3 hangs off `TestActivityParityTestSuite` in package `tests`. The drivers are
+`activity_standalone_driver.go` and `activity_workflow_driver.go`; the model-conformance engine is
+`activity_standalone_conformance{,_test}.go`.
 
-### SAA↔WFA equivalence (real drivers)
+### SAA↔WFA parity — `activity_parity_test.go`
 
 The urgent goal: prove the CHASM activity (SAA) behaves like the legacy workflow activity (WFA) at
 their intersection. Because the model is ours, "SAA conforms to the model" does not prove "SAA matches
 WFA"; equivalence is checked by *differential testing* — drive the same trace through a SAA and a WFA
-activity with the parallel real drivers (`activity_standalone_driver.go`, `activity_workflow_driver.go`)
-and compare their user-visible activity info. There is no oracle: each test's `want` encodes how the
-product *should* behave, and both surfaces are asserted against it, so a failure on either (or both) is
-useful information — it can mean SAA is wrong, WFA is wrong, or both. Each `TestWFASAA*` holds a
-`WorkflowActivity` and a `StandaloneActivity` subtest asserting the same projection; a few one-sided
-`TestSAA*` tests cover SAA-only behavior (worker-side validation and the timeout-marked-non-retryable
-config injected via `customizeStart`). All live in `tests/activity_parity_with_real_drivers_test.go`.
+activity with the parallel drivers and compare their user-visible activity info. There is no oracle:
+each test's `expected` encodes how the product *should* behave, and both surfaces are asserted against
+it, so a failure on either (or both) is useful information. Each `TestParity*` holds a
+`WorkflowActivity` and a `StandaloneActivity` subtest asserting the same projection.
 
 ```bash
-# SAA↔WFA equivalence pairs + one-sided SAA driver tests
-go test -tags test_dep -run 'TestStandaloneActivityTestSuite/(TestWFASAA|TestSAA)' -count=1 -v ./tests/
+go test -count=1 -tags test_dep -run 'TestActivityParityTestSuite/TestParity' ./tests/
 ```
+
+`activity_metrics_parity_test.go` does the same for metric emission and tag keys
+(`TestWFASAAMetricsParity`).
 
 ### RPC graph traversal + random walk
 
@@ -100,7 +104,7 @@ internal state, reject kind, heartbeat flags, Describe projection, and task-inva
 against the model at every step.
 
 ```bash
-go test -tags test_dep -run 'TestStandaloneActivityTestSuite/TestConformance' -count=1 -v ./tests/
+go test -count=1 -tags test_dep -run 'TestActivityParityTestSuite/TestConformance' ./tests/
 ```
 
 Tunable via env vars:
@@ -111,23 +115,36 @@ Tunable via env vars:
 - `TEMPORAL_SAASPEC_WALK_STEPS=N` / `TEMPORAL_SAASPEC_WALK_SEED=N` / `TEMPORAL_SAASPEC_VERBOSE=1` —
   random-walk steps per config (default 200), RNG seed (default 1, logged), and per-step logging.
 
-### Wall-clock directed traces (real timers)
+### Wall-clock directed traces — `activity_standalone_traces_test.go`
 
-Where the traversal is exhaustive over RPCs, wall-clock behavior is also checked at tier 3 by directed
-traces — a scripted event sequence run once on one activity, checked against the model at every step,
-where a timeout or a start-delay/backoff window is configured short and waited out so each real wait
-is paid once. These are the `*_Declarative` tests (in `activity_parity_with_real_drivers_test.go`,
-driven by the same SAA real driver).
+Where the traversal is exhaustive over RPCs, wall-clock behavior is checked by directed traces — a
+scripted event sequence run once on one activity, checked against the model at every step, where a
+timeout or a start-delay/backoff window is configured short and waited out so each real wait is paid
+once. These are the `*_Declarative` tests. They are standalone-activity only: the behavior they cover
+has no workflow-activity counterpart, so there is nothing to compare against.
 
 ```bash
-go test -tags test_dep -run 'TestStandaloneActivityTestSuite/Test.*_Declarative' -count=1 -v ./tests/
+go test -count=1 -tags test_dep -run 'TestActivityParityTestSuite/Test.*_Declarative' ./tests/
 ```
 
-### Graph tools
+### Driver self-tests — `activity_driver_selftest_test.go`
+
+The drivers are test infrastructure, so they are themselves tested: that they report a scripted event
+whose effect never arrived, and that they blame themselves rather than the product when their own
+timing is at fault.
+
+```bash
+go test -count=1 -tags test_dep -run 'TestActivityParityTestSuite/TestSAADriver' ./tests/
+```
+
+## Graph tools (no server)
+
 ```bash
 go run ./chasm/lib/activity/model/cmd/graph                          # counts+nodes+edges, onebox configs
 go run ./chasm/lib/activity/model/cmd/graph -show skeleton           # status-level transition relation
 go run ./chasm/lib/activity/model/cmd/graph -explorer engine -show counts
 go run ./chasm/lib/activity/model/cmd/graph -config 1 -show nodes,edges
 ```
-Flags: -explorer {engine,onebox} (the tier-2 and tier-3 explorers respectively), -config N (index into that explorer's set, default all), -show (comma list of counts,nodes,edges,skeleton).
+
+Flags: `-explorer {engine,onebox}` (the tier-2 and tier-3 explorers respectively), `-config N` (index
+into that explorer's set, default all), `-show` (comma list of counts,nodes,edges,skeleton).
