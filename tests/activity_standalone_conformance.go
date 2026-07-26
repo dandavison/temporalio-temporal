@@ -914,6 +914,3 @@ func (tr saaTrace) startDelay() time.Duration {
 // activityDelayWindow is a dispatch-delay window long enough to outlast a valid negative long poll, so that
 // "not dispatchable yet" is observable within it.
 const activityDelayWindow = 5 * time.Second
-
-// activityLongStartDelay keeps a first attempt in its start-delay window for the whole trace.
-const activityLongStartDelay = time.Hour
