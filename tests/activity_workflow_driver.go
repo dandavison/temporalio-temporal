@@ -307,7 +307,7 @@ func (a *wfaHandle) pollForTask(t require.TestingT, timeout time.Duration) *work
 	resp, err := a.d.env.FrontendClient().PollActivityTaskQueue(ctx, &workflowservice.PollActivityTaskQueueRequest{
 		Namespace: a.d.env.Namespace().String(),
 		TaskQueue: &taskqueuepb.TaskQueue{Name: a.activityTQ},
-		Identity:  "worker",
+		Identity:  a.d.env.Tv().WorkerIdentity(),
 	})
 	require.NoError(t, err)
 	if resp.GetActivityId() == "" {
@@ -329,17 +329,17 @@ func (a *wfaHandle) rpc(e model.Event) error {
 		return err
 	case model.RespondCompletedType:
 		_, err := fc.RespondActivityTaskCompleted(a.d.ctx, &workflowservice.RespondActivityTaskCompletedRequest{
-			Namespace: ns, TaskToken: a.token, Identity: "worker",
+			Namespace: ns, TaskToken: a.token, Identity: a.d.env.Tv().WorkerIdentity(),
 		})
 		return err
 	case model.RespondFailedType:
 		_, err := fc.RespondActivityTaskFailed(a.d.ctx, &workflowservice.RespondActivityTaskFailedRequest{
-			Namespace: ns, TaskToken: a.token, Identity: "worker", Failure: activityFailure(e.Retryable, a.d.cfg.NextRetryDelay),
+			Namespace: ns, TaskToken: a.token, Identity: a.d.env.Tv().WorkerIdentity(), Failure: activityFailure(e.Retryable, a.d.cfg.NextRetryDelay),
 		})
 		return err
 	case model.RespondCanceledType:
 		_, err := fc.RespondActivityTaskCanceled(a.d.ctx, &workflowservice.RespondActivityTaskCanceledRequest{
-			Namespace: ns, TaskToken: a.token, Identity: "worker",
+			Namespace: ns, TaskToken: a.token, Identity: a.d.env.Tv().WorkerIdentity(),
 		})
 		return err
 	case model.RequestCancelType:
@@ -351,18 +351,18 @@ func (a *wfaHandle) rpc(e model.Event) error {
 		return a.waitForCancelRequested()
 	case model.PauseType:
 		_, err := fc.PauseActivityExecution(a.d.ctx, &workflowservice.PauseActivityExecutionRequest{
-			Namespace: ns, WorkflowId: a.workflowID, ActivityId: a.activityID, RunId: a.runID, Identity: "op", Reason: "drive", RequestId: uuid.NewString(),
+			Namespace: ns, WorkflowId: a.workflowID, ActivityId: a.activityID, RunId: a.runID, Identity: a.d.env.Tv().ClientIdentity(), Reason: "drive", RequestId: uuid.NewString(),
 		})
 		return err
 	case model.UnpauseType:
 		_, err := fc.UnpauseActivityExecution(a.d.ctx, &workflowservice.UnpauseActivityExecutionRequest{
-			Namespace: ns, WorkflowId: a.workflowID, ActivityId: a.activityID, RunId: a.runID, Identity: "op",
+			Namespace: ns, WorkflowId: a.workflowID, ActivityId: a.activityID, RunId: a.runID, Identity: a.d.env.Tv().ClientIdentity(),
 			ResetAttempts: e.ResetAttempts, ResetHeartbeat: e.ResetHeartbeat,
 		})
 		return err
 	case model.ResetType:
 		_, err := fc.ResetActivityExecution(a.d.ctx, &workflowservice.ResetActivityExecutionRequest{
-			Namespace: ns, WorkflowId: a.workflowID, ActivityId: a.activityID, RunId: a.runID, Identity: "op",
+			Namespace: ns, WorkflowId: a.workflowID, ActivityId: a.activityID, RunId: a.runID, Identity: a.d.env.Tv().ClientIdentity(),
 			KeepPaused: e.KeepPaused, RestoreOriginalOptions: e.RestoreOriginal,
 		})
 		return err
@@ -375,7 +375,7 @@ func (a *wfaHandle) rpc(e model.Event) error {
 
 func (a *wfaHandle) updateOptions(e model.Event) error {
 	req := &workflowservice.UpdateActivityExecutionOptionsRequest{
-		Namespace: a.d.env.Namespace().String(), WorkflowId: a.workflowID, ActivityId: a.activityID, RunId: a.runID, Identity: "op",
+		Namespace: a.d.env.Namespace().String(), WorkflowId: a.workflowID, ActivityId: a.activityID, RunId: a.runID, Identity: a.d.env.Tv().ClientIdentity(),
 	}
 	switch {
 	case e.RestoreOriginal:

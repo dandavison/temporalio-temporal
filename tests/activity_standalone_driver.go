@@ -285,7 +285,7 @@ func (d *saaDriver) startRequest(activityID, taskQueue string) *workflowservice.
 		Namespace:              d.env.Namespace().String(),
 		ActivityId:             activityID,
 		ActivityType:           d.env.Tv().ActivityType(),
-		Identity:               "worker",
+		Identity:               d.env.Tv().ClientIdentity(),
 		Input:                  activityParityDefaultInput,
 		TaskQueue:              &taskqueuepb.TaskQueue{Name: taskQueue},
 		StartToCloseTimeout:    durationpb.New(c.startToClose()),
@@ -394,43 +394,43 @@ func (a *saaHandle) rpc(e model.Event) error {
 		return err
 	case model.RespondCompletedType:
 		_, err := fc.RespondActivityTaskCompleted(a.d.ctx, &workflowservice.RespondActivityTaskCompletedRequest{
-			Namespace: ns, TaskToken: a.token, Identity: "worker",
+			Namespace: ns, TaskToken: a.token, Identity: a.d.env.Tv().WorkerIdentity(),
 		})
 		return err
 	case model.RespondFailedType:
 		_, err := fc.RespondActivityTaskFailed(a.d.ctx, &workflowservice.RespondActivityTaskFailedRequest{
-			Namespace: ns, TaskToken: a.token, Identity: "worker", Failure: activityFailure(e.Retryable, a.d.cfg.NextRetryDelay),
+			Namespace: ns, TaskToken: a.token, Identity: a.d.env.Tv().WorkerIdentity(), Failure: activityFailure(e.Retryable, a.d.cfg.NextRetryDelay),
 		})
 		return err
 	case model.RespondCanceledType:
 		_, err := fc.RespondActivityTaskCanceled(a.d.ctx, &workflowservice.RespondActivityTaskCanceledRequest{
-			Namespace: ns, TaskToken: a.token, Identity: "worker",
+			Namespace: ns, TaskToken: a.token, Identity: a.d.env.Tv().WorkerIdentity(),
 		})
 		return err
 	case model.RequestCancelType:
 		_, err := fc.RequestCancelActivityExecution(a.d.ctx, &workflowservice.RequestCancelActivityExecutionRequest{
-			Namespace: ns, ActivityId: a.activityID, RunId: a.runID, Identity: "op", Reason: "drive", RequestId: a.reqID(e),
+			Namespace: ns, ActivityId: a.activityID, RunId: a.runID, Identity: a.d.env.Tv().ClientIdentity(), Reason: "drive", RequestId: a.reqID(e),
 		})
 		return err
 	case model.TerminateType:
 		_, err := fc.TerminateActivityExecution(a.d.ctx, &workflowservice.TerminateActivityExecutionRequest{
-			Namespace: ns, ActivityId: a.activityID, RunId: a.runID, Identity: "op", Reason: "drive", RequestId: a.reqID(e),
+			Namespace: ns, ActivityId: a.activityID, RunId: a.runID, Identity: a.d.env.Tv().ClientIdentity(), Reason: "drive", RequestId: a.reqID(e),
 		})
 		return err
 	case model.PauseType:
 		_, err := fc.PauseActivityExecution(a.d.ctx, &workflowservice.PauseActivityExecutionRequest{
-			Namespace: ns, ActivityId: a.activityID, RunId: a.runID, Identity: "op", Reason: "drive", RequestId: a.reqID(e),
+			Namespace: ns, ActivityId: a.activityID, RunId: a.runID, Identity: a.d.env.Tv().ClientIdentity(), Reason: "drive", RequestId: a.reqID(e),
 		})
 		return err
 	case model.UnpauseType:
 		_, err := fc.UnpauseActivityExecution(a.d.ctx, &workflowservice.UnpauseActivityExecutionRequest{
-			Namespace: ns, ActivityId: a.activityID, RunId: a.runID, Identity: "op",
+			Namespace: ns, ActivityId: a.activityID, RunId: a.runID, Identity: a.d.env.Tv().ClientIdentity(),
 			ResetAttempts: e.ResetAttempts, ResetHeartbeat: e.ResetHeartbeat,
 		})
 		return err
 	case model.ResetType:
 		_, err := fc.ResetActivityExecution(a.d.ctx, &workflowservice.ResetActivityExecutionRequest{
-			Namespace: ns, ActivityId: a.activityID, RunId: a.runID, Identity: "op",
+			Namespace: ns, ActivityId: a.activityID, RunId: a.runID, Identity: a.d.env.Tv().ClientIdentity(),
 			KeepPaused: e.KeepPaused, RestoreOriginalOptions: e.RestoreOriginal,
 		})
 		return err
@@ -443,7 +443,7 @@ func (a *saaHandle) rpc(e model.Event) error {
 
 func (a *saaHandle) updateOptions(e model.Event) error {
 	req := &workflowservice.UpdateActivityExecutionOptionsRequest{
-		Namespace: a.d.env.Namespace().String(), ActivityId: a.activityID, RunId: a.runID, Identity: "op",
+		Namespace: a.d.env.Namespace().String(), ActivityId: a.activityID, RunId: a.runID, Identity: a.d.env.Tv().ClientIdentity(),
 	}
 	switch {
 	case e.RestoreOriginal:
@@ -479,7 +479,7 @@ func (a *saaHandle) pollForTask(t require.TestingT, timeout time.Duration) *work
 	resp, err := a.d.env.FrontendClient().PollActivityTaskQueue(ctx, &workflowservice.PollActivityTaskQueueRequest{
 		Namespace: a.d.env.Namespace().String(),
 		TaskQueue: &taskqueuepb.TaskQueue{Name: a.taskQueue},
-		Identity:  "worker",
+		Identity:  a.d.env.Tv().WorkerIdentity(),
 	})
 	// Matching signals "waited, found nothing" with an empty response and a nil error, so any error
 	// means the poll did not complete cleanly.
