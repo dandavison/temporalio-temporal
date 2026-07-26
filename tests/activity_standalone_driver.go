@@ -109,7 +109,9 @@ type saaDriver struct {
 	cfg        activityConfig
 	cfgIdx     int
 	numStarted int
-	idBase     string // activity-id prefix, unique per driver
+	// idBase is the activity-id prefix. Several drivers can share one *testing.T, and so one
+	// namespace, so it is randomized rather than derived from the test name alone.
+	idBase string
 
 	positivePollTimeout time.Duration // bounds a "must dispatch" poll; 0 => activityDriverPositivePollTimeout
 
@@ -265,8 +267,7 @@ func activityDriverPollUntil(deadline time.Time, cond func() bool) bool {
 
 func (d *saaDriver) start(t require.TestingT) *saaHandle {
 	d.numStarted++
-	// cfgIdx keeps ids distinct across the per-config drivers an explorer sweeps.
-	id := fmt.Sprintf("%s-%d-%d", d.idBase, d.cfgIdx, d.numStarted)
+	id := fmt.Sprintf("%s-%d", d.idBase, d.numStarted)
 	resp, err := d.env.FrontendClient().StartActivityExecution(d.ctx, d.startRequest(id, id))
 	require.NoError(t, err)
 	return &saaHandle{d: d, activityID: id, taskQueue: id, runID: resp.RunId, establishedReqID: map[model.EventType]string{}}
