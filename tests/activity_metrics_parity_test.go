@@ -126,22 +126,24 @@ func (sc activityMetricsScenario) expectedTimeoutType() string {
 type activityMetricSets struct {
 	wfa map[string]map[string]string
 	saa map[string]map[string]string
+	// The namespace each surface drove in. They differ, which is what separates the two captures.
+	wfaNS, saaNS string
 }
 
 func (s *activityParityTestSuite) TestWFASAAMetricsParity() {
-	env := newActivityParityEnv(s.T())
 	t := s.T()
 	observed := make(map[string]activityMetricSets, len(activityMetricsScenarios))
 
 	for _, sc := range activityMetricsScenarios {
 		t.Run(sc.name, func(t *testing.T) {
-			sets := activityMetricSets{saa: s.saaActivityMetrics(t, env, sc)}
+			saa, saaNS := s.saaActivityMetrics(t, sc)
+			sets := activityMetricSets{saa: saa, saaNS: saaNS}
 			if !sc.saaOnly {
-				sets.wfa = s.wfaActivityMetrics(t, env, sc)
+				sets.wfa, sets.wfaNS = s.wfaActivityMetrics(t, sc)
 			}
 			observed[sc.name] = sets
 
-			assertActivityMetricLabels(t, env, sc, sets)
+			assertActivityMetricLabels(t, sc, sets)
 
 			if sc.saaOnly {
 				_, ok := sets.saa[metrics.ActivityTerminate.Name()]
@@ -157,20 +159,22 @@ func (s *activityParityTestSuite) TestWFASAAMetricsParity() {
 	t.Log(activityMetricsMatrix(observed))
 }
 
-func (s *activityParityTestSuite) saaActivityMetrics(t *testing.T, env *testcore.TestEnv, sc activityMetricsScenario) map[string]map[string]string {
+func (s *activityParityTestSuite) saaActivityMetrics(t *testing.T, sc activityMetricsScenario) (map[string]map[string]string, string) {
+	env := newActivityParityEnv(s.T())
 	return s.captureActivityMetrics(t, env, sc, func() {
 		newSAADriver(t, env, sc.cfg).driveTrace(t, sc.trace)
-	})
+	}), env.Namespace().String()
 }
 
-func (s *activityParityTestSuite) wfaActivityMetrics(t *testing.T, env *testcore.TestEnv, sc activityMetricsScenario) map[string]map[string]string {
+func (s *activityParityTestSuite) wfaActivityMetrics(t *testing.T, sc activityMetricsScenario) (map[string]map[string]string, string) {
+	env := newActivityParityEnv(s.T())
 	return s.captureActivityMetrics(t, env, sc, func() {
 		newWFADriver(t, env, sc.cfg).driveTrace(t, sc.trace)
-	})
+	}), env.Namespace().String()
 }
 
-// captureActivityMetrics captures the activity metrics emitted while drive runs, scoped to the test
-// namespace. The two surfaces share the namespace, so it is the capture window that separates them.
+// captureActivityMetrics captures the activity metrics emitted while drive runs, scoped to env's
+// namespace. Each surface drives in its own namespace, so the capture separates them.
 func (s *activityParityTestSuite) captureActivityMetrics(t *testing.T, env *testcore.TestEnv, sc activityMetricsScenario, drive func()) map[string]map[string]string {
 	capture := env.StartNamespaceMetricCapture()
 	drive()
@@ -294,11 +298,11 @@ func tagKeys(tags map[string]string) []string {
 // assertActivityMetricLabels asserts that every metric carries the test namespace, that the two timeout
 // counters carry the timeout_type that fired, and that a metric both surfaces emit carries the same tag
 // keys, so that one dashboard works for either surface.
-func assertActivityMetricLabels(t *testing.T, env *testcore.TestEnv, sc activityMetricsScenario, sets activityMetricSets) {
-	checkTags := func(surface string, emitted map[string]map[string]string) {
+func assertActivityMetricLabels(t *testing.T, sc activityMetricsScenario, sets activityMetricSets) {
+	checkTags := func(surface string, emitted map[string]map[string]string, ns string) {
 		for name, tags := range emitted {
-			require.Equal(t, env.Namespace().String(), tags["namespace"],
-				"%s %s must be tagged with the test namespace", surface, name)
+			require.Equal(t, ns, tags["namespace"],
+				"%s %s must be tagged with the namespace it was driven in", surface, name)
 		}
 		if timeoutType := sc.expectedTimeoutType(); timeoutType != "" {
 			for _, name := range []string{metrics.ActivityTaskTimeout.Name(), metrics.ActivityTimeout.Name()} {
@@ -309,11 +313,11 @@ func assertActivityMetricLabels(t *testing.T, env *testcore.TestEnv, sc activity
 			}
 		}
 	}
-	checkTags("SAA", sets.saa)
+	checkTags("SAA", sets.saa, sets.saaNS)
 	if sc.saaOnly {
 		return
 	}
-	checkTags("WFA", sets.wfa)
+	checkTags("WFA", sets.wfa, sets.wfaNS)
 
 	for _, m := range activityMetricCatalog {
 		if !m.compared {
