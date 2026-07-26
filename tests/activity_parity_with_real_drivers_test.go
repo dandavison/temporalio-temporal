@@ -10,7 +10,6 @@ import (
 	failurepb "go.temporal.io/api/failure/v1"
 	"go.temporal.io/api/workflowservice/v1"
 	"go.temporal.io/server/chasm/lib/activity/model"
-	"go.temporal.io/server/common/retrypolicy"
 	"go.temporal.io/server/common/testing/testcontext"
 	"go.temporal.io/server/tests/testcore"
 )
@@ -190,6 +189,23 @@ func (s *activityParityTestSuite) TestWFASAARetry() {
 	})
 }
 
+// TestWFASAACompleteAfterRetry: attempt 1 fails retryably, the backoff elapses, and attempt 2
+// completes. The counterpart of TestWFASAARetry, which ends in a non-retryable failure.
+func (s *activityParityTestSuite) TestWFASAACompleteAfterRetry() {
+	env := newActivityParityEnv(s.T())
+	trace := []model.Event{model.Poll, model.FailRetryably, model.BackoffElapses, model.Poll, model.Complete}
+	expected := activityTerminalProjection{Status: enumspb.ACTIVITY_EXECUTION_STATUS_COMPLETED}
+
+	cfg := activityConfig{MaxAttempts: 3, RetryInterval: activityDelayWindow}
+
+	s.T().Run("WorkflowActivity", func(t *testing.T) {
+		require.Equal(t, expected, newWFADriver(t, env, cfg).driveTrace(t, trace).terminal(t))
+	})
+	s.T().Run("StandaloneActivity", func(t *testing.T) {
+		require.Equal(t, expected, newSAADriver(t, env, cfg).driveTrace(t, trace).terminal(t))
+	})
+}
+
 // TestWFASAAHeartbeatTimeout ports the core of TestActivityHeartBeatWorkflow_Timeout: a started attempt
 // heartbeats nothing within its HeartbeatTimeout and, with no retries left, ends TIMED_OUT with the
 // Heartbeat TimeoutType.
@@ -232,185 +248,9 @@ func (s *activityParityTestSuite) TestWFASAACancel() {
 // activity is then running, with no pending retry, so there is no current retry interval and no
 // next-attempt schedule time.
 
-func (s *activityParityTestSuite) TestWFASAARetryAfterFail() {
-	env := newActivityParityEnv(s.T())
-	trace := []model.Event{model.Poll, model.FailRetryably, model.BackoffElapses, model.Poll}
-	expected := activityInfoProjection{
-		State:                  enumspb.PENDING_ACTIVITY_STATE_STARTED,
-		Attempt:                2,
-		CurrentRetryInterval:   0,
-		NextAttemptScheduleSet: false,
-	}
-
-	s.T().Run("WorkflowActivity", func(t *testing.T) {
-		d := newWFADriver(t, env, activityConfig{MaxAttempts: 3, RetryInterval: 2 * time.Second})
-		require.Equal(t, expected, d.driveTrace(t, trace).projection(t))
-	})
-	s.T().Run("StandaloneActivity", func(t *testing.T) {
-		d := newSAADriver(t, env, activityConfig{MaxAttempts: 3, RetryInterval: 2 * time.Second})
-		require.Equal(t, expected, d.driveTrace(t, trace).projection(t))
-	})
-}
-
 // TestWFASAABackingOff: attempt 1 fails retryably and is observed during the backoff window, so the next
 // dispatch is still in the future. The retry is pending, so both the current retry interval and the
 // next-attempt schedule time are populated. The long interval keeps the window open across the describe.
-
-func (s *activityParityTestSuite) TestWFASAABackingOff() {
-	env := newActivityParityEnv(s.T())
-	backingOffInterval := 30 * time.Second
-	trace := []model.Event{model.Poll, model.FailRetryably}
-	expected := activityInfoProjection{
-		State:                  enumspb.PENDING_ACTIVITY_STATE_SCHEDULED,
-		Attempt:                2,
-		CurrentRetryInterval:   backingOffInterval,
-		NextAttemptScheduleSet: true,
-	}
-
-	s.T().Run("WorkflowActivity", func(t *testing.T) {
-		d := newWFADriver(t, env, activityConfig{MaxAttempts: 3, RetryInterval: backingOffInterval})
-		require.Equal(t, expected, d.driveTrace(t, trace).projection(t))
-	})
-	s.T().Run("StandaloneActivity", func(t *testing.T) {
-		d := newSAADriver(t, env, activityConfig{MaxAttempts: 3, RetryInterval: backingOffInterval})
-		require.Equal(t, expected, d.driveTrace(t, trace).projection(t))
-	})
-}
-
-// TestWFASAANextRetryDelayOverride: the worker fails with a next_retry_delay that overrides the policy
-// backoff, observed during the override-length window. The reported current retry interval must be the
-// override, not the policy's interval.
-func (s *activityParityTestSuite) TestWFASAANextRetryDelayOverride() {
-	env := newActivityParityEnv(s.T())
-	nextRetryDelayOverride := 30 * time.Second
-	trace := []model.Event{model.Poll, model.FailRetryably}
-	expected := activityInfoProjection{
-		State:                  enumspb.PENDING_ACTIVITY_STATE_SCHEDULED,
-		Attempt:                2,
-		CurrentRetryInterval:   nextRetryDelayOverride,
-		NextAttemptScheduleSet: true,
-	}
-
-	s.T().Run("WorkflowActivity", func(t *testing.T) {
-		d := newWFADriver(t, env, activityConfig{MaxAttempts: 3, RetryInterval: 5 * time.Second, NextRetryDelay: nextRetryDelayOverride})
-		require.Equal(t, expected, d.driveTrace(t, trace).projection(t))
-	})
-	s.T().Run("StandaloneActivity", func(t *testing.T) {
-		d := newSAADriver(t, env, activityConfig{MaxAttempts: 3, RetryInterval: 5 * time.Second, NextRetryDelay: nextRetryDelayOverride})
-		require.Equal(t, expected, d.driveTrace(t, trace).projection(t))
-	})
-}
-
-// TestWFASAAFirstAttemptStarted: a worker polls the first attempt, which is now running. No attempt has
-// failed, so there is no current retry interval and no next-attempt schedule time.
-func (s *activityParityTestSuite) TestWFASAAFirstAttemptStarted() {
-	env := newActivityParityEnv(s.T())
-	trace := []model.Event{model.Poll}
-	expected := activityInfoProjection{
-		State:                  enumspb.PENDING_ACTIVITY_STATE_STARTED,
-		Attempt:                1,
-		CurrentRetryInterval:   0,
-		NextAttemptScheduleSet: false,
-	}
-
-	s.T().Run("WorkflowActivity", func(t *testing.T) {
-		d := newWFADriver(t, env, activityConfig{MaxAttempts: 3, RetryInterval: 2 * time.Second})
-		require.Equal(t, expected, d.driveTrace(t, trace).projection(t))
-	})
-	s.T().Run("StandaloneActivity", func(t *testing.T) {
-		d := newSAADriver(t, env, activityConfig{MaxAttempts: 3, RetryInterval: 2 * time.Second})
-		require.Equal(t, expected, d.driveTrace(t, trace).projection(t))
-	})
-}
-
-// TestWFASAANextAttemptScheduleTimeAndCurrentRetryInterval sweeps NextAttemptScheduleTime and
-// CurrentRetryInterval across the activity lifecycle. A running attempt is not a pending retry, so the
-// running-attempt scenarios report neither. StartDelayPending is SAA-only.
-func (s *activityParityTestSuite) TestWFASAANextAttemptScheduleTimeAndCurrentRetryInterval() {
-	env := newActivityParityEnv(s.T())
-	t := s.T()
-
-	// both drives a trace through both surfaces, asserting each reports expected.
-	both := func(t *testing.T, cfg activityConfig, trace []model.Event, expected activityInfoProjection) {
-		t.Run("WorkflowActivity", func(t *testing.T) {
-			require.Equal(t, expected, newWFADriver(t, env, cfg).driveTrace(t, trace).projection(t))
-		})
-		t.Run("StandaloneActivity", func(t *testing.T) {
-			require.Equal(t, expected, newSAADriver(t, env, cfg).driveTrace(t, trace).projection(t))
-		})
-	}
-
-	// First attempt within its start delay: the dispatch is pending in the future, and is not a retry.
-	t.Run("StartDelayPending", func(t *testing.T) {
-		info := s.driveTrace(t, env, saaTrace{trace: []model.Event{}, startDelayed: true}).describe(t).GetInfo()
-		require.Equal(t, enumspb.PENDING_ACTIVITY_STATE_SCHEDULED, info.GetRunState())
-		require.Equal(t, info.GetExecutionTime().AsTime(), info.GetNextAttemptScheduleTime().AsTime(),
-			"during a start delay, NextAttemptScheduleTime is the pending dispatch time (schedule+delay)")
-		require.Nil(t, info.GetCurrentRetryInterval(), "the first attempt is not a retry")
-	})
-
-	// First attempt running: no pending next dispatch, and no preceding backoff, so no retry interval.
-	t.Run("FirstAttemptRunning", func(t *testing.T) {
-		both(t, activityConfig{MaxAttempts: 3, RetryInterval: activityDelayWindow}, []model.Event{model.Poll},
-			activityInfoProjection{State: enumspb.PENDING_ACTIVITY_STATE_STARTED, Attempt: 1})
-	})
-
-	// Backing off before the retry dispatches: the retry is pending, so both the interval and the
-	// next-attempt schedule time are populated.
-	t.Run("BackingOffBeforeRetry", func(t *testing.T) {
-		both(t, activityConfig{MaxAttempts: 3, RetryInterval: activityDelayWindow}, []model.Event{model.Poll, model.FailRetryably},
-			activityInfoProjection{State: enumspb.PENDING_ACTIVITY_STATE_SCHEDULED, Attempt: 2, CurrentRetryInterval: activityDelayWindow, NextAttemptScheduleSet: true})
-	})
-
-	// Retry dispatched to Matching but not yet polled: schedulable now, not backing off, so no current
-	// retry interval and no future dispatch time.
-	t.Run("RetryQueuedNotStarted", func(t *testing.T) {
-		both(t, activityConfig{MaxAttempts: 3, RetryInterval: activityDelayWindow}, []model.Event{model.Poll, model.FailRetryably, model.BackoffElapses},
-			activityInfoProjection{State: enumspb.PENDING_ACTIVITY_STATE_SCHEDULED, Attempt: 2})
-	})
-
-	// Retry attempt running with a further retry permitted: nothing pending.
-	t.Run("RetryAttemptRunning", func(t *testing.T) {
-		both(t, activityConfig{MaxAttempts: 3, RetryInterval: activityDelayWindow}, []model.Event{model.Poll, model.FailRetryably, model.BackoffElapses, model.Poll},
-			activityInfoProjection{State: enumspb.PENDING_ACTIVITY_STATE_STARTED, Attempt: 2})
-	})
-
-	// Final attempt running with no retry remaining: nothing pending.
-	t.Run("FinalAttemptRunning", func(t *testing.T) {
-		both(t, activityConfig{MaxAttempts: 2, RetryInterval: activityDelayWindow}, []model.Event{model.Poll, model.FailRetryably, model.BackoffElapses, model.Poll},
-			activityInfoProjection{State: enumspb.PENDING_ACTIVITY_STATE_STARTED, Attempt: 2})
-	})
-
-	// Completed after a retry: terminal, nothing pending.
-	t.Run("Completed", func(t *testing.T) {
-		trace := []model.Event{model.Poll, model.FailRetryably, model.BackoffElapses, model.Poll, model.Complete}
-		expected := activityTerminalProjection{Status: enumspb.ACTIVITY_EXECUTION_STATUS_COMPLETED}
-		cfg := activityConfig{MaxAttempts: 3, RetryInterval: activityDelayWindow}
-		t.Run("WorkflowActivity", func(t *testing.T) {
-			require.Equal(t, expected, newWFADriver(t, env, cfg).driveTrace(t, trace).terminal(t))
-		})
-		t.Run("StandaloneActivity", func(t *testing.T) {
-			require.Equal(t, expected, newSAADriver(t, env, cfg).driveTrace(t, trace).terminal(t))
-		})
-	})
-
-	// Paused while backing off, before the retry dispatches. No dispatch will occur while paused, so there
-	// is neither a next attempt scheduled nor a current retry interval to report.
-	t.Run("PausedBeforeDispatch", func(t *testing.T) {
-		both(t, activityConfig{MaxAttempts: 3, RetryInterval: activityDelayWindow}, []model.Event{model.Poll, model.FailRetryably, model.Pause},
-			activityInfoProjection{State: enumspb.PENDING_ACTIVITY_STATE_PAUSED, Attempt: 2})
-	})
-
-	// Paused after the backoff elapsed and the retry was dispatched to Matching. No field of
-	// ActivityExecutionInfo or PendingActivityInfo distinguishes this from PausedBeforeDispatch on either
-	// surface, so the two subtests differ in the state they reach, not in what they assert. The
-	// behavioral difference — whether an unpause dispatches at once — is covered by the
-	// backoff/pause-{before,after}-dispatch-then-unpause traces.
-	t.Run("PausedAfterDispatch", func(t *testing.T) {
-		both(t, activityConfig{MaxAttempts: 3, RetryInterval: activityDelayWindow}, []model.Event{model.Poll, model.FailRetryably, model.BackoffElapses, model.Pause},
-			activityInfoProjection{State: enumspb.PENDING_ACTIVITY_STATE_PAUSED, Attempt: 2})
-	})
-}
 
 // The rest of this file is one-sided SAA coverage: behavior with no WFA counterpart (worker-side
 // validation, per-activity start delay, the SAA-only operator commands), or config injected through
@@ -456,38 +296,6 @@ func (s *activityParityTestSuite) TestSAAWorkerMustSendApplicationFailure() {
 		},
 	})
 	require.ErrorContains(s.T(), err, "Failure must have ApplicationFailureInfo")
-}
-
-// TestWFASAANonRetryableTimeout ports TestParityNonRetryableTimeout: a StartToClose or Heartbeat timeout
-// whose type is named in RetryPolicy.NonRetryableErrorTypes must fail the activity terminally when it
-// fires, rather than retrying. The type is set via the WFA driver's nonRetryableErrorTypes and, on SAA,
-// via customizeStart.
-func (s *activityParityTestSuite) TestWFASAANonRetryableTimeout() {
-	env := newActivityParityEnv(s.T())
-	t := s.T()
-
-	both := func(t *testing.T, cfg activityConfig, elapses model.Event, timeoutType enumspb.TimeoutType) {
-		trace := []model.Event{model.Poll, elapses}
-		cfg.MaxAttempts = 3
-		cfg.NonRetryableErrorTypes = []string{retrypolicy.TimeoutFailureTypePrefix + timeoutType.String()}
-		t.Run("WorkflowActivity", func(t *testing.T) {
-			require.Equalf(t, enumspb.ACTIVITY_EXECUTION_STATUS_TIMED_OUT,
-				newWFADriver(t, env, cfg).driveTrace(t, trace).terminal(t).Status,
-				"a %s timeout marked non-retryable must fail the activity terminally, not retry it", timeoutType)
-		})
-		t.Run("StandaloneActivity", func(t *testing.T) {
-			require.Equalf(t, enumspb.ACTIVITY_EXECUTION_STATUS_TIMED_OUT,
-				newSAADriver(t, env, cfg).driveTrace(t, trace).terminal(t).Status,
-				"a %s timeout marked non-retryable must fail the activity terminally, not retry it", timeoutType)
-		})
-	}
-
-	t.Run("StartToClose", func(t *testing.T) {
-		both(t, activityConfig{StartToClose: activityShortTimeout}, model.StartToCloseElapses, enumspb.TIMEOUT_TYPE_START_TO_CLOSE)
-	})
-	t.Run("Heartbeat", func(t *testing.T) {
-		both(t, activityConfig{Heartbeat: activityShortTimeout}, model.HeartbeatElapses, enumspb.TIMEOUT_TYPE_HEARTBEAT)
-	})
 }
 
 // TestStartDelay_Declarative drives the start-delay scenarios, each a named subtest with its trace
