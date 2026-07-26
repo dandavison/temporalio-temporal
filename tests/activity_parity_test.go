@@ -202,22 +202,22 @@ func (s *activityParityTestSuite) TestParityTimeoutPreservesUnderlyingFailureCau
 
 	// The application failure driven on attempt 1; see activityFailure. The terminal timeout must chain it
 	// verbatim, both Type and Message.
-	wantCause := failureCause{Type: "drive", Message: "drive"}
+	expectedCause := failureCause{Type: "drive", Message: "drive"}
 
 	// assertCausePreserved drives the trace on both surfaces and asserts each ends TIMED_OUT with the given
-	// timeout type, chaining wantCause.
+	// timeout type, chaining expectedCause.
 	assertCausePreserved := func(t *testing.T, cfg activityConfig, trace []model.Event, timeoutType enumspb.TimeoutType) {
 		expected := activityTerminalProjection{Status: enumspb.ACTIVITY_EXECUTION_STATUS_TIMED_OUT, FailureType: timeoutType.String()}
 		const chained = "the terminal timeout must chain the underlying application failure as its Cause"
 		t.Run("WorkflowActivity", func(t *testing.T) {
 			a := newWFADriver(t, env, cfg).driveTrace(t, trace)
 			require.Equal(t, expected, a.terminal(t))
-			require.Equal(t, wantCause, a.terminalCause(t), chained)
+			require.Equal(t, expectedCause, a.terminalCause(t), chained)
 		})
 		t.Run("StandaloneActivity", func(t *testing.T) {
 			a := newSAADriver(t, env, cfg).driveTrace(t, trace)
 			require.Equal(t, expected, a.terminal(t))
-			require.Equal(t, wantCause, a.terminalCause(t), chained)
+			require.Equal(t, expectedCause, a.terminalCause(t), chained)
 		})
 	}
 
@@ -236,5 +236,58 @@ func (s *activityParityTestSuite) TestParityTimeoutPreservesUnderlyingFailureCau
 	s.T().Run("ScheduleToClose", func(t *testing.T) {
 		assertCausePreserved(t, activityConfig{ScheduleToClose: activityShortTimeout},
 			[]model.Event{model.Poll, model.FailRetryably, model.ScheduleToCloseElapses}, enumspb.TIMEOUT_TYPE_SCHEDULE_TO_CLOSE)
+	})
+
+	// A fourth code path: the final attempt's timeout fires while the schedule-to-close deadline is
+	// still in the future, but too little of it remains for another attempt. The attempt timeout and
+	// the deadline both bear on the outcome, and the activity is reported as having timed out on the
+	// deadline. The failure that drove the retries must still be the Cause: it is what the activity
+	// was retrying, and it is the same claim the three subtests above make.
+	//
+	// The timings put the timeout in the middle of the last retry window: attempt 1 fails at ~0s and
+	// the retry is dispatched at ~6s, so the attempt's 2s timeout fires at ~8s, leaving ~3s of the 11s
+	// deadline — less than the 6s another attempt would have to wait.
+	const (
+		lastRetryInterval  = 6 * time.Second
+		exhaustedByTimeout = 11 * time.Second
+	)
+	s.T().Run("StartToCloseLeavesNoTimeForAnotherAttempt", func(t *testing.T) {
+		assertCausePreserved(t, activityConfig{
+			RetryInterval:   lastRetryInterval,
+			ScheduleToClose: exhaustedByTimeout,
+			StartToClose:    activityShortTimeout,
+		}, []model.Event{model.Poll, model.FailRetryably, model.Poll, model.StartToCloseElapses},
+			enumspb.TIMEOUT_TYPE_SCHEDULE_TO_CLOSE)
+	})
+	s.T().Run("HeartbeatLeavesNoTimeForAnotherAttempt", func(t *testing.T) {
+		assertCausePreserved(t, activityConfig{
+			RetryInterval:   lastRetryInterval,
+			ScheduleToClose: exhaustedByTimeout,
+			Heartbeat:       activityShortTimeout,
+		}, []model.Event{model.Poll, model.FailRetryably, model.Poll, model.HeartbeatElapses},
+			enumspb.TIMEOUT_TYPE_SCHEDULE_TO_CLOSE)
+	})
+
+	// The claim holds equally when something stands between the application failure and the timeout
+	// that closes the activity: the failure is what the user needs to see in every one of them.
+
+	// An attempt that times out and is retried stands between the two. Only the immediately preceding
+	// attempt's failure is chained, so an intervening retried timeout is all the client is left with:
+	// the application failure is gone. Chaining it at every retry instead is not the answer — the chain
+	// would then grow by a level per attempt — so preserving it needs a place to keep it, which neither
+	// surface has.
+	s.T().Run("AfterAnInterveningRetriedTimeout", func(t *testing.T) {
+		assertCausePreserved(t, activityConfig{MaxAttempts: 3, StartToClose: activityShortTimeout},
+			[]model.Event{model.Poll, model.FailRetryably, model.Poll, model.StartToCloseElapses, model.Poll, model.StartToCloseElapses},
+			enumspb.TIMEOUT_TYPE_START_TO_CLOSE)
+	})
+
+	// The retry is dispatched but no worker takes it, so the schedule-to-start deadline closes the
+	// activity. A schedule-to-start timeout is never retried, and the attempt it belongs to never ran,
+	// so the failure of the attempt before it is the only failure there is to report.
+	s.T().Run("OnScheduleToStartOfARetry", func(t *testing.T) {
+		assertCausePreserved(t, activityConfig{MaxAttempts: 3, ScheduleToStart: activityShortTimeout},
+			[]model.Event{model.Poll, model.FailRetryably, model.ScheduleToStartElapses},
+			enumspb.TIMEOUT_TYPE_SCHEDULE_TO_START)
 	})
 }
