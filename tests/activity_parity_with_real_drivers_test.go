@@ -128,14 +128,23 @@ func (s *activityParityTestSuite) TestWFASAATimeoutTypeOnRetryDeadline() {
 // current retry interval should be reported. Uses a non-constant backoff, so it is a distinct config
 // from the constant-interval tests.
 
-func (s *activityParityTestSuite) TestWFASAAQueuedRetryInterval() {
+// TestWFASAABackoffCoefficient: with a coefficient above 1 each retry waits longer than the last. The
+// interval for attempt N is InitialInterval * coefficient^(N-2), so the first backoff is the initial
+// interval and the second is that times the coefficient. Observed during the second backoff, before it
+// dispatches.
+func (s *activityParityTestSuite) TestWFASAABackoffCoefficient() {
 	env := newActivityParityEnv(s.T())
-	trace := []model.Event{model.Poll, model.FailRetryably, model.BackoffElapses}
 	const initialInterval, maxInterval = 5 * time.Second, 30 * time.Second
-	expected := activityInfoProjection{State: enumspb.PENDING_ACTIVITY_STATE_SCHEDULED, Attempt: 2}
+	trace := []model.Event{model.Poll, model.FailRetryably, model.BackoffElapses, model.Poll, model.FailRetryably}
+	expected := activityInfoProjection{
+		State:                  enumspb.PENDING_ACTIVITY_STATE_SCHEDULED,
+		Attempt:                3,
+		CurrentRetryInterval:   2 * initialInterval,
+		NextAttemptScheduleSet: true,
+	}
 
 	cfg := activityConfig{
-		MaxAttempts: 3, RetryInterval: initialInterval, BackoffCoefficient: 2.0, MaxRetryInterval: maxInterval,
+		MaxAttempts: 4, RetryInterval: initialInterval, BackoffCoefficient: 2.0, MaxRetryInterval: maxInterval,
 	}
 
 	s.T().Run("WorkflowActivity", func(t *testing.T) {
