@@ -822,7 +822,7 @@ func (a *saaHandle) observedRaw() (model.AbstractState, error) {
 
 // awaitObservedMatch polls the internal state until it matches expected, or the deadline passes.
 func (a *saaHandle) awaitObservedMatch(expected model.AbstractState, deadline time.Time) {
-	pollUntil(deadline, func() bool {
+	driverPollUntil(deadline, func() bool {
 		obs, err := a.observedRaw()
 		return err == nil && expected.SameObserved(obs)
 	})

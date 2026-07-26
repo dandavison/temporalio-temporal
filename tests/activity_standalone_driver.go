@@ -236,20 +236,20 @@ func (a *saaHandle) awaitStateTransition(t require.TestingT, e model.Event, dead
 // fails if it has not by the deadline.
 func (a *saaHandle) awaitDispatchTimePassed(t require.TestingT, e model.Event, deadline time.Time) {
 	var p activityInfoProjection
-	if pollUntil(deadline, func() bool { p = a.projection(t); return !p.NextAttemptScheduleSet }) {
+	if driverPollUntil(deadline, func() bool { p = a.projection(t); return !p.NextAttemptScheduleSet }) {
 		return
 	}
 	t.Errorf("%s: a dispatch is still pending in the future %s after driving the event, so the "+
 		"window did not elapse. Last observed: %+v", e, a.d.cfg.window(e)+driverWallClockSettle, p)
 }
 
-// pollUntil reports whether cond held before the deadline, reading every driverPollInterval.
+// driverPollUntil reports whether cond held before the deadline, reading every driverPollInterval.
 //
 // common/testing/await is the usual way to write this, but await.Require and await.RequireTrue take a
 // testing.TB, which has an unexported method and so admits only *testing.T. The drivers take a
 // require.TestingT instead, which is what lets their self-tests hand them a recorder and assert on
 // what they reported.
-func pollUntil(deadline time.Time, cond func() bool) bool {
+func driverPollUntil(deadline time.Time, cond func() bool) bool {
 	for {
 		if cond() {
 			return true

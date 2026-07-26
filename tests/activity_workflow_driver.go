@@ -192,7 +192,7 @@ func (a *wfaHandle) awaitWallClock(t require.TestingT, e model.Event) {
 		now, nowPending := a.pendingSnapshot(t)
 		return nowPending != beforePending || (nowPending && now != before)
 	}
-	if pollUntil(deadline, changed) {
+	if driverPollUntil(deadline, changed) {
 		return
 	}
 	t.Errorf("%s: the activity did not change within %s of driving the event, so the event did not "+
@@ -389,7 +389,7 @@ func (a *wfaHandle) waitForCancelRequested() error {
 		}
 		return false
 	}
-	if pollUntil(time.Now().Add(driverCancelRequestedTimeout), cancelRequested) {
+	if driverPollUntil(time.Now().Add(driverCancelRequestedTimeout), cancelRequested) {
 		return describeErr
 	}
 	return fmt.Errorf("wfaDriver: activity %q did not reach CANCEL_REQUESTED after signal", a.activityID)
