@@ -271,11 +271,11 @@ func (s *activityParityTestSuite) TestParityTimeoutPreservesUnderlyingFailureCau
 	})
 }
 
-// TestParityTimeoutTypeOnRetryDeadline ports the HeartbeatWithScheduleToClose slice of
+// TestParityTimeoutTypeOnInsufficientTimeForRetry ports the HeartbeatWithScheduleToClose slice of
 // Test_ActivityTimeouts: a heartbeat timeout fires on a started attempt, but the retry interval cannot
 // fit before the schedule-to-close deadline, so retries are given up and the terminal timeout is
 // reported as ScheduleToClose rather than Heartbeat.
-func (s *activityParityTestSuite) TestParityTimeoutTypeOnRetryDeadline() {
+func (s *activityParityTestSuite) TestParityTimeoutTypeOnInsufficientTimeForRetry() {
 	env := newActivityParityEnv(s.T())
 	trace := []model.Event{model.Poll, {Type: model.HeartbeatElapsesType}}
 	// Heartbeat fires at ~2s; the 30s retry cannot fit before the 10s schedule-to-close deadline.
