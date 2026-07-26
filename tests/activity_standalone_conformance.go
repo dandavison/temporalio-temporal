@@ -822,15 +822,10 @@ func (a *saaHandle) observedRaw() (model.AbstractState, error) {
 
 // awaitObservedMatch polls the internal state until it matches expected, or the deadline passes.
 func (a *saaHandle) awaitObservedMatch(expected model.AbstractState, deadline time.Time) {
-	for {
-		if obs, err := a.observedRaw(); err == nil && expected.SameObserved(obs) {
-			return
-		}
-		if !time.Now().Before(deadline) {
-			return
-		}
-		time.Sleep(driverPollInterval)
-	}
+	pollUntil(deadline, func() bool {
+		obs, err := a.observedRaw()
+		return err == nil && expected.SameObserved(obs)
+	})
 }
 
 // chasmContext is the context ReadComponent needs to read internal component state, memoized.

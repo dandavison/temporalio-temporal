@@ -108,6 +108,9 @@ type wfaActivityParams struct {
 	NonRetryableErrorTypes []string
 }
 
+// driverCancelRequestedTimeout bounds the wait for a signalled cancel to reach the activity.
+const driverCancelRequestedTimeout = 10 * time.Second
+
 // wfaCancelSignal makes the helper workflow cancel the activity, which is how a workflow activity is
 // cancelled rather than by a direct RPC.
 const wfaCancelSignal = "cancel"
@@ -185,17 +188,15 @@ func (a *wfaHandle) driveEvent(t require.TestingT, e model.Event) {
 func (a *wfaHandle) awaitWallClock(t require.TestingT, e model.Event) {
 	before, beforePending := a.pendingSnapshot(t)
 	deadline := time.Now().Add(a.d.cfg.window(e) + driverWallClockSettle)
-	for {
-		if now, nowPending := a.pendingSnapshot(t); nowPending != beforePending || (nowPending && now != before) {
-			return
-		}
-		if !time.Now().Before(deadline) {
-			t.Errorf("%s: the activity did not change within %s of driving the event, so the event did not "+
-				"take effect. Last observed: %+v", e, a.d.cfg.window(e)+driverWallClockSettle, before)
-			return
-		}
-		time.Sleep(driverPollInterval)
+	changed := func() bool {
+		now, nowPending := a.pendingSnapshot(t)
+		return nowPending != beforePending || (nowPending && now != before)
 	}
+	if pollUntil(deadline, changed) {
+		return
+	}
+	t.Errorf("%s: the activity did not change within %s of driving the event, so the event did not "+
+		"take effect. Last observed: %+v", e, a.d.cfg.window(e)+driverWallClockSettle, before)
 }
 
 // pendingSnapshot is the activity's pending-activity projection, and whether it is currently pending. A
@@ -374,18 +375,22 @@ func (a *wfaHandle) updateOptions(e model.Event) error {
 
 // waitForCancelRequested blocks until the activity reports CANCEL_REQUESTED.
 func (a *wfaHandle) waitForCancelRequested() error {
-	deadline := time.Now().Add(10 * time.Second)
-	for time.Now().Before(deadline) {
+	var describeErr error
+	cancelRequested := func() bool {
 		resp, err := a.d.env.SdkClient().DescribeWorkflowExecution(a.d.ctx, a.workflowID, a.runID)
 		if err != nil {
-			return err
+			describeErr = err
+			return true
 		}
 		for _, pa := range resp.GetPendingActivities() {
 			if pa.GetActivityId() == a.activityID && pa.GetState() == enumspb.PENDING_ACTIVITY_STATE_CANCEL_REQUESTED {
-				return nil
+				return true
 			}
 		}
-		time.Sleep(100 * time.Millisecond)
+		return false
+	}
+	if pollUntil(time.Now().Add(driverCancelRequestedTimeout), cancelRequested) {
+		return describeErr
 	}
 	return fmt.Errorf("wfaDriver: activity %q did not reach CANCEL_REQUESTED after signal", a.activityID)
 }
