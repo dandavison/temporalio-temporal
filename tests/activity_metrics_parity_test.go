@@ -129,7 +129,7 @@ type activityMetricSets struct {
 }
 
 func (s *activityParityTestSuite) TestWFASAAMetricsParity() {
-	env := newParityEnv(s.T())
+	env := newActivityParityEnv(s.T())
 	t := s.T()
 	observed := make(map[string]activityMetricSets, len(activityMetricsScenarios))
 

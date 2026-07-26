@@ -57,7 +57,7 @@ func saaConformanceContextBudget() time.Duration {
 // Timeouts are configured long so none fires mid-scenario; the retry backoff is short so retries can be
 // traversed.
 func (s *activityParityTestSuite) conformanceRPCGraphTraversal(t *testing.T) {
-	env := newParityEnv(s.T())
+	env := newActivityParityEnv(s.T())
 	for i, cfg := range saaTraversalConfigs {
 		// The driver anchors on the subtest t, not s.T(): the suite context is memoized once per suite
 		// test, so all TestConformance subtests would otherwise share a single budget.
@@ -73,7 +73,7 @@ func (s *activityParityTestSuite) conformanceRPCGraphTraversal(t *testing.T) {
 // the same apply(). The walk is deterministic in its seed, which is logged, so a failure reproduces with
 // TEMPORAL_SAASPEC_WALK_SEED. Deep runs need a raised TEMPORAL_TEST_TIMEOUT and go test -timeout.
 func (s *activityParityTestSuite) conformanceRandomWalk(t *testing.T) {
-	env := newParityEnv(s.T())
+	env := newActivityParityEnv(s.T())
 	seed, steps := saaWalkSeed(), saaWalkSteps()
 	t.Logf("random walk: seed=%d steps=%d/cfg (override TEMPORAL_SAASPEC_WALK_SEED / _WALK_STEPS)", seed, steps)
 

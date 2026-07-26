@@ -48,7 +48,7 @@ func recordDriverReports(drive func(require.TestingT)) (failures []string) {
 // TestSAADriverReportsUnrealizedWallClockEvents drives a trace whose wall-clock event provably cannot
 // take effect inside the window the driver waits, and requires the driver to report it.
 func (s *activityParityTestSuite) TestSAADriverReportsUnrealizedWallClockEvents() {
-	env := newParityEnv(s.T())
+	env := newActivityParityEnv(s.T())
 
 	// realRetryInterval and realStartToClose are far longer than the windows the driver derives below,
 	// so the corresponding event cannot possibly have taken effect when the driver moves on.
@@ -105,7 +105,7 @@ func (s *activityParityTestSuite) TestSAADriverReportsUnrealizedWallClockEvents(
 // Injected by shortening the real start delay to nothing while the driver still believes it is an hour,
 // which puts the poll in the position a slow machine would.
 func (s *activityParityTestSuite) TestSAADriverBlamesItselfWhenItOutrunsTheDispatchWindow() {
-	env := newParityEnv(s.T())
+	env := newActivityParityEnv(s.T())
 
 	// negativePoll drives the one Poll of a start-delayed activity through the model-checking path, and
 	// returns everything the driver reported.
