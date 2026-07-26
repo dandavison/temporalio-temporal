@@ -1,8 +1,8 @@
 package tests
 
-// Driver for standalone-activity (SAA) tests: starts an activity and drives it through a scripted
-// sequence of events (a trace), realizing each event as a frontend RPC, a poll, or a wall-clock wait.
-// The event vocabulary is chasm/lib/activity/model.
+// Driver for standalone-activity (SAA) tests: starts an activity and drives it through a sequence
+// of events (a trace). Each event is either a frontend RPC, a poll, or a wall-clock wait. The event
+// vocabulary is in chasm/lib/activity/model.
 
 import (
 	"cmp"
@@ -98,7 +98,7 @@ type saaDriver struct {
 	numStarted int
 	idBase     string // activity-id prefix, unique per driver
 
-	positivePollTimeout time.Duration // bounds a "must dispatch" poll; 0 => driverPositivePollTimeout
+	positivePollTimeout time.Duration // bounds a "must dispatch" poll; 0 => activityDriverPositivePollTimeout
 
 	// customizeStart mutates the StartActivityExecutionRequest before it is sent.
 	customizeStart func(*workflowservice.StartActivityExecutionRequest)
@@ -117,14 +117,14 @@ func newSAADriver(t *testing.T, env *testcore.TestEnv, cfg activityConfig) *saaD
 // activityDefaultRetryInterval is the RetryPolicy InitialInterval when a driver sets none.
 const activityDefaultRetryInterval = 200 * time.Millisecond
 
-// driverPositivePollTimeout bounds a poll that must find a task.
-const driverPositivePollTimeout = 10 * time.Second
+// activityDriverPositivePollTimeout bounds a poll that must find a task.
+const activityDriverPositivePollTimeout = 10 * time.Second
 
-// driverWallClockSettle is slack added to a wall-clock event's window when waiting for its effect.
-const driverWallClockSettle = 2 * time.Second
+// activityDriverWallClockSettle is slack added to a wall-clock event's window when waiting for its effect.
+const activityDriverWallClockSettle = 2 * time.Second
 
-// driverPollInterval is the gap between reads when polling for a wall-clock event's effect.
-const driverPollInterval = 100 * time.Millisecond
+// activityDriverPollInterval is the gap between reads when polling for a wall-clock event's effect.
+const activityDriverPollInterval = 100 * time.Millisecond
 
 // saaHandle is a handle to one activity instance: the ids that address it, plus the token last
 // dispatched to it.
@@ -163,7 +163,7 @@ func (a *saaHandle) driveEvent(t require.TestingT, e model.Event) {
 	switch {
 	case e.Type == model.PollType:
 		// A poll captures the dispatched task token.
-		if resp := a.pollForTask(t, cmp.Or(d.positivePollTimeout, driverPositivePollTimeout)); resp != nil {
+		if resp := a.pollForTask(t, cmp.Or(d.positivePollTimeout, activityDriverPositivePollTimeout)); resp != nil {
 			a.token = resp.GetTaskToken()
 		}
 	case isWallClockEvent(e.Type):
@@ -179,7 +179,7 @@ func (a *saaHandle) driveEvent(t require.TestingT, e model.Event) {
 // poll; a dispatch-delay elapse advances no version, so it is detected by NextAttemptScheduleTime
 // clearing.
 func (a *saaHandle) awaitWallClock(t require.TestingT, e model.Event) {
-	deadline := time.Now().Add(a.d.cfg.window(e) + driverWallClockSettle)
+	deadline := time.Now().Add(a.d.cfg.window(e) + activityDriverWallClockSettle)
 	if isDispatchDelayEvent(e.Type) {
 		a.awaitDispatchTimePassed(t, e, deadline)
 		return
@@ -212,24 +212,35 @@ func (a *saaHandle) awaitStateTransition(t require.TestingT, e model.Event, dead
 		}
 	}
 	t.Errorf("%s: the activity did not transition within %s of driving the event, so the event did not take "+
-		"effect. Last observed: %+v", e, a.d.cfg.window(e)+driverWallClockSettle, a.projection(t))
+		"effect. Last observed: %+v", e, a.d.cfg.window(e)+activityDriverWallClockSettle, a.projection(t))
 }
 
 // awaitDispatchTimePassed polls the public projection until the pending dispatch time has passed, and
 // fails if it has not by the deadline.
 func (a *saaHandle) awaitDispatchTimePassed(t require.TestingT, e model.Event, deadline time.Time) {
+	var p activityInfoProjection
+	if activityDriverPollUntil(deadline, func() bool { p = a.projection(t); return !p.NextAttemptScheduleSet }) {
+		return
+	}
+	t.Errorf("%s: a dispatch is still pending in the future %s after driving the event, so the "+
+		"window did not elapse. Last observed: %+v", e, a.d.cfg.window(e)+activityDriverWallClockSettle, p)
+}
+
+// activityDriverPollUntil reports whether cond held before the deadline, reading every activityDriverPollInterval.
+//
+// common/testing/await is the usual way to write this, but await.Require and await.RequireTrue take a
+// testing.TB, which has an unexported method and so admits only *testing.T. The drivers take a
+// require.TestingT instead, which is what lets their self-tests hand them a recorder and assert on
+// what they reported.
+func activityDriverPollUntil(deadline time.Time, cond func() bool) bool {
 	for {
-		p := a.projection(t)
-		if !p.NextAttemptScheduleSet {
-			return
+		if cond() {
+			return true
 		}
 		if !time.Now().Before(deadline) {
-			t.Errorf("%s: a dispatch is still pending in the future %s after driving the event, so the "+
-				"window did not elapse. Last observed: %+v",
-				e, a.d.cfg.window(e)+driverWallClockSettle, p)
-			return
+			return false
 		}
-		time.Sleep(driverPollInterval)
+		time.Sleep(activityDriverPollInterval)
 	}
 }
 
