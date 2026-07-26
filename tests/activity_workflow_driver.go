@@ -179,7 +179,7 @@ func (d *wfaDriverDeclarative) driveTrace(t *testing.T, trace []model.Event) *wf
 func (a *wfaHandle) driveEvent(t require.TestingT, e model.Event) {
 	d := a.d
 	switch {
-	case e.Type == model.PollEvent:
+	case e.Type == model.PollType:
 		// A poll captures the dispatched task token.
 		if resp := a.pollForTask(t, cmp.Or(d.positivePollTimeout, saaPositivePollTimeout)); resp != nil {
 			a.token = resp.GetTaskToken()
@@ -229,7 +229,7 @@ func (a *wfaHandle) pendingSnapshot(t require.TestingT) (activityInfoProjection,
 // eventClock is how long the clock behind a wall-clock event takes to elapse. WFA has no per-activity
 // start delay, so the only dispatch delay is a retry backoff.
 func (d *wfaDriverDeclarative) eventClock(e model.Event) time.Duration {
-	if e.Type == model.BackoffElapsesEvent {
+	if e.Type == model.BackoffElapsesType {
 		return cmp.Or(d.nextRetryDelay, d.effectiveRetryInterval())
 	}
 	return saaShortTimeout // the four timeouts
@@ -257,18 +257,18 @@ func (d *wfaDriverDeclarative) start(t *testing.T) *wfaHandle {
 	}
 	params := wfaActivityParams{
 		ActivityTQ: actTQ, ActivityID: actID,
-		StartToClose:  dur(model.StartToCloseElapsesEvent),
+		StartToClose:  dur(model.StartToCloseElapsesType),
 		RetryInterval: d.effectiveRetryInterval(), BackoffCoefficient: d.backoffCoefficient, MaxInterval: d.maxRetryInterval,
 		MaxAttempts:            d.maxAttempts,
 		NonRetryableErrorTypes: d.nonRetryableErrorTypes,
 	}
-	if d.shortTimeout == model.ScheduleToCloseElapsesEvent {
+	if d.shortTimeout == model.ScheduleToCloseElapsesType {
 		params.ScheduleToClose = saaShortTimeout
 	}
-	if d.shortTimeout == model.ScheduleToStartElapsesEvent {
+	if d.shortTimeout == model.ScheduleToStartElapsesType {
 		params.ScheduleToStart = saaShortTimeout
 	}
-	if d.shortTimeout == model.HeartbeatElapsesEvent {
+	if d.shortTimeout == model.HeartbeatElapsesType {
 		params.Heartbeat = saaShortTimeout
 	}
 	if d.scheduleToClose > 0 {
@@ -342,54 +342,54 @@ func (a *wfaHandle) rpc(e model.Event) error {
 	fc := a.d.env.FrontendClient()
 	ns := a.d.env.Namespace().String()
 	switch e.Type {
-	case model.HeartbeatEvent:
+	case model.HeartbeatType:
 		_, err := fc.RecordActivityTaskHeartbeat(a.d.ctx, &workflowservice.RecordActivityTaskHeartbeatRequest{
 			Namespace: ns, TaskToken: a.token, Details: saaHeartbeatDetails,
 		})
 		return err
-	case model.RespondCompletedEvent:
+	case model.RespondCompletedType:
 		_, err := fc.RespondActivityTaskCompleted(a.d.ctx, &workflowservice.RespondActivityTaskCompletedRequest{
 			Namespace: ns, TaskToken: a.token, Identity: "worker",
 		})
 		return err
-	case model.RespondFailedEvent:
+	case model.RespondFailedType:
 		_, err := fc.RespondActivityTaskFailed(a.d.ctx, &workflowservice.RespondActivityTaskFailedRequest{
 			Namespace: ns, TaskToken: a.token, Identity: "worker", Failure: saaFailure(e.Retryable, a.d.nextRetryDelay),
 		})
 		return err
-	case model.RespondCanceledEvent:
+	case model.RespondCanceledType:
 		_, err := fc.RespondActivityTaskCanceled(a.d.ctx, &workflowservice.RespondActivityTaskCanceledRequest{
 			Namespace: ns, TaskToken: a.token, Identity: "worker",
 		})
 		return err
-	case model.RequestCancelEvent:
+	case model.RequestCancelType:
 		// WFA cancel comes from the workflow, so signal it, then wait for CANCEL_REQUESTED. SAA's direct
 		// RequestCancelActivityExecution RPC is synchronous; waiting here makes the two comparable.
 		if err := a.d.env.SdkClient().SignalWorkflow(a.d.ctx, a.workflowID, a.runID, wfaCancelSignal, nil); err != nil {
 			return err
 		}
 		return a.waitForCancelRequested()
-	case model.PauseEvent:
+	case model.PauseType:
 		_, err := fc.PauseActivityExecution(a.d.ctx, &workflowservice.PauseActivityExecutionRequest{
 			Namespace: ns, WorkflowId: a.workflowID, ActivityId: a.activityID, RunId: a.runID, Identity: "op", Reason: "drive", RequestId: uuid.NewString(),
 		})
 		return err
-	case model.UnpauseEvent:
+	case model.UnpauseType:
 		_, err := fc.UnpauseActivityExecution(a.d.ctx, &workflowservice.UnpauseActivityExecutionRequest{
 			Namespace: ns, WorkflowId: a.workflowID, ActivityId: a.activityID, RunId: a.runID, Identity: "op",
 			ResetAttempts: e.ResetAttempts, ResetHeartbeat: e.ResetHeartbeat,
 		})
 		return err
-	case model.ResetEvent:
+	case model.ResetType:
 		_, err := fc.ResetActivityExecution(a.d.ctx, &workflowservice.ResetActivityExecutionRequest{
 			Namespace: ns, WorkflowId: a.workflowID, ActivityId: a.activityID, RunId: a.runID, Identity: "op",
 			KeepPaused: e.KeepPaused, RestoreOriginalOptions: e.RestoreOriginal,
 		})
 		return err
-	case model.UpdateOptionsEvent:
+	case model.UpdateOptionsType:
 		return a.updateOptions(e)
 	default:
-		return fmt.Errorf("wfaDriverDeclarative: unhandled event kind %v", e.Type)
+		return fmt.Errorf("wfaDriverDeclarative: unhandled event type %v", e.Type)
 	}
 }
 

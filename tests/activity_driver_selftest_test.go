@@ -81,7 +81,7 @@ func (s *standaloneActivityTestSuite) TestSAADriverReportsUnrealizedWallClockEve
 		drive := func(customize func(*workflowservice.StartActivityExecutionRequest)) []string {
 			return recordDriverReports(func(rt require.TestingT) {
 				d := newSAADriverDeclarative(t, env, model.Config{MaxAttempts: 1})
-				d.shortTimeout = model.StartToCloseElapsesEvent // the window the driver will wait out
+				d.shortTimeout = model.StartToCloseElapsesType // the window the driver will wait out
 				d.customizeStart = customize
 				d.driveTrace(rt, []model.Event{model.Poll, model.StartToCloseElapses})
 			})
@@ -123,7 +123,7 @@ func (s *standaloneActivityTestSuite) TestSAADriverRejectsInconsistentConfig() {
 		{
 			name:  "shortHeartbeatTimeoutWithoutConfigFlag",
 			cfg:   model.Config{MaxAttempts: 1},
-			knobs: func(d *saaDriverDeclarative) { d.shortTimeout = model.HeartbeatElapsesEvent },
+			knobs: func(d *saaDriverDeclarative) { d.shortTimeout = model.HeartbeatElapsesType },
 			why:   "no heartbeat timeout is configured at all, so a HeartbeatElapses event can never fire",
 		},
 		{
@@ -149,7 +149,7 @@ func (s *standaloneActivityTestSuite) TestSAADriverRejectsInconsistentConfig() {
 		reports := recordDriverReports(func(rt require.TestingT) {
 			d := newSAADriverDeclarative(t, env, model.Config{MaxAttempts: 1, HasScheduleToClose: true, HasHeartbeat: true})
 			d.scheduleToClose = 10 * time.Second
-			d.shortTimeout = model.HeartbeatElapsesEvent
+			d.shortTimeout = model.HeartbeatElapsesType
 			d.start(rt)
 		})
 		require.Empty(t, reports, "a consistent configuration must be accepted")

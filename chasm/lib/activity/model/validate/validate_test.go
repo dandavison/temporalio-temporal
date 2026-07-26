@@ -19,9 +19,9 @@ var allSpecStatuses = []model.Status{
 }
 
 var allEventTypes = []model.EventType{
-	model.PollEvent, model.HeartbeatEvent, model.RespondCompletedEvent, model.RespondFailedEvent,
-	model.RespondCanceledEvent, model.RequestCancelEvent, model.TerminateEvent, model.PauseEvent,
-	model.UnpauseEvent, model.ResetEvent, model.UpdateOptionsEvent,
+	model.PollType, model.HeartbeatType, model.RespondCompletedType, model.RespondFailedType,
+	model.RespondCanceledType, model.RequestCancelType, model.TerminateType, model.PauseType,
+	model.UnpauseType, model.ResetType, model.UpdateOptionsType,
 }
 
 var cfgs = []model.Config{
@@ -37,11 +37,11 @@ func eventsFor(e model.EventType) []model.Event {
 	bools := []bool{false, true}
 	var out []model.Event
 	switch e {
-	case model.RespondFailedEvent:
+	case model.RespondFailedType:
 		for _, r := range bools {
 			out = append(out, model.Event{Type: e, Retryable: r})
 		}
-	case model.ResetEvent:
+	case model.ResetType:
 		for _, kp := range bools {
 			for _, ro := range bools {
 				for _, rh := range bools {
@@ -49,13 +49,13 @@ func eventsFor(e model.EventType) []model.Event {
 				}
 			}
 		}
-	case model.UnpauseEvent:
+	case model.UnpauseType:
 		for _, ra := range bools {
 			for _, rh := range bools {
 				out = append(out, model.Event{Type: e, ResetAttempts: ra, ResetHeartbeat: rh})
 			}
 		}
-	case model.PauseEvent, model.TerminateEvent, model.RequestCancelEvent:
+	case model.PauseType, model.TerminateType, model.RequestCancelType:
 		for _, sr := range bools {
 			out = append(out, model.Event{Type: e, SameRequestID: sr})
 		}
@@ -293,27 +293,27 @@ func specToProto(s model.Status) activitypb.ActivityExecutionStatus {
 
 func eventTypeName(k model.EventType) string {
 	switch k {
-	case model.PollEvent:
+	case model.PollType:
 		return "Poll"
-	case model.HeartbeatEvent:
+	case model.HeartbeatType:
 		return "Heartbeat"
-	case model.RespondCompletedEvent:
+	case model.RespondCompletedType:
 		return "RespondCompleted"
-	case model.RespondFailedEvent:
+	case model.RespondFailedType:
 		return "RespondFailed"
-	case model.RespondCanceledEvent:
+	case model.RespondCanceledType:
 		return "RespondCanceled"
-	case model.RequestCancelEvent:
+	case model.RequestCancelType:
 		return "RequestCancel"
-	case model.TerminateEvent:
+	case model.TerminateType:
 		return "Terminate"
-	case model.PauseEvent:
+	case model.PauseType:
 		return "Pause"
-	case model.UnpauseEvent:
+	case model.UnpauseType:
 		return "Unpause"
-	case model.ResetEvent:
+	case model.ResetType:
 		return "Reset"
-	case model.UpdateOptionsEvent:
+	case model.UpdateOptionsType:
 		return "UpdateOptions"
 	default:
 		return fmt.Sprintf("EventType(%d)", k)

@@ -51,39 +51,39 @@ func Transition(cfg Config, s AbstractState, e Event) Outcome {
 		return terminalOutcome(s, e)
 	}
 	switch e.Type {
-	case PollEvent:
+	case PollType:
 		return poll(cfg, s, e)
-	case HeartbeatEvent:
+	case HeartbeatType:
 		return heartbeat(cfg, s, e)
-	case RespondCompletedEvent:
+	case RespondCompletedType:
 		return respondCompleted(cfg, s, e)
-	case RespondFailedEvent:
+	case RespondFailedType:
 		return respondFailed(cfg, s, e)
-	case RespondCanceledEvent:
+	case RespondCanceledType:
 		return respondCanceled(cfg, s, e)
-	case RequestCancelEvent:
+	case RequestCancelType:
 		return requestCancel(cfg, s, e)
-	case TerminateEvent:
+	case TerminateType:
 		return terminate(cfg, s, e)
-	case PauseEvent:
+	case PauseType:
 		return pause(cfg, s, e)
-	case UnpauseEvent:
+	case UnpauseType:
 		return unpause(cfg, s, e)
-	case ResetEvent:
+	case ResetType:
 		return reset(cfg, s, e)
-	case UpdateOptionsEvent:
+	case UpdateOptionsType:
 		return updateOptions(cfg, s, e)
-	case ScheduleToStartElapsesEvent:
+	case ScheduleToStartElapsesType:
 		return scheduleToStartElapses(cfg, s, e)
-	case ScheduleToCloseElapsesEvent:
+	case ScheduleToCloseElapsesType:
 		return scheduleToCloseElapses(cfg, s, e)
-	case StartToCloseElapsesEvent:
+	case StartToCloseElapsesType:
 		return startToCloseElapses(cfg, s, e)
-	case HeartbeatElapsesEvent:
+	case HeartbeatElapsesType:
 		return heartbeatElapses(cfg, s, e)
-	case StartDelayElapsesEvent:
+	case StartDelayElapsesType:
 		return startDelayElapses(cfg, s, e)
-	case BackoffElapsesEvent:
+	case BackoffElapsesType:
 		return backoffElapses(cfg, s, e)
 	default:
 		panic("model: unhandled event type")
@@ -417,17 +417,17 @@ func backoffElapses(_ Config, s AbstractState, _ Event) Outcome {
 // with the same request id, else FailedPrecondition.
 func terminalOutcome(s AbstractState, e Event) Outcome {
 	switch e.Type {
-	case HeartbeatEvent, RespondCompletedEvent, RespondFailedEvent, RespondCanceledEvent:
+	case HeartbeatType, RespondCompletedType, RespondFailedType, RespondCanceledType:
 		return reject(s, NotFound) // stale task token
-	case RequestCancelEvent, PauseEvent, UnpauseEvent, ResetEvent, UpdateOptionsEvent:
+	case RequestCancelType, PauseType, UnpauseType, ResetType, UpdateOptionsType:
 		return reject(s, FailedPrecondition)
-	case TerminateEvent:
+	case TerminateType:
 		if s.Status == Terminated && e.SameRequestID {
 			return noop(s) // idempotent only from Terminated
 		}
 		return reject(s, FailedPrecondition)
-	case PollEvent, ScheduleToStartElapsesEvent, ScheduleToCloseElapsesEvent, StartToCloseElapsesEvent,
-		HeartbeatElapsesEvent, StartDelayElapsesEvent, BackoffElapsesEvent:
+	case PollType, ScheduleToStartElapsesType, ScheduleToCloseElapsesType, StartToCloseElapsesType,
+		HeartbeatElapsesType, StartDelayElapsesType, BackoffElapsesType:
 		return noop(s) // no running attempt or dispatch; the event is stale
 	default:
 		panic("model: unhandled event type in terminalOutcome")

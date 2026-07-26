@@ -126,7 +126,7 @@ func (d *saaDriverDeclarative) traverse(t *testing.T) {
 		var unexercised []string
 		for c := range skippedCells {
 			if !verifiedCells[c] {
-				unexercised = append(unexercised, fmt.Sprintf("%s/%s", c.status, model.EventTypeName(c.kind)))
+				unexercised = append(unexercised, fmt.Sprintf("%s/%s", c.status, model.EventTypeName(c.eventType)))
 			}
 		}
 		sort.Strings(unexercised)
@@ -252,14 +252,14 @@ func adjudicateDispatch(polledUntil, dispatchTime time.Time) negativePollResult 
 	return windowOutrun
 }
 
-// saaCell identifies a (source status, event kind) pair for the coverage ledger.
+// saaCell identifies a (source status, event type) pair for the coverage ledger.
 type saaCell struct {
-	status model.Status
-	kind   model.EventType
+	status    model.Status
+	eventType model.EventType
 }
 
 func (a *saaHandle) apply(t require.TestingT, e model.Event, cur model.AbstractState, out model.Outcome, final bool) saaApply {
-	if e.Type == model.PollEvent {
+	if e.Type == model.PollType {
 		return a.applyPoll(cur, out, final, t)
 	}
 	if saaIsWallClock(e.Type) {
@@ -286,7 +286,7 @@ func (a *saaHandle) apply(t require.TestingT, e model.Event, cur model.AbstractS
 		}
 	}
 	ok := a.verify(t, e, cur, out, err, final)
-	if e.Type == model.HeartbeatEvent && out.Reject == model.NoError {
+	if e.Type == model.HeartbeatType && out.Reject == model.NoError {
 		observed := model.HeartbeatFlags{
 			CancelRequested: a.lastHeartbeat.GetCancelRequested(),
 			ActivityPaused:  a.lastHeartbeat.GetActivityPaused(),
@@ -582,31 +582,31 @@ func saaStepDesc(cur model.AbstractState, e model.Event, out model.Outcome, res 
 func saaCandidateEvents() []model.Event {
 	var out []model.Event
 	simple := []model.EventType{
-		model.PollEvent, model.HeartbeatEvent, model.RespondCompletedEvent, model.RespondCanceledEvent, model.UpdateOptionsEvent,
+		model.PollType, model.HeartbeatType, model.RespondCompletedType, model.RespondCanceledType, model.UpdateOptionsType,
 	}
 	for _, k := range simple {
 		out = append(out, model.Event{Type: k})
 	}
 	// start_delay is mutable only within the StartDelayPending window, so the model rejects this in every
 	// state the RPC-only traversal reaches.
-	out = append(out, model.Event{Type: model.UpdateOptionsEvent, SetsStartDelay: true})
+	out = append(out, model.Event{Type: model.UpdateOptionsType, SetsStartDelay: true})
 	for _, r := range []bool{false, true} {
-		out = append(out, model.Event{Type: model.RespondFailedEvent, Retryable: r})
+		out = append(out, model.Event{Type: model.RespondFailedType, Retryable: r})
 	}
 	for _, sr := range []bool{false, true} {
 		out = append(out,
-			model.Event{Type: model.PauseEvent, SameRequestID: sr},
-			model.Event{Type: model.TerminateEvent, SameRequestID: sr},
-			model.Event{Type: model.RequestCancelEvent, SameRequestID: sr},
+			model.Event{Type: model.PauseType, SameRequestID: sr},
+			model.Event{Type: model.TerminateType, SameRequestID: sr},
+			model.Event{Type: model.RequestCancelType, SameRequestID: sr},
 		)
 	}
 	for _, kp := range []bool{false, true} {
 		for _, ro := range []bool{false, true} {
-			out = append(out, model.Event{Type: model.ResetEvent, KeepPaused: kp, RestoreOriginal: ro})
+			out = append(out, model.Event{Type: model.ResetType, KeepPaused: kp, RestoreOriginal: ro})
 		}
 	}
 	for _, ra := range []bool{false, true} {
-		out = append(out, model.Event{Type: model.UnpauseEvent, ResetAttempts: ra})
+		out = append(out, model.Event{Type: model.UnpauseType, ResetAttempts: ra})
 	}
 	return out
 }

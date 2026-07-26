@@ -21,7 +21,7 @@ func CellKey(s AbstractState, k EventType) string {
 // NeedsToken reports whether an event is a worker RPC that requires a dispatched task token.
 func NeedsToken(k EventType) bool {
 	switch k {
-	case HeartbeatEvent, RespondCompletedEvent, RespondFailedEvent, RespondCanceledEvent:
+	case HeartbeatType, RespondCompletedType, RespondFailedType, RespondCanceledType:
 		return true
 	default:
 		return false
@@ -31,7 +31,7 @@ func NeedsToken(k EventType) bool {
 // CarriesReqID reports whether an operator command's server-side idempotency is keyed on its request id.
 func CarriesReqID(k EventType) bool {
 	switch k {
-	case RequestCancelEvent, TerminateEvent, PauseEvent:
+	case RequestCancelType, TerminateType, PauseType:
 		return true
 	default:
 		return false
@@ -69,39 +69,39 @@ func Reachable(cfg Config, events []Event) map[string]bool {
 // EventTypeName is a stable label for an event type, for logs and failure reports.
 func EventTypeName(e EventType) string {
 	switch e {
-	case PollEvent:
+	case PollType:
 		return "Poll"
-	case HeartbeatEvent:
+	case HeartbeatType:
 		return "Heartbeat"
-	case RespondCompletedEvent:
+	case RespondCompletedType:
 		return "RespondCompleted"
-	case RespondFailedEvent:
+	case RespondFailedType:
 		return "RespondFailed"
-	case RespondCanceledEvent:
+	case RespondCanceledType:
 		return "RespondCanceled"
-	case RequestCancelEvent:
+	case RequestCancelType:
 		return "RequestCancel"
-	case TerminateEvent:
+	case TerminateType:
 		return "Terminate"
-	case PauseEvent:
+	case PauseType:
 		return "Pause"
-	case UnpauseEvent:
+	case UnpauseType:
 		return "Unpause"
-	case ResetEvent:
+	case ResetType:
 		return "Reset"
-	case UpdateOptionsEvent:
+	case UpdateOptionsType:
 		return "UpdateOptions"
-	case ScheduleToStartElapsesEvent:
+	case ScheduleToStartElapsesType:
 		return "ScheduleToStartElapses"
-	case ScheduleToCloseElapsesEvent:
+	case ScheduleToCloseElapsesType:
 		return "ScheduleToCloseElapses"
-	case StartToCloseElapsesEvent:
+	case StartToCloseElapsesType:
 		return "StartToCloseElapses"
-	case HeartbeatElapsesEvent:
+	case HeartbeatElapsesType:
 		return "HeartbeatElapses"
-	case StartDelayElapsesEvent:
+	case StartDelayElapsesType:
 		return "StartDelayElapses"
-	case BackoffElapsesEvent:
+	case BackoffElapsesType:
 		return "BackoffElapses"
 	default:
 		return fmt.Sprintf("EventType(%d)", e)
@@ -117,17 +117,17 @@ func EventLabel(e Event) string {
 		}
 	}
 	switch e.Type {
-	case RespondFailedEvent:
+	case RespondFailedType:
 		flags = append(flags, fmt.Sprintf("retryable=%v", e.Retryable))
-	case ResetEvent:
+	case ResetType:
 		add(e.KeepPaused, "keepPaused")
 		add(e.RestoreOriginal, "restoreOriginal")
-	case UnpauseEvent:
+	case UnpauseType:
 		add(e.ResetAttempts, "resetAttempts")
 		add(e.ResetHeartbeat, "resetHeartbeat")
-	case PauseEvent, TerminateEvent, RequestCancelEvent:
+	case PauseType, TerminateType, RequestCancelType:
 		add(e.SameRequestID, "sameRequestID")
-	case UpdateOptionsEvent:
+	case UpdateOptionsType:
 		add(e.SetsStartDelay, "setsStartDelay")
 		add(e.RestoreOriginal, "restoreOriginal")
 	}
