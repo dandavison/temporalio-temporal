@@ -294,6 +294,16 @@ func (s *activityParityTestSuite) TestParityTimeoutFailureCauseAcrossRetries() {
 			enumspb.TIMEOUT_TYPE_START_TO_CLOSE)
 	})
 
+	// An operator pauses the activity while it backs off from the application failure and then unpauses
+	// it. Pausing and unpausing decide when the next attempt runs; they say nothing about why the
+	// previous one failed, so the failure must survive the round trip.
+	s.T().Run("AfterPauseAndUnpause", func(t *testing.T) {
+		assertTimeoutChainsDrivenFailure(t, env,
+			activityConfig{MaxAttempts: 2, RetryInterval: dispatchInterval, StartToClose: activityShortTimeout},
+			[]model.Event{model.Poll, model.FailRetryably, model.Pause, model.Unpause, model.Poll, model.StartToCloseElapses},
+			enumspb.TIMEOUT_TYPE_START_TO_CLOSE)
+	})
+
 	// The retry is dispatched but no worker takes it, so the schedule-to-start deadline closes the
 	// activity. A schedule-to-start timeout is never retried, and the attempt it belongs to never ran,
 	// so the failure of the attempt before it is the only failure there is to report.

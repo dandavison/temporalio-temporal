@@ -12,6 +12,7 @@ const (
 	PollType EventType = iota
 	RespondFailedType
 	PauseType
+	UnpauseType
 
 	// Timeout deadlines elapsing: the configured deadline window has passed in wall-clock (a timer
 	// may or may not have actually fired)
@@ -37,6 +38,7 @@ var (
 	Poll                   = Event{Type: PollType}
 	FailRetryably          = Event{Type: RespondFailedType, Retryable: true}
 	Pause                  = Event{Type: PauseType}
+	Unpause                = Event{Type: UnpauseType}
 	StartToCloseElapses    = Event{Type: StartToCloseElapsesType}
 	ScheduleToCloseElapses = Event{Type: ScheduleToCloseElapsesType}
 	ScheduleToStartElapses = Event{Type: ScheduleToStartElapsesType}
@@ -54,6 +56,8 @@ func (t EventType) String() string {
 		return "RespondFailed"
 	case PauseType:
 		return "Pause"
+	case UnpauseType:
+		return "Unpause"
 	case ScheduleToStartElapsesType:
 		return "ScheduleToStartElapses"
 	case ScheduleToCloseElapsesType:
