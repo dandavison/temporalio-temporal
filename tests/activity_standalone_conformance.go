@@ -129,7 +129,7 @@ func (d *saaDriver) traverse(t *testing.T) {
 		var unexercised []string
 		for c := range skippedCells {
 			if !verifiedCells[c] {
-				unexercised = append(unexercised, fmt.Sprintf("%s/%s", c.status, model.EventTypeName(c.eventType)))
+				unexercised = append(unexercised, fmt.Sprintf("%s/%s", c.status, c.eventType))
 			}
 		}
 		sort.Strings(unexercised)
@@ -575,7 +575,7 @@ func (d *saaDriver) pickWalkEvent(rng *rand.Rand, a *saaHandle, cur model.Abstra
 // saaStepDesc renders one walk step as "FromStatus --Event--> ToStatus", annotated with the reject
 // kind or a no-token skip.
 func saaStepDesc(cur model.AbstractState, e model.Event, out model.Outcome, res saaApply) string {
-	desc := fmt.Sprintf("%s --%s--> %s", cur.Status, model.EventLabel(e), out.Next.Status)
+	desc := fmt.Sprintf("%s --%s--> %s", cur.Status, e, out.Next.Status)
 	switch {
 	case res == saaSkippedNoToken:
 		desc += "  [skipped: no token]"
@@ -650,7 +650,7 @@ func saaRejectKind(err error) model.ErrorKind {
 // edge names the event and the status it was driven from, e.g. "RespondFailed[retryable=true] from
 // Started".
 func (a *saaHandle) edge(e model.Event, src model.Status) string {
-	return fmt.Sprintf("%s from %s", model.EventLabel(e), src)
+	return fmt.Sprintf("%s from %s", e, src)
 }
 
 func (a *saaHandle) pathLine() string {
@@ -692,7 +692,7 @@ func saaPathString(path []model.Event) string {
 	parts := make([]string, 0, len(path)+1)
 	parts = append(parts, "Schedule")
 	for _, e := range path {
-		parts = append(parts, model.EventLabel(e))
+		parts = append(parts, e.String())
 	}
 	return strings.Join(parts, " → ")
 }

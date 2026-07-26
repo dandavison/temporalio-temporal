@@ -128,7 +128,7 @@ func TestModelDecisionCoverage(t *testing.T) {
 								decidedCells[cell{st, et}] = true
 							case unexpected:
 								t.Errorf("unexpected panic: status=%s eventType=%s event=%+v: %s",
-									st, eventTypeName(et), e, msg)
+									st, et.String(), e, msg)
 							}
 						}
 					}
@@ -174,7 +174,7 @@ func TestModelEdgesReachableInCode(t *testing.T) {
 							if !reach[src][dst] {
 								reported[key] = true
 								t.Errorf("model accepts %s --%s--> %s, but the code cannot reach %s from %s via any transition path",
-									st, eventTypeName(et), out.Next.Status, out.Next.Status, st)
+									st, et.String(), out.Next.Status, out.Next.Status, st)
 							}
 						}
 					}
@@ -288,34 +288,5 @@ func specToProto(s model.Status) activitypb.ActivityExecutionStatus {
 		return activitypb.ACTIVITY_EXECUTION_STATUS_RESET_REQUESTED
 	default:
 		panic(fmt.Sprintf("specToProto: unknown status %v", s))
-	}
-}
-
-func eventTypeName(k model.EventType) string {
-	switch k {
-	case model.PollType:
-		return "Poll"
-	case model.HeartbeatType:
-		return "Heartbeat"
-	case model.RespondCompletedType:
-		return "RespondCompleted"
-	case model.RespondFailedType:
-		return "RespondFailed"
-	case model.RespondCanceledType:
-		return "RespondCanceled"
-	case model.RequestCancelType:
-		return "RequestCancel"
-	case model.TerminateType:
-		return "Terminate"
-	case model.PauseType:
-		return "Pause"
-	case model.UnpauseType:
-		return "Unpause"
-	case model.ResetType:
-		return "Reset"
-	case model.UpdateOptionsType:
-		return "UpdateOptions"
-	default:
-		return fmt.Sprintf("EventType(%d)", k)
 	}
 }

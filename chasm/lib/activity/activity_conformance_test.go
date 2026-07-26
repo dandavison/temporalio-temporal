@@ -431,7 +431,7 @@ func (a *handle) apply(e model.Event, cur model.AbstractState, out model.Outcome
 		if a.dispatchable() != wantDispatchable {
 			if final {
 				a.d.t.Errorf("%s: dispatch readiness disagrees — driver=%v model=%v\n  path: %s",
-					model.EventLabel(e), a.dispatchable(), wantDispatchable, pathString(a.path))
+					e, a.dispatchable(), wantDispatchable, pathString(a.path))
 			}
 			return false
 		}
@@ -444,28 +444,28 @@ func (a *handle) apply(e model.Event, cur model.AbstractState, out model.Outcome
 	}
 	if gotKind != out.Reject {
 		a.d.t.Errorf("%s from %s: reject kind disagrees — driver=%v model=%v\n  path: %s",
-			model.EventLabel(e), cur.Status, gotKind, out.Reject, pathString(a.path))
+			e, cur.Status, gotKind, out.Reject, pathString(a.path))
 	}
 	if !out.Next.SameObserved(obs) {
 		a.d.t.Errorf("%s from %s: state disagrees\n  observed=%s\n  model=   %s\n  path: %s",
-			model.EventLabel(e), cur.Status, model.Fingerprint(obs), model.Fingerprint(out.Next), pathString(a.path))
+			e, cur.Status, model.Fingerprint(obs), model.Fingerprint(out.Next), pathString(a.path))
 	}
 	// An edge invalidates the prior attempt's tasks by bumping a stamp, so compare the stamp delta across
 	// this edge, refreshed by observed() above, to the model's per-transition invalidation bools.
 	gotAttempt, gotSTC := a.curStamp != a.prevStamp, a.curSTCStamp != a.prevSTCStamp
 	if gotAttempt != out.AttemptTasksInvalidated {
 		a.d.t.Errorf("%s from %s: attempt-task invalidation disagrees — driver=%v model=%v\n  path: %s",
-			model.EventLabel(e), cur.Status, gotAttempt, out.AttemptTasksInvalidated, pathString(a.path))
+			e, cur.Status, gotAttempt, out.AttemptTasksInvalidated, pathString(a.path))
 	}
 	if gotSTC != out.ScheduleToCloseTaskInvalidated {
 		a.d.t.Errorf("%s from %s: schedule-to-close-task invalidation disagrees — driver=%v model=%v\n  path: %s",
-			model.EventLabel(e), cur.Status, gotSTC, out.ScheduleToCloseTaskInvalidated, pathString(a.path))
+			e, cur.Status, gotSTC, out.ScheduleToCloseTaskInvalidated, pathString(a.path))
 	}
 	st, rs, attempt := a.describe()
 	wantSt, wantRs := model.ExpectedDescribe(out.Next)
 	if st != wantSt || rs != wantRs || attempt != out.Next.AttemptCount {
 		a.d.t.Errorf("%s from %s: Describe disagrees — driver=(%v,%v,attempt=%d) model=(%v,%v,attempt=%d)\n  path: %s",
-			model.EventLabel(e), cur.Status, st, rs, attempt, wantSt, wantRs, out.Next.AttemptCount, pathString(a.path))
+			e, cur.Status, st, rs, attempt, wantSt, wantRs, out.Next.AttemptCount, pathString(a.path))
 	}
 	return gotKind == out.Reject && out.Next.SameObserved(obs)
 }
@@ -474,7 +474,7 @@ func pathString(path []model.Event) string {
 	parts := make([]string, 0, len(path)+1)
 	parts = append(parts, "Schedule")
 	for _, e := range path {
-		parts = append(parts, model.EventLabel(e))
+		parts = append(parts, e.String())
 	}
 	return joinArrows(parts)
 }

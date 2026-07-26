@@ -104,7 +104,7 @@ func buildGraph(cfg model.Config, events []model.Event) graph {
 				if out.Reject != model.NoError {
 					continue
 				}
-				edgeSet[fmt.Sprintf("%s  --%s-->  %s", model.Fingerprint(s), model.EventLabel(e), toFP)] = true
+				edgeSet[fmt.Sprintf("%s  --%s-->  %s", model.Fingerprint(s), e, toFP)] = true
 				if !visited[toFP] {
 					visited[toFP] = true
 					next = append(next, out.Next)
@@ -137,7 +137,7 @@ func printSkeleton(explorer string, cfgs []model.Config) {
 					if s.Status == out.Next.Status {
 						self = "   (self)"
 					}
-					rel[fmt.Sprintf("%-16s --%-24s--> %-16s%s", s.Status, model.EventTypeName(e.Type), out.Next.Status, self)] = true
+					rel[fmt.Sprintf("%-16s --%-24s--> %-16s%s", s.Status, e.Type, out.Next.Status, self)] = true
 					fp := model.Fingerprint(out.Next)
 					if !visited[fp] {
 						visited[fp] = true

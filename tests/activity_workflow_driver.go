@@ -191,7 +191,7 @@ func (a *wfaHandle) awaitWallClock(t require.TestingT, e model.Event) {
 		}
 		if !time.Now().Before(deadline) {
 			t.Errorf("%s: the activity did not change within %s of driving the event, so the event did not "+
-				"take effect. Last observed: %+v", model.EventLabel(e), a.d.cfg.window(e)+driverWallClockSettle, before)
+				"take effect. Last observed: %+v", e, a.d.cfg.window(e)+driverWallClockSettle, before)
 			return
 		}
 		time.Sleep(driverPollInterval)

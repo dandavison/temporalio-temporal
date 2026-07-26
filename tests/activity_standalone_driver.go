@@ -229,7 +229,7 @@ func (a *saaHandle) awaitStateTransition(t require.TestingT, e model.Event, dead
 		}
 	}
 	t.Errorf("%s: the activity did not transition within %s of driving the event, so the event did not take "+
-		"effect. Last observed: %+v", model.EventLabel(e), a.d.cfg.window(e)+driverWallClockSettle, a.projection(t))
+		"effect. Last observed: %+v", e, a.d.cfg.window(e)+driverWallClockSettle, a.projection(t))
 }
 
 // awaitDispatchTimePassed polls the public projection until the pending dispatch time has passed, and
@@ -243,7 +243,7 @@ func (a *saaHandle) awaitDispatchTimePassed(t require.TestingT, e model.Event, d
 		if !time.Now().Before(deadline) {
 			t.Errorf("%s: a dispatch is still pending in the future %s after driving the event, so the "+
 				"window did not elapse. Last observed: %+v",
-				model.EventLabel(e), a.d.cfg.window(e)+driverWallClockSettle, p)
+				e, a.d.cfg.window(e)+driverWallClockSettle, p)
 			return
 		}
 		time.Sleep(driverPollInterval)

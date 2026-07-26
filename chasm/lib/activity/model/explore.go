@@ -15,7 +15,7 @@ func Fingerprint(s AbstractState) string {
 
 // CellKey identifies a (state, event type) cell at fingerprint granularity.
 func CellKey(s AbstractState, k EventType) string {
-	return Fingerprint(s) + " / " + EventTypeName(k)
+	return Fingerprint(s) + " / " + k.String()
 }
 
 // NeedsToken reports whether an event is a worker RPC that requires a dispatched task token.
@@ -66,9 +66,9 @@ func Reachable(cfg Config, events []Event) map[string]bool {
 	return cells
 }
 
-// EventTypeName is a stable label for an event type, for logs and failure reports.
-func EventTypeName(e EventType) string {
-	switch e {
+// String is a stable label for an event type, for logs and failure reports.
+func (t EventType) String() string {
+	switch t {
 	case PollType:
 		return "Poll"
 	case HeartbeatType:
@@ -104,12 +104,12 @@ func EventTypeName(e EventType) string {
 	case BackoffElapsesType:
 		return "BackoffElapses"
 	default:
-		return fmt.Sprintf("EventType(%d)", e)
+		return fmt.Sprintf("EventType(%d)", int(t))
 	}
 }
 
-// EventLabel names an event and appends the flags that affect its outcome.
-func EventLabel(e Event) string {
+// String names an event and appends the flags that affect its outcome.
+func (e Event) String() string {
 	var flags []string
 	add := func(cond bool, name string) {
 		if cond {
@@ -132,7 +132,7 @@ func EventLabel(e Event) string {
 		add(e.RestoreOriginal, "restoreOriginal")
 	}
 	if len(flags) == 0 {
-		return EventTypeName(e.Type)
+		return e.Type.String()
 	}
-	return fmt.Sprintf("%s[%s]", EventTypeName(e.Type), strings.Join(flags, ","))
+	return fmt.Sprintf("%s[%s]", e.Type, strings.Join(flags, ","))
 }
