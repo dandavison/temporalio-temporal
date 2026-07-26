@@ -20,6 +20,7 @@ import (
 	"go.temporal.io/api/workflowservice/v1"
 	"go.temporal.io/server/chasm/lib/activity/model"
 	"go.temporal.io/server/common"
+	"go.temporal.io/server/common/payloads"
 	"go.temporal.io/server/common/testing/testcontext"
 	"go.temporal.io/server/tests/testcore"
 	"google.golang.org/protobuf/types/known/durationpb"
@@ -48,6 +49,9 @@ type activityConfig struct {
 	Heartbeat       time.Duration
 	StartDelay      time.Duration // SAA only: WFA has no per-activity start delay
 }
+
+// activityParityDefaultInput is the payload the drivers start activities with. Its content is never asserted on.
+var activityParityDefaultInput = payloads.EncodeString("Input")
 
 // saaLongTimeout is a timeout long enough not to fire during a test.
 const saaLongTimeout = time.Hour
@@ -84,7 +88,7 @@ func (c activityConfig) window(e model.Event) time.Duration {
 // --- driver --------------------------------------------------------------------------------
 
 type saaDriver struct {
-	env        *standaloneActivityEnv
+	env        *testcore.TestEnv
 	ctx        context.Context
 	chasmCtx   context.Context // memoized by chasmContext
 	cfg        activityConfig
@@ -99,7 +103,7 @@ type saaDriver struct {
 }
 
 // newSAADriver builds a driver with the test-scoped context and its own activity-id prefix.
-func newSAADriver(t *testing.T, env *standaloneActivityEnv, cfg activityConfig) *saaDriver {
+func newSAADriver(t *testing.T, env *testcore.TestEnv, cfg activityConfig) *saaDriver {
 	return &saaDriver{
 		env:    env,
 		ctx:    testcontext.For(t),
@@ -249,7 +253,7 @@ func (d *saaDriver) startRequest(activityID, taskQueue string) *workflowservice.
 		ActivityId:             activityID,
 		ActivityType:           d.env.Tv().ActivityType(),
 		Identity:               "worker",
-		Input:                  defaultInput,
+		Input:                  activityParityDefaultInput,
 		TaskQueue:              &taskqueuepb.TaskQueue{Name: taskQueue},
 		StartToCloseTimeout:    durationpb.New(c.startToClose()),
 		ScheduleToCloseTimeout: opt(c.ScheduleToClose),

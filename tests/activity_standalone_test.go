@@ -50,6 +50,7 @@ const (
 )
 
 var (
+	defaultInput            = payloads.EncodeString("Input")
 	defaultHeartbeatDetails = payloads.EncodeString("Heartbeat Details")
 	defaultResult           = payloads.EncodeString("Done")
 	defaultRetryPolicy      = &commonpb.RetryPolicy{
@@ -94,6 +95,10 @@ type standaloneActivityTestSuite struct {
 
 func TestStandaloneActivityTestSuite(t *testing.T) {
 	parallelsuite.Run(t, &standaloneActivityTestSuite{})
+}
+
+type standaloneActivityEnv struct {
+	*testcore.TestEnv
 }
 
 func (s *standaloneActivityTestSuite) newTestEnv(opts ...testcore.TestOption) *standaloneActivityEnv {

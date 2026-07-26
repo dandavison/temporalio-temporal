@@ -10,9 +10,6 @@ package tests
 //
 // The drivers are activity_standalone_driver.go and activity_workflow_driver.go, over the
 // event vocabulary in chasm/lib/activity/model.
-//
-// These live on standaloneActivityTestSuite because its env enables the standalone activity. WFA needs
-// nothing special, so one SAA-enabled env drives both.
 
 import (
 	"testing"
@@ -20,9 +17,38 @@ import (
 
 	"github.com/stretchr/testify/require"
 	enumspb "go.temporal.io/api/enums/v1"
+	"go.temporal.io/server/chasm/lib/activity"
 	"go.temporal.io/server/chasm/lib/activity/model"
+	"go.temporal.io/server/common/dynamicconfig"
 	"go.temporal.io/server/common/retrypolicy"
+	"go.temporal.io/server/common/testing/parallelsuite"
+	"go.temporal.io/server/tests/testcore"
 )
+
+type activityParityTestSuite struct {
+	parallelsuite.Suite[*activityParityTestSuite]
+}
+
+func TestActivityParityTestSuite(t *testing.T) {
+	parallelsuite.Run(t, &activityParityTestSuite{})
+}
+
+// newActivityParityEnv is a test env with the standalone activity enabled. A workflow activity needs nothing
+// enabled, so one env drives both surfaces.
+func newActivityParityEnv(t *testing.T) *testcore.TestEnv {
+	env := testcore.NewEnv(t)
+	nsValues := func(value any) []dynamicconfig.ConstrainedValue {
+		return []dynamicconfig.ConstrainedValue{
+			{Constraints: dynamicconfig.Constraints{Namespace: env.Namespace().String()}, Value: value},
+		}
+	}
+	cluster := env.GetTestCluster()
+	cluster.OverrideDynamicConfig(t, dynamicconfig.EnableChasm, nsValues(true))
+	cluster.OverrideDynamicConfig(t, activity.Enabled, nsValues(true))
+	cluster.OverrideDynamicConfig(t, activity.StartDelayEnabled, nsValues(true))
+	cluster.OverrideDynamicConfig(t, activity.EnableStandaloneActivityOperatorCommands, nsValues(true))
+	return env
+}
 
 const (
 	// backingOffInterval is long enough to observe an activity while it is still backing off.
@@ -38,8 +64,8 @@ const (
 
 // A StartToClose or Heartbeat timeout whose type is listed in the retry policy's NonRetryableErrorTypes
 // must fail the activity terminally (TimedOut) when it fires, rather than retrying.
-func (s *standaloneActivityTestSuite) TestParityNonRetryableTimeout() {
-	env := s.newTestEnv()
+func (s *activityParityTestSuite) TestParityNonRetryableTimeout() {
+	env := newActivityParityEnv(s.T())
 
 	both := func(t *testing.T, cfg activityConfig, elapses model.Event, timeoutType enumspb.TimeoutType) {
 		trace := []model.Event{model.Poll, elapses}
@@ -69,8 +95,8 @@ func (s *standaloneActivityTestSuite) TestParityNonRetryableTimeout() {
 // current_retry_interval and next_attempt_schedule_time are reported while a retry is backing off
 // (before it is dispatched to Matching), and for next_attempt_schedule_time also during start delay
 // (SAA only). Once the attempt is dispatched, or while the activity is paused, both are nil.
-func (s *standaloneActivityTestSuite) TestParityCurrentRetryInterval() {
-	env := s.newTestEnv()
+func (s *activityParityTestSuite) TestParityCurrentRetryInterval() {
+	env := newActivityParityEnv(s.T())
 
 	// both drives a trace through both surfaces, asserting each reports want.
 	both := func(t *testing.T, cfg activityConfig, trace []model.Event, want activityInfoProjection) {
