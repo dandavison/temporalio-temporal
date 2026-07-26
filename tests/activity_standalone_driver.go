@@ -51,8 +51,8 @@ type activityConfig struct {
 	StartDelay      time.Duration // SAA only: WFA has no per-activity start delay
 }
 
-// parityInput is the payload the drivers start activities with. Its content is never asserted on.
-var parityInput = payloads.EncodeString("Input")
+// activityParityDefaultInput is the payload the drivers start activities with. Its content is never asserted on.
+var activityParityDefaultInput = payloads.EncodeString("Input")
 
 // activityLongTimeout is a timeout long enough not to fire during a test.
 const activityLongTimeout = time.Hour
@@ -272,7 +272,7 @@ func (d *saaDriver) startRequest(activityID, taskQueue string) *workflowservice.
 		ActivityId:             activityID,
 		ActivityType:           d.env.Tv().ActivityType(),
 		Identity:               "worker",
-		Input:                  parityInput,
+		Input:                  activityParityDefaultInput,
 		TaskQueue:              &taskqueuepb.TaskQueue{Name: taskQueue},
 		StartToCloseTimeout:    durationpb.New(c.startToClose()),
 		ScheduleToCloseTimeout: opt(c.ScheduleToClose),
