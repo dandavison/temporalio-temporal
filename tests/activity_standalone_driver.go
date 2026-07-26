@@ -141,6 +141,9 @@ const activityDriverWallClockSettle = 2 * time.Second
 // activityDriverPollInterval is the gap between reads when polling for a wall-clock event's effect.
 const activityDriverPollInterval = 100 * time.Millisecond
 
+// activityDriverTerminalTimeout bounds the wait for an activity the trace has driven to a terminal status.
+const activityDriverTerminalTimeout = 10 * time.Second
+
 // saaPollTimeout is a poll timeout above common.MinLongPollTimeout, the floor below which the frontend
 // rejects the poll rather than reaching matching.
 const saaPollTimeout = common.MinLongPollTimeout + time.Second
@@ -337,7 +340,7 @@ func (a *saaHandle) projection(t require.TestingT) activityInfoProjection {
 
 // terminal is the terminal status from Info plus the failure discriminant from the Outcome.
 func (a *saaHandle) terminal(t require.TestingT) activityTerminalProjection {
-	resp := a.describe(t)
+	resp := a.awaitTerminal(t)
 	return activityTerminalProjection{
 		Status:      resp.GetInfo().GetStatus(),
 		FailureType: saaFailureType(resp.GetOutcome().GetFailure()),
@@ -346,8 +349,38 @@ func (a *saaHandle) terminal(t require.TestingT) activityTerminalProjection {
 
 // terminalCause is the failure the terminal outcome chains as its Cause, empty if there is none.
 func (a *saaHandle) terminalCause(t require.TestingT) failureCause {
-	cause := a.describe(t).GetOutcome().GetFailure().GetCause()
+	cause := a.awaitTerminal(t).GetOutcome().GetFailure().GetCause()
 	return failureCause{Type: saaFailureType(cause), Message: cause.GetMessage()}
+}
+
+// awaitTerminal waits for the activity to stop running and then describes it. Neither the terminal
+// status nor the Outcome is settled before then, so reading either without waiting reports whatever the
+// activity happens to be doing. PollActivityExecution is the long poll that resolves once it is no
+// longer running; it returns an empty response when its window expires, so resubmit. Each poll is
+// bounded by the deadline.
+func (a *saaHandle) awaitTerminal(t require.TestingT) *workflowservice.DescribeActivityExecutionResponse {
+	deadline := time.Now().Add(activityDriverTerminalTimeout)
+	for time.Now().Before(deadline) {
+		ctx, cancel := context.WithDeadline(a.d.ctx, deadline)
+		resp, err := a.d.env.FrontendClient().PollActivityExecution(ctx, &workflowservice.PollActivityExecutionRequest{
+			Namespace:  a.d.env.Namespace().String(),
+			ActivityId: a.activityID,
+			RunId:      a.runID,
+		})
+		cancel()
+		if err != nil {
+			if time.Now().Before(deadline) {
+				require.NoError(t, err)
+			}
+			break // the deadline cancelled the long poll
+		}
+		if resp.GetRunId() != "" {
+			return a.describe(t)
+		}
+	}
+	t.Errorf("the activity did not reach a terminal status within %s of the trace finishing. Last observed: %+v",
+		activityDriverTerminalTimeout, a.projection(t))
+	return a.describe(t)
 }
 
 // heartbeatDetails is the last heartbeat checkpoint, as the first payload's raw bytes.
