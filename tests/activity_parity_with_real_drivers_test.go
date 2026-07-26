@@ -38,15 +38,13 @@ func (s *standaloneActivityTestSuite) TestWFASAAStartToCloseTimeout() {
 	trace := []model.Event{model.Poll, model.StartToCloseElapses}
 	want := activityTerminalProjection{Status: enumspb.ACTIVITY_EXECUTION_STATUS_TIMED_OUT, FailureType: enumspb.TIMEOUT_TYPE_START_TO_CLOSE.String()}
 
+	cfg := activityConfig{MaxAttempts: 1, StartToClose: saaShortTimeout}
+
 	s.T().Run("WorkflowActivity", func(t *testing.T) {
-		d := newWFADriverDeclarative(t, env, 1)
-		d.shortTimeout = saaTimeoutIn(trace)
-		require.Equal(t, want, d.driveTrace(t, trace).terminal(t))
+		require.Equal(t, want, newWFADriverDeclarative(t, env, cfg).driveTrace(t, trace).terminal(t))
 	})
 	s.T().Run("StandaloneActivity", func(t *testing.T) {
-		d := newSAADriverDeclarative(t, env, model.Config{MaxAttempts: 1})
-		d.shortTimeout = saaTimeoutIn(trace)
-		require.Equal(t, want, d.driveTrace(t, trace).terminal(t))
+		require.Equal(t, want, newSAADriverDeclarative(t, env, cfg).driveTrace(t, trace).terminal(t))
 	})
 }
 
@@ -59,15 +57,13 @@ func (s *standaloneActivityTestSuite) TestWFASAAScheduleToCloseTimeout() {
 	trace := []model.Event{model.Poll, {Type: model.ScheduleToCloseElapsesType}}
 	want := activityTerminalProjection{Status: enumspb.ACTIVITY_EXECUTION_STATUS_TIMED_OUT, FailureType: enumspb.TIMEOUT_TYPE_SCHEDULE_TO_CLOSE.String()}
 
+	cfg := activityConfig{MaxAttempts: 1, ScheduleToClose: saaShortTimeout}
+
 	s.T().Run("WorkflowActivity", func(t *testing.T) {
-		d := newWFADriverDeclarative(t, env, 1)
-		d.shortTimeout = saaTimeoutIn(trace)
-		require.Equal(t, want, d.driveTrace(t, trace).terminal(t))
+		require.Equal(t, want, newWFADriverDeclarative(t, env, cfg).driveTrace(t, trace).terminal(t))
 	})
 	s.T().Run("StandaloneActivity", func(t *testing.T) {
-		d := newSAADriverDeclarative(t, env, model.Config{MaxAttempts: 1, HasScheduleToClose: true})
-		d.shortTimeout = saaTimeoutIn(trace)
-		require.Equal(t, want, d.driveTrace(t, trace).terminal(t))
+		require.Equal(t, want, newSAADriverDeclarative(t, env, cfg).driveTrace(t, trace).terminal(t))
 	})
 }
 
@@ -84,43 +80,36 @@ func (s *standaloneActivityTestSuite) TestWFASAATimeoutPreservesUnderlyingFailur
 
 	// assertCausePreserved drives the trace on both surfaces and asserts each ends TIMED_OUT with the given
 	// timeout type, chaining wantCause.
-	assertCausePreserved := func(t *testing.T, maxAttempts int32, trace []model.Event, timeoutType enumspb.TimeoutType) {
+	assertCausePreserved := func(t *testing.T, cfg activityConfig, trace []model.Event, timeoutType enumspb.TimeoutType) {
 		want := activityTerminalProjection{Status: enumspb.ACTIVITY_EXECUTION_STATUS_TIMED_OUT, FailureType: timeoutType.String()}
+		const chained = "the terminal timeout must chain the underlying application failure as its Cause"
 		t.Run("WorkflowActivity", func(t *testing.T) {
-			d := newWFADriverDeclarative(t, env, maxAttempts)
-			d.shortTimeout = saaTimeoutIn(trace)
-			a := d.driveTrace(t, trace)
+			a := newWFADriverDeclarative(t, env, cfg).driveTrace(t, trace)
 			require.Equal(t, want, a.terminal(t))
-			require.Equal(t, wantCause, a.terminalCause(t), "the terminal timeout must chain the underlying application failure as its Cause")
+			require.Equal(t, wantCause, a.terminalCause(t), chained)
 		})
 		t.Run("StandaloneActivity", func(t *testing.T) {
-			cfg := model.Config{MaxAttempts: maxAttempts}
-			switch timeoutType {
-			case enumspb.TIMEOUT_TYPE_SCHEDULE_TO_CLOSE:
-				cfg.HasScheduleToClose = true
-			case enumspb.TIMEOUT_TYPE_HEARTBEAT:
-				cfg.HasHeartbeat = true
-			}
-			d := newSAADriverDeclarative(t, env, cfg)
-			d.shortTimeout = saaTimeoutIn(trace)
-			a := d.driveTrace(t, trace)
+			a := newSAADriverDeclarative(t, env, cfg).driveTrace(t, trace)
 			require.Equal(t, want, a.terminal(t))
-			require.Equal(t, wantCause, a.terminalCause(t), "the terminal timeout must chain the underlying application failure as its Cause")
+			require.Equal(t, wantCause, a.terminalCause(t), chained)
 		})
 	}
 
 	// Retries exhausted by a StartToClose timeout on the final attempt (attempt 1 failed retryably).
 	s.T().Run("StartToClose", func(t *testing.T) {
-		assertCausePreserved(t, 2, []model.Event{model.Poll, model.FailRetryably, model.Poll, model.StartToCloseElapses}, enumspb.TIMEOUT_TYPE_START_TO_CLOSE)
+		assertCausePreserved(t, activityConfig{MaxAttempts: 2, StartToClose: saaShortTimeout},
+			[]model.Event{model.Poll, model.FailRetryably, model.Poll, model.StartToCloseElapses}, enumspb.TIMEOUT_TYPE_START_TO_CLOSE)
 	})
 	// Retries exhausted by a Heartbeat timeout on the final attempt: the attempt starts but never
 	// heartbeats. A distinct code path that must chain the same cause.
 	s.T().Run("Heartbeat", func(t *testing.T) {
-		assertCausePreserved(t, 2, []model.Event{model.Poll, model.FailRetryably, model.Poll, {Type: model.HeartbeatElapsesType}}, enumspb.TIMEOUT_TYPE_HEARTBEAT)
+		assertCausePreserved(t, activityConfig{MaxAttempts: 2, Heartbeat: saaShortTimeout},
+			[]model.Event{model.Poll, model.FailRetryably, model.Poll, model.HeartbeatElapses}, enumspb.TIMEOUT_TYPE_HEARTBEAT)
 	})
 	// Schedule-to-close deadline closes the activity while it backs off to retry. A third code path.
 	s.T().Run("ScheduleToClose", func(t *testing.T) {
-		assertCausePreserved(t, 0, []model.Event{model.Poll, model.FailRetryably, {Type: model.ScheduleToCloseElapsesType}}, enumspb.TIMEOUT_TYPE_SCHEDULE_TO_CLOSE)
+		assertCausePreserved(t, activityConfig{ScheduleToClose: saaShortTimeout},
+			[]model.Event{model.Poll, model.FailRetryably, model.ScheduleToCloseElapses}, enumspb.TIMEOUT_TYPE_SCHEDULE_TO_CLOSE)
 	})
 }
 
@@ -135,19 +124,15 @@ func (s *standaloneActivityTestSuite) TestWFASAATimeoutTypeOnRetryDeadline() {
 	const retryInterval, scheduleToClose = 30 * time.Second, 10 * time.Second
 	want := activityTerminalProjection{Status: enumspb.ACTIVITY_EXECUTION_STATUS_TIMED_OUT, FailureType: enumspb.TIMEOUT_TYPE_SCHEDULE_TO_CLOSE.String()}
 
+	cfg := activityConfig{
+		MaxAttempts: 2, RetryInterval: retryInterval, ScheduleToClose: scheduleToClose, Heartbeat: saaShortTimeout,
+	}
+
 	s.T().Run("WorkflowActivity", func(t *testing.T) {
-		d := newWFADriverDeclarative(t, env, 2)
-		d.retryInterval = retryInterval
-		d.scheduleToClose = scheduleToClose
-		d.shortTimeout = saaTimeoutIn(trace)
-		require.Equal(t, want, d.driveTrace(t, trace).terminal(t))
+		require.Equal(t, want, newWFADriverDeclarative(t, env, cfg).driveTrace(t, trace).terminal(t))
 	})
 	s.T().Run("StandaloneActivity", func(t *testing.T) {
-		d := newSAADriverDeclarative(t, env, model.Config{MaxAttempts: 2, HasHeartbeat: true, HasScheduleToClose: true})
-		d.retryInterval = retryInterval
-		d.scheduleToClose = scheduleToClose
-		d.shortTimeout = saaTimeoutIn(trace)
-		require.Equal(t, want, d.driveTrace(t, trace).terminal(t))
+		require.Equal(t, want, newSAADriverDeclarative(t, env, cfg).driveTrace(t, trace).terminal(t))
 	})
 }
 
@@ -162,19 +147,15 @@ func (s *standaloneActivityTestSuite) TestWFASAAQueuedRetryInterval() {
 	const initialInterval, maxInterval = 5 * time.Second, 30 * time.Second
 	want := activityInfoProjection{State: enumspb.PENDING_ACTIVITY_STATE_SCHEDULED, Attempt: 2}
 
+	cfg := activityConfig{
+		MaxAttempts: 3, RetryInterval: initialInterval, BackoffCoefficient: 2.0, MaxRetryInterval: maxInterval,
+	}
+
 	s.T().Run("WorkflowActivity", func(t *testing.T) {
-		d := newWFADriverDeclarative(t, env, 3)
-		d.retryInterval = initialInterval
-		d.backoffCoefficient = 2.0
-		d.maxRetryInterval = maxInterval
-		require.Equal(t, want, d.driveTrace(t, trace).projection(t))
+		require.Equal(t, want, newWFADriverDeclarative(t, env, cfg).driveTrace(t, trace).projection(t))
 	})
 	s.T().Run("StandaloneActivity", func(t *testing.T) {
-		d := newSAADriverDeclarative(t, env, model.Config{MaxAttempts: 3})
-		d.retryInterval = initialInterval
-		d.backoffCoefficient = 2.0
-		d.maxRetryInterval = maxInterval
-		require.Equal(t, want, d.driveTrace(t, trace).projection(t))
+		require.Equal(t, want, newSAADriverDeclarative(t, env, cfg).driveTrace(t, trace).projection(t))
 	})
 }
 
@@ -189,16 +170,14 @@ func (s *standaloneActivityTestSuite) TestWFASAAHeartBeat() {
 	want := activityTerminalProjection{Status: enumspb.ACTIVITY_EXECUTION_STATUS_COMPLETED}
 
 	s.T().Run("WorkflowActivity", func(t *testing.T) {
-		d := newWFADriverDeclarative(t, env, 3)
-		d.retryInterval = 2 * time.Second
+		d := newWFADriverDeclarative(t, env, activityConfig{MaxAttempts: 3, RetryInterval: 2 * time.Second})
 		a := d.driveTrace(t, trace)
 		require.Equal(t, heartbeatWant, a.heartbeatDetails(t))
 		a.driveEvent(t, model.Complete)
 		require.Equal(t, want, a.terminal(t))
 	})
 	s.T().Run("StandaloneActivity", func(t *testing.T) {
-		d := newSAADriverDeclarative(t, env, model.Config{MaxAttempts: 3})
-		d.retryInterval = 2 * time.Second
+		d := newSAADriverDeclarative(t, env, activityConfig{MaxAttempts: 3, RetryInterval: 2 * time.Second})
 		a := d.driveTrace(t, trace)
 		require.Equal(t, heartbeatWant, a.heartbeatDetails(t))
 		a.driveEvent(t, model.Complete)
@@ -214,13 +193,11 @@ func (s *standaloneActivityTestSuite) TestWFASAARetry() {
 	want := activityTerminalProjection{Status: enumspb.ACTIVITY_EXECUTION_STATUS_FAILED, FailureType: "drive"}
 
 	s.T().Run("WorkflowActivity", func(t *testing.T) {
-		d := newWFADriverDeclarative(t, env, 3)
-		d.retryInterval = 2 * time.Second
+		d := newWFADriverDeclarative(t, env, activityConfig{MaxAttempts: 3, RetryInterval: 2 * time.Second})
 		require.Equal(t, want, d.driveTrace(t, trace).terminal(t))
 	})
 	s.T().Run("StandaloneActivity", func(t *testing.T) {
-		d := newSAADriverDeclarative(t, env, model.Config{MaxAttempts: 3})
-		d.retryInterval = 2 * time.Second
+		d := newSAADriverDeclarative(t, env, activityConfig{MaxAttempts: 3, RetryInterval: 2 * time.Second})
 		require.Equal(t, want, d.driveTrace(t, trace).terminal(t))
 	})
 }
@@ -233,15 +210,13 @@ func (s *standaloneActivityTestSuite) TestWFASAAHeartbeatTimeout() {
 	trace := []model.Event{model.Poll, {Type: model.HeartbeatElapsesType}}
 	want := activityTerminalProjection{Status: enumspb.ACTIVITY_EXECUTION_STATUS_TIMED_OUT, FailureType: enumspb.TIMEOUT_TYPE_HEARTBEAT.String()}
 
+	cfg := activityConfig{MaxAttempts: 1, Heartbeat: saaShortTimeout}
+
 	s.T().Run("WorkflowActivity", func(t *testing.T) {
-		d := newWFADriverDeclarative(t, env, 1)
-		d.shortTimeout = saaTimeoutIn(trace)
-		require.Equal(t, want, d.driveTrace(t, trace).terminal(t))
+		require.Equal(t, want, newWFADriverDeclarative(t, env, cfg).driveTrace(t, trace).terminal(t))
 	})
 	s.T().Run("StandaloneActivity", func(t *testing.T) {
-		d := newSAADriverDeclarative(t, env, model.Config{MaxAttempts: 1, HasHeartbeat: true})
-		d.shortTimeout = saaTimeoutIn(trace)
-		require.Equal(t, want, d.driveTrace(t, trace).terminal(t))
+		require.Equal(t, want, newSAADriverDeclarative(t, env, cfg).driveTrace(t, trace).terminal(t))
 	})
 }
 
@@ -255,13 +230,13 @@ func (s *standaloneActivityTestSuite) TestWFASAACancel() {
 	trace := []model.Event{model.Poll, model.RequestCancel, {Type: model.RespondCanceledType}}
 	want := activityTerminalProjection{Status: enumspb.ACTIVITY_EXECUTION_STATUS_CANCELED}
 
+	cfg := activityConfig{MaxAttempts: 1}
+
 	s.T().Run("WorkflowActivity", func(t *testing.T) {
-		d := newWFADriverDeclarative(t, env, 1)
-		require.Equal(t, want, d.driveTrace(t, trace).terminal(t))
+		require.Equal(t, want, newWFADriverDeclarative(t, env, cfg).driveTrace(t, trace).terminal(t))
 	})
 	s.T().Run("StandaloneActivity", func(t *testing.T) {
-		d := newSAADriverDeclarative(t, env, model.Config{MaxAttempts: 1})
-		require.Equal(t, want, d.driveTrace(t, trace).terminal(t))
+		require.Equal(t, want, newSAADriverDeclarative(t, env, cfg).driveTrace(t, trace).terminal(t))
 	})
 }
 
@@ -280,13 +255,11 @@ func (s *standaloneActivityTestSuite) TestWFASAARetryAfterFail() {
 	}
 
 	s.T().Run("WorkflowActivity", func(t *testing.T) {
-		d := newWFADriverDeclarative(t, env, 3)
-		d.retryInterval = 2 * time.Second
+		d := newWFADriverDeclarative(t, env, activityConfig{MaxAttempts: 3, RetryInterval: 2 * time.Second})
 		require.Equal(t, want, d.driveTrace(t, trace).projection(t))
 	})
 	s.T().Run("StandaloneActivity", func(t *testing.T) {
-		d := newSAADriverDeclarative(t, env, model.Config{MaxAttempts: 3})
-		d.retryInterval = 2 * time.Second
+		d := newSAADriverDeclarative(t, env, activityConfig{MaxAttempts: 3, RetryInterval: 2 * time.Second})
 		require.Equal(t, want, d.driveTrace(t, trace).projection(t))
 	})
 }
@@ -307,13 +280,11 @@ func (s *standaloneActivityTestSuite) TestWFASAABackingOff() {
 	}
 
 	s.T().Run("WorkflowActivity", func(t *testing.T) {
-		d := newWFADriverDeclarative(t, env, 3)
-		d.retryInterval = backingOffInterval
+		d := newWFADriverDeclarative(t, env, activityConfig{MaxAttempts: 3, RetryInterval: backingOffInterval})
 		require.Equal(t, want, d.driveTrace(t, trace).projection(t))
 	})
 	s.T().Run("StandaloneActivity", func(t *testing.T) {
-		d := newSAADriverDeclarative(t, env, model.Config{MaxAttempts: 3})
-		d.retryInterval = backingOffInterval
+		d := newSAADriverDeclarative(t, env, activityConfig{MaxAttempts: 3, RetryInterval: backingOffInterval})
 		require.Equal(t, want, d.driveTrace(t, trace).projection(t))
 	})
 }
@@ -333,15 +304,11 @@ func (s *standaloneActivityTestSuite) TestWFASAANextRetryDelayOverride() {
 	}
 
 	s.T().Run("WorkflowActivity", func(t *testing.T) {
-		d := newWFADriverDeclarative(t, env, 3)
-		d.retryInterval = 5 * time.Second
-		d.nextRetryDelay = nextRetryDelayOverride
+		d := newWFADriverDeclarative(t, env, activityConfig{MaxAttempts: 3, RetryInterval: 5 * time.Second, NextRetryDelay: nextRetryDelayOverride})
 		require.Equal(t, want, d.driveTrace(t, trace).projection(t))
 	})
 	s.T().Run("StandaloneActivity", func(t *testing.T) {
-		d := newSAADriverDeclarative(t, env, model.Config{MaxAttempts: 3})
-		d.retryInterval = 5 * time.Second
-		d.nextRetryDelay = nextRetryDelayOverride
+		d := newSAADriverDeclarative(t, env, activityConfig{MaxAttempts: 3, RetryInterval: 5 * time.Second, NextRetryDelay: nextRetryDelayOverride})
 		require.Equal(t, want, d.driveTrace(t, trace).projection(t))
 	})
 }
@@ -359,13 +326,11 @@ func (s *standaloneActivityTestSuite) TestWFASAAFirstAttemptStarted() {
 	}
 
 	s.T().Run("WorkflowActivity", func(t *testing.T) {
-		d := newWFADriverDeclarative(t, env, 3)
-		d.retryInterval = 2 * time.Second
+		d := newWFADriverDeclarative(t, env, activityConfig{MaxAttempts: 3, RetryInterval: 2 * time.Second})
 		require.Equal(t, want, d.driveTrace(t, trace).projection(t))
 	})
 	s.T().Run("StandaloneActivity", func(t *testing.T) {
-		d := newSAADriverDeclarative(t, env, model.Config{MaxAttempts: 3})
-		d.retryInterval = 2 * time.Second
+		d := newSAADriverDeclarative(t, env, activityConfig{MaxAttempts: 3, RetryInterval: 2 * time.Second})
 		require.Equal(t, want, d.driveTrace(t, trace).projection(t))
 	})
 }
@@ -378,16 +343,12 @@ func (s *standaloneActivityTestSuite) TestWFASAANextAttemptScheduleTimeAndCurren
 	t := s.T()
 
 	// both drives a trace through both surfaces, asserting each reports want.
-	both := func(t *testing.T, maxAttempts int32, retryInterval time.Duration, trace []model.Event, want activityInfoProjection) {
+	both := func(t *testing.T, cfg activityConfig, trace []model.Event, want activityInfoProjection) {
 		t.Run("WorkflowActivity", func(t *testing.T) {
-			d := newWFADriverDeclarative(t, env, maxAttempts)
-			d.retryInterval = retryInterval
-			require.Equal(t, want, d.driveTrace(t, trace).projection(t))
+			require.Equal(t, want, newWFADriverDeclarative(t, env, cfg).driveTrace(t, trace).projection(t))
 		})
 		t.Run("StandaloneActivity", func(t *testing.T) {
-			d := newSAADriverDeclarative(t, env, model.Config{MaxAttempts: maxAttempts})
-			d.retryInterval = retryInterval
-			require.Equal(t, want, d.driveTrace(t, trace).projection(t))
+			require.Equal(t, want, newSAADriverDeclarative(t, env, cfg).driveTrace(t, trace).projection(t))
 		})
 	}
 
@@ -402,33 +363,33 @@ func (s *standaloneActivityTestSuite) TestWFASAANextAttemptScheduleTimeAndCurren
 
 	// First attempt running: no pending next dispatch, and no preceding backoff, so no retry interval.
 	t.Run("FirstAttemptRunning", func(t *testing.T) {
-		both(t, 3, saaDelayWindow, []model.Event{model.Poll},
+		both(t, activityConfig{MaxAttempts: 3, RetryInterval: saaDelayWindow}, []model.Event{model.Poll},
 			activityInfoProjection{State: enumspb.PENDING_ACTIVITY_STATE_STARTED, Attempt: 1})
 	})
 
 	// Backing off before the retry dispatches: the retry is pending, so both the interval and the
 	// next-attempt schedule time are populated.
 	t.Run("BackingOffBeforeRetry", func(t *testing.T) {
-		both(t, 3, saaDelayWindow, []model.Event{model.Poll, model.FailRetryably},
+		both(t, activityConfig{MaxAttempts: 3, RetryInterval: saaDelayWindow}, []model.Event{model.Poll, model.FailRetryably},
 			activityInfoProjection{State: enumspb.PENDING_ACTIVITY_STATE_SCHEDULED, Attempt: 2, CurrentRetryInterval: saaDelayWindow, NextAttemptScheduleSet: true})
 	})
 
 	// Retry dispatched to Matching but not yet polled: schedulable now, not backing off, so no current
 	// retry interval and no future dispatch time.
 	t.Run("RetryQueuedNotStarted", func(t *testing.T) {
-		both(t, 3, saaDelayWindow, []model.Event{model.Poll, model.FailRetryably, model.BackoffElapses},
+		both(t, activityConfig{MaxAttempts: 3, RetryInterval: saaDelayWindow}, []model.Event{model.Poll, model.FailRetryably, model.BackoffElapses},
 			activityInfoProjection{State: enumspb.PENDING_ACTIVITY_STATE_SCHEDULED, Attempt: 2})
 	})
 
 	// Retry attempt running with a further retry permitted: nothing pending.
 	t.Run("RetryAttemptRunning", func(t *testing.T) {
-		both(t, 3, saaDelayWindow, []model.Event{model.Poll, model.FailRetryably, model.BackoffElapses, model.Poll},
+		both(t, activityConfig{MaxAttempts: 3, RetryInterval: saaDelayWindow}, []model.Event{model.Poll, model.FailRetryably, model.BackoffElapses, model.Poll},
 			activityInfoProjection{State: enumspb.PENDING_ACTIVITY_STATE_STARTED, Attempt: 2})
 	})
 
 	// Final attempt running with no retry remaining: nothing pending.
 	t.Run("FinalAttemptRunning", func(t *testing.T) {
-		both(t, 2, saaDelayWindow, []model.Event{model.Poll, model.FailRetryably, model.BackoffElapses, model.Poll},
+		both(t, activityConfig{MaxAttempts: 2, RetryInterval: saaDelayWindow}, []model.Event{model.Poll, model.FailRetryably, model.BackoffElapses, model.Poll},
 			activityInfoProjection{State: enumspb.PENDING_ACTIVITY_STATE_STARTED, Attempt: 2})
 	})
 
@@ -436,22 +397,19 @@ func (s *standaloneActivityTestSuite) TestWFASAANextAttemptScheduleTimeAndCurren
 	t.Run("Completed", func(t *testing.T) {
 		trace := []model.Event{model.Poll, model.FailRetryably, model.BackoffElapses, model.Poll, model.Complete}
 		want := activityTerminalProjection{Status: enumspb.ACTIVITY_EXECUTION_STATUS_COMPLETED}
+		cfg := activityConfig{MaxAttempts: 3, RetryInterval: saaDelayWindow}
 		t.Run("WorkflowActivity", func(t *testing.T) {
-			d := newWFADriverDeclarative(t, env, 3)
-			d.retryInterval = saaDelayWindow
-			require.Equal(t, want, d.driveTrace(t, trace).terminal(t))
+			require.Equal(t, want, newWFADriverDeclarative(t, env, cfg).driveTrace(t, trace).terminal(t))
 		})
 		t.Run("StandaloneActivity", func(t *testing.T) {
-			d := newSAADriverDeclarative(t, env, model.Config{MaxAttempts: 3})
-			d.retryInterval = saaDelayWindow
-			require.Equal(t, want, d.driveTrace(t, trace).terminal(t))
+			require.Equal(t, want, newSAADriverDeclarative(t, env, cfg).driveTrace(t, trace).terminal(t))
 		})
 	})
 
 	// Paused while backing off, before the retry dispatches. No dispatch will occur while paused, so there
 	// is neither a next attempt scheduled nor a current retry interval to report.
 	t.Run("PausedBeforeDispatch", func(t *testing.T) {
-		both(t, 3, saaDelayWindow, []model.Event{model.Poll, model.FailRetryably, model.Pause},
+		both(t, activityConfig{MaxAttempts: 3, RetryInterval: saaDelayWindow}, []model.Event{model.Poll, model.FailRetryably, model.Pause},
 			activityInfoProjection{State: enumspb.PENDING_ACTIVITY_STATE_PAUSED, Attempt: 2})
 	})
 
@@ -461,7 +419,7 @@ func (s *standaloneActivityTestSuite) TestWFASAANextAttemptScheduleTimeAndCurren
 	// behavioral difference — whether an unpause dispatches at once — is covered by the
 	// backoff/pause-{before,after}-dispatch-then-unpause traces.
 	t.Run("PausedAfterDispatch", func(t *testing.T) {
-		both(t, 3, saaDelayWindow, []model.Event{model.Poll, model.FailRetryably, model.BackoffElapses, model.Pause},
+		both(t, activityConfig{MaxAttempts: 3, RetryInterval: saaDelayWindow}, []model.Event{model.Poll, model.FailRetryably, model.BackoffElapses, model.Pause},
 			activityInfoProjection{State: enumspb.PENDING_ACTIVITY_STATE_PAUSED, Attempt: 2})
 	})
 }
@@ -484,11 +442,7 @@ func saaTraceBudget() time.Duration {
 // checks conformance to the model at every step, unless customizeStart is set.
 func (s *standaloneActivityTestSuite) driveTrace(t *testing.T, env *standaloneActivityEnv, tr saaTrace) *saaHandle {
 	d := newSAADriverDeclarative(t, env, tr.config())
-	d.startDelay = tr.startDelay()
-	d.retryInterval = tr.retryInterval
-	d.nextRetryDelay = tr.nextRetryDelay
 	d.customizeStart = tr.customizeStart
-	d.shortTimeout = saaTimeoutIn(tr.trace)
 	// Bound the positive poll below the delay window, so that "Dispatchable" means "dispatches promptly".
 	d.positivePollTimeout = saaPollTimeout
 	// customizeStart injects config the model cannot see, so drive model-free and leave the assertions to
@@ -503,7 +457,7 @@ func (s *standaloneActivityTestSuite) driveTrace(t *testing.T, env *standaloneAc
 // ApplicationFailureInfo failure, and a server failure is rejected. SAA-only worker-side RPC validation.
 func (s *standaloneActivityTestSuite) TestSAAWorkerMustSendApplicationFailure() {
 	env := s.newTestEnv()
-	a := s.driveTrace(s.T(), env, saaTrace{trace: []model.Event{model.Poll}, maxAttempts: 3})
+	a := s.driveTrace(s.T(), env, saaTrace{trace: []model.Event{model.Poll}, cfg: activityConfig{MaxAttempts: 3}})
 	_, err := env.FrontendClient().RespondActivityTaskFailed(testcontext.For(s.T()), &workflowservice.RespondActivityTaskFailedRequest{
 		Namespace: env.Namespace().String(),
 		TaskToken: a.token,
@@ -524,32 +478,27 @@ func (s *standaloneActivityTestSuite) TestWFASAANonRetryableTimeout() {
 	env := s.newTestEnv()
 	t := s.T()
 
-	both := func(t *testing.T, elapse model.EventType, timeoutType enumspb.TimeoutType) {
-		trace := []model.Event{model.Poll, {Type: elapse}}
-		nonRetryableType := retrypolicy.TimeoutFailureTypePrefix + timeoutType.String()
+	both := func(t *testing.T, cfg activityConfig, elapses model.Event, timeoutType enumspb.TimeoutType) {
+		trace := []model.Event{model.Poll, elapses}
+		cfg.MaxAttempts = 3
+		cfg.NonRetryableErrorTypes = []string{retrypolicy.TimeoutFailureTypePrefix + timeoutType.String()}
 		t.Run("WorkflowActivity", func(t *testing.T) {
-			d := newWFADriverDeclarative(t, env, 3)
-			d.shortTimeout = saaTimeoutIn(trace)
-			d.nonRetryableErrorTypes = []string{nonRetryableType}
-			require.Equalf(t, enumspb.ACTIVITY_EXECUTION_STATUS_TIMED_OUT, d.driveTrace(t, trace).terminal(t).Status,
+			require.Equalf(t, enumspb.ACTIVITY_EXECUTION_STATUS_TIMED_OUT,
+				newWFADriverDeclarative(t, env, cfg).driveTrace(t, trace).terminal(t).Status,
 				"a %s timeout marked non-retryable must fail the activity terminally, not retry it", timeoutType)
 		})
 		t.Run("StandaloneActivity", func(t *testing.T) {
-			d := newSAADriverDeclarative(t, env, model.Config{MaxAttempts: 3, HasHeartbeat: elapse == model.HeartbeatElapsesType})
-			d.shortTimeout = saaTimeoutIn(trace)
-			d.customizeStart = func(req *workflowservice.StartActivityExecutionRequest) {
-				req.RetryPolicy.NonRetryableErrorTypes = []string{nonRetryableType}
-			}
-			require.Equalf(t, enumspb.ACTIVITY_EXECUTION_STATUS_TIMED_OUT, d.driveTrace(t, trace).terminal(t).Status,
+			require.Equalf(t, enumspb.ACTIVITY_EXECUTION_STATUS_TIMED_OUT,
+				newSAADriverDeclarative(t, env, cfg).driveTrace(t, trace).terminal(t).Status,
 				"a %s timeout marked non-retryable must fail the activity terminally, not retry it", timeoutType)
 		})
 	}
 
 	t.Run("StartToClose", func(t *testing.T) {
-		both(t, model.StartToCloseElapsesType, enumspb.TIMEOUT_TYPE_START_TO_CLOSE)
+		both(t, activityConfig{StartToClose: saaShortTimeout}, model.StartToCloseElapses, enumspb.TIMEOUT_TYPE_START_TO_CLOSE)
 	})
 	t.Run("Heartbeat", func(t *testing.T) {
-		both(t, model.HeartbeatElapsesType, enumspb.TIMEOUT_TYPE_HEARTBEAT)
+		both(t, activityConfig{Heartbeat: saaShortTimeout}, model.HeartbeatElapses, enumspb.TIMEOUT_TYPE_HEARTBEAT)
 	})
 }
 
@@ -606,55 +555,48 @@ func (s *standaloneActivityTestSuite) TestBackoff_Declarative() {
 
 	t.Run("backoff/retry-dispatch", func(t *testing.T) {
 		s.driveTrace(t, env, saaTrace{
-			trace:         []model.Event{model.Poll, model.FailRetryably, model.Poll, model.BackoffElapses, model.Poll},
-			maxAttempts:   3,
-			retryInterval: saaDelayWindow,
+			trace: []model.Event{model.Poll, model.FailRetryably, model.Poll, model.BackoffElapses, model.Poll},
+			cfg:   activityConfig{MaxAttempts: 3, RetryInterval: saaDelayWindow},
 		})
 	})
 	t.Run("backoff/next-retry-delay-override", func(t *testing.T) {
 		s.driveTrace(t, env, saaTrace{
-			trace:          []model.Event{model.Poll, model.FailRetryably, model.Poll, model.BackoffElapses, model.Poll},
-			maxAttempts:    3,
-			nextRetryDelay: saaDelayWindow,
+			trace: []model.Event{model.Poll, model.FailRetryably, model.Poll, model.BackoffElapses, model.Poll},
+			cfg:   activityConfig{MaxAttempts: 3, NextRetryDelay: saaDelayWindow},
 		})
 	})
 	// Paused mid-backoff: the unpause resumes waiting, so the next poll must find nothing until the
 	// remaining window elapses.
 	t.Run("backoff/pause-before-dispatch-then-unpause", func(t *testing.T) {
 		s.driveTrace(t, env, saaTrace{
-			trace:         []model.Event{model.Poll, model.FailRetryably, model.Pause, {Type: model.UnpauseType}, model.Poll, model.BackoffElapses, model.Poll},
-			maxAttempts:   3,
-			retryInterval: saaDelayWindow,
+			trace: []model.Event{model.Poll, model.FailRetryably, model.Pause, {Type: model.UnpauseType}, model.Poll, model.BackoffElapses, model.Poll},
+			cfg:   activityConfig{MaxAttempts: 3, RetryInterval: saaDelayWindow},
 		})
 	})
 	// The counterpart: paused after the backoff already elapsed, so the unpause must dispatch at once
 	// rather than impose a fresh window.
 	t.Run("backoff/pause-after-dispatch-then-unpause", func(t *testing.T) {
 		s.driveTrace(t, env, saaTrace{
-			trace:         []model.Event{model.Poll, model.FailRetryably, model.BackoffElapses, model.Pause, {Type: model.UnpauseType}, model.Poll},
-			maxAttempts:   3,
-			retryInterval: saaDelayWindow,
+			trace: []model.Event{model.Poll, model.FailRetryably, model.BackoffElapses, model.Pause, {Type: model.UnpauseType}, model.Poll},
+			cfg:   activityConfig{MaxAttempts: 3, RetryInterval: saaDelayWindow},
 		})
 	})
 	t.Run("backoff/pause-unpause-then-update", func(t *testing.T) {
 		s.driveTrace(t, env, saaTrace{
-			trace:         []model.Event{model.Poll, model.FailRetryably, model.Pause, {Type: model.UnpauseType}, {Type: model.UpdateOptionsType}, model.Poll, model.BackoffElapses, model.Poll},
-			maxAttempts:   3,
-			retryInterval: saaDelayWindow,
+			trace: []model.Event{model.Poll, model.FailRetryably, model.Pause, {Type: model.UnpauseType}, {Type: model.UpdateOptionsType}, model.Poll, model.BackoffElapses, model.Poll},
+			cfg:   activityConfig{MaxAttempts: 3, RetryInterval: saaDelayWindow},
 		})
 	})
 	t.Run("backoff/next-retry-delay-override-then-update", func(t *testing.T) {
 		s.driveTrace(t, env, saaTrace{
-			trace:          []model.Event{model.Poll, model.FailRetryably, {Type: model.UpdateOptionsType}, model.Poll, model.BackoffElapses, model.Poll},
-			maxAttempts:    3,
-			nextRetryDelay: saaDelayWindow,
+			trace: []model.Event{model.Poll, model.FailRetryably, {Type: model.UpdateOptionsType}, model.Poll, model.BackoffElapses, model.Poll},
+			cfg:   activityConfig{MaxAttempts: 3, NextRetryDelay: saaDelayWindow},
 		})
 	})
 	t.Run("backoff/reset", func(t *testing.T) {
 		s.driveTrace(t, env, saaTrace{
-			trace:         []model.Event{model.Poll, model.FailRetryably, {Type: model.ResetType}, model.Poll},
-			maxAttempts:   3,
-			retryInterval: saaDelayWindow,
+			trace: []model.Event{model.Poll, model.FailRetryably, {Type: model.ResetType}, model.Poll},
+			cfg:   activityConfig{MaxAttempts: 3, RetryInterval: saaDelayWindow},
 		})
 	})
 }
@@ -688,8 +630,8 @@ func (s *standaloneActivityTestSuite) TestTimeout_Declarative() {
 	})
 	t.Run("start-to-close/elapses-while-started/last-attempt", func(t *testing.T) {
 		s.driveTrace(t, env, saaTrace{
-			trace:       []model.Event{model.Poll, model.StartToCloseElapses},
-			maxAttempts: 1,
+			trace: []model.Event{model.Poll, model.StartToCloseElapses},
+			cfg:   activityConfig{MaxAttempts: 1},
 		})
 	})
 	t.Run("start-to-close/elapses-while-cancel-requested", func(t *testing.T) {
@@ -704,8 +646,8 @@ func (s *standaloneActivityTestSuite) TestTimeout_Declarative() {
 	})
 	t.Run("heartbeat/elapses-while-started/last-attempt", func(t *testing.T) {
 		s.driveTrace(t, env, saaTrace{
-			trace:       []model.Event{model.Poll, {Type: model.HeartbeatElapsesType}},
-			maxAttempts: 1,
+			trace: []model.Event{model.Poll, {Type: model.HeartbeatElapsesType}},
+			cfg:   activityConfig{MaxAttempts: 1},
 		})
 	})
 	t.Run("schedule-to-start/elapses-within-start-delay", func(t *testing.T) {

@@ -63,31 +63,17 @@ func projectWFA(p *workflowpb.PendingActivityInfo) activityInfoProjection {
 // --- driver --------------------------------------------------------------------------------
 
 type wfaDriverDeclarative struct {
-	env                *standaloneActivityEnv
-	ctx                context.Context
-	maxAttempts        int32         // RetryPolicy MaximumAttempts (0 = unlimited)
-	retryInterval      time.Duration // RetryPolicy InitialInterval; 0 => saaDefaultRetryInterval
-	backoffCoefficient float64       // RetryPolicy BackoffCoefficient; 0 => 1.0 (constant interval)
-	maxRetryInterval   time.Duration // RetryPolicy MaximumInterval; 0 => retryInterval
-	nextRetryDelay     time.Duration // ApplicationFailureInfo.NextRetryDelay sent with RespondFailed
+	env *standaloneActivityEnv
+	ctx context.Context
+	cfg activityConfig
 
-	shortTimeout        model.EventType // this timeout is configured short at schedule time
-	scheduleToClose     time.Duration   // ScheduleToClose deadline
-	positivePollTimeout time.Duration   // bounds a "must dispatch" poll; 0 => saaPositivePollTimeout
-
-	// nonRetryableErrorTypes are the RetryPolicy's NonRetryableErrorTypes. A timeout type is named via
-	// retrypolicy.TimeoutFailureTypePrefix.
-	nonRetryableErrorTypes []string
+	positivePollTimeout time.Duration // bounds a "must dispatch" poll; 0 => saaPositivePollTimeout
 }
 
-// newWFADriverDeclarative builds a driver with the test-scoped context.
-func newWFADriverDeclarative(t *testing.T, env *standaloneActivityEnv, maxAttempts int32) *wfaDriverDeclarative {
-	return &wfaDriverDeclarative{env: env, ctx: testcontext.For(t), maxAttempts: maxAttempts}
-}
-
-// effectiveRetryInterval is the RetryPolicy InitialInterval the driver schedules activities with.
-func (d *wfaDriverDeclarative) effectiveRetryInterval() time.Duration {
-	return cmp.Or(d.retryInterval, saaDefaultRetryInterval)
+// newWFADriverDeclarative builds a driver with the test-scoped context. cfg.StartDelay is ignored: a
+// workflow activity has no per-activity start delay.
+func newWFADriverDeclarative(t *testing.T, env *standaloneActivityEnv, cfg activityConfig) *wfaDriverDeclarative {
+	return &wfaDriverDeclarative{env: env, ctx: testcontext.For(t), cfg: cfg}
 }
 
 // wfaHandle is a handle to one workflow-scheduled activity: the ids that address it and the workflow
@@ -192,14 +178,14 @@ func (a *wfaHandle) driveEvent(t require.TestingT, e model.Event) {
 // so this polls.
 func (a *wfaHandle) awaitWallClock(t require.TestingT, e model.Event) {
 	before, beforePending := a.pendingSnapshot(t)
-	deadline := time.Now().Add(a.d.eventClock(e) + saaWallClockSettle)
+	deadline := time.Now().Add(a.d.cfg.window(e) + saaWallClockSettle)
 	for {
 		if now, nowPending := a.pendingSnapshot(t); nowPending != beforePending || (nowPending && now != before) {
 			return
 		}
 		if !time.Now().Before(deadline) {
 			t.Errorf("%s: the activity did not change within %s of driving the event, so the event did not "+
-				"take effect. Last observed: %+v", model.EventLabel(e), a.d.eventClock(e)+saaWallClockSettle, before)
+				"take effect. Last observed: %+v", model.EventLabel(e), a.d.cfg.window(e)+saaWallClockSettle, before)
 			return
 		}
 		time.Sleep(saaPollInterval)
@@ -219,15 +205,6 @@ func (a *wfaHandle) pendingSnapshot(t require.TestingT) (activityInfoProjection,
 	return activityInfoProjection{}, false
 }
 
-// eventClock is how long the clock behind a wall-clock event takes to elapse. WFA has no per-activity
-// start delay, so the only dispatch delay is a retry backoff.
-func (d *wfaDriverDeclarative) eventClock(e model.Event) time.Duration {
-	if e.Type == model.BackoffElapsesType {
-		return cmp.Or(d.nextRetryDelay, d.effectiveRetryInterval())
-	}
-	return saaShortTimeout // the four timeouts
-}
-
 func (d *wfaDriverDeclarative) start(t *testing.T) *wfaHandle {
 	wfTQ := testcore.RandomizeStr("wfa-wf")
 	actTQ := testcore.RandomizeStr("wfa-act")
@@ -240,37 +217,23 @@ func (d *wfaDriverDeclarative) start(t *testing.T) *wfaHandle {
 	require.NoError(t, w.Start())
 	t.Cleanup(w.Stop)
 
-	// dur is short for the one timeout under test and long otherwise, so no other timeout fires
-	// mid-scenario.
-	dur := func(k model.EventType) time.Duration {
-		if d.shortTimeout == k {
-			return saaShortTimeout
-		}
-		return time.Hour
-	}
-	params := wfaActivityParams{
-		ActivityTQ: actTQ, ActivityID: actID,
-		StartToClose:  dur(model.StartToCloseElapsesType),
-		RetryInterval: d.effectiveRetryInterval(), BackoffCoefficient: d.backoffCoefficient, MaxInterval: d.maxRetryInterval,
-		MaxAttempts:            d.maxAttempts,
-		NonRetryableErrorTypes: d.nonRetryableErrorTypes,
-	}
-	if d.shortTimeout == model.ScheduleToCloseElapsesType {
-		params.ScheduleToClose = saaShortTimeout
-	}
-	if d.shortTimeout == model.ScheduleToStartElapsesType {
-		params.ScheduleToStart = saaShortTimeout
-	}
-	if d.shortTimeout == model.HeartbeatElapsesType {
-		params.Heartbeat = saaShortTimeout
-	}
-	if d.scheduleToClose > 0 {
-		params.ScheduleToClose = d.scheduleToClose
-	}
+	c := d.cfg
 	wfID := testcore.RandomizeStr("wfa-run")
 	run, err := d.env.SdkClient().ExecuteWorkflow(d.ctx,
 		sdkclient.StartWorkflowOptions{ID: wfID, TaskQueue: wfTQ},
-		wfaOneActivityWorkflow, params)
+		wfaOneActivityWorkflow, wfaActivityParams{
+			ActivityTQ:             actTQ,
+			ActivityID:             actID,
+			StartToClose:           c.startToClose(),
+			ScheduleToClose:        c.ScheduleToClose,
+			ScheduleToStart:        c.ScheduleToStart,
+			Heartbeat:              c.Heartbeat,
+			RetryInterval:          c.retryInterval(),
+			BackoffCoefficient:     c.BackoffCoefficient,
+			MaxInterval:            c.MaxRetryInterval,
+			MaxAttempts:            c.MaxAttempts,
+			NonRetryableErrorTypes: c.NonRetryableErrorTypes,
+		})
 	require.NoError(t, err)
 	return &wfaHandle{d: d, run: run, workflowID: wfID, runID: run.GetRunID(), activityID: actID, activityTQ: actTQ}
 }
@@ -345,7 +308,7 @@ func (a *wfaHandle) rpc(e model.Event) error {
 		return err
 	case model.RespondFailedType:
 		_, err := fc.RespondActivityTaskFailed(a.d.ctx, &workflowservice.RespondActivityTaskFailedRequest{
-			Namespace: ns, TaskToken: a.token, Identity: "worker", Failure: saaFailure(e.Retryable, a.d.nextRetryDelay),
+			Namespace: ns, TaskToken: a.token, Identity: "worker", Failure: saaFailure(e.Retryable, a.d.cfg.NextRetryDelay),
 		})
 		return err
 	case model.RespondCanceledType:

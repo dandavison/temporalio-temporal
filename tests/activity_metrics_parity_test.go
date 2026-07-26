@@ -64,37 +64,49 @@ var activityMetricCatalog = []activityMetric{
 	{metrics.WorkerRegistryActivitySlotsUsed.Name(), false, false}, // matching worker registry; no real worker here
 }
 
-// activityMetricsScenario drives one activity behavior. maxAttempts caps retries, so a terminal outcome
-// is actually terminal. saaOnly marks a behavior with no WFA analog. anchor is a metric both surfaces
+// activityMetricsScenario drives one activity behavior. cfg.MaxAttempts caps retries, so a terminal
+// outcome is actually terminal. saaOnly marks a behavior with no WFA analog. anchor is a metric both surfaces
 // emit at the end of the trace; when set, the driver waits for it before snapshotting, absorbing the
 // async gap between an observed timeout transition and its metric emission. It is empty for a trace
 // whose final effect is a synchronous RPC.
 type activityMetricsScenario struct {
-	name        string
-	trace       []model.Event
-	maxAttempts int32
-	saaOnly     bool
-	anchor      string
+	name    string
+	trace   []model.Event
+	cfg     activityConfig
+	saaOnly bool
+	anchor  string
 }
 
 var activityMetricsScenarios = []activityMetricsScenario{
-	{name: "Success", trace: []model.Event{model.Poll, model.Complete}, maxAttempts: 1},
-	{name: "TerminalFailure", trace: []model.Event{model.Poll, model.FailNonRetryably}, maxAttempts: 1},
-	{name: "Cancel", trace: []model.Event{model.Poll, model.RequestCancel, {Type: model.RespondCanceledType}}, maxAttempts: 1},
-	{name: "TerminalTimeout", trace: []model.Event{model.Poll, model.StartToCloseElapses}, maxAttempts: 1, anchor: metrics.ActivityTimeout.Name()},
-	{name: "RetryableTaskFailure", trace: []model.Event{model.Poll, model.FailRetryably}, maxAttempts: 2},
-	{name: "Heartbeat", trace: []model.Event{model.Poll, {Type: model.HeartbeatType}}, maxAttempts: 1},
-	{name: "Pause", trace: []model.Event{model.Poll, model.Pause}, maxAttempts: 1},
-	{name: "Unpause", trace: []model.Event{model.Poll, model.Pause, {Type: model.UnpauseType}}, maxAttempts: 1},
-	{name: "Reset", trace: []model.Event{model.Poll, {Type: model.ResetType}}, maxAttempts: 1},
-	{name: "UpdateOptions", trace: []model.Event{model.Poll, {Type: model.UpdateOptionsType}}, maxAttempts: 1},
-	{name: "Terminate", trace: []model.Event{model.Poll, {Type: model.TerminateType}}, maxAttempts: 1, saaOnly: true},
+	{name: "Success", trace: []model.Event{model.Poll, model.Complete}, cfg: activityConfig{MaxAttempts: 1}},
+	{name: "TerminalFailure", trace: []model.Event{model.Poll, model.FailNonRetryably}, cfg: activityConfig{MaxAttempts: 1}},
+	{name: "Cancel", trace: []model.Event{model.Poll, model.RequestCancel, {Type: model.RespondCanceledType}}, cfg: activityConfig{MaxAttempts: 1}},
+	{name: "TerminalTimeout", trace: []model.Event{model.Poll, model.StartToCloseElapses}, cfg: activityConfig{MaxAttempts: 1, StartToClose: saaShortTimeout}, anchor: metrics.ActivityTimeout.Name()},
+	{name: "RetryableTaskFailure", trace: []model.Event{model.Poll, model.FailRetryably}, cfg: activityConfig{MaxAttempts: 2}},
+	{name: "Heartbeat", trace: []model.Event{model.Poll, {Type: model.HeartbeatType}}, cfg: activityConfig{MaxAttempts: 1}},
+	{name: "Pause", trace: []model.Event{model.Poll, model.Pause}, cfg: activityConfig{MaxAttempts: 1}},
+	{name: "Unpause", trace: []model.Event{model.Poll, model.Pause, {Type: model.UnpauseType}}, cfg: activityConfig{MaxAttempts: 1}},
+	{name: "Reset", trace: []model.Event{model.Poll, {Type: model.ResetType}}, cfg: activityConfig{MaxAttempts: 1}},
+	{name: "UpdateOptions", trace: []model.Event{model.Poll, {Type: model.UpdateOptionsType}}, cfg: activityConfig{MaxAttempts: 1}},
+	{name: "Terminate", trace: []model.Event{model.Poll, {Type: model.TerminateType}}, cfg: activityConfig{MaxAttempts: 1}, saaOnly: true},
+}
+
+// timeoutFiredBy is the timeout whose *Elapses event a trace fires, zero if none.
+func timeoutFiredBy(trace []model.Event) model.EventType {
+	for _, e := range trace {
+		switch e.Type {
+		case model.ScheduleToStartElapsesType, model.ScheduleToCloseElapsesType,
+			model.StartToCloseElapsesType, model.HeartbeatElapsesType:
+			return e.Type
+		}
+	}
+	return 0
 }
 
 // expectedTimeoutType returns the timeout_type tag value the timeout counters must carry for this
 // scenario, or "" if the trace fires no timeout.
 func (sc activityMetricsScenario) expectedTimeoutType() string {
-	switch saaTimeoutIn(sc.trace) {
+	switch timeoutFiredBy(sc.trace) {
 	case model.StartToCloseElapsesType:
 		return enumspb.TIMEOUT_TYPE_START_TO_CLOSE.String()
 	case model.ScheduleToCloseElapsesType:
@@ -146,17 +158,13 @@ func (s *standaloneActivityTestSuite) TestWFASAAMetricsParity() {
 
 func (s *standaloneActivityTestSuite) saaActivityMetrics(t *testing.T, env *standaloneActivityEnv, sc activityMetricsScenario) map[string]map[string]string {
 	return s.captureActivityMetrics(t, env, sc, func() {
-		d := newSAADriverDeclarative(t, env, model.Config{MaxAttempts: sc.maxAttempts})
-		d.shortTimeout = saaTimeoutIn(sc.trace)
-		d.driveTrace(t, sc.trace)
+		newSAADriverDeclarative(t, env, sc.cfg).driveTrace(t, sc.trace)
 	})
 }
 
 func (s *standaloneActivityTestSuite) wfaActivityMetrics(t *testing.T, env *standaloneActivityEnv, sc activityMetricsScenario) map[string]map[string]string {
 	return s.captureActivityMetrics(t, env, sc, func() {
-		d := newWFADriverDeclarative(t, env, sc.maxAttempts)
-		d.shortTimeout = saaTimeoutIn(sc.trace)
-		d.driveTrace(t, sc.trace)
+		newWFADriverDeclarative(t, env, sc.cfg).driveTrace(t, sc.trace)
 	})
 }
 

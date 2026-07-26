@@ -11,7 +11,6 @@ import (
 	"testing"
 	"time"
 
-	"go.temporal.io/server/chasm/lib/activity/model"
 	"go.temporal.io/server/common/testing/testcontext"
 )
 
@@ -22,17 +21,17 @@ func (s *standaloneActivityTestSuite) TestConformance() {
 }
 
 // saaTraversalConfigs are the activity configurations the graph traversal and random walk explore.
-var saaTraversalConfigs = []model.Config{
+var saaTraversalConfigs = []activityConfig{
 	{}, // no schedule-to-close, unlimited attempts
-	{HasScheduleToClose: true, HasScheduleToStart: true, HasHeartbeat: true, MaxAttempts: 3},
+	{ScheduleToClose: saaLongTimeout, ScheduleToStart: saaLongTimeout, Heartbeat: saaLongTimeout, MaxAttempts: 3},
 	// Retries exhaust after the first attempt, putting the retryable-failure-with-no-retries-left edge at
 	// depth 2 rather than past the depth bound.
 	{MaxAttempts: 1},
 	// No RPC event leaves StartDelayPending, so the activity stays in the start-delay window for the whole
 	// traversal: this crosses every operator command with that window, and the per-Poll negative poll
 	// checks that none of them dispatches early. The second adds schedule-to-close.
-	{HasStartDelay: true},
-	{HasStartDelay: true, HasScheduleToClose: true},
+	{StartDelay: saaLongStartDelay},
+	{StartDelay: saaLongStartDelay, ScheduleToClose: saaLongTimeout},
 }
 
 // saaConformanceContextBudget is TestConformance's overall context deadline: the larger of
@@ -64,11 +63,6 @@ func (s *standaloneActivityTestSuite) conformanceRPCGraphTraversal(t *testing.T)
 		// test, so all TestConformance subtests would otherwise share a single budget.
 		d := newSAADriverDeclarative(t, env, cfg)
 		d.cfgIdx = i
-		if cfg.HasStartDelay {
-			// Keep the first-dispatch window open for the whole traversal, so the activity stays
-			// StartDelayPending.
-			d.startDelay = time.Hour
-		}
 		d.traverse(t)
 	}
 }
@@ -86,11 +80,6 @@ func (s *standaloneActivityTestSuite) conformanceRandomWalk(t *testing.T) {
 	for i, cfg := range saaTraversalConfigs {
 		d := newSAADriverDeclarative(t, env, cfg) // subtest-scoped budget; see conformanceRPCGraphTraversal
 		d.cfgIdx = i
-		if cfg.HasStartDelay {
-			// Keep the first-dispatch window open for the whole walk. Unlike the BFS, the walk re-polls
-			// post-operation states, so it catches an early re-dispatch.
-			d.startDelay = time.Hour
-		}
 		// Independent, reproducible RNG stream per config.
 		d.randomWalk(t, rand.New(rand.NewSource(seed+int64(i))), steps)
 	}

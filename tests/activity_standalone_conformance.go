@@ -8,6 +8,7 @@ package tests
 
 import (
 	"cmp"
+	"context"
 	"errors"
 	"fmt"
 	"math/rand"
@@ -21,6 +22,8 @@ import (
 	"github.com/stretchr/testify/require"
 	"go.temporal.io/api/serviceerror"
 	"go.temporal.io/api/workflowservice/v1"
+	"go.temporal.io/server/chasm"
+	"go.temporal.io/server/chasm/lib/activity"
 	"go.temporal.io/server/chasm/lib/activity/model"
 	"go.temporal.io/server/common"
 )
@@ -70,7 +73,7 @@ func (d *saaDriverDeclarative) traverse(t *testing.T) {
 		path  []model.Event
 		state model.AbstractState
 	}
-	start := model.Initial(d.cfg)
+	start := model.Initial(d.cfg.modelConfig())
 	visited := map[string]bool{model.Fingerprint(start): true}
 	frontier := []node{{nil, start}}
 
@@ -88,7 +91,7 @@ func (d *saaDriverDeclarative) traverse(t *testing.T) {
 		var next []node
 		for _, nd := range frontier {
 			for _, e := range saaCandidateEvents() {
-				out := model.Transition(d.cfg, nd.state, e)
+				out := model.Transition(d.cfg.modelConfig(), nd.state, e)
 				edges++
 				path := append(append([]model.Event{}, nd.path...), e)
 				res, reached := d.verifyPath(t, path)
@@ -146,7 +149,7 @@ func (d *saaDriverDeclarative) checkCompleteness(t *testing.T, verifiedFine, ski
 		return
 	}
 	var gaps []string
-	for key := range model.Reachable(d.cfg, saaCandidateEvents()) {
+	for key := range model.Reachable(d.cfg.modelConfig(), saaCandidateEvents()) {
 		if verifiedFine[key] || skippedFine[key] {
 			continue
 		}
@@ -172,7 +175,7 @@ func (d *saaDriverDeclarative) checkCompleteness(t *testing.T, verifiedFine, ski
 func (d *saaDriverDeclarative) verifyPath(t require.TestingT, path []model.Event) (saaApply, bool) {
 	a := d.start(t)
 	a.path = path
-	cur := model.Initial(d.cfg)
+	cur := model.Initial(d.cfg.modelConfig())
 
 	obs, err := a.observed()
 	require.NoError(t, err)
@@ -183,7 +186,7 @@ func (d *saaDriverDeclarative) verifyPath(t require.TestingT, path []model.Event
 	}
 
 	for i, e := range path {
-		out := model.Transition(d.cfg, cur, e)
+		out := model.Transition(d.cfg.modelConfig(), cur, e)
 		final := i == len(path)-1
 		res := a.apply(t, e, cur, out, final)
 		if final {
@@ -248,6 +251,18 @@ func adjudicateDispatch(polledUntil, dispatchTime time.Time) negativePollResult 
 	return windowOutrun
 }
 
+// dispatchDelay is how long the pending delay in dispatchability d lasts under this config.
+func (c activityConfig) dispatchDelay(d model.Dispatchability) time.Duration {
+	switch d {
+	case model.StartDelayPending:
+		return c.StartDelay
+	case model.BackoffPending:
+		return cmp.Or(c.NextRetryDelay, c.retryInterval())
+	default:
+		return 0
+	}
+}
+
 // saaCell identifies a (source status, event type) pair for the coverage ledger.
 type saaCell struct {
 	status    model.Status
@@ -276,7 +291,7 @@ func (a *saaHandle) apply(t require.TestingT, e model.Event, cur model.AbstractS
 	// idempotent no-op: beyond that the server dedupes the consumed id, while the model, which tracks no
 	// id history, expects a fresh op.
 	for k := range a.establishedReqID {
-		probe := model.Transition(a.d.cfg, out.Next, model.Event{Type: k, SameRequestID: true})
+		probe := model.Transition(a.d.cfg.modelConfig(), out.Next, model.Event{Type: k, SameRequestID: true})
 		if probe.Reject != model.NoError || !probe.Next.SameObserved(out.Next) {
 			delete(a.establishedReqID, k)
 		}
@@ -363,7 +378,7 @@ func (a *saaHandle) applyPoll(cur model.AbstractState, out model.Outcome, final 
 		// A start_delay or backoff is still pending, so the poll must find no task. Only worth a negative
 		// poll when the configured delay outlasts a valid long poll; otherwise the state comparison below
 		// suffices.
-		if a.d.dispatchDelay(cur.Dispatchability) > saaPollTimeout {
+		if a.d.cfg.dispatchDelay(cur.Dispatchability) > saaPollTimeout {
 			switch result, resp := a.negativePoll(t); result {
 			case dispatchedEarly:
 				if final {
@@ -411,7 +426,7 @@ func (a *saaHandle) applyPoll(cur model.AbstractState, out model.Outcome, final 
 // out.Next. Where the model predicts an observable change it polls for that state; where it predicts
 // none, the only way to confirm is to wait the window out and see nothing move.
 func (a *saaHandle) applyWallClock(t require.TestingT, e model.Event, cur model.AbstractState, out model.Outcome, final bool) saaApply {
-	deadline := time.Now().Add(a.d.eventClock(e) + saaWallClockSettle)
+	deadline := time.Now().Add(a.d.cfg.window(e) + saaWallClockSettle)
 	switch {
 	case saaIsDispatchDelay(e.Type) && out.Next.Dispatchability == model.Dispatchable &&
 		cur.Dispatchability != model.Dispatchable:
@@ -491,7 +506,7 @@ func (d *saaDriverDeclarative) randomWalk(t *testing.T, rng *rand.Rand, maxSteps
 		e := d.pickWalkEvent(rng, a, cur)
 		trace = append(trace, e)
 		a.path = trace
-		out := model.Transition(d.cfg, cur, e)
+		out := model.Transition(d.cfg.modelConfig(), cur, e)
 		res := a.apply(t, e, cur, out, true)
 		if verbose {
 			t.Logf("cfg %d walk %d step %d: %s", d.cfgIdx, walks, step, saaStepDesc(cur, e, out, res))
@@ -516,7 +531,7 @@ func (d *saaDriverDeclarative) randomWalk(t *testing.T, rng *rand.Rand, maxSteps
 // walkStart begins a fresh activity and asserts it matches Initial(cfg).
 func (d *saaDriverDeclarative) walkStart(t *testing.T) (*saaHandle, model.AbstractState) {
 	a := d.start(t)
-	cur := model.Initial(d.cfg)
+	cur := model.Initial(d.cfg.modelConfig())
 	obs, err := a.observed()
 	require.NoError(t, err)
 	if !cur.SameObserved(obs) {
@@ -536,7 +551,7 @@ func (d *saaDriverDeclarative) pickWalkEvent(rng *rand.Rand, a *saaHandle, cur m
 			continue
 		}
 		applicable = append(applicable, e)
-		if out := model.Transition(d.cfg, cur, e); out.Reject == model.NoError && !out.Next.SameObserved(cur) {
+		if out := model.Transition(d.cfg.modelConfig(), cur, e); out.Reject == model.NoError && !out.Next.SameObserved(cur) {
 			changing = append(changing, e)
 			if !out.Next.Status.Terminal() {
 				deep = append(deep, e)
@@ -761,3 +776,149 @@ func saaRejectKindName(k model.ErrorKind) string {
 		return fmt.Sprintf("unrecognized(%d)", int(k))
 	}
 }
+
+// --- model-conformance additions to the SAA driver -------------------------------------------
+
+// driveTraceWithModelConformanceChecking drives a trace like driveTrace, additionally checking each
+// step against model.Transition (see apply). The state after Start must equal model.Initial(cfg).
+// Requires a config the model can see in full, so no customizeStart.
+func (d *saaDriverDeclarative) driveTraceWithModelConformanceChecking(t *testing.T, trace []model.Event) *saaHandle {
+	a := d.start(t)
+	a.path = trace
+	cur := model.Initial(d.cfg.modelConfig())
+	obs, err := a.observed()
+	require.NoError(t, err)
+	if !cur.SameObserved(obs) {
+		t.Fatalf("after Start, state disagrees with Initial(cfg).\n%s", saaStateDiff(obs, cur))
+	}
+	for _, e := range trace {
+		out := model.Transition(d.cfg.modelConfig(), cur, e)
+		a.apply(t, e, cur, out, true)
+		cur = out.Next
+	}
+	return a
+}
+
+// observed is the activity's internal state as the model's AbstractState. It shifts the raw stamps
+// cur->prev, so a caller can compare the stamp change across the last edge.
+func (a *saaHandle) observed() (model.AbstractState, error) {
+	o, err := a.readObserved()
+	if err != nil {
+		return model.AbstractState{}, err
+	}
+	a.prevStamp, a.curStamp = a.curStamp, o.Stamp
+	a.prevSTCStamp, a.curSTCStamp = a.curSTCStamp, o.ScheduleToCloseStamp
+	return model.Abstract(o), nil
+}
+
+// observedRaw is observed without the stamp shift, for use in a polling loop.
+func (a *saaHandle) observedRaw() (model.AbstractState, error) {
+	o, err := a.readObserved()
+	if err != nil {
+		return model.AbstractState{}, err
+	}
+	return model.Abstract(o), nil
+}
+
+// awaitObservedMatch polls the internal state until it matches want, or the deadline passes.
+func (a *saaHandle) awaitObservedMatch(want model.AbstractState, deadline time.Time) {
+	for {
+		if obs, err := a.observedRaw(); err == nil && want.SameObserved(obs) {
+			return
+		}
+		if !time.Now().Before(deadline) {
+			return
+		}
+		time.Sleep(saaPollInterval)
+	}
+}
+
+// chasmContext is the context ReadComponent needs to read internal component state, memoized.
+func (d *saaDriverDeclarative) chasmContext() (context.Context, error) {
+	if d.chasmCtx == nil {
+		ctx, err := d.env.GetTestCluster().Host().ChasmContext(d.ctx)
+		if err != nil {
+			return nil, err
+		}
+		d.chasmCtx = ctx
+	}
+	return d.chasmCtx, nil
+}
+
+// readObserved reads the activity's internal component state.
+func (a *saaHandle) readObserved() (model.Observed, error) {
+	chasmCtx, err := a.d.chasmContext()
+	if err != nil {
+		return model.Observed{}, err
+	}
+	ref := chasm.NewComponentRef[*activity.Activity](chasm.ExecutionKey{
+		NamespaceID: a.d.env.NamespaceID().String(), BusinessID: a.activityID, RunID: a.runID,
+	})
+	return chasm.ReadComponent(chasmCtx, ref, func(act *activity.Activity, cctx chasm.Context, _ struct{}) (model.Observed, error) {
+		attempt := act.LastAttempt.Get(cctx)
+		return model.Observed{
+			Status:               act.GetStatus(),
+			Count:                attempt.GetCount(),
+			Stamp:                attempt.GetStamp(),
+			ScheduleToCloseStamp: act.GetScheduleToCloseStamp(),
+			ResetKeepPaused:      act.GetResetKeepPaused(),
+			ResetRestoreOptions:  act.GetResetRestoreOptions(),
+			FirstAttemptStarted:  act.GetFirstAttemptStartedTime() != nil,
+			DispatchTimeSet:      attempt.GetDispatchTime() != nil,
+		}, nil
+	}, struct{}{})
+}
+
+// --- traces --------------------------------------------------------------------------------
+//
+// A trace is an event sequence run once on one fresh activity. Writing a timeout's *Elapses event into
+// the sequence is what makes the driver configure that timeout short, so that it fires.
+
+type saaTrace struct {
+	trace        []model.Event
+	cfg          activityConfig
+	startDelayed bool // activity created with a start_delay; see startDelay for the window length
+	// customizeStart mutates the StartActivityExecutionRequest before it is sent.
+	customizeStart func(*workflowservice.StartActivityExecutionRequest)
+}
+
+// config is the activity the trace implies: cfg, plus a short window for each timeout the trace fires
+// so that it can, and the start delay when the trace needs one.
+func (tr saaTrace) config() activityConfig {
+	c := tr.cfg
+	for _, e := range tr.trace {
+		switch e.Type {
+		case model.ScheduleToStartElapsesType:
+			c.ScheduleToStart = saaShortTimeout
+		case model.ScheduleToCloseElapsesType:
+			c.ScheduleToClose = saaShortTimeout
+		case model.StartToCloseElapsesType:
+			c.StartToClose = saaShortTimeout
+		case model.HeartbeatElapsesType:
+			c.Heartbeat = saaShortTimeout
+		}
+	}
+	c.StartDelay = tr.startDelay()
+	return c
+}
+
+// startDelay is the activity's start_delay: short when the trace fires StartDelayElapses, otherwise
+// long enough to stay open for the whole trace. Zero when not start-delayed.
+func (tr saaTrace) startDelay() time.Duration {
+	if !tr.startDelayed {
+		return 0
+	}
+	for _, e := range tr.trace {
+		if e.Type == model.StartDelayElapsesType {
+			return saaDelayWindow
+		}
+	}
+	return saaLongStartDelay
+}
+
+// saaDelayWindow is a dispatch-delay window long enough to outlast a valid negative long poll, so that
+// "not dispatchable yet" is observable within it.
+const saaDelayWindow = 5 * time.Second
+
+// saaLongStartDelay keeps a first attempt in its start-delay window for the whole trace.
+const saaLongStartDelay = time.Hour

@@ -242,13 +242,22 @@ func mapStatus(s activitypb.ActivityExecutionStatus) Status {
 
 // Canonical Event values for the variants frequently used in traces
 var (
-	Poll                = Event{Type: PollType}
-	Complete            = Event{Type: RespondCompletedType}
-	FailRetryably       = Event{Type: RespondFailedType, Retryable: true}
-	FailNonRetryably    = Event{Type: RespondFailedType, Retryable: false}
-	Pause               = Event{Type: PauseType}
-	RequestCancel       = Event{Type: RequestCancelType}
-	StartDelayElapses   = Event{Type: StartDelayElapsesType}
-	BackoffElapses      = Event{Type: BackoffElapsesType}
-	StartToCloseElapses = Event{Type: StartToCloseElapsesType}
+	Poll                   = Event{Type: PollType}
+	Complete               = Event{Type: RespondCompletedType}
+	FailRetryably          = Event{Type: RespondFailedType, Retryable: true}
+	FailNonRetryably       = Event{Type: RespondFailedType, Retryable: false}
+	Pause                  = Event{Type: PauseType}
+	RequestCancel          = Event{Type: RequestCancelType}
+	StartDelayElapses      = Event{Type: StartDelayElapsesType}
+	BackoffElapses         = Event{Type: BackoffElapsesType}
+	StartToCloseElapses    = Event{Type: StartToCloseElapsesType}
+	ScheduleToCloseElapses = Event{Type: ScheduleToCloseElapsesType}
+	ScheduleToStartElapses = Event{Type: ScheduleToStartElapsesType}
+	HeartbeatElapses       = Event{Type: HeartbeatElapsesType}
+	Heartbeat              = Event{Type: HeartbeatType}
+	Unpause                = Event{Type: UnpauseType}
+	Reset                  = Event{Type: ResetType}
+	UpdateOptions          = Event{Type: UpdateOptionsType}
+	Terminate              = Event{Type: TerminateType}
+	RespondCanceled        = Event{Type: RespondCanceledType}
 )

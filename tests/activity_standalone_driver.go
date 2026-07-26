@@ -18,8 +18,6 @@ import (
 	failurepb "go.temporal.io/api/failure/v1"
 	taskqueuepb "go.temporal.io/api/taskqueue/v1"
 	"go.temporal.io/api/workflowservice/v1"
-	"go.temporal.io/server/chasm"
-	"go.temporal.io/server/chasm/lib/activity"
 	"go.temporal.io/server/chasm/lib/activity/model"
 	"go.temporal.io/server/common"
 	"go.temporal.io/server/common/testing/testcontext"
@@ -28,32 +26,93 @@ import (
 	"google.golang.org/protobuf/types/known/fieldmaskpb"
 )
 
+// --- the activity under test -----------------------------------------------------------------
+
+// activityConfig is the activity a driver starts. One value configures either surface, so a parity
+// test describes a single activity rather than two that might differ.
+//
+// Every field is the value it names. A zero duration leaves that option unset, which for a timeout
+// means it never fires; the exceptions are noted. A trace that fires a timeout must therefore
+// configure it: writing model.HeartbeatElapses into a trace requires a Heartbeat here, and the
+// duration set is the window the driver waits out.
+type activityConfig struct {
+	MaxAttempts            int32         // RetryPolicy MaximumAttempts; 0 = unlimited
+	RetryInterval          time.Duration // RetryPolicy InitialInterval; 0 => saaDefaultRetryInterval
+	BackoffCoefficient     float64       // RetryPolicy BackoffCoefficient; 0 => 1.0 (constant interval)
+	MaxRetryInterval       time.Duration // RetryPolicy MaximumInterval; 0 => RetryInterval
+	NextRetryDelay         time.Duration // ApplicationFailureInfo.NextRetryDelay sent with RespondFailed
+	NonRetryableErrorTypes []string      // RetryPolicy NonRetryableErrorTypes
+
+	StartToClose    time.Duration // 0 => saaLongTimeout, so it does not fire
+	ScheduleToClose time.Duration
+	ScheduleToStart time.Duration
+	Heartbeat       time.Duration
+	StartDelay      time.Duration // SAA only: WFA has no per-activity start delay
+}
+
+// saaLongTimeout is a timeout long enough not to fire during a test.
+const saaLongTimeout = time.Hour
+
+// saaShortTimeout is a timeout short enough for a trace to wait out.
+const saaShortTimeout = 2 * time.Second
+
+func (c activityConfig) retryInterval() time.Duration {
+	return cmp.Or(c.RetryInterval, saaDefaultRetryInterval)
+}
+func (c activityConfig) startToClose() time.Duration { return cmp.Or(c.StartToClose, saaLongTimeout) }
+
+// window is how long the clock behind a wall-clock event takes to elapse, from the option that event
+// fires on. Zero for an event whose option is not configured, which no trace should drive.
+func (c activityConfig) window(e model.Event) time.Duration {
+	switch e.Type {
+	case model.StartDelayElapsesType:
+		return c.StartDelay
+	case model.BackoffElapsesType:
+		return cmp.Or(c.NextRetryDelay, c.retryInterval())
+	case model.StartToCloseElapsesType:
+		return c.startToClose()
+	case model.ScheduleToCloseElapsesType:
+		return c.ScheduleToClose
+	case model.ScheduleToStartElapsesType:
+		return c.ScheduleToStart
+	case model.HeartbeatElapsesType:
+		return c.Heartbeat
+	default:
+		return 0
+	}
+}
+
+// modelConfig is the model's view of the activity: which options are configured at all. Deriving it
+// means the two cannot disagree.
+func (c activityConfig) modelConfig() model.Config {
+	return model.Config{
+		MaxAttempts:        c.MaxAttempts,
+		HasStartDelay:      c.StartDelay > 0,
+		HasScheduleToClose: c.ScheduleToClose > 0,
+		HasScheduleToStart: c.ScheduleToStart > 0,
+		HasHeartbeat:       c.Heartbeat > 0,
+	}
+}
+
 // --- driver --------------------------------------------------------------------------------
 
 type saaDriverDeclarative struct {
 	env        *standaloneActivityEnv
 	ctx        context.Context
 	chasmCtx   context.Context // memoized by chasmContext
-	cfg        model.Config
+	cfg        activityConfig
 	cfgIdx     int
 	numStarted int
 	idBase     string // activity-id prefix, unique per driver
 
-	shortTimeout        model.EventType // this timeout is configured short at Start; zero leaves all timeouts long
-	startDelay          time.Duration   // StartActivityExecutionRequest.StartDelay
-	retryInterval       time.Duration   // RetryPolicy InitialInterval; 0 => saaDefaultRetryInterval
-	backoffCoefficient  float64         // RetryPolicy BackoffCoefficient; 0 => 1.0 (constant interval)
-	maxRetryInterval    time.Duration   // RetryPolicy MaximumInterval; 0 => the InitialInterval
-	nextRetryDelay      time.Duration   // ApplicationFailureInfo.NextRetryDelay sent with RespondFailed
-	scheduleToClose     time.Duration   // ScheduleToCloseTimeout, overriding the long default
-	positivePollTimeout time.Duration   // bounds a "must dispatch" poll; 0 => saaPositivePollTimeout
+	positivePollTimeout time.Duration // bounds a "must dispatch" poll; 0 => saaPositivePollTimeout
 
 	// customizeStart mutates the StartActivityExecutionRequest before it is sent.
 	customizeStart func(*workflowservice.StartActivityExecutionRequest)
 }
 
 // newSAADriverDeclarative builds a driver with the test-scoped context and its own activity-id prefix.
-func newSAADriverDeclarative(t *testing.T, env *standaloneActivityEnv, cfg model.Config) *saaDriverDeclarative {
+func newSAADriverDeclarative(t *testing.T, env *standaloneActivityEnv, cfg activityConfig) *saaDriverDeclarative {
 	return &saaDriverDeclarative{
 		env:    env,
 		ctx:    testcontext.For(t),
@@ -61,8 +120,6 @@ func newSAADriverDeclarative(t *testing.T, env *standaloneActivityEnv, cfg model
 		idBase: testcore.RandomizeStr(t.Name()),
 	}
 }
-
-const saaShortTimeout = 2 * time.Second
 
 // saaDefaultRetryInterval is the RetryPolicy InitialInterval when a driver sets none.
 const saaDefaultRetryInterval = 200 * time.Millisecond
@@ -133,7 +190,7 @@ func (a *saaHandle) driveEvent(t require.TestingT, e model.Event) {
 // poll; a dispatch-delay elapse advances no version, so it is detected by NextAttemptScheduleTime
 // clearing.
 func (a *saaHandle) awaitWallClock(t require.TestingT, e model.Event) {
-	deadline := time.Now().Add(a.d.eventClock(e) + saaWallClockSettle)
+	deadline := time.Now().Add(a.d.cfg.window(e) + saaWallClockSettle)
 	if saaIsDispatchDelay(e.Type) {
 		a.awaitDispatchTimePassed(t, e, deadline)
 		return
@@ -166,7 +223,7 @@ func (a *saaHandle) awaitStateTransition(t require.TestingT, e model.Event, dead
 		}
 	}
 	t.Errorf("%s: the activity did not transition within %s of driving the event, so the event did not take "+
-		"effect. Last observed: %+v", model.EventLabel(e), a.d.eventClock(e)+saaWallClockSettle, a.projection(t))
+		"effect. Last observed: %+v", model.EventLabel(e), a.d.cfg.window(e)+saaWallClockSettle, a.projection(t))
 }
 
 // awaitDispatchTimePassed polls the public projection until the pending dispatch time has passed, and
@@ -180,35 +237,14 @@ func (a *saaHandle) awaitDispatchTimePassed(t require.TestingT, e model.Event, d
 		if !time.Now().Before(deadline) {
 			t.Errorf("%s: a dispatch is still pending in the future %s after driving the event, so the "+
 				"window did not elapse. Last observed: %+v",
-				model.EventLabel(e), a.d.eventClock(e)+saaWallClockSettle, p)
+				model.EventLabel(e), a.d.cfg.window(e)+saaWallClockSettle, p)
 			return
 		}
 		time.Sleep(saaPollInterval)
 	}
 }
 
-// driveTraceWithModelConformanceChecking drives a trace like driveTrace, additionally checking each
-// step against model.Transition (see apply). The state after Start must equal model.Initial(cfg).
-// Requires a config the model can see in full, so no customizeStart.
-func (d *saaDriverDeclarative) driveTraceWithModelConformanceChecking(t *testing.T, trace []model.Event) *saaHandle {
-	a := d.start(t)
-	a.path = trace
-	cur := model.Initial(d.cfg)
-	obs, err := a.observed()
-	require.NoError(t, err)
-	if !cur.SameObserved(obs) {
-		t.Fatalf("after Start, state disagrees with Initial(cfg).\n%s", saaStateDiff(obs, cur))
-	}
-	for _, e := range trace {
-		out := model.Transition(d.cfg, cur, e)
-		a.apply(t, e, cur, out, true)
-		cur = out.Next
-	}
-	return a
-}
-
 func (d *saaDriverDeclarative) start(t require.TestingT) *saaHandle {
-	d.requireConsistentConfig(t)
 	d.numStarted++
 	// cfgIdx keeps ids distinct across the per-config drivers an explorer sweeps.
 	id := fmt.Sprintf("%s-%d-%d", d.idBase, d.cfgIdx, d.numStarted)
@@ -218,45 +254,33 @@ func (d *saaDriverDeclarative) start(t require.TestingT) *saaHandle {
 }
 
 func (d *saaDriverDeclarative) startRequest(activityID, taskQueue string) *workflowservice.StartActivityExecutionRequest {
-	long := durationpb.New(time.Hour)
-	dur := func(k model.EventType) *durationpb.Duration {
-		if d.shortTimeout == k {
-			return durationpb.New(saaShortTimeout)
+	c := d.cfg
+	opt := func(v time.Duration) *durationpb.Duration {
+		if v == 0 {
+			return nil
 		}
-		return long
+		return durationpb.New(v)
 	}
-	retryInterval := d.effectiveRetryInterval()
 	req := &workflowservice.StartActivityExecutionRequest{
-		Namespace:           d.env.Namespace().String(),
-		ActivityId:          activityID,
-		ActivityType:        d.env.Tv().ActivityType(),
-		Identity:            "worker",
-		Input:               defaultInput,
-		TaskQueue:           &taskqueuepb.TaskQueue{Name: taskQueue},
-		StartToCloseTimeout: dur(model.StartToCloseElapsesType),
+		Namespace:              d.env.Namespace().String(),
+		ActivityId:             activityID,
+		ActivityType:           d.env.Tv().ActivityType(),
+		Identity:               "worker",
+		Input:                  defaultInput,
+		TaskQueue:              &taskqueuepb.TaskQueue{Name: taskQueue},
+		StartToCloseTimeout:    durationpb.New(c.startToClose()),
+		ScheduleToCloseTimeout: opt(c.ScheduleToClose),
+		ScheduleToStartTimeout: opt(c.ScheduleToStart),
+		HeartbeatTimeout:       opt(c.Heartbeat),
+		StartDelay:             opt(c.StartDelay),
 		RetryPolicy: &commonpb.RetryPolicy{
-			InitialInterval:    durationpb.New(retryInterval),
-			BackoffCoefficient: cmp.Or(d.backoffCoefficient, 1.0),
-			MaximumInterval:    durationpb.New(cmp.Or(d.maxRetryInterval, retryInterval)),
-			MaximumAttempts:    d.cfg.MaxAttempts,
+			InitialInterval:        durationpb.New(c.retryInterval()),
+			BackoffCoefficient:     cmp.Or(c.BackoffCoefficient, 1.0),
+			MaximumInterval:        durationpb.New(cmp.Or(c.MaxRetryInterval, c.retryInterval())),
+			MaximumAttempts:        c.MaxAttempts,
+			NonRetryableErrorTypes: c.NonRetryableErrorTypes,
 		},
 		RequestId: uuid.NewString(),
-	}
-	if d.startDelay > 0 {
-		req.StartDelay = durationpb.New(d.startDelay)
-	}
-	if d.cfg.HasScheduleToClose {
-		if d.scheduleToClose > 0 {
-			req.ScheduleToCloseTimeout = durationpb.New(d.scheduleToClose)
-		} else {
-			req.ScheduleToCloseTimeout = dur(model.ScheduleToCloseElapsesType)
-		}
-	}
-	if d.cfg.HasScheduleToStart {
-		req.ScheduleToStartTimeout = dur(model.ScheduleToStartElapsesType)
-	}
-	if d.cfg.HasHeartbeat {
-		req.HeartbeatTimeout = dur(model.HeartbeatElapsesType)
 	}
 	if d.customizeStart != nil {
 		d.customizeStart(req)
@@ -337,40 +361,6 @@ func projectSAA(i *apiactivitypb.ActivityExecutionInfo) activityInfoProjection {
 	}
 }
 
-// observed is the activity's internal state as the model's AbstractState. It shifts the raw stamps
-// cur->prev, so a caller can compare the stamp change across the last edge.
-func (a *saaHandle) observed() (model.AbstractState, error) {
-	o, err := a.readObserved()
-	if err != nil {
-		return model.AbstractState{}, err
-	}
-	a.prevStamp, a.curStamp = a.curStamp, o.Stamp
-	a.prevSTCStamp, a.curSTCStamp = a.curSTCStamp, o.ScheduleToCloseStamp
-	return model.Abstract(o), nil
-}
-
-// observedRaw is observed without the stamp shift, for use in a polling loop.
-func (a *saaHandle) observedRaw() (model.AbstractState, error) {
-	o, err := a.readObserved()
-	if err != nil {
-		return model.AbstractState{}, err
-	}
-	return model.Abstract(o), nil
-}
-
-// awaitObservedMatch polls the internal state until it matches want, or the deadline passes.
-func (a *saaHandle) awaitObservedMatch(want model.AbstractState, deadline time.Time) {
-	for {
-		if obs, err := a.observedRaw(); err == nil && want.SameObserved(obs) {
-			return
-		}
-		if !time.Now().Before(deadline) {
-			return
-		}
-		time.Sleep(saaPollInterval)
-	}
-}
-
 // rpc performs the frontend RPC for a non-Poll, non-wall-clock event and returns its error.
 func (a *saaHandle) rpc(e model.Event) error {
 	fc := a.d.env.FrontendClient()
@@ -389,7 +379,7 @@ func (a *saaHandle) rpc(e model.Event) error {
 		return err
 	case model.RespondFailedType:
 		_, err := fc.RespondActivityTaskFailed(a.d.ctx, &workflowservice.RespondActivityTaskFailedRequest{
-			Namespace: ns, TaskToken: a.token, Identity: "worker", Failure: saaFailure(e.Retryable, a.d.nextRetryDelay),
+			Namespace: ns, TaskToken: a.token, Identity: "worker", Failure: saaFailure(e.Retryable, a.d.cfg.NextRetryDelay),
 		})
 		return err
 	case model.RespondCanceledType:
@@ -493,106 +483,6 @@ func (a *saaHandle) pollForTask(t require.TestingT, timeout time.Duration) *work
 	return resp
 }
 
-// eventClock is how long the clock behind a wall-clock event takes to elapse.
-func (d *saaDriverDeclarative) eventClock(e model.Event) time.Duration {
-	switch e.Type {
-	case model.StartDelayElapsesType:
-		return d.dispatchDelay(model.StartDelayPending)
-	case model.BackoffElapsesType:
-		return d.dispatchDelay(model.BackoffPending)
-	default: // the four timeouts
-		return saaShortTimeout
-	}
-}
-
-// dispatchDelay is how long the driver configured the pending delay to last.
-func (d *saaDriverDeclarative) dispatchDelay(disp model.Dispatchability) time.Duration {
-	switch disp {
-	case model.StartDelayPending:
-		return d.startDelay
-	case model.BackoffPending:
-		return cmp.Or(d.nextRetryDelay, d.effectiveRetryInterval())
-	default:
-		return 0
-	}
-}
-
-// effectiveRetryInterval is the RetryPolicy InitialInterval the driver starts activities with.
-func (d *saaDriverDeclarative) effectiveRetryInterval() time.Duration {
-	return cmp.Or(d.retryInterval, saaDefaultRetryInterval)
-}
-
-// requireConsistentConfig fails unless cfg and the timing knobs describe the same activity.
-func (d *saaDriverDeclarative) requireConsistentConfig(t require.TestingT) {
-	requireBoth := func(flag bool, knobSet bool, flagName, knobName string) {
-		if flag && !knobSet {
-			require.Fail(t, fmt.Sprintf("saaDriverDeclarative misconfigured: cfg.%s requires %s", flagName, knobName))
-		}
-		if knobSet && !flag {
-			require.Fail(t, fmt.Sprintf("saaDriverDeclarative misconfigured: %s requires cfg.%s, or the model cannot "+
-				"see it", knobName, flagName))
-		}
-	}
-	requireBoth(d.cfg.HasStartDelay, d.startDelay > 0, "HasStartDelay", "startDelay")
-	// A timeout knob only reaches the request when its cfg flag is set. The reverse does not hold: a set
-	// flag with no knob configures that timeout long.
-	if d.scheduleToClose > 0 && !d.cfg.HasScheduleToClose {
-		require.Fail(t, "saaDriverDeclarative misconfigured: scheduleToClose requires cfg.HasScheduleToClose, or "+
-			"startRequest drops it")
-	}
-	// Shortening a timeout so a trace can fire it requires that timeout to be configured at all.
-	for _, c := range []struct {
-		eventType model.EventType
-		flag      bool
-		flagName  string
-	}{
-		{model.ScheduleToCloseElapsesType, d.cfg.HasScheduleToClose, "HasScheduleToClose"},
-		{model.ScheduleToStartElapsesType, d.cfg.HasScheduleToStart, "HasScheduleToStart"},
-		{model.HeartbeatElapsesType, d.cfg.HasHeartbeat, "HasHeartbeat"},
-	} {
-		if d.shortTimeout == c.eventType && !c.flag {
-			require.Fail(t, fmt.Sprintf("saaDriverDeclarative misconfigured: shortTimeout=%s requires cfg.%s, or that "+
-				"timeout is never configured and the event cannot fire", model.EventTypeName(c.eventType), c.flagName))
-		}
-	}
-}
-
-// chasmContext is the context ReadComponent needs to read internal component state, memoized.
-func (d *saaDriverDeclarative) chasmContext() (context.Context, error) {
-	if d.chasmCtx == nil {
-		ctx, err := d.env.GetTestCluster().Host().ChasmContext(d.ctx)
-		if err != nil {
-			return nil, err
-		}
-		d.chasmCtx = ctx
-	}
-	return d.chasmCtx, nil
-}
-
-// readObserved reads the activity's internal component state.
-func (a *saaHandle) readObserved() (model.Observed, error) {
-	chasmCtx, err := a.d.chasmContext()
-	if err != nil {
-		return model.Observed{}, err
-	}
-	ref := chasm.NewComponentRef[*activity.Activity](chasm.ExecutionKey{
-		NamespaceID: a.d.env.NamespaceID().String(), BusinessID: a.activityID, RunID: a.runID,
-	})
-	return chasm.ReadComponent(chasmCtx, ref, func(act *activity.Activity, cctx chasm.Context, _ struct{}) (model.Observed, error) {
-		attempt := act.LastAttempt.Get(cctx)
-		return model.Observed{
-			Status:               act.GetStatus(),
-			Count:                attempt.GetCount(),
-			Stamp:                attempt.GetStamp(),
-			ScheduleToCloseStamp: act.GetScheduleToCloseStamp(),
-			ResetKeepPaused:      act.GetResetKeepPaused(),
-			ResetRestoreOptions:  act.GetResetRestoreOptions(),
-			FirstAttemptStarted:  act.GetFirstAttemptStartedTime() != nil,
-			DispatchTimeSet:      attempt.GetDispatchTime() != nil,
-		}, nil
-	}, struct{}{})
-}
-
 // saaIsWallClock reports whether an event fires on wall-clock time rather than synchronously.
 func saaIsWallClock(k model.EventType) bool {
 	switch k {
@@ -611,19 +501,6 @@ func saaIsDispatchDelay(k model.EventType) bool {
 	return k == model.StartDelayElapsesType || k == model.BackoffElapsesType
 }
 
-// saaTimeoutIn is the timeout whose *Elapses event a trace fires, zero if none. A trace fires at most
-// one, as its final event.
-func saaTimeoutIn(trace []model.Event) model.EventType {
-	for _, e := range trace {
-		switch e.Type {
-		case model.ScheduleToStartElapsesType, model.ScheduleToCloseElapsesType,
-			model.StartToCloseElapsesType, model.HeartbeatElapsesType:
-			return e.Type
-		}
-	}
-	return 0 // none; zero value (Poll) means no timeout is shortened
-}
-
 func saaFailure(retryable bool, nextRetryDelay time.Duration) *failurepb.Failure {
 	info := &failurepb.ApplicationFailureInfo{Type: "drive", NonRetryable: !retryable}
 	if nextRetryDelay > 0 {
@@ -634,56 +511,3 @@ func saaFailure(retryable bool, nextRetryDelay time.Duration) *failurepb.Failure
 		FailureInfo: &failurepb.Failure_ApplicationFailureInfo{ApplicationFailureInfo: info},
 	}
 }
-
-// --- traces --------------------------------------------------------------------------------
-//
-// A trace is an event sequence run once on one fresh activity. Writing a timeout's *Elapses event into
-// the sequence is what makes the driver configure that timeout short, so that it fires.
-
-type saaTrace struct {
-	trace          []model.Event
-	maxAttempts    int32         // RetryPolicy MaximumAttempts (0 = unlimited)
-	startDelayed   bool          // activity created with a start_delay; see startDelay for the window length
-	retryInterval  time.Duration // RetryPolicy InitialInterval
-	nextRetryDelay time.Duration // worker-supplied next_retry_delay
-	// customizeStart mutates the StartActivityExecutionRequest before it is sent.
-	customizeStart func(*workflowservice.StartActivityExecutionRequest)
-}
-
-// config is the model Config the trace implies: MaxAttempts, plus a timeout flag per timeout the trace
-// fires.
-func (tr saaTrace) config() model.Config {
-	cfg := model.Config{MaxAttempts: tr.maxAttempts, HasStartDelay: tr.startDelayed}
-	for _, e := range tr.trace {
-		switch e.Type {
-		case model.ScheduleToStartElapsesType:
-			cfg.HasScheduleToStart = true
-		case model.ScheduleToCloseElapsesType:
-			cfg.HasScheduleToClose = true
-		case model.HeartbeatElapsesType:
-			cfg.HasHeartbeat = true
-		}
-	}
-	return cfg
-}
-
-// startDelay is the activity's start_delay: short when the trace fires StartDelayElapses, otherwise
-// long enough to stay open for the whole trace. Zero when not start-delayed.
-func (tr saaTrace) startDelay() time.Duration {
-	if !tr.startDelayed {
-		return 0
-	}
-	for _, e := range tr.trace {
-		if e.Type == model.StartDelayElapsesType {
-			return saaDelayWindow
-		}
-	}
-	return saaLongStartDelay
-}
-
-// saaDelayWindow is a dispatch-delay window long enough to outlast a valid negative long poll, so that
-// "not dispatchable yet" is observable within it.
-const saaDelayWindow = 5 * time.Second
-
-// saaLongStartDelay keeps a first attempt in its start-delay window for the whole trace.
-const saaLongStartDelay = time.Hour
