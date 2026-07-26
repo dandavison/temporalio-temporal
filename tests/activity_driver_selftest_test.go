@@ -156,7 +156,7 @@ func (s *standaloneActivityTestSuite) TestSAADriverRejectsInconsistentConfig() {
 	})
 }
 
-// TestSAADriverAttributesAnOutrunDispatchWindowToTheDriver requires the negative poll to blame the
+// TestSAADriverBlamesItselfWhenItOutrunsTheDispatchWindow requires the negative poll to blame the
 // driver, not the product, when it can no longer make its check.
 //
 // The negative poll asserts that a start-delayed or backing-off activity dispatches nothing. It decides
@@ -169,7 +169,7 @@ func (s *standaloneActivityTestSuite) TestSAADriverRejectsInconsistentConfig() {
 //
 // Injected here by shortening the real start delay to nothing while the driver still believes it is an
 // hour, which puts the poll in exactly the position a slow machine would.
-func (s *standaloneActivityTestSuite) TestSAADriverAttributesAnOutrunDispatchWindowToTheDriver() {
+func (s *standaloneActivityTestSuite) TestSAADriverBlamesItselfWhenItOutrunsTheDispatchWindow() {
 	env := s.newTestEnv()
 
 	// negativePoll drives the one Poll of a start-delayed activity through the model-checking path, which
