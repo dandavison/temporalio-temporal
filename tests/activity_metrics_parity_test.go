@@ -29,6 +29,7 @@ import (
 	"go.temporal.io/server/chasm/lib/activity/model"
 	"go.temporal.io/server/common/metrics"
 	"go.temporal.io/server/common/testing/await"
+	"go.temporal.io/server/tests/testcore"
 )
 
 // activityMetric is one entry in the activity-metric catalog. measured marks whether this test queries
@@ -127,8 +128,8 @@ type activityMetricSets struct {
 	saa map[string]map[string]string
 }
 
-func (s *standaloneActivityTestSuite) TestWFASAAMetricsParity() {
-	env := s.newTestEnv()
+func (s *activityParityTestSuite) TestWFASAAMetricsParity() {
+	env := newParityEnv(s.T())
 	t := s.T()
 	observed := make(map[string]activityMetricSets, len(activityMetricsScenarios))
 
@@ -156,13 +157,13 @@ func (s *standaloneActivityTestSuite) TestWFASAAMetricsParity() {
 	t.Log(activityMetricsMatrix(observed))
 }
 
-func (s *standaloneActivityTestSuite) saaActivityMetrics(t *testing.T, env *standaloneActivityEnv, sc activityMetricsScenario) map[string]map[string]string {
+func (s *activityParityTestSuite) saaActivityMetrics(t *testing.T, env *testcore.TestEnv, sc activityMetricsScenario) map[string]map[string]string {
 	return s.captureActivityMetrics(t, env, sc, func() {
 		newSAADriver(t, env, sc.cfg).driveTrace(t, sc.trace)
 	})
 }
 
-func (s *standaloneActivityTestSuite) wfaActivityMetrics(t *testing.T, env *standaloneActivityEnv, sc activityMetricsScenario) map[string]map[string]string {
+func (s *activityParityTestSuite) wfaActivityMetrics(t *testing.T, env *testcore.TestEnv, sc activityMetricsScenario) map[string]map[string]string {
 	return s.captureActivityMetrics(t, env, sc, func() {
 		newWFADriver(t, env, sc.cfg).driveTrace(t, sc.trace)
 	})
@@ -170,7 +171,7 @@ func (s *standaloneActivityTestSuite) wfaActivityMetrics(t *testing.T, env *stan
 
 // captureActivityMetrics captures the activity metrics emitted while drive runs, scoped to the test
 // namespace. The two surfaces share the namespace, so it is the capture window that separates them.
-func (s *standaloneActivityTestSuite) captureActivityMetrics(t *testing.T, env *standaloneActivityEnv, sc activityMetricsScenario, drive func()) map[string]map[string]string {
+func (s *activityParityTestSuite) captureActivityMetrics(t *testing.T, env *testcore.TestEnv, sc activityMetricsScenario, drive func()) map[string]map[string]string {
 	capture := env.StartNamespaceMetricCapture()
 	drive()
 
@@ -293,7 +294,7 @@ func tagKeys(tags map[string]string) []string {
 // assertActivityMetricLabels asserts that every metric carries the test namespace, that the two timeout
 // counters carry the timeout_type that fired, and that a metric both surfaces emit carries the same tag
 // keys, so that one dashboard works for either surface.
-func assertActivityMetricLabels(t *testing.T, env *standaloneActivityEnv, sc activityMetricsScenario, sets activityMetricSets) {
+func assertActivityMetricLabels(t *testing.T, env *testcore.TestEnv, sc activityMetricsScenario, sets activityMetricSets) {
 	checkTags := func(surface string, emitted map[string]map[string]string) {
 		for name, tags := range emitted {
 			require.Equal(t, env.Namespace().String(), tags["namespace"],

@@ -14,7 +14,7 @@ import (
 	"go.temporal.io/server/common/testing/testcontext"
 )
 
-func (s *standaloneActivityTestSuite) TestConformance() {
+func (s *activityParityTestSuite) TestConformance() {
 	testcontext.For(s.T(), testcontext.WithTimeout(saaConformanceContextBudget()))
 	s.T().Run("RPCGraphTraversal", s.conformanceRPCGraphTraversal)
 	s.T().Run("RandomWalk", s.conformanceRandomWalk)
@@ -56,8 +56,8 @@ func saaConformanceContextBudget() time.Duration {
 // model.Transition is total over the RPC alphabet, so a cell it does not handle panics and fails the run.
 // Timeouts are configured long so none fires mid-scenario; the retry backoff is short so retries can be
 // traversed.
-func (s *standaloneActivityTestSuite) conformanceRPCGraphTraversal(t *testing.T) {
-	env := s.newTestEnv()
+func (s *activityParityTestSuite) conformanceRPCGraphTraversal(t *testing.T) {
+	env := newParityEnv(s.T())
 	for i, cfg := range saaTraversalConfigs {
 		// The driver anchors on the subtest t, not s.T(): the suite context is memoized once per suite
 		// test, so all TestConformance subtests would otherwise share a single budget.
@@ -72,8 +72,8 @@ func (s *standaloneActivityTestSuite) conformanceRPCGraphTraversal(t *testing.T)
 // depth-bounded traversal structurally never visits. Every step is checked against model.Transition via
 // the same apply(). The walk is deterministic in its seed, which is logged, so a failure reproduces with
 // TEMPORAL_SAASPEC_WALK_SEED. Deep runs need a raised TEMPORAL_TEST_TIMEOUT and go test -timeout.
-func (s *standaloneActivityTestSuite) conformanceRandomWalk(t *testing.T) {
-	env := s.newTestEnv()
+func (s *activityParityTestSuite) conformanceRandomWalk(t *testing.T) {
+	env := newParityEnv(s.T())
 	seed, steps := saaWalkSeed(), saaWalkSteps()
 	t.Logf("random walk: seed=%d steps=%d/cfg (override TEMPORAL_SAASPEC_WALK_SEED / _WALK_STEPS)", seed, steps)
 

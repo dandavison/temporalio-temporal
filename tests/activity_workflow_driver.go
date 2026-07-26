@@ -69,7 +69,7 @@ func projectWFA(p *workflowpb.PendingActivityInfo) activityInfoProjection {
 // --- driver --------------------------------------------------------------------------------
 
 type wfaDriver struct {
-	env *standaloneActivityEnv
+	env *testcore.TestEnv
 	ctx context.Context
 	cfg activityConfig
 
@@ -78,7 +78,7 @@ type wfaDriver struct {
 
 // newWFADriver builds a driver with the test-scoped context. cfg.StartDelay is ignored: a
 // workflow activity has no per-activity start delay.
-func newWFADriver(t *testing.T, env *standaloneActivityEnv, cfg activityConfig) *wfaDriver {
+func newWFADriver(t *testing.T, env *testcore.TestEnv, cfg activityConfig) *wfaDriver {
 	return &wfaDriver{env: env, ctx: testcontext.For(t), cfg: cfg}
 }
 
