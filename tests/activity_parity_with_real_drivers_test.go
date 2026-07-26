@@ -123,11 +123,6 @@ func (s *activityParityTestSuite) TestWFASAATimeoutTypeOnRetryDeadline() {
 	})
 }
 
-// TestWFASAAQueuedRetryInterval covers the queued-but-not-started window: SCHEDULED on attempt 2, after
-// the backoff elapsed and the retry was dispatched to Matching. Nothing is backing off there, so no
-// current retry interval should be reported. Uses a non-constant backoff, so it is a distinct config
-// from the constant-interval tests.
-
 // TestWFASAABackoffCoefficient: with a coefficient above 1 each retry waits longer than the last. The
 // interval for attempt N is InitialInterval * coefficient^(N-2), so the first backoff is the initial
 // interval and the second is that times the coefficient. Observed during the second backoff, before it
@@ -252,14 +247,6 @@ func (s *activityParityTestSuite) TestWFASAACancel() {
 		require.Equal(t, expected, newSAADriver(t, env, cfg).driveTrace(t, trace).terminal(t))
 	})
 }
-
-// TestWFASAARetryAfterFail: attempt 1 fails retryably, the backoff elapses, attempt 2 starts. The
-// activity is then running, with no pending retry, so there is no current retry interval and no
-// next-attempt schedule time.
-
-// TestWFASAABackingOff: attempt 1 fails retryably and is observed during the backoff window, so the next
-// dispatch is still in the future. The retry is pending, so both the current retry interval and the
-// next-attempt schedule time are populated. The long interval keeps the window open across the describe.
 
 // The rest of this file is one-sided SAA coverage: behavior with no WFA counterpart (worker-side
 // validation, per-activity start delay, the SAA-only operator commands), or config injected through
