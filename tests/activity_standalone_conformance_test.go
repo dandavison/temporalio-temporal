@@ -61,7 +61,7 @@ func (s *standaloneActivityTestSuite) conformanceRPCGraphTraversal(t *testing.T)
 	for i, cfg := range saaTraversalConfigs {
 		// The driver anchors on the subtest t, not s.T(): the suite context is memoized once per suite
 		// test, so all TestConformance subtests would otherwise share a single budget.
-		d := newSAADriverDeclarative(t, env, cfg)
+		d := newSAADriver(t, env, cfg)
 		d.cfgIdx = i
 		d.traverse(t)
 	}
@@ -78,7 +78,7 @@ func (s *standaloneActivityTestSuite) conformanceRandomWalk(t *testing.T) {
 	t.Logf("random walk: seed=%d steps=%d/cfg (override TEMPORAL_SAASPEC_WALK_SEED / _WALK_STEPS)", seed, steps)
 
 	for i, cfg := range saaTraversalConfigs {
-		d := newSAADriverDeclarative(t, env, cfg) // subtest-scoped budget; see conformanceRPCGraphTraversal
+		d := newSAADriver(t, env, cfg) // subtest-scoped budget; see conformanceRPCGraphTraversal
 		d.cfgIdx = i
 		// Independent, reproducible RNG stream per config.
 		d.randomWalk(t, rand.New(rand.NewSource(seed+int64(i))), steps)

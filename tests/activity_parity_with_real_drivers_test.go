@@ -41,10 +41,10 @@ func (s *standaloneActivityTestSuite) TestWFASAAStartToCloseTimeout() {
 	cfg := activityConfig{MaxAttempts: 1, StartToClose: saaShortTimeout}
 
 	s.T().Run("WorkflowActivity", func(t *testing.T) {
-		require.Equal(t, want, newWFADriverDeclarative(t, env, cfg).driveTrace(t, trace).terminal(t))
+		require.Equal(t, want, newWFADriver(t, env, cfg).driveTrace(t, trace).terminal(t))
 	})
 	s.T().Run("StandaloneActivity", func(t *testing.T) {
-		require.Equal(t, want, newSAADriverDeclarative(t, env, cfg).driveTrace(t, trace).terminal(t))
+		require.Equal(t, want, newSAADriver(t, env, cfg).driveTrace(t, trace).terminal(t))
 	})
 }
 
@@ -60,10 +60,10 @@ func (s *standaloneActivityTestSuite) TestWFASAAScheduleToCloseTimeout() {
 	cfg := activityConfig{MaxAttempts: 1, ScheduleToClose: saaShortTimeout}
 
 	s.T().Run("WorkflowActivity", func(t *testing.T) {
-		require.Equal(t, want, newWFADriverDeclarative(t, env, cfg).driveTrace(t, trace).terminal(t))
+		require.Equal(t, want, newWFADriver(t, env, cfg).driveTrace(t, trace).terminal(t))
 	})
 	s.T().Run("StandaloneActivity", func(t *testing.T) {
-		require.Equal(t, want, newSAADriverDeclarative(t, env, cfg).driveTrace(t, trace).terminal(t))
+		require.Equal(t, want, newSAADriver(t, env, cfg).driveTrace(t, trace).terminal(t))
 	})
 }
 
@@ -84,12 +84,12 @@ func (s *standaloneActivityTestSuite) TestWFASAATimeoutPreservesUnderlyingFailur
 		want := activityTerminalProjection{Status: enumspb.ACTIVITY_EXECUTION_STATUS_TIMED_OUT, FailureType: timeoutType.String()}
 		const chained = "the terminal timeout must chain the underlying application failure as its Cause"
 		t.Run("WorkflowActivity", func(t *testing.T) {
-			a := newWFADriverDeclarative(t, env, cfg).driveTrace(t, trace)
+			a := newWFADriver(t, env, cfg).driveTrace(t, trace)
 			require.Equal(t, want, a.terminal(t))
 			require.Equal(t, wantCause, a.terminalCause(t), chained)
 		})
 		t.Run("StandaloneActivity", func(t *testing.T) {
-			a := newSAADriverDeclarative(t, env, cfg).driveTrace(t, trace)
+			a := newSAADriver(t, env, cfg).driveTrace(t, trace)
 			require.Equal(t, want, a.terminal(t))
 			require.Equal(t, wantCause, a.terminalCause(t), chained)
 		})
@@ -129,10 +129,10 @@ func (s *standaloneActivityTestSuite) TestWFASAATimeoutTypeOnRetryDeadline() {
 	}
 
 	s.T().Run("WorkflowActivity", func(t *testing.T) {
-		require.Equal(t, want, newWFADriverDeclarative(t, env, cfg).driveTrace(t, trace).terminal(t))
+		require.Equal(t, want, newWFADriver(t, env, cfg).driveTrace(t, trace).terminal(t))
 	})
 	s.T().Run("StandaloneActivity", func(t *testing.T) {
-		require.Equal(t, want, newSAADriverDeclarative(t, env, cfg).driveTrace(t, trace).terminal(t))
+		require.Equal(t, want, newSAADriver(t, env, cfg).driveTrace(t, trace).terminal(t))
 	})
 }
 
@@ -152,10 +152,10 @@ func (s *standaloneActivityTestSuite) TestWFASAAQueuedRetryInterval() {
 	}
 
 	s.T().Run("WorkflowActivity", func(t *testing.T) {
-		require.Equal(t, want, newWFADriverDeclarative(t, env, cfg).driveTrace(t, trace).projection(t))
+		require.Equal(t, want, newWFADriver(t, env, cfg).driveTrace(t, trace).projection(t))
 	})
 	s.T().Run("StandaloneActivity", func(t *testing.T) {
-		require.Equal(t, want, newSAADriverDeclarative(t, env, cfg).driveTrace(t, trace).projection(t))
+		require.Equal(t, want, newSAADriver(t, env, cfg).driveTrace(t, trace).projection(t))
 	})
 }
 
@@ -170,14 +170,14 @@ func (s *standaloneActivityTestSuite) TestWFASAAHeartBeat() {
 	want := activityTerminalProjection{Status: enumspb.ACTIVITY_EXECUTION_STATUS_COMPLETED}
 
 	s.T().Run("WorkflowActivity", func(t *testing.T) {
-		d := newWFADriverDeclarative(t, env, activityConfig{MaxAttempts: 3, RetryInterval: 2 * time.Second})
+		d := newWFADriver(t, env, activityConfig{MaxAttempts: 3, RetryInterval: 2 * time.Second})
 		a := d.driveTrace(t, trace)
 		require.Equal(t, heartbeatWant, a.heartbeatDetails(t))
 		a.driveEvent(t, model.Complete)
 		require.Equal(t, want, a.terminal(t))
 	})
 	s.T().Run("StandaloneActivity", func(t *testing.T) {
-		d := newSAADriverDeclarative(t, env, activityConfig{MaxAttempts: 3, RetryInterval: 2 * time.Second})
+		d := newSAADriver(t, env, activityConfig{MaxAttempts: 3, RetryInterval: 2 * time.Second})
 		a := d.driveTrace(t, trace)
 		require.Equal(t, heartbeatWant, a.heartbeatDetails(t))
 		a.driveEvent(t, model.Complete)
@@ -193,11 +193,11 @@ func (s *standaloneActivityTestSuite) TestWFASAARetry() {
 	want := activityTerminalProjection{Status: enumspb.ACTIVITY_EXECUTION_STATUS_FAILED, FailureType: "drive"}
 
 	s.T().Run("WorkflowActivity", func(t *testing.T) {
-		d := newWFADriverDeclarative(t, env, activityConfig{MaxAttempts: 3, RetryInterval: 2 * time.Second})
+		d := newWFADriver(t, env, activityConfig{MaxAttempts: 3, RetryInterval: 2 * time.Second})
 		require.Equal(t, want, d.driveTrace(t, trace).terminal(t))
 	})
 	s.T().Run("StandaloneActivity", func(t *testing.T) {
-		d := newSAADriverDeclarative(t, env, activityConfig{MaxAttempts: 3, RetryInterval: 2 * time.Second})
+		d := newSAADriver(t, env, activityConfig{MaxAttempts: 3, RetryInterval: 2 * time.Second})
 		require.Equal(t, want, d.driveTrace(t, trace).terminal(t))
 	})
 }
@@ -213,10 +213,10 @@ func (s *standaloneActivityTestSuite) TestWFASAAHeartbeatTimeout() {
 	cfg := activityConfig{MaxAttempts: 1, Heartbeat: saaShortTimeout}
 
 	s.T().Run("WorkflowActivity", func(t *testing.T) {
-		require.Equal(t, want, newWFADriverDeclarative(t, env, cfg).driveTrace(t, trace).terminal(t))
+		require.Equal(t, want, newWFADriver(t, env, cfg).driveTrace(t, trace).terminal(t))
 	})
 	s.T().Run("StandaloneActivity", func(t *testing.T) {
-		require.Equal(t, want, newSAADriverDeclarative(t, env, cfg).driveTrace(t, trace).terminal(t))
+		require.Equal(t, want, newSAADriver(t, env, cfg).driveTrace(t, trace).terminal(t))
 	})
 }
 
@@ -233,10 +233,10 @@ func (s *standaloneActivityTestSuite) TestWFASAACancel() {
 	cfg := activityConfig{MaxAttempts: 1}
 
 	s.T().Run("WorkflowActivity", func(t *testing.T) {
-		require.Equal(t, want, newWFADriverDeclarative(t, env, cfg).driveTrace(t, trace).terminal(t))
+		require.Equal(t, want, newWFADriver(t, env, cfg).driveTrace(t, trace).terminal(t))
 	})
 	s.T().Run("StandaloneActivity", func(t *testing.T) {
-		require.Equal(t, want, newSAADriverDeclarative(t, env, cfg).driveTrace(t, trace).terminal(t))
+		require.Equal(t, want, newSAADriver(t, env, cfg).driveTrace(t, trace).terminal(t))
 	})
 }
 
@@ -255,11 +255,11 @@ func (s *standaloneActivityTestSuite) TestWFASAARetryAfterFail() {
 	}
 
 	s.T().Run("WorkflowActivity", func(t *testing.T) {
-		d := newWFADriverDeclarative(t, env, activityConfig{MaxAttempts: 3, RetryInterval: 2 * time.Second})
+		d := newWFADriver(t, env, activityConfig{MaxAttempts: 3, RetryInterval: 2 * time.Second})
 		require.Equal(t, want, d.driveTrace(t, trace).projection(t))
 	})
 	s.T().Run("StandaloneActivity", func(t *testing.T) {
-		d := newSAADriverDeclarative(t, env, activityConfig{MaxAttempts: 3, RetryInterval: 2 * time.Second})
+		d := newSAADriver(t, env, activityConfig{MaxAttempts: 3, RetryInterval: 2 * time.Second})
 		require.Equal(t, want, d.driveTrace(t, trace).projection(t))
 	})
 }
@@ -280,11 +280,11 @@ func (s *standaloneActivityTestSuite) TestWFASAABackingOff() {
 	}
 
 	s.T().Run("WorkflowActivity", func(t *testing.T) {
-		d := newWFADriverDeclarative(t, env, activityConfig{MaxAttempts: 3, RetryInterval: backingOffInterval})
+		d := newWFADriver(t, env, activityConfig{MaxAttempts: 3, RetryInterval: backingOffInterval})
 		require.Equal(t, want, d.driveTrace(t, trace).projection(t))
 	})
 	s.T().Run("StandaloneActivity", func(t *testing.T) {
-		d := newSAADriverDeclarative(t, env, activityConfig{MaxAttempts: 3, RetryInterval: backingOffInterval})
+		d := newSAADriver(t, env, activityConfig{MaxAttempts: 3, RetryInterval: backingOffInterval})
 		require.Equal(t, want, d.driveTrace(t, trace).projection(t))
 	})
 }
@@ -304,11 +304,11 @@ func (s *standaloneActivityTestSuite) TestWFASAANextRetryDelayOverride() {
 	}
 
 	s.T().Run("WorkflowActivity", func(t *testing.T) {
-		d := newWFADriverDeclarative(t, env, activityConfig{MaxAttempts: 3, RetryInterval: 5 * time.Second, NextRetryDelay: nextRetryDelayOverride})
+		d := newWFADriver(t, env, activityConfig{MaxAttempts: 3, RetryInterval: 5 * time.Second, NextRetryDelay: nextRetryDelayOverride})
 		require.Equal(t, want, d.driveTrace(t, trace).projection(t))
 	})
 	s.T().Run("StandaloneActivity", func(t *testing.T) {
-		d := newSAADriverDeclarative(t, env, activityConfig{MaxAttempts: 3, RetryInterval: 5 * time.Second, NextRetryDelay: nextRetryDelayOverride})
+		d := newSAADriver(t, env, activityConfig{MaxAttempts: 3, RetryInterval: 5 * time.Second, NextRetryDelay: nextRetryDelayOverride})
 		require.Equal(t, want, d.driveTrace(t, trace).projection(t))
 	})
 }
@@ -326,11 +326,11 @@ func (s *standaloneActivityTestSuite) TestWFASAAFirstAttemptStarted() {
 	}
 
 	s.T().Run("WorkflowActivity", func(t *testing.T) {
-		d := newWFADriverDeclarative(t, env, activityConfig{MaxAttempts: 3, RetryInterval: 2 * time.Second})
+		d := newWFADriver(t, env, activityConfig{MaxAttempts: 3, RetryInterval: 2 * time.Second})
 		require.Equal(t, want, d.driveTrace(t, trace).projection(t))
 	})
 	s.T().Run("StandaloneActivity", func(t *testing.T) {
-		d := newSAADriverDeclarative(t, env, activityConfig{MaxAttempts: 3, RetryInterval: 2 * time.Second})
+		d := newSAADriver(t, env, activityConfig{MaxAttempts: 3, RetryInterval: 2 * time.Second})
 		require.Equal(t, want, d.driveTrace(t, trace).projection(t))
 	})
 }
@@ -345,10 +345,10 @@ func (s *standaloneActivityTestSuite) TestWFASAANextAttemptScheduleTimeAndCurren
 	// both drives a trace through both surfaces, asserting each reports want.
 	both := func(t *testing.T, cfg activityConfig, trace []model.Event, want activityInfoProjection) {
 		t.Run("WorkflowActivity", func(t *testing.T) {
-			require.Equal(t, want, newWFADriverDeclarative(t, env, cfg).driveTrace(t, trace).projection(t))
+			require.Equal(t, want, newWFADriver(t, env, cfg).driveTrace(t, trace).projection(t))
 		})
 		t.Run("StandaloneActivity", func(t *testing.T) {
-			require.Equal(t, want, newSAADriverDeclarative(t, env, cfg).driveTrace(t, trace).projection(t))
+			require.Equal(t, want, newSAADriver(t, env, cfg).driveTrace(t, trace).projection(t))
 		})
 	}
 
@@ -399,10 +399,10 @@ func (s *standaloneActivityTestSuite) TestWFASAANextAttemptScheduleTimeAndCurren
 		want := activityTerminalProjection{Status: enumspb.ACTIVITY_EXECUTION_STATUS_COMPLETED}
 		cfg := activityConfig{MaxAttempts: 3, RetryInterval: saaDelayWindow}
 		t.Run("WorkflowActivity", func(t *testing.T) {
-			require.Equal(t, want, newWFADriverDeclarative(t, env, cfg).driveTrace(t, trace).terminal(t))
+			require.Equal(t, want, newWFADriver(t, env, cfg).driveTrace(t, trace).terminal(t))
 		})
 		t.Run("StandaloneActivity", func(t *testing.T) {
-			require.Equal(t, want, newSAADriverDeclarative(t, env, cfg).driveTrace(t, trace).terminal(t))
+			require.Equal(t, want, newSAADriver(t, env, cfg).driveTrace(t, trace).terminal(t))
 		})
 	})
 
@@ -441,7 +441,7 @@ func saaTraceBudget() time.Duration {
 // driveTrace drives one declared trace on its own driver and returns a handle at the reached state. It
 // checks conformance to the model at every step, unless customizeStart is set.
 func (s *standaloneActivityTestSuite) driveTrace(t *testing.T, env *standaloneActivityEnv, tr saaTrace) *saaHandle {
-	d := newSAADriverDeclarative(t, env, tr.config())
+	d := newSAADriver(t, env, tr.config())
 	d.customizeStart = tr.customizeStart
 	// Bound the positive poll below the delay window, so that "Dispatchable" means "dispatches promptly".
 	d.positivePollTimeout = saaPollTimeout
@@ -484,12 +484,12 @@ func (s *standaloneActivityTestSuite) TestWFASAANonRetryableTimeout() {
 		cfg.NonRetryableErrorTypes = []string{retrypolicy.TimeoutFailureTypePrefix + timeoutType.String()}
 		t.Run("WorkflowActivity", func(t *testing.T) {
 			require.Equalf(t, enumspb.ACTIVITY_EXECUTION_STATUS_TIMED_OUT,
-				newWFADriverDeclarative(t, env, cfg).driveTrace(t, trace).terminal(t).Status,
+				newWFADriver(t, env, cfg).driveTrace(t, trace).terminal(t).Status,
 				"a %s timeout marked non-retryable must fail the activity terminally, not retry it", timeoutType)
 		})
 		t.Run("StandaloneActivity", func(t *testing.T) {
 			require.Equalf(t, enumspb.ACTIVITY_EXECUTION_STATUS_TIMED_OUT,
-				newSAADriverDeclarative(t, env, cfg).driveTrace(t, trace).terminal(t).Status,
+				newSAADriver(t, env, cfg).driveTrace(t, trace).terminal(t).Status,
 				"a %s timeout marked non-retryable must fail the activity terminally, not retry it", timeoutType)
 		})
 	}

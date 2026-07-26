@@ -57,7 +57,7 @@ func (s *standaloneActivityTestSuite) TestSAADriverReportsUnrealizedWallClockEve
 	s.T().Run("BackoffElapses", func(t *testing.T) {
 		drive := func(customize func(*workflowservice.StartActivityExecutionRequest)) []string {
 			return recordDriverReports(func(rt require.TestingT) {
-				d := newSAADriverDeclarative(t, env, activityConfig{
+				d := newSAADriver(t, env, activityConfig{
 					MaxAttempts:   3,
 					RetryInterval: time.Second, // the window the driver will wait out
 				})
@@ -79,7 +79,7 @@ func (s *standaloneActivityTestSuite) TestSAADriverReportsUnrealizedWallClockEve
 	s.T().Run("StartToCloseElapses", func(t *testing.T) {
 		drive := func(customize func(*workflowservice.StartActivityExecutionRequest)) []string {
 			return recordDriverReports(func(rt require.TestingT) {
-				d := newSAADriverDeclarative(t, env, activityConfig{
+				d := newSAADriver(t, env, activityConfig{
 					MaxAttempts:  1,
 					StartToClose: saaShortTimeout, // the window the driver will wait out
 				})
@@ -111,7 +111,7 @@ func (s *standaloneActivityTestSuite) TestSAADriverBlamesItselfWhenItOutrunsTheD
 	// returns everything the driver reported.
 	negativePoll := func(t *testing.T, customize func(*workflowservice.StartActivityExecutionRequest)) []string {
 		return recordDriverReports(func(rt require.TestingT) {
-			d := newSAADriverDeclarative(t, env, activityConfig{MaxAttempts: 1, StartDelay: saaLongStartDelay})
+			d := newSAADriver(t, env, activityConfig{MaxAttempts: 1, StartDelay: saaLongStartDelay})
 			d.customizeStart = customize
 			a := d.start(rt)
 			_, err := a.observed() // seed the stamp baseline, as the model-checking driver does after Start

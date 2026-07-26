@@ -34,9 +34,15 @@ import (
 )
 
 // --- shared observable projections ---------------------------------------------------------
-//
-// activityInfoProjection, the retry-scheduling contract both surfaces expose, is defined in
-// activity_parity_test.go.
+
+// activityInfoProjection is the retry-scheduling contract both surfaces expose. See the two
+// projection() methods.
+type activityInfoProjection struct {
+	State                  enumspb.PendingActivityState
+	Attempt                int32
+	CurrentRetryInterval   time.Duration
+	NextAttemptScheduleSet bool
+}
 
 // activityTerminalProjection is the terminal status plus the failure discriminant a user sees: the
 // application failure Type for FAILED, the TimeoutType string for TIMED_OUT, empty otherwise.
@@ -62,7 +68,7 @@ func projectWFA(p *workflowpb.PendingActivityInfo) activityInfoProjection {
 
 // --- driver --------------------------------------------------------------------------------
 
-type wfaDriverDeclarative struct {
+type wfaDriver struct {
 	env *standaloneActivityEnv
 	ctx context.Context
 	cfg activityConfig
@@ -70,16 +76,16 @@ type wfaDriverDeclarative struct {
 	positivePollTimeout time.Duration // bounds a "must dispatch" poll; 0 => saaPositivePollTimeout
 }
 
-// newWFADriverDeclarative builds a driver with the test-scoped context. cfg.StartDelay is ignored: a
+// newWFADriver builds a driver with the test-scoped context. cfg.StartDelay is ignored: a
 // workflow activity has no per-activity start delay.
-func newWFADriverDeclarative(t *testing.T, env *standaloneActivityEnv, cfg activityConfig) *wfaDriverDeclarative {
-	return &wfaDriverDeclarative{env: env, ctx: testcontext.For(t), cfg: cfg}
+func newWFADriver(t *testing.T, env *standaloneActivityEnv, cfg activityConfig) *wfaDriver {
+	return &wfaDriver{env: env, ctx: testcontext.For(t), cfg: cfg}
 }
 
 // wfaHandle is a handle to one workflow-scheduled activity: the ids that address it and the workflow
 // that owns it, plus the token last dispatched to it.
 type wfaHandle struct {
-	d          *wfaDriverDeclarative
+	d          *wfaDriver
 	run        sdkclient.WorkflowRun
 	workflowID string
 	runID      string
@@ -147,7 +153,7 @@ func wfaOneActivityWorkflow(ctx workflow.Context, p wfaActivityParams) error {
 
 // driveTrace runs a trace on a fresh workflow-scheduled activity and returns a handle at the reached
 // state. Model-free.
-func (d *wfaDriverDeclarative) driveTrace(t *testing.T, trace []model.Event) *wfaHandle {
+func (d *wfaDriver) driveTrace(t *testing.T, trace []model.Event) *wfaHandle {
 	a := d.start(t)
 	for _, e := range trace {
 		a.driveEvent(t, e)
@@ -205,7 +211,7 @@ func (a *wfaHandle) pendingSnapshot(t require.TestingT) (activityInfoProjection,
 	return activityInfoProjection{}, false
 }
 
-func (d *wfaDriverDeclarative) start(t *testing.T) *wfaHandle {
+func (d *wfaDriver) start(t *testing.T) *wfaHandle {
 	wfTQ := testcore.RandomizeStr("wfa-wf")
 	actTQ := testcore.RandomizeStr("wfa-act")
 	const actID = "act"
@@ -343,7 +349,7 @@ func (a *wfaHandle) rpc(e model.Event) error {
 	case model.UpdateOptionsType:
 		return a.updateOptions(e)
 	default:
-		return fmt.Errorf("wfaDriverDeclarative: unhandled event type %v", e.Type)
+		return fmt.Errorf("wfaDriver: unhandled event type %v", e.Type)
 	}
 }
 
@@ -381,7 +387,7 @@ func (a *wfaHandle) waitForCancelRequested() error {
 		}
 		time.Sleep(100 * time.Millisecond)
 	}
-	return fmt.Errorf("wfaDriverDeclarative: activity %q did not reach CANCEL_REQUESTED after signal", a.activityID)
+	return fmt.Errorf("wfaDriver: activity %q did not reach CANCEL_REQUESTED after signal", a.activityID)
 }
 
 // heartbeatDetails is the last heartbeat checkpoint, as the first payload's raw bytes. Readable only

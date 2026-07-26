@@ -96,7 +96,7 @@ func (c activityConfig) modelConfig() model.Config {
 
 // --- driver --------------------------------------------------------------------------------
 
-type saaDriverDeclarative struct {
+type saaDriver struct {
 	env        *standaloneActivityEnv
 	ctx        context.Context
 	chasmCtx   context.Context // memoized by chasmContext
@@ -111,9 +111,9 @@ type saaDriverDeclarative struct {
 	customizeStart func(*workflowservice.StartActivityExecutionRequest)
 }
 
-// newSAADriverDeclarative builds a driver with the test-scoped context and its own activity-id prefix.
-func newSAADriverDeclarative(t *testing.T, env *standaloneActivityEnv, cfg activityConfig) *saaDriverDeclarative {
-	return &saaDriverDeclarative{
+// newSAADriver builds a driver with the test-scoped context and its own activity-id prefix.
+func newSAADriver(t *testing.T, env *standaloneActivityEnv, cfg activityConfig) *saaDriver {
+	return &saaDriver{
 		env:    env,
 		ctx:    testcontext.For(t),
 		cfg:    cfg,
@@ -140,7 +140,7 @@ const saaPollTimeout = common.MinLongPollTimeout + time.Second
 // saaHandle is a handle to one activity instance: the ids that address it, plus the token last
 // dispatched to it.
 type saaHandle struct {
-	d             *saaDriverDeclarative
+	d             *saaDriver
 	activityID    string
 	taskQueue     string
 	runID         string
@@ -160,7 +160,7 @@ type saaHandle struct {
 
 // driveTrace runs a trace on a fresh activity and returns a handle at the reached state. Model-free:
 // each RPC must succeed.
-func (d *saaDriverDeclarative) driveTrace(t require.TestingT, trace []model.Event) *saaHandle {
+func (d *saaDriver) driveTrace(t require.TestingT, trace []model.Event) *saaHandle {
 	a := d.start(t)
 	for _, e := range trace {
 		a.driveEvent(t, e)
@@ -244,7 +244,7 @@ func (a *saaHandle) awaitDispatchTimePassed(t require.TestingT, e model.Event, d
 	}
 }
 
-func (d *saaDriverDeclarative) start(t require.TestingT) *saaHandle {
+func (d *saaDriver) start(t require.TestingT) *saaHandle {
 	d.numStarted++
 	// cfgIdx keeps ids distinct across the per-config drivers an explorer sweeps.
 	id := fmt.Sprintf("%s-%d-%d", d.idBase, d.cfgIdx, d.numStarted)
@@ -253,7 +253,7 @@ func (d *saaDriverDeclarative) start(t require.TestingT) *saaHandle {
 	return &saaHandle{d: d, activityID: id, taskQueue: id, runID: resp.RunId, establishedReqID: map[model.EventType]string{}}
 }
 
-func (d *saaDriverDeclarative) startRequest(activityID, taskQueue string) *workflowservice.StartActivityExecutionRequest {
+func (d *saaDriver) startRequest(activityID, taskQueue string) *workflowservice.StartActivityExecutionRequest {
 	c := d.cfg
 	opt := func(v time.Duration) *durationpb.Duration {
 		if v == 0 {
@@ -417,7 +417,7 @@ func (a *saaHandle) rpc(e model.Event) error {
 	case model.UpdateOptionsType:
 		return a.updateOptions(e)
 	default:
-		return fmt.Errorf("saaDriverDeclarative: unhandled event type %v", e.Type)
+		return fmt.Errorf("saaDriver: unhandled event type %v", e.Type)
 	}
 }
 
@@ -468,12 +468,12 @@ func (a *saaHandle) pollForTask(t require.TestingT, timeout time.Duration) *work
 			return nil // teardown
 		}
 		if deadline, ok := a.d.ctx.Deadline(); ok && time.Until(deadline) < common.MinLongPollTimeout {
-			t.Errorf("saaDriverDeclarative: test context budget exhausted before the poll could run (%.1fs left, need >= %s). "+
+			t.Errorf("saaDriver: test context budget exhausted before the poll could run (%.1fs left, need >= %s). "+
 				"Raise TEMPORAL_TEST_TIMEOUT and `go test -timeout`.\n  %v",
 				time.Until(deadline).Seconds(), common.MinLongPollTimeout, err)
 			return nil
 		}
-		t.Errorf("saaDriverDeclarative bug: PollActivityTaskQueue did not complete cleanly (poll timeout must be >= "+
+		t.Errorf("saaDriver bug: PollActivityTaskQueue did not complete cleanly (poll timeout must be >= "+
 			"MinLongPollTimeout; only an empty response with a nil error means \"no task\"): %v", err)
 		return nil
 	}

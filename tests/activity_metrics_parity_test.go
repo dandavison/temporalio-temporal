@@ -158,13 +158,13 @@ func (s *standaloneActivityTestSuite) TestWFASAAMetricsParity() {
 
 func (s *standaloneActivityTestSuite) saaActivityMetrics(t *testing.T, env *standaloneActivityEnv, sc activityMetricsScenario) map[string]map[string]string {
 	return s.captureActivityMetrics(t, env, sc, func() {
-		newSAADriverDeclarative(t, env, sc.cfg).driveTrace(t, sc.trace)
+		newSAADriver(t, env, sc.cfg).driveTrace(t, sc.trace)
 	})
 }
 
 func (s *standaloneActivityTestSuite) wfaActivityMetrics(t *testing.T, env *standaloneActivityEnv, sc activityMetricsScenario) map[string]map[string]string {
 	return s.captureActivityMetrics(t, env, sc, func() {
-		newWFADriverDeclarative(t, env, sc.cfg).driveTrace(t, sc.trace)
+		newWFADriver(t, env, sc.cfg).driveTrace(t, sc.trace)
 	})
 }
 
