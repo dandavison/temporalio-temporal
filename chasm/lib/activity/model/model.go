@@ -39,7 +39,7 @@ func Initial(cfg Config) AbstractState {
 }
 
 func noop(s AbstractState) Outcome                { return Outcome{Next: s, Reject: NoError} }
-func impossible(s AbstractState) Outcome          { return Outcome{Next: s, Reject: NoError, Impossible: true} }
+func impossible(s AbstractState) Outcome          { o := noop(s); o.Impossible = true; return o }
 func reject(s AbstractState, k ErrorKind) Outcome { return Outcome{Next: s, Reject: k} }
 
 // Transition is the model's total transition function: given the config, the current abstract state,
