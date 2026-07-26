@@ -3,7 +3,7 @@
 // Workflow Activity, so the same trace can be driven for both.
 package model
 
-import "strconv"
+import "fmt"
 
 // EventType enumerates the events a driver can realize.
 type EventType int
@@ -45,8 +45,8 @@ var (
 	BackoffElapses         = Event{Type: BackoffElapsesType}
 )
 
-// EventTypeName is a stable label for an event type, for failure reports.
-func EventTypeName(t EventType) string {
+// String is a stable label for an event type, for failure reports.
+func (t EventType) String() string {
 	switch t {
 	case PollType:
 		return "Poll"
@@ -67,17 +67,17 @@ func EventTypeName(t EventType) string {
 	case BackoffElapsesType:
 		return "BackoffElapses"
 	default:
-		panic("Unknown EventType: " + strconv.Itoa(int(t)))
+		return fmt.Sprintf("EventType(%d)", int(t))
 	}
 }
 
-// EventLabel names an event and appends the flags that affect its outcome.
-func EventLabel(e Event) string {
+// String names an event and appends the flags that affect its outcome.
+func (e Event) String() string {
 	if e.Type == RespondFailedType {
 		if e.Retryable {
 			return "RespondFailed[retryable=true]"
 		}
 		return "RespondFailed[retryable=false]"
 	}
-	return EventTypeName(e.Type)
+	return e.Type.String()
 }
