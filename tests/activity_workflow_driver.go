@@ -13,6 +13,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/stretchr/testify/require"
+	apiactivitypb "go.temporal.io/api/activity/v1"
 	enumspb "go.temporal.io/api/enums/v1"
 	taskqueuepb "go.temporal.io/api/taskqueue/v1"
 	workflowpb "go.temporal.io/api/workflow/v1"
@@ -24,18 +25,23 @@ import (
 	"go.temporal.io/server/chasm/lib/activity/model"
 	"go.temporal.io/server/common/testing/testcontext"
 	"go.temporal.io/server/tests/testcore"
-	"google.golang.org/protobuf/types/known/timestamppb"
+	"google.golang.org/protobuf/types/known/durationpb"
+	"google.golang.org/protobuf/types/known/fieldmaskpb"
 )
 
-// --- shared observable projections ---------------------------------------------------------
+// --- the activity info both surfaces expose --------------------------------------------------
 
-// activityInfoProjection is the retry-scheduling contract both surfaces expose. See the two
-// projection() methods.
-type activityInfoProjection struct {
-	State                  enumspb.PendingActivityState
-	Attempt                int32
-	CurrentRetryInterval   time.Duration
-	NextAttemptScheduleSet bool
+// activityInfo is user-visible activity state projected out of the two different messages that
+// carry it: SAA's ActivityExecutionInfo and WFA's PendingActivityInfo.
+//
+// CurrentRetryInterval is rounded to the second, because WFA derives it by subtracting two stored
+// timestamps while SAA stores it exactly. NextAttemptScheduleTime is reduced to whether it is set
+// to facilitate test assertions.
+type activityInfo struct {
+	RunState                   enumspb.PendingActivityState
+	Attempt                    int32
+	CurrentRetryInterval       time.Duration
+	NextAttemptScheduleTimeSet bool
 }
 
 // activityTerminalProjection is the terminal status plus the failure discriminant a user sees: the
@@ -45,12 +51,18 @@ type activityTerminalProjection struct {
 	FailureType string
 }
 
-func projectWFA(p *workflowpb.PendingActivityInfo) activityInfoProjection {
-	return activityInfoProjection{
-		State:                  p.GetState(),
-		Attempt:                p.GetAttempt(),
-		CurrentRetryInterval:   p.GetCurrentRetryInterval().AsDuration().Round(time.Second),
-		NextAttemptScheduleSet: p.GetNextAttemptScheduleTime() != nil,
+// failureCause is the Type and Message of the failure a terminal outcome chains as its Cause.
+type failureCause struct {
+	Type    string
+	Message string
+}
+
+func wfaActivityInfo(p *workflowpb.PendingActivityInfo) activityInfo {
+	return activityInfo{
+		RunState:                   p.GetState(),
+		Attempt:                    p.GetAttempt(),
+		CurrentRetryInterval:       p.GetCurrentRetryInterval().AsDuration().Round(time.Second),
+		NextAttemptScheduleTimeSet: p.GetNextAttemptScheduleTime() != nil,
 	}
 }
 
@@ -95,6 +107,9 @@ type wfaActivityParams struct {
 	MaxAttempts            int32
 	NonRetryableErrorTypes []string
 }
+
+// activityDriverCancelRequestedTimeout bounds the wait for a signalled cancel to reach the activity.
+const activityDriverCancelRequestedTimeout = 10 * time.Second
 
 // wfaCancelSignal makes the helper workflow cancel the activity, which is how a workflow activity is
 // cancelled rather than by a direct RPC.
@@ -142,6 +157,8 @@ func wfaOneActivityWorkflow(ctx workflow.Context, p wfaActivityParams) error {
 // driveTrace runs a trace on a fresh workflow-scheduled activity and returns a handle at the reached
 // state. Model-free.
 func (d *wfaDriver) driveTrace(t *testing.T, trace []model.Event) *wfaHandle {
+	d.cfg = d.cfg.forTrace(trace)
+	validateTrace(t, d.cfg, trace)
 	a := d.start(t)
 	for _, e := range trace {
 		a.driveEvent(t, e)
@@ -196,16 +213,16 @@ func (a *wfaHandle) awaitWallClock(t require.TestingT, e model.Event) {
 // passed, and fails if it has not. The deadline is the server's own NextAttemptScheduleTime; see
 // saaHandle.awaitDispatchTimePassed.
 func (a *wfaHandle) awaitDispatchTimePassed(t require.TestingT, e model.Event) {
-	next := a.nextAttemptScheduleTime(t)
+	next := a.pendingActivity(t).GetNextAttemptScheduleTime()
 	if next == nil {
 		return // the dispatch time has already passed, or the activity is no longer pending
 	}
 	deadline := next.AsTime().Add(activityDriverWallClockSettle)
-	var p activityInfoProjection
+	var p activityInfo
 	dispatched := func() bool {
 		var pending bool
 		p, pending = a.pendingSnapshot(t)
-		return !pending || !p.NextAttemptScheduleSet
+		return !pending || !p.NextAttemptScheduleTimeSet
 	}
 	if activityDriverPollUntil(deadline, dispatched) {
 		return
@@ -215,26 +232,26 @@ func (a *wfaHandle) awaitDispatchTimePassed(t require.TestingT, e model.Event) {
 }
 
 // nextAttemptScheduleTime is when the server will dispatch the pending attempt, nil if none is pending.
-func (a *wfaHandle) nextAttemptScheduleTime(t require.TestingT) *timestamppb.Timestamp {
+// pendingActivity is the activity's entry in the workflow's pending set, nil once it is no longer
+// pending. A Describe error is reported rather than treated as absence.
+func (a *wfaHandle) pendingActivity(t require.TestingT) *workflowpb.PendingActivityInfo {
 	resp, err := a.d.env.SdkClient().DescribeWorkflowExecution(a.d.ctx, a.workflowID, a.runID)
 	require.NoError(t, err)
 	for _, pa := range resp.GetPendingActivities() {
 		if pa.GetActivityId() == a.activityID {
-			return pa.GetNextAttemptScheduleTime()
+			return pa
 		}
 	}
 	return nil
 }
 
-func (a *wfaHandle) pendingSnapshot(t require.TestingT) (activityInfoProjection, bool) {
-	resp, err := a.d.env.SdkClient().DescribeWorkflowExecution(a.d.ctx, a.workflowID, a.runID)
-	require.NoError(t, err)
-	for _, pa := range resp.GetPendingActivities() {
-		if pa.GetActivityId() == a.activityID {
-			return projectWFA(pa), true
-		}
+// pendingSnapshot is the activity's info, and whether it is currently pending.
+func (a *wfaHandle) pendingSnapshot(t require.TestingT) (activityInfo, bool) {
+	pa := a.pendingActivity(t)
+	if pa == nil {
+		return activityInfo{}, false
 	}
-	return activityInfoProjection{}, false
+	return wfaActivityInfo(pa), true
 }
 
 func (d *wfaDriver) start(t *testing.T) *wfaHandle {
@@ -294,6 +311,24 @@ func (a *wfaHandle) terminal(t require.TestingT) activityTerminalProjection {
 	}
 }
 
+// terminalStatus is the terminal status alone, for a test that asserts nothing about the failure.
+func (a *wfaHandle) terminalStatus(t require.TestingT) enumspb.ActivityExecutionStatus {
+	return a.terminal(t).Status
+}
+
+// terminalCause is the failure the terminal outcome chains as its Cause, empty if there is none. The
+// SDK surfaces it via TimeoutError.Unwrap().
+func (a *wfaHandle) terminalCause(_ require.TestingT) failureCause {
+	var toErr *temporal.TimeoutError
+	if errors.As(a.run.Get(a.d.ctx, nil), &toErr) {
+		var appErr *temporal.ApplicationError
+		if errors.As(toErr.Unwrap(), &appErr) {
+			return failureCause{Type: appErr.Type(), Message: appErr.Message()}
+		}
+	}
+	return failureCause{}
+}
+
 func (a *wfaHandle) pollForTask(t require.TestingT, timeout time.Duration) *workflowservice.PollActivityTaskQueueResponse {
 	ctx, cancel := context.WithTimeout(a.d.ctx, timeout)
 	defer cancel()
@@ -315,30 +350,115 @@ func (a *wfaHandle) rpc(e model.Event) error {
 	fc := a.d.env.FrontendClient()
 	ns := a.d.env.Namespace().String()
 	switch e.Type {
+	case model.HeartbeatType:
+		_, err := fc.RecordActivityTaskHeartbeat(a.d.ctx, &workflowservice.RecordActivityTaskHeartbeatRequest{
+			Namespace: ns, TaskToken: a.token, Details: activityHeartbeatDetails,
+		})
+		return err
+	case model.RespondCompletedType:
+		_, err := fc.RespondActivityTaskCompleted(a.d.ctx, &workflowservice.RespondActivityTaskCompletedRequest{
+			Namespace: ns, TaskToken: a.token, Identity: a.d.env.Tv().WorkerIdentity(),
+		})
+		return err
 	case model.RespondFailedType:
 		_, err := fc.RespondActivityTaskFailed(a.d.ctx, &workflowservice.RespondActivityTaskFailedRequest{
 			Namespace: ns, TaskToken: a.token, Identity: a.d.env.Tv().WorkerIdentity(), Failure: activityFailure(e.Retryable, a.d.cfg.NextRetryDelay),
 		})
 		return err
+	case model.RespondCanceledType:
+		_, err := fc.RespondActivityTaskCanceled(a.d.ctx, &workflowservice.RespondActivityTaskCanceledRequest{
+			Namespace: ns, TaskToken: a.token, Identity: a.d.env.Tv().WorkerIdentity(),
+		})
+		return err
+	case model.RequestCancelType:
+		// WFA cancel comes from the workflow, so signal it, then wait for CANCEL_REQUESTED, which SAA's
+		// RequestCancelActivityExecution reaches synchronously.
+		if err := a.d.env.SdkClient().SignalWorkflow(a.d.ctx, a.workflowID, a.runID, wfaCancelSignal, nil); err != nil {
+			return err
+		}
+		return a.waitForCancelRequested()
 	case model.PauseType:
 		_, err := fc.PauseActivityExecution(a.d.ctx, &workflowservice.PauseActivityExecutionRequest{
 			Namespace: ns, WorkflowId: a.workflowID, ActivityId: a.activityID, RunId: a.runID, Identity: a.d.env.Tv().ClientIdentity(), Reason: "drive", RequestId: uuid.NewString(),
 		})
 		return err
+	case model.UnpauseType:
+		_, err := fc.UnpauseActivityExecution(a.d.ctx, &workflowservice.UnpauseActivityExecutionRequest{
+			Namespace: ns, WorkflowId: a.workflowID, ActivityId: a.activityID, RunId: a.runID, Identity: a.d.env.Tv().ClientIdentity(),
+			ResetAttempts: e.ResetAttempts, ResetHeartbeat: e.ResetHeartbeat,
+		})
+		return err
+	case model.ResetType:
+		_, err := fc.ResetActivityExecution(a.d.ctx, &workflowservice.ResetActivityExecutionRequest{
+			Namespace: ns, WorkflowId: a.workflowID, ActivityId: a.activityID, RunId: a.runID, Identity: a.d.env.Tv().ClientIdentity(),
+			KeepPaused: e.KeepPaused, RestoreOriginalOptions: e.RestoreOriginal,
+		})
+		return err
+	case model.UpdateOptionsType:
+		return a.updateOptions(e)
 	default:
 		return fmt.Errorf("wfaDriver: unhandled event type %v", e.Type)
 	}
 }
 
-// projection is the activity's pending-activity info as an activityInfoProjection.
-func (a *wfaHandle) projection(t require.TestingT) activityInfoProjection {
+func (a *wfaHandle) updateOptions(e model.Event) error {
+	req := &workflowservice.UpdateActivityExecutionOptionsRequest{
+		Namespace: a.d.env.Namespace().String(), WorkflowId: a.workflowID, ActivityId: a.activityID, RunId: a.runID, Identity: a.d.env.Tv().ClientIdentity(),
+	}
+	switch {
+	case e.RestoreOriginal:
+		req.RestoreOriginal = true
+	case e.SetsStartDelay:
+		req.ActivityOptions = &apiactivitypb.ActivityOptions{StartDelay: durationpb.New(time.Hour)}
+		req.UpdateMask = &fieldmaskpb.FieldMask{Paths: []string{"start_delay"}}
+	default:
+		// A minimal, always-valid update: re-set the heartbeat timeout.
+		req.ActivityOptions = &apiactivitypb.ActivityOptions{HeartbeatTimeout: durationpb.New(time.Hour)}
+		req.UpdateMask = &fieldmaskpb.FieldMask{Paths: []string{"heartbeat_timeout"}}
+	}
+	_, err := a.d.env.FrontendClient().UpdateActivityExecutionOptions(a.d.ctx, req)
+	return err
+}
+
+// waitForCancelRequested blocks until the activity reports CANCEL_REQUESTED.
+func (a *wfaHandle) waitForCancelRequested() error {
+	var describeErr error
+	cancelRequested := func() bool {
+		resp, err := a.d.env.SdkClient().DescribeWorkflowExecution(a.d.ctx, a.workflowID, a.runID)
+		if err != nil {
+			describeErr = err
+			return true
+		}
+		for _, pa := range resp.GetPendingActivities() {
+			if pa.GetActivityId() == a.activityID && pa.GetState() == enumspb.PENDING_ACTIVITY_STATE_CANCEL_REQUESTED {
+				return true
+			}
+		}
+		return false
+	}
+	if activityDriverPollUntil(time.Now().Add(activityDriverCancelRequestedTimeout), cancelRequested) {
+		return describeErr
+	}
+	return fmt.Errorf("wfaDriver: activity %q did not reach CANCEL_REQUESTED after signal", a.activityID)
+}
+
+// heartbeatDetails is the last heartbeat checkpoint, as the first payload's raw bytes. Readable only
+// while the activity is still pending.
+func (a *wfaHandle) heartbeatDetails(t require.TestingT) []byte {
 	resp, err := a.d.env.SdkClient().DescribeWorkflowExecution(a.d.ctx, a.workflowID, a.runID)
 	require.NoError(t, err)
 	for _, pa := range resp.GetPendingActivities() {
 		if pa.GetActivityId() == a.activityID {
-			return projectWFA(pa)
+			return firstPayloadData(pa.GetHeartbeatDetails())
 		}
 	}
-	require.FailNowf(t, "no pending activity", "activity %q not pending; workflow may have closed", a.activityID)
-	return activityInfoProjection{}
+	require.FailNowf(t, "no pending activity", "activity %q not pending", a.activityID)
+	return nil
+}
+
+// activityInfo is the activity's PendingActivityInfo, projected.
+func (a *wfaHandle) activityInfo(t require.TestingT) activityInfo {
+	p, pending := a.pendingSnapshot(t)
+	require.Truef(t, pending, "activity %q not pending; workflow may have closed", a.activityID)
+	return p
 }

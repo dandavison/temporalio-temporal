@@ -15,6 +15,7 @@ import (
 	"github.com/stretchr/testify/require"
 	apiactivitypb "go.temporal.io/api/activity/v1"
 	commonpb "go.temporal.io/api/common/v1"
+	enumspb "go.temporal.io/api/enums/v1"
 	failurepb "go.temporal.io/api/failure/v1"
 	taskqueuepb "go.temporal.io/api/taskqueue/v1"
 	"go.temporal.io/api/workflowservice/v1"
@@ -24,6 +25,7 @@ import (
 	"go.temporal.io/server/common/testing/testcontext"
 	"go.temporal.io/server/tests/testcore"
 	"google.golang.org/protobuf/types/known/durationpb"
+	"google.golang.org/protobuf/types/known/fieldmaskpb"
 )
 
 // --- the activity under test -----------------------------------------------------------------
@@ -32,9 +34,12 @@ import (
 // test describes a single activity rather than two that might differ.
 //
 // Every field is the value it names. A zero duration leaves that option unset, which for a timeout
-// means it never fires; the exceptions are noted. A trace that fires a timeout must therefore
-// configure it: writing model.HeartbeatElapses into a trace requires a Heartbeat here, and the
-// duration set is the window the driver waits out.
+// means it never fires; the exceptions are noted.
+//
+// Timeouts are usually left unset: forTrace gives a short window to each one the trace fires, so
+// writing model.HeartbeatElapses is itself the statement that this activity has a heartbeat timeout.
+// Set one explicitly only to say something the trace cannot — that it exists without firing, or that
+// its exact duration is what the test is about.
 type activityConfig struct {
 	MaxAttempts            int32         // RetryPolicy MaximumAttempts; 0 = unlimited
 	RetryInterval          time.Duration // RetryPolicy InitialInterval; 0 => activityDefaultRetryInterval
@@ -59,11 +64,41 @@ const activityLongTimeout = time.Hour
 // activityShortTimeout is a timeout short enough for a trace to wait out.
 const activityShortTimeout = 2 * time.Second
 
+// activityLongRetryInterval is a retry interval long enough to observe an activity while it is still
+// backing off.
+const activityLongRetryInterval = 30 * time.Second
+
+// activityShortRetryInterval is a retry interval short enough for a trace to wait the backoff out. Not
+// much shorter is useful: a timer task's fire time is floored at now + TimerProcessorMaxTimeShift (~1s).
+const activityShortRetryInterval = 1 * time.Second
+
+// activityLongStartDelay is a start delay long enough to keep the first attempt pending for a whole test.
+const activityLongStartDelay = time.Hour
+
 func (c activityConfig) retryInterval() time.Duration {
 	return cmp.Or(c.RetryInterval, activityDefaultRetryInterval)
 }
 func (c activityConfig) startToClose() time.Duration {
 	return cmp.Or(c.StartToClose, activityLongTimeout)
+}
+
+// forTrace is the config with a short window for each timeout the trace fires, so that it can. A
+// timeout the author set is left alone: only they can say how long a timeout that the trace does not
+// fire should be, or that a fired one has a duration the test depends on.
+func (c activityConfig) forTrace(trace []model.Event) activityConfig {
+	for _, e := range trace {
+		switch e.Type {
+		case model.ScheduleToStartElapsesType:
+			c.ScheduleToStart = cmp.Or(c.ScheduleToStart, activityShortTimeout)
+		case model.ScheduleToCloseElapsesType:
+			c.ScheduleToClose = cmp.Or(c.ScheduleToClose, activityShortTimeout)
+		case model.StartToCloseElapsesType:
+			c.StartToClose = cmp.Or(c.StartToClose, activityShortTimeout)
+		case model.HeartbeatElapsesType:
+			c.Heartbeat = cmp.Or(c.Heartbeat, activityShortTimeout)
+		}
+	}
+	return c
 }
 
 // window is how long the clock behind a wall-clock event takes to elapse, from the option that event
@@ -89,6 +124,18 @@ func (c activityConfig) window(e model.Event) time.Duration {
 	}
 }
 
+// modelConfig is the model's view of the activity: which options are configured at all. Deriving it
+// means the two cannot disagree.
+func (c activityConfig) modelConfig() model.Config {
+	return model.Config{
+		MaxAttempts:        c.MaxAttempts,
+		HasStartDelay:      c.StartDelay > 0,
+		HasScheduleToClose: c.ScheduleToClose > 0,
+		HasScheduleToStart: c.ScheduleToStart > 0,
+		HasHeartbeat:       c.Heartbeat > 0,
+	}
+}
+
 // --- driver --------------------------------------------------------------------------------
 
 type saaDriver struct {
@@ -96,6 +143,7 @@ type saaDriver struct {
 	ctx        context.Context
 	chasmCtx   context.Context // memoized by chasmContext
 	cfg        activityConfig
+	cfgIdx     int // labels this driver's config in the conformance explorer's logs
 	numStarted int
 	idBase     string // activity-id prefix
 
@@ -127,6 +175,13 @@ const activityDriverWallClockSettle = 2 * time.Second
 // activityDriverPollInterval is the gap between reads when polling for a wall-clock event's effect.
 const activityDriverPollInterval = 100 * time.Millisecond
 
+// activityDriverTerminalTimeout bounds the wait for an activity the trace has driven to a terminal status.
+const activityDriverTerminalTimeout = 10 * time.Second
+
+// saaPollTimeout is a poll timeout above common.MinLongPollTimeout, the floor below which the frontend
+// rejects the poll rather than reaching matching.
+const saaPollTimeout = common.MinLongPollTimeout + time.Second
+
 // saaHandle is a handle to one activity instance: the ids that address it, plus the token last
 // dispatched to it.
 type saaHandle struct {
@@ -151,6 +206,8 @@ type saaHandle struct {
 // driveTrace runs a trace on a fresh activity and returns a handle at the reached state. Model-free:
 // each RPC must succeed.
 func (d *saaDriver) driveTrace(t require.TestingT, trace []model.Event) *saaHandle {
+	d.cfg = d.cfg.forTrace(trace)
+	validateTrace(t, d.cfg, trace)
 	a := d.start(t)
 	for _, e := range trace {
 		a.driveEvent(t, e)
@@ -214,7 +271,7 @@ func (a *saaHandle) awaitStateTransition(t require.TestingT, e model.Event, dead
 		}
 	}
 	t.Errorf("%s: the activity did not transition within %s of driving the event, so the event did not take "+
-		"effect. Last observed: %+v", e, a.d.cfg.window(e)+activityDriverWallClockSettle, a.projection(t))
+		"effect. Last observed: %+v", e, a.d.cfg.window(e)+activityDriverWallClockSettle, a.activityInfo(t))
 }
 
 // awaitDispatchTimePassed polls the public projection until the pending dispatch time has passed, and
@@ -228,8 +285,8 @@ func (a *saaHandle) awaitDispatchTimePassed(t require.TestingT, e model.Event) {
 		return // the dispatch time has already passed
 	}
 	deadline := next.AsTime().Add(activityDriverWallClockSettle)
-	p := projectSAA(info)
-	if activityDriverPollUntil(deadline, func() bool { p = a.projection(t); return !p.NextAttemptScheduleSet }) {
+	p := saaActivityInfo(info)
+	if activityDriverPollUntil(deadline, func() bool { p = a.activityInfo(t); return !p.NextAttemptScheduleTimeSet }) {
 		return
 	}
 	t.Errorf("%s: a dispatch is still pending %s after the time the server scheduled it for, so the "+
@@ -312,18 +369,77 @@ func (a *saaHandle) describe(t require.TestingT) *workflowservice.DescribeActivi
 	return resp
 }
 
-// projection is the activity's public info as an activityInfoProjection.
-func (a *saaHandle) projection(t require.TestingT) activityInfoProjection {
-	return projectSAA(a.describe(t).GetInfo())
+// activityInfo is the activity's ActivityExecutionInfo, projected.
+func (a *saaHandle) activityInfo(t require.TestingT) activityInfo {
+	return saaActivityInfo(a.describe(t).GetInfo())
 }
 
 // terminal is the terminal status from Info plus the failure discriminant from the Outcome.
 func (a *saaHandle) terminal(t require.TestingT) activityTerminalProjection {
-	resp := a.describe(t)
+	resp := a.awaitTerminal(t)
 	return activityTerminalProjection{
 		Status:      resp.GetInfo().GetStatus(),
 		FailureType: saaFailureType(resp.GetOutcome().GetFailure()),
 	}
+}
+
+// terminalStatus is the terminal status alone, for a test that asserts nothing about the failure.
+func (a *saaHandle) terminalStatus(t require.TestingT) enumspb.ActivityExecutionStatus {
+	return a.terminal(t).Status
+}
+
+// terminalCause is the failure the terminal outcome chains as its Cause, empty if there is none.
+func (a *saaHandle) terminalCause(t require.TestingT) failureCause {
+	cause := a.awaitTerminal(t).GetOutcome().GetFailure().GetCause()
+	return failureCause{Type: saaFailureType(cause), Message: cause.GetMessage()}
+}
+
+// awaitTerminal waits for the activity to stop running and then describes it. Neither the terminal
+// status nor the Outcome is settled before then, so reading either without waiting reports whatever the
+// activity happens to be doing. PollActivityExecution is the long poll that resolves once it is no
+// longer running; it returns an empty response when its window expires, so resubmit. Each poll is
+// bounded by the deadline.
+func (a *saaHandle) awaitTerminal(t require.TestingT) *workflowservice.DescribeActivityExecutionResponse {
+	deadline := time.Now().Add(activityDriverTerminalTimeout)
+	for time.Now().Before(deadline) {
+		ctx, cancel := context.WithDeadline(a.d.ctx, deadline)
+		resp, err := a.d.env.FrontendClient().PollActivityExecution(ctx, &workflowservice.PollActivityExecutionRequest{
+			Namespace:  a.d.env.Namespace().String(),
+			ActivityId: a.activityID,
+			RunId:      a.runID,
+		})
+		cancel()
+		if err != nil {
+			if time.Now().Before(deadline) {
+				require.NoError(t, err)
+			}
+			break // the deadline cancelled the long poll
+		}
+		if resp.GetRunId() != "" {
+			return a.describe(t)
+		}
+	}
+	t.Errorf("the activity did not reach a terminal status within %s of the trace finishing. Last observed: %+v",
+		activityDriverTerminalTimeout, a.activityInfo(t))
+	return a.describe(t)
+}
+
+// heartbeatDetails is the last heartbeat checkpoint, as the first payload's raw bytes.
+func (a *saaHandle) heartbeatDetails(t require.TestingT) []byte {
+	return firstPayloadData(a.describe(t).GetInfo().GetHeartbeatDetails())
+}
+
+// activityHeartbeatDetails is the checkpoint payload both drivers send with a Heartbeat event.
+var activityHeartbeatDetails = &commonpb.Payloads{Payloads: []*commonpb.Payload{{
+	Metadata: map[string][]byte{"encoding": []byte("json/plain")},
+	Data:     []byte(`"hb"`),
+}}}
+
+func firstPayloadData(p *commonpb.Payloads) []byte {
+	if ps := p.GetPayloads(); len(ps) > 0 {
+		return ps[0].GetData()
+	}
+	return nil
 }
 
 // saaFailureType is the application failure Type, the TimeoutType string, or "" for neither.
@@ -337,12 +453,12 @@ func saaFailureType(f *failurepb.Failure) string {
 	return ""
 }
 
-func projectSAA(i *apiactivitypb.ActivityExecutionInfo) activityInfoProjection {
-	return activityInfoProjection{
-		State:                  i.GetRunState(),
-		Attempt:                i.GetAttempt(),
-		CurrentRetryInterval:   i.GetCurrentRetryInterval().AsDuration().Round(time.Second),
-		NextAttemptScheduleSet: i.GetNextAttemptScheduleTime() != nil,
+func saaActivityInfo(i *apiactivitypb.ActivityExecutionInfo) activityInfo {
+	return activityInfo{
+		RunState:                   i.GetRunState(),
+		Attempt:                    i.GetAttempt(),
+		CurrentRetryInterval:       i.GetCurrentRetryInterval().AsDuration().Round(time.Second),
+		NextAttemptScheduleTimeSet: i.GetNextAttemptScheduleTime() != nil,
 	}
 }
 
@@ -351,19 +467,91 @@ func (a *saaHandle) rpc(e model.Event) error {
 	fc := a.d.env.FrontendClient()
 	ns := a.d.env.Namespace().String()
 	switch e.Type {
+	case model.HeartbeatType:
+		resp, err := fc.RecordActivityTaskHeartbeat(a.d.ctx, &workflowservice.RecordActivityTaskHeartbeatRequest{
+			Namespace: ns, TaskToken: a.token, Details: activityHeartbeatDetails,
+		})
+		a.lastHeartbeat = resp
+		return err
+	case model.RespondCompletedType:
+		_, err := fc.RespondActivityTaskCompleted(a.d.ctx, &workflowservice.RespondActivityTaskCompletedRequest{
+			Namespace: ns, TaskToken: a.token, Identity: a.d.env.Tv().WorkerIdentity(),
+		})
+		return err
 	case model.RespondFailedType:
 		_, err := fc.RespondActivityTaskFailed(a.d.ctx, &workflowservice.RespondActivityTaskFailedRequest{
 			Namespace: ns, TaskToken: a.token, Identity: a.d.env.Tv().WorkerIdentity(), Failure: activityFailure(e.Retryable, a.d.cfg.NextRetryDelay),
 		})
 		return err
-	case model.PauseType:
-		_, err := fc.PauseActivityExecution(a.d.ctx, &workflowservice.PauseActivityExecutionRequest{
-			Namespace: ns, ActivityId: a.activityID, RunId: a.runID, Identity: a.d.env.Tv().ClientIdentity(), Reason: "drive", RequestId: uuid.NewString(),
+	case model.RespondCanceledType:
+		_, err := fc.RespondActivityTaskCanceled(a.d.ctx, &workflowservice.RespondActivityTaskCanceledRequest{
+			Namespace: ns, TaskToken: a.token, Identity: a.d.env.Tv().WorkerIdentity(),
 		})
 		return err
+	case model.RequestCancelType:
+		_, err := fc.RequestCancelActivityExecution(a.d.ctx, &workflowservice.RequestCancelActivityExecutionRequest{
+			Namespace: ns, ActivityId: a.activityID, RunId: a.runID, Identity: a.d.env.Tv().ClientIdentity(), Reason: "drive", RequestId: a.reqID(e),
+		})
+		return err
+	case model.TerminateType:
+		_, err := fc.TerminateActivityExecution(a.d.ctx, &workflowservice.TerminateActivityExecutionRequest{
+			Namespace: ns, ActivityId: a.activityID, RunId: a.runID, Identity: a.d.env.Tv().ClientIdentity(), Reason: "drive", RequestId: a.reqID(e),
+		})
+		return err
+	case model.PauseType:
+		_, err := fc.PauseActivityExecution(a.d.ctx, &workflowservice.PauseActivityExecutionRequest{
+			Namespace: ns, ActivityId: a.activityID, RunId: a.runID, Identity: a.d.env.Tv().ClientIdentity(), Reason: "drive", RequestId: a.reqID(e),
+		})
+		return err
+	case model.UnpauseType:
+		_, err := fc.UnpauseActivityExecution(a.d.ctx, &workflowservice.UnpauseActivityExecutionRequest{
+			Namespace: ns, ActivityId: a.activityID, RunId: a.runID, Identity: a.d.env.Tv().ClientIdentity(),
+			ResetAttempts: e.ResetAttempts, ResetHeartbeat: e.ResetHeartbeat,
+		})
+		return err
+	case model.ResetType:
+		_, err := fc.ResetActivityExecution(a.d.ctx, &workflowservice.ResetActivityExecutionRequest{
+			Namespace: ns, ActivityId: a.activityID, RunId: a.runID, Identity: a.d.env.Tv().ClientIdentity(),
+			KeepPaused: e.KeepPaused, RestoreOriginalOptions: e.RestoreOriginal,
+		})
+		return err
+	case model.UpdateOptionsType:
+		return a.updateOptions(e)
 	default:
 		return fmt.Errorf("saaDriver: unhandled event type %v", e.Type)
 	}
+}
+
+func (a *saaHandle) updateOptions(e model.Event) error {
+	req := &workflowservice.UpdateActivityExecutionOptionsRequest{
+		Namespace: a.d.env.Namespace().String(), ActivityId: a.activityID, RunId: a.runID, Identity: a.d.env.Tv().ClientIdentity(),
+	}
+	switch {
+	case e.RestoreOriginal:
+		req.RestoreOriginal = true
+	case e.SetsStartDelay:
+		req.ActivityOptions = &apiactivitypb.ActivityOptions{StartDelay: durationpb.New(time.Hour)}
+		req.UpdateMask = &fieldmaskpb.FieldMask{Paths: []string{"start_delay"}}
+	default:
+		// A minimal, always-valid update: re-set the heartbeat timeout.
+		req.ActivityOptions = &apiactivitypb.ActivityOptions{HeartbeatTimeout: durationpb.New(time.Hour)}
+		req.UpdateMask = &fieldmaskpb.FieldMask{Paths: []string{"heartbeat_timeout"}}
+	}
+	_, err := a.d.env.FrontendClient().UpdateActivityExecutionOptions(a.d.ctx, req)
+	return err
+}
+
+// reqID is the request id for an operator command: the id that established the current state for that
+// command type if the event is a SameRequestID replay, else a fresh one. It is recorded as lastReqID.
+func (a *saaHandle) reqID(e model.Event) string {
+	id := uuid.NewString()
+	if e.SameRequestID {
+		if est, ok := a.establishedReqID[e.Type]; ok {
+			id = est
+		}
+	}
+	a.lastReqID = id
+	return id
 }
 
 func (a *saaHandle) pollForTask(t require.TestingT, timeout time.Duration) *workflowservice.PollActivityTaskQueueResponse {
@@ -394,6 +582,34 @@ func (a *saaHandle) pollForTask(t require.TestingT, timeout time.Duration) *work
 		return nil // no task available
 	}
 	return resp
+}
+
+// timeoutType is the TimeoutType a timeout-elapse event reports when it fires,
+// TIMEOUT_TYPE_UNSPECIFIED for any other event. The model names no API types, so the correspondence
+// lives here.
+func timeoutType(e model.Event) enumspb.TimeoutType {
+	switch e.Type {
+	case model.ScheduleToStartElapsesType:
+		return enumspb.TIMEOUT_TYPE_SCHEDULE_TO_START
+	case model.ScheduleToCloseElapsesType:
+		return enumspb.TIMEOUT_TYPE_SCHEDULE_TO_CLOSE
+	case model.StartToCloseElapsesType:
+		return enumspb.TIMEOUT_TYPE_START_TO_CLOSE
+	case model.HeartbeatElapsesType:
+		return enumspb.TIMEOUT_TYPE_HEARTBEAT
+	default:
+		return enumspb.TIMEOUT_TYPE_UNSPECIFIED
+	}
+}
+
+// validateTrace rejects a trace no activity could produce: one that drives an event when the clock
+// behind it is not running. Config is passed after forTrace, so a timeout the trace fires is
+// configured by then and only the state conditions remain to be checked.
+//
+// Only driveTrace validates. driveTraceWithModelConformanceChecking drives stopped clocks on purpose,
+// to assert the server does nothing, and the model already predicts that.
+func validateTrace(t require.TestingT, cfg activityConfig, trace []model.Event) {
+	require.NoError(t, model.ValidateTrace(cfg.modelConfig(), trace))
 }
 
 // isWallClockEvent reports whether an event fires on wall-clock time rather than synchronously.
