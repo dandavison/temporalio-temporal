@@ -117,7 +117,7 @@ func buildGraph(cfg model.Config, events []model.Event) graph {
 }
 
 // printSkeleton collapses the reachable graphs of the given configs to the status level: the union of
-// status --eventKind--> destStatus over every non-reject edge, without the fingerprint inflation from
+// status --eventType--> destStatus over every non-reject edge, without the fingerprint inflation from
 // count buckets, reset flags, and dispatchability.
 func printSkeleton(tier int, cfgs []model.Config) {
 	rel := map[string]bool{}
@@ -137,7 +137,7 @@ func printSkeleton(tier int, cfgs []model.Config) {
 					if s.Status == out.Next.Status {
 						self = "   (self)"
 					}
-					rel[fmt.Sprintf("%-16s --%-24s--> %-16s%s", s.Status, model.KindName(e.Kind), out.Next.Status, self)] = true
+					rel[fmt.Sprintf("%-16s --%-24s--> %-16s%s", s.Status, model.EventTypeName(e.Type), out.Next.Status, self)] = true
 					fp := model.Fingerprint(out.Next)
 					if !visited[fp] {
 						visited[fp] = true
@@ -161,15 +161,15 @@ func eventsFor(tier int, cfg model.Config) []model.Event {
 	switch tier {
 	case 2:
 		events := []model.Event{
-			{Kind: model.PollKind}, {Kind: model.HeartbeatKind}, {Kind: model.RespondCompletedKind},
-			{Kind: model.RespondFailedKind, Retryable: true}, {Kind: model.RespondFailedKind, Retryable: false},
-			{Kind: model.RespondCanceledKind}, {Kind: model.BackoffElapsesKind}, {Kind: model.StartToCloseElapsesKind},
+			{Type: model.PollEvent}, {Type: model.HeartbeatEvent}, {Type: model.RespondCompletedEvent},
+			{Type: model.RespondFailedEvent, Retryable: true}, {Type: model.RespondFailedEvent, Retryable: false},
+			{Type: model.RespondCanceledEvent}, {Type: model.BackoffElapsesEvent}, {Type: model.StartToCloseElapsesEvent},
 		}
 		if cfg.HasHeartbeat {
-			events = append(events, model.Event{Kind: model.HeartbeatElapsesKind})
+			events = append(events, model.Event{Type: model.HeartbeatElapsesEvent})
 		}
 		if cfg.HasScheduleToClose {
-			events = append(events, model.Event{Kind: model.ScheduleToCloseElapsesKind})
+			events = append(events, model.Event{Type: model.ScheduleToCloseElapsesEvent})
 		}
 		return events
 	default:
@@ -180,27 +180,27 @@ func eventsFor(tier int, cfg model.Config) []model.Event {
 // tier3Events mirrors saaCandidateEvents(): worker RPCs + operator commands, no wall-clock.
 func tier3Events() []model.Event {
 	var out []model.Event
-	for _, k := range []model.EventKind{model.PollKind, model.HeartbeatKind, model.RespondCompletedKind, model.RespondCanceledKind, model.UpdateOptionsKind} {
-		out = append(out, model.Event{Kind: k})
+	for _, k := range []model.EventType{model.PollEvent, model.HeartbeatEvent, model.RespondCompletedEvent, model.RespondCanceledEvent, model.UpdateOptionsEvent} {
+		out = append(out, model.Event{Type: k})
 	}
-	out = append(out, model.Event{Kind: model.UpdateOptionsKind, SetsStartDelay: true})
+	out = append(out, model.Event{Type: model.UpdateOptionsEvent, SetsStartDelay: true})
 	for _, r := range []bool{false, true} {
-		out = append(out, model.Event{Kind: model.RespondFailedKind, Retryable: r})
+		out = append(out, model.Event{Type: model.RespondFailedEvent, Retryable: r})
 	}
 	for _, sr := range []bool{false, true} {
 		out = append(out,
-			model.Event{Kind: model.PauseKind, SameRequestID: sr},
-			model.Event{Kind: model.TerminateKind, SameRequestID: sr},
-			model.Event{Kind: model.RequestCancelKind, SameRequestID: sr},
+			model.Event{Type: model.PauseEvent, SameRequestID: sr},
+			model.Event{Type: model.TerminateEvent, SameRequestID: sr},
+			model.Event{Type: model.RequestCancelEvent, SameRequestID: sr},
 		)
 	}
 	for _, kp := range []bool{false, true} {
 		for _, ro := range []bool{false, true} {
-			out = append(out, model.Event{Kind: model.ResetKind, KeepPaused: kp, RestoreOriginal: ro})
+			out = append(out, model.Event{Type: model.ResetEvent, KeepPaused: kp, RestoreOriginal: ro})
 		}
 	}
 	for _, ra := range []bool{false, true} {
-		out = append(out, model.Event{Kind: model.UnpauseKind, ResetAttempts: ra})
+		out = append(out, model.Event{Type: model.UnpauseEvent, ResetAttempts: ra})
 	}
 	return out
 }

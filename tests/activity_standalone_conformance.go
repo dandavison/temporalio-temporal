@@ -93,8 +93,8 @@ func (d *saaDriverDeclarative) traverse(t *testing.T) {
 				path := append(append([]model.Event{}, nd.path...), e)
 				res, reached := d.verifyPath(t, path)
 				if reached {
-					c := saaCell{nd.state.Status, e.Kind}
-					key := model.CellKey(nd.state, e.Kind)
+					c := saaCell{nd.state.Status, e.Type}
+					key := model.CellKey(nd.state, e.Type)
 					if res == saaSkippedNoToken {
 						skippedCells[c] = true
 						skippedFine[key] = true
@@ -126,7 +126,7 @@ func (d *saaDriverDeclarative) traverse(t *testing.T) {
 		var unexercised []string
 		for c := range skippedCells {
 			if !verifiedCells[c] {
-				unexercised = append(unexercised, fmt.Sprintf("%s/%s", c.status, model.KindName(c.kind)))
+				unexercised = append(unexercised, fmt.Sprintf("%s/%s", c.status, model.EventTypeName(c.kind)))
 			}
 		}
 		sort.Strings(unexercised)
@@ -255,38 +255,38 @@ func adjudicateDispatch(polledUntil, dispatchTime time.Time) negativePollResult 
 // saaCell identifies a (source status, event kind) pair for the coverage ledger.
 type saaCell struct {
 	status model.Status
-	kind   model.EventKind
+	kind   model.EventType
 }
 
 func (a *saaHandle) apply(t require.TestingT, e model.Event, cur model.AbstractState, out model.Outcome, final bool) saaApply {
-	if e.Kind == model.PollKind {
+	if e.Type == model.PollEvent {
 		return a.applyPoll(cur, out, final, t)
 	}
-	if saaIsWallClock(e.Kind) {
+	if saaIsWallClock(e.Type) {
 		return a.applyWallClock(t, e, cur, out, final)
 	}
 	// A worker RPC needs a task token, held only after a poll. An empty token yields a different error
 	// than the model's NotFound, so the edge is not drivable on a never-polled path.
-	if model.NeedsToken(e.Kind) && a.token == nil {
+	if model.NeedsToken(e.Type) && a.token == nil {
 		return saaSkippedNoToken
 	}
 	err := a.rpc(e)
-	if model.CarriesReqID(e.Kind) && out.Reject == model.NoError && out.Next.Status != cur.Status {
+	if model.CarriesReqID(e.Type) && out.Reject == model.NoError && out.Next.Status != cur.Status {
 		// This request established a new state, so its id is the one a later SameRequestID reuses. An
 		// intervening rejected or no-op request must not overwrite it.
-		a.establishedReqID[e.Kind] = a.lastReqID
+		a.establishedReqID[e.Type] = a.lastReqID
 	}
 	// Drop an established id once the model no longer treats that op's SameRequestID replay as an
 	// idempotent no-op, which is what probing it here determines. Beyond that region the server would
 	// dedupe the already-consumed id, while the model, which tracks no id history, expects a fresh op.
 	for k := range a.establishedReqID {
-		probe := model.Transition(a.d.cfg, out.Next, model.Event{Kind: k, SameRequestID: true})
+		probe := model.Transition(a.d.cfg, out.Next, model.Event{Type: k, SameRequestID: true})
 		if probe.Reject != model.NoError || !probe.Next.SameObserved(out.Next) {
 			delete(a.establishedReqID, k)
 		}
 	}
 	ok := a.verify(t, e, cur, out, err, final)
-	if e.Kind == model.HeartbeatKind && out.Reject == model.NoError {
+	if e.Type == model.HeartbeatEvent && out.Reject == model.NoError {
 		observed := model.HeartbeatFlags{
 			CancelRequested: a.lastHeartbeat.GetCancelRequested(),
 			ActivityPaused:  a.lastHeartbeat.GetActivityPaused(),
@@ -418,7 +418,7 @@ func (a *saaHandle) applyPoll(cur model.AbstractState, out model.Outcome, final 
 func (a *saaHandle) applyWallClock(t require.TestingT, e model.Event, cur model.AbstractState, out model.Outcome, final bool) saaApply {
 	deadline := time.Now().Add(a.d.eventClock(e) + saaWallClockSettle)
 	switch {
-	case saaIsDispatchDelay(e.Kind) && out.Next.Dispatchability == model.Dispatchable &&
+	case saaIsDispatchDelay(e.Type) && out.Next.Dispatchability == model.Dispatchable &&
 		cur.Dispatchability != model.Dispatchable:
 		// The delay elapsing is not visible in the component state the oracle compares — Dispatchability is
 		// masked out of SameObserved — so assert the public dispatch time passing instead. Otherwise this
@@ -539,7 +539,7 @@ func (d *saaDriverDeclarative) walkStart(t *testing.T) (*saaHandle, model.Abstra
 func (d *saaDriverDeclarative) pickWalkEvent(rng *rand.Rand, a *saaHandle, cur model.AbstractState) model.Event {
 	var applicable, changing, deep []model.Event
 	for _, e := range saaCandidateEvents() {
-		if model.NeedsToken(e.Kind) && a.token == nil {
+		if model.NeedsToken(e.Type) && a.token == nil {
 			continue
 		}
 		applicable = append(applicable, e)
@@ -581,32 +581,32 @@ func saaStepDesc(cur model.AbstractState, e model.Event, out model.Outcome, res 
 // variant per outcome-affecting flag.
 func saaCandidateEvents() []model.Event {
 	var out []model.Event
-	simple := []model.EventKind{
-		model.PollKind, model.HeartbeatKind, model.RespondCompletedKind, model.RespondCanceledKind, model.UpdateOptionsKind,
+	simple := []model.EventType{
+		model.PollEvent, model.HeartbeatEvent, model.RespondCompletedEvent, model.RespondCanceledEvent, model.UpdateOptionsEvent,
 	}
 	for _, k := range simple {
-		out = append(out, model.Event{Kind: k})
+		out = append(out, model.Event{Type: k})
 	}
 	// start_delay is mutable only within the StartDelayPending window, so the model rejects this in every
 	// state the RPC-only traversal reaches.
-	out = append(out, model.Event{Kind: model.UpdateOptionsKind, SetsStartDelay: true})
+	out = append(out, model.Event{Type: model.UpdateOptionsEvent, SetsStartDelay: true})
 	for _, r := range []bool{false, true} {
-		out = append(out, model.Event{Kind: model.RespondFailedKind, Retryable: r})
+		out = append(out, model.Event{Type: model.RespondFailedEvent, Retryable: r})
 	}
 	for _, sr := range []bool{false, true} {
 		out = append(out,
-			model.Event{Kind: model.PauseKind, SameRequestID: sr},
-			model.Event{Kind: model.TerminateKind, SameRequestID: sr},
-			model.Event{Kind: model.RequestCancelKind, SameRequestID: sr},
+			model.Event{Type: model.PauseEvent, SameRequestID: sr},
+			model.Event{Type: model.TerminateEvent, SameRequestID: sr},
+			model.Event{Type: model.RequestCancelEvent, SameRequestID: sr},
 		)
 	}
 	for _, kp := range []bool{false, true} {
 		for _, ro := range []bool{false, true} {
-			out = append(out, model.Event{Kind: model.ResetKind, KeepPaused: kp, RestoreOriginal: ro})
+			out = append(out, model.Event{Type: model.ResetEvent, KeepPaused: kp, RestoreOriginal: ro})
 		}
 	}
 	for _, ra := range []bool{false, true} {
-		out = append(out, model.Event{Kind: model.UnpauseKind, ResetAttempts: ra})
+		out = append(out, model.Event{Type: model.UnpauseEvent, ResetAttempts: ra})
 	}
 	return out
 }

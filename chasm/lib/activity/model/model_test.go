@@ -14,7 +14,7 @@ func TestInitial(t *testing.T) {
 
 func TestPollFromScheduledStarts(t *testing.T) {
 	s := Initial(Config{})
-	out := Transition(Config{}, s, Event{Kind: PollKind})
+	out := Transition(Config{}, s, Event{Type: PollEvent})
 	if out.Reject != NoError {
 		t.Fatalf("unexpected reject %v", out.Reject)
 	}
@@ -29,7 +29,7 @@ func TestPollFromScheduledStarts(t *testing.T) {
 func TestPauseFromScheduledInvalidatesAttemptTasks(t *testing.T) {
 	cfg := Config{HasScheduleToClose: true}
 	s := Initial(cfg)
-	out := Transition(cfg, s, Event{Kind: PauseKind})
+	out := Transition(cfg, s, Event{Type: PauseEvent})
 	if out.Reject != NoError {
 		t.Fatalf("unexpected reject %v", out.Reject)
 	}
@@ -46,8 +46,8 @@ func TestPauseFromScheduledInvalidatesAttemptTasks(t *testing.T) {
 
 func TestPauseWhileStartedIsPauseRequested(t *testing.T) {
 	cfg := Config{}
-	s := Transition(cfg, Initial(cfg), Event{Kind: PollKind}).Next // Scheduled -> Started
-	out := Transition(cfg, s, Event{Kind: PauseKind})
+	s := Transition(cfg, Initial(cfg), Event{Type: PollEvent}).Next // Scheduled -> Started
+	out := Transition(cfg, s, Event{Type: PauseEvent})
 	if out.Reject != NoError {
 		t.Fatalf("unexpected reject %v", out.Reject)
 	}
@@ -66,8 +66,8 @@ func TestPauseWhileStartedIsPauseRequested(t *testing.T) {
 // a worker would: poll the first attempt, then fail it retryably.
 func backedOffRetry(t *testing.T, cfg Config) AbstractState {
 	t.Helper()
-	started := Transition(cfg, Initial(cfg), Event{Kind: PollKind}).Next
-	s := Transition(cfg, started, Event{Kind: RespondFailedKind, Retryable: true}).Next
+	started := Transition(cfg, Initial(cfg), Event{Type: PollEvent}).Next
+	s := Transition(cfg, started, Event{Type: RespondFailedEvent, Retryable: true}).Next
 	if s.Status != Scheduled || s.Dispatchability != BackoffPending {
 		t.Fatalf("expected a Scheduled/BackoffPending retry, got %v/%v", s.Status, s.Dispatchability)
 	}
@@ -75,25 +75,25 @@ func backedOffRetry(t *testing.T, cfg Config) AbstractState {
 }
 
 func pollable(cfg Config, s AbstractState) bool {
-	return Transition(cfg, s, Event{Kind: PollKind}).Next.Status == Started
+	return Transition(cfg, s, Event{Type: PollEvent}).Next.Status == Started
 }
 
 // Pause during a start delay is possible; unpause does not dispatch immediately — it keeps waiting
 // for the delay, and only a StartDelayElapses makes it dispatchable.
 func TestPauseUnpauseDuringStartDelay(t *testing.T) {
 	cfg := Config{HasStartDelay: true}
-	paused := Transition(cfg, Initial(cfg), Event{Kind: PauseKind})
+	paused := Transition(cfg, Initial(cfg), Event{Type: PauseEvent})
 	if paused.Reject != NoError || paused.Next.Status != Paused {
 		t.Fatalf("pause during start delay must succeed -> Paused, got %v/%v", paused.Reject, paused.Next.Status)
 	}
-	unpaused := Transition(cfg, paused.Next, Event{Kind: UnpauseKind}).Next
+	unpaused := Transition(cfg, paused.Next, Event{Type: UnpauseEvent}).Next
 	if unpaused.Status != Scheduled || unpaused.Dispatchability != StartDelayPending {
 		t.Fatalf("unpause during start delay must resume waiting (Scheduled/StartDelayPending), got %v/%v", unpaused.Status, unpaused.Dispatchability)
 	}
 	if pollable(cfg, unpaused) {
 		t.Fatalf("a poll must find no task while the start delay is still pending")
 	}
-	elapsed := Transition(cfg, unpaused, Event{Kind: StartDelayElapsesKind}).Next
+	elapsed := Transition(cfg, unpaused, Event{Type: StartDelayElapsesEvent}).Next
 	if !pollable(cfg, elapsed) {
 		t.Fatalf("once the start delay elapses the activity must dispatch")
 	}
@@ -103,18 +103,18 @@ func TestPauseUnpauseDuringStartDelay(t *testing.T) {
 func TestPauseUnpauseDuringBackoff(t *testing.T) {
 	cfg := Config{}
 	retry := backedOffRetry(t, cfg)
-	paused := Transition(cfg, retry, Event{Kind: PauseKind})
+	paused := Transition(cfg, retry, Event{Type: PauseEvent})
 	if paused.Reject != NoError || paused.Next.Status != Paused {
 		t.Fatalf("pause during backoff must succeed -> Paused, got %v/%v", paused.Reject, paused.Next.Status)
 	}
-	unpaused := Transition(cfg, paused.Next, Event{Kind: UnpauseKind}).Next
+	unpaused := Transition(cfg, paused.Next, Event{Type: UnpauseEvent}).Next
 	if unpaused.Dispatchability != BackoffPending {
 		t.Fatalf("unpause during backoff must resume waiting (BackoffPending), got %v", unpaused.Dispatchability)
 	}
 	if pollable(cfg, unpaused) {
 		t.Fatalf("a poll must find no task while the backoff is still pending")
 	}
-	if !pollable(cfg, Transition(cfg, unpaused, Event{Kind: BackoffElapsesKind}).Next) {
+	if !pollable(cfg, Transition(cfg, unpaused, Event{Type: BackoffElapsesEvent}).Next) {
 		t.Fatalf("once the backoff elapses the activity must dispatch")
 	}
 }
@@ -126,7 +126,7 @@ func TestScheduleToClosePushedBackByStartDelay(t *testing.T) {
 	if s.Dispatchability != StartDelayPending {
 		t.Fatalf("Initial with start delay should be StartDelayPending, got %v", s.Dispatchability)
 	}
-	if out := Transition(cfg, s, Event{Kind: ScheduleToCloseElapsesKind}); out.Next.Status != Scheduled {
+	if out := Transition(cfg, s, Event{Type: ScheduleToCloseElapsesEvent}); out.Next.Status != Scheduled {
 		t.Fatalf("schedule-to-close must not fire during the start delay, got %v", out.Next.Status)
 	}
 }
@@ -135,17 +135,17 @@ func TestScheduleToClosePushedBackByStartDelay(t *testing.T) {
 func TestScheduleToStartPushedBackByDispatchDelay(t *testing.T) {
 	startDelayCfg := Config{HasStartDelay: true, HasScheduleToStart: true}
 	s := Initial(startDelayCfg)
-	if out := Transition(startDelayCfg, s, Event{Kind: ScheduleToStartElapsesKind}); out.Next.Status != Scheduled {
+	if out := Transition(startDelayCfg, s, Event{Type: ScheduleToStartElapsesEvent}); out.Next.Status != Scheduled {
 		t.Fatalf("schedule-to-start must not fire during the start delay (pushed back), got %v", out.Next.Status)
 	}
-	dispatched := Transition(startDelayCfg, s, Event{Kind: StartDelayElapsesKind}).Next
-	if out := Transition(startDelayCfg, dispatched, Event{Kind: ScheduleToStartElapsesKind}); out.Next.Status != TimedOut {
+	dispatched := Transition(startDelayCfg, s, Event{Type: StartDelayElapsesEvent}).Next
+	if out := Transition(startDelayCfg, dispatched, Event{Type: ScheduleToStartElapsesEvent}); out.Next.Status != TimedOut {
 		t.Fatalf("schedule-to-start should fire once the delay elapses, got %v", out.Next.Status)
 	}
 
 	backoffCfg := Config{HasScheduleToStart: true}
 	retry := backedOffRetry(t, backoffCfg)
-	if out := Transition(backoffCfg, retry, Event{Kind: ScheduleToStartElapsesKind}); out.Next.Status != Scheduled {
+	if out := Transition(backoffCfg, retry, Event{Type: ScheduleToStartElapsesEvent}); out.Next.Status != Scheduled {
 		t.Fatalf("schedule-to-start must not fire during the retry backoff (pushed back), got %v", out.Next.Status)
 	}
 }
@@ -154,7 +154,7 @@ func TestScheduleToStartPushedBackByDispatchDelay(t *testing.T) {
 // rather than dispatching now.
 func TestResetDuringStartDelayPreservesDelay(t *testing.T) {
 	cfg := Config{HasStartDelay: true}
-	out := Transition(cfg, Initial(cfg), Event{Kind: ResetKind})
+	out := Transition(cfg, Initial(cfg), Event{Type: ResetEvent})
 	if out.Reject != NoError {
 		t.Fatalf("reset during start delay must be accepted, got reject %v", out.Reject)
 	}
@@ -169,7 +169,7 @@ func TestResetDuringStartDelayPreservesDelay(t *testing.T) {
 // Reset during a retry backoff discards the backoff: the reset attempt dispatches immediately.
 func TestResetDuringBackoffDispatchesImmediately(t *testing.T) {
 	cfg := Config{}
-	out := Transition(cfg, backedOffRetry(t, cfg), Event{Kind: ResetKind})
+	out := Transition(cfg, backedOffRetry(t, cfg), Event{Type: ResetEvent})
 	if out.Reject != NoError {
 		t.Fatalf("reset during backoff must be accepted, got reject %v", out.Reject)
 	}

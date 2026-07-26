@@ -75,7 +75,7 @@ type wfaDriverDeclarative struct {
 	maxRetryInterval   time.Duration // RetryPolicy MaximumInterval; 0 => retryInterval
 	nextRetryDelay     time.Duration // ApplicationFailureInfo.NextRetryDelay sent with RespondFailed
 
-	shortTimeout        model.EventKind // this timeout is configured short at schedule time; mirrors saaDriverDeclarative.shortTimeout
+	shortTimeout        model.EventType // this timeout is configured short at schedule time; mirrors saaDriverDeclarative.shortTimeout
 	scheduleToClose     time.Duration   // ScheduleToClose deadline; mirrors saaDriverDeclarative.scheduleToClose
 	positivePollTimeout time.Duration   // bounds a "must dispatch" poll; 0 => saaPositivePollTimeout
 
@@ -179,12 +179,12 @@ func (d *wfaDriverDeclarative) driveTrace(t *testing.T, trace []model.Event) *wf
 func (a *wfaHandle) driveEvent(t require.TestingT, e model.Event) {
 	d := a.d
 	switch {
-	case e.Kind == model.PollKind:
+	case e.Type == model.PollEvent:
 		// A poll captures the dispatched task token.
 		if resp := a.pollForTask(t, cmp.Or(d.positivePollTimeout, saaPositivePollTimeout)); resp != nil {
 			a.token = resp.GetTaskToken()
 		}
-	case saaIsWallClock(e.Kind):
+	case saaIsWallClock(e.Type):
 		// A wall-clock event is realized by waiting out its configured window.
 		a.awaitWallClock(t, e)
 	default:
@@ -229,7 +229,7 @@ func (a *wfaHandle) pendingSnapshot(t require.TestingT) (activityInfoProjection,
 // eventClock is how long the clock behind a wall-clock event takes to elapse. WFA has no per-activity
 // start delay, so the only dispatch delay is a retry backoff.
 func (d *wfaDriverDeclarative) eventClock(e model.Event) time.Duration {
-	if e.Kind == model.BackoffElapsesKind {
+	if e.Type == model.BackoffElapsesEvent {
 		return cmp.Or(d.nextRetryDelay, d.effectiveRetryInterval())
 	}
 	return saaShortTimeout // the four timeouts
@@ -249,7 +249,7 @@ func (d *wfaDriverDeclarative) start(t *testing.T) *wfaHandle {
 
 	// dur is short for the one timeout under test and long otherwise, so no other timeout fires
 	// mid-scenario. Mirrors saaDriverDeclarative.startRequest.
-	dur := func(k model.EventKind) time.Duration {
+	dur := func(k model.EventType) time.Duration {
 		if d.shortTimeout == k {
 			return saaShortTimeout
 		}
@@ -257,18 +257,18 @@ func (d *wfaDriverDeclarative) start(t *testing.T) *wfaHandle {
 	}
 	params := wfaActivityParams{
 		ActivityTQ: actTQ, ActivityID: actID,
-		StartToClose:  dur(model.StartToCloseElapsesKind),
+		StartToClose:  dur(model.StartToCloseElapsesEvent),
 		RetryInterval: d.effectiveRetryInterval(), BackoffCoefficient: d.backoffCoefficient, MaxInterval: d.maxRetryInterval,
 		MaxAttempts:            d.maxAttempts,
 		NonRetryableErrorTypes: d.nonRetryableErrorTypes,
 	}
-	if d.shortTimeout == model.ScheduleToCloseElapsesKind {
+	if d.shortTimeout == model.ScheduleToCloseElapsesEvent {
 		params.ScheduleToClose = saaShortTimeout
 	}
-	if d.shortTimeout == model.ScheduleToStartElapsesKind {
+	if d.shortTimeout == model.ScheduleToStartElapsesEvent {
 		params.ScheduleToStart = saaShortTimeout
 	}
-	if d.shortTimeout == model.HeartbeatElapsesKind {
+	if d.shortTimeout == model.HeartbeatElapsesEvent {
 		params.Heartbeat = saaShortTimeout
 	}
 	if d.scheduleToClose > 0 {
@@ -341,55 +341,55 @@ func (a *wfaHandle) pollForTask(t require.TestingT, timeout time.Duration) *work
 func (a *wfaHandle) rpc(e model.Event) error {
 	fc := a.d.env.FrontendClient()
 	ns := a.d.env.Namespace().String()
-	switch e.Kind {
-	case model.HeartbeatKind:
+	switch e.Type {
+	case model.HeartbeatEvent:
 		_, err := fc.RecordActivityTaskHeartbeat(a.d.ctx, &workflowservice.RecordActivityTaskHeartbeatRequest{
 			Namespace: ns, TaskToken: a.token, Details: saaHeartbeatDetails,
 		})
 		return err
-	case model.RespondCompletedKind:
+	case model.RespondCompletedEvent:
 		_, err := fc.RespondActivityTaskCompleted(a.d.ctx, &workflowservice.RespondActivityTaskCompletedRequest{
 			Namespace: ns, TaskToken: a.token, Identity: "worker",
 		})
 		return err
-	case model.RespondFailedKind:
+	case model.RespondFailedEvent:
 		_, err := fc.RespondActivityTaskFailed(a.d.ctx, &workflowservice.RespondActivityTaskFailedRequest{
 			Namespace: ns, TaskToken: a.token, Identity: "worker", Failure: saaFailure(e.Retryable, a.d.nextRetryDelay),
 		})
 		return err
-	case model.RespondCanceledKind:
+	case model.RespondCanceledEvent:
 		_, err := fc.RespondActivityTaskCanceled(a.d.ctx, &workflowservice.RespondActivityTaskCanceledRequest{
 			Namespace: ns, TaskToken: a.token, Identity: "worker",
 		})
 		return err
-	case model.RequestCancelKind:
+	case model.RequestCancelEvent:
 		// WFA cancel comes from the workflow, so signal it, then wait for CANCEL_REQUESTED. SAA's direct
 		// RequestCancelActivityExecution RPC is synchronous; waiting here makes the two comparable.
 		if err := a.d.env.SdkClient().SignalWorkflow(a.d.ctx, a.workflowID, a.runID, wfaCancelSignal, nil); err != nil {
 			return err
 		}
 		return a.waitForCancelRequested()
-	case model.PauseKind:
+	case model.PauseEvent:
 		_, err := fc.PauseActivityExecution(a.d.ctx, &workflowservice.PauseActivityExecutionRequest{
 			Namespace: ns, WorkflowId: a.workflowID, ActivityId: a.activityID, RunId: a.runID, Identity: "op", Reason: "drive", RequestId: uuid.NewString(),
 		})
 		return err
-	case model.UnpauseKind:
+	case model.UnpauseEvent:
 		_, err := fc.UnpauseActivityExecution(a.d.ctx, &workflowservice.UnpauseActivityExecutionRequest{
 			Namespace: ns, WorkflowId: a.workflowID, ActivityId: a.activityID, RunId: a.runID, Identity: "op",
 			ResetAttempts: e.ResetAttempts, ResetHeartbeat: e.ResetHeartbeat,
 		})
 		return err
-	case model.ResetKind:
+	case model.ResetEvent:
 		_, err := fc.ResetActivityExecution(a.d.ctx, &workflowservice.ResetActivityExecutionRequest{
 			Namespace: ns, WorkflowId: a.workflowID, ActivityId: a.activityID, RunId: a.runID, Identity: "op",
 			KeepPaused: e.KeepPaused, RestoreOriginalOptions: e.RestoreOriginal,
 		})
 		return err
-	case model.UpdateOptionsKind:
+	case model.UpdateOptionsEvent:
 		return a.updateOptions(e)
 	default:
-		return fmt.Errorf("wfaDriverDeclarative: unhandled event kind %v", e.Kind)
+		return fmt.Errorf("wfaDriverDeclarative: unhandled event kind %v", e.Type)
 	}
 }
 

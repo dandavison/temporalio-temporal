@@ -7,12 +7,12 @@ the server binary. It is archetype-level, not tied to one product surface: the s
 (SAA) frontend driver checks a real server against it today; a workflow-activity driver over the same
 model will let the two be checked for equivalence.
 
-- `vocabulary.go` — the event alphabet (`Event`/`EventKind`), start-time `Config`, and the
+- `vocabulary.go` — the event alphabet (`Event`/`EventType`), start-time `Config`, and the
   observable-state projection (`AbstractState`, `Observed`, `Abstract`).
 - `model.go` — the transition rules (`Transition`, `Initial`, the per-event functions) and the
   response predictors.
 - `explore.go` — pure graph helpers shared by the explorers (`Fingerprint`, `Reachable`, `CellKey`,
-  `NeedsToken`, `KindName`, `EventLabel`).
+  `NeedsToken`, `EventTypeName`, `EventLabel`).
 - `validate/` — static checks *validating the model* against the product state-machine code, no
   server. (Distinct from conformance testing below, which checks a running server against the model.)
 

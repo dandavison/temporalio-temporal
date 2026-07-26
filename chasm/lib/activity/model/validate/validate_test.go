@@ -18,10 +18,10 @@ var allSpecStatuses = []model.Status{
 	model.Paused, model.PauseRequested, model.ResetRequested,
 }
 
-var allEventKinds = []model.EventKind{
-	model.PollKind, model.HeartbeatKind, model.RespondCompletedKind, model.RespondFailedKind,
-	model.RespondCanceledKind, model.RequestCancelKind, model.TerminateKind, model.PauseKind,
-	model.UnpauseKind, model.ResetKind, model.UpdateOptionsKind,
+var allEventTypes = []model.EventType{
+	model.PollEvent, model.HeartbeatEvent, model.RespondCompletedEvent, model.RespondFailedEvent,
+	model.RespondCanceledEvent, model.RequestCancelEvent, model.TerminateEvent, model.PauseEvent,
+	model.UnpauseEvent, model.ResetEvent, model.UpdateOptionsEvent,
 }
 
 var cfgs = []model.Config{
@@ -31,36 +31,36 @@ var cfgs = []model.Config{
 
 var countValues = []int32{1, 2}
 
-// eventsFor returns a representative set of events for a kind, covering the flags that affect
+// eventsFor returns a representative set of events for a type, covering the flags that affect
 // the outcome.
-func eventsFor(k model.EventKind) []model.Event {
+func eventsFor(e model.EventType) []model.Event {
 	bools := []bool{false, true}
 	var out []model.Event
-	switch k {
-	case model.RespondFailedKind:
+	switch e {
+	case model.RespondFailedEvent:
 		for _, r := range bools {
-			out = append(out, model.Event{Kind: k, Retryable: r})
+			out = append(out, model.Event{Type: e, Retryable: r})
 		}
-	case model.ResetKind:
+	case model.ResetEvent:
 		for _, kp := range bools {
 			for _, ro := range bools {
 				for _, rh := range bools {
-					out = append(out, model.Event{Kind: k, KeepPaused: kp, RestoreOriginal: ro, ResetHeartbeat: rh})
+					out = append(out, model.Event{Type: e, KeepPaused: kp, RestoreOriginal: ro, ResetHeartbeat: rh})
 				}
 			}
 		}
-	case model.UnpauseKind:
+	case model.UnpauseEvent:
 		for _, ra := range bools {
 			for _, rh := range bools {
-				out = append(out, model.Event{Kind: k, ResetAttempts: ra, ResetHeartbeat: rh})
+				out = append(out, model.Event{Type: e, ResetAttempts: ra, ResetHeartbeat: rh})
 			}
 		}
-	case model.PauseKind, model.TerminateKind, model.RequestCancelKind:
+	case model.PauseEvent, model.TerminateEvent, model.RequestCancelEvent:
 		for _, sr := range bools {
-			out = append(out, model.Event{Kind: k, SameRequestID: sr})
+			out = append(out, model.Event{Type: e, SameRequestID: sr})
 		}
 	default:
-		out = append(out, model.Event{Kind: k})
+		out = append(out, model.Event{Type: e})
 	}
 	return out
 }
@@ -107,8 +107,8 @@ func evalModel(cfg model.Config, s model.AbstractState, e model.Event) (out mode
 // either returns an Outcome or is an explicit unreachable assertion, which is the pre-creation
 // Unspecified status. Any other panic fails the test.
 type cell struct {
-	status model.Status
-	kind   model.EventKind
+	status    model.Status
+	eventType model.EventType
 }
 
 func TestModelDecisionCoverage(t *testing.T) {
@@ -119,16 +119,16 @@ func TestModelDecisionCoverage(t *testing.T) {
 		for _, st := range allSpecStatuses {
 			for _, kp := range []bool{false, true} {
 				for _, ct := range countValues {
-					for _, k := range allEventKinds {
-						for _, e := range eventsFor(k) {
+					for _, et := range allEventTypes {
+						for _, e := range eventsFor(et) {
 							_, v, msg := evalModel(cfg, srcState(cfg, st, kp, ct), e)
 							counts[v]++
 							switch v {
 							case decided, unreachable:
-								decidedCells[cell{st, k}] = true
+								decidedCells[cell{st, et}] = true
 							case unexpected:
-								t.Errorf("unexpected panic: status=%s kind=%s event=%+v: %s",
-									st, kindName(k), e, msg)
+								t.Errorf("unexpected panic: status=%s eventType=%s event=%+v: %s",
+									st, eventTypeName(et), e, msg)
 							}
 						}
 					}
@@ -155,8 +155,8 @@ func TestModelEdgesReachableInCode(t *testing.T) {
 		for _, st := range allSpecStatuses {
 			for _, kp := range []bool{false, true} {
 				for _, ct := range countValues {
-					for _, k := range allEventKinds {
-						for _, e := range eventsFor(k) {
+					for _, et := range allEventTypes {
+						for _, e := range eventsFor(et) {
 							s := srcState(cfg, st, kp, ct)
 							out, v, _ := evalModel(cfg, s, e)
 							if v != decided || out.Reject != model.NoError {
@@ -174,7 +174,7 @@ func TestModelEdgesReachableInCode(t *testing.T) {
 							if !reach[src][dst] {
 								reported[key] = true
 								t.Errorf("model accepts %s --%s--> %s, but the code cannot reach %s from %s via any transition path",
-									st, kindName(k), out.Next.Status, out.Next.Status, st)
+									st, eventTypeName(et), out.Next.Status, out.Next.Status, st)
 							}
 						}
 					}
@@ -291,31 +291,31 @@ func specToProto(s model.Status) activitypb.ActivityExecutionStatus {
 	}
 }
 
-func kindName(k model.EventKind) string {
+func eventTypeName(k model.EventType) string {
 	switch k {
-	case model.PollKind:
+	case model.PollEvent:
 		return "Poll"
-	case model.HeartbeatKind:
+	case model.HeartbeatEvent:
 		return "Heartbeat"
-	case model.RespondCompletedKind:
+	case model.RespondCompletedEvent:
 		return "RespondCompleted"
-	case model.RespondFailedKind:
+	case model.RespondFailedEvent:
 		return "RespondFailed"
-	case model.RespondCanceledKind:
+	case model.RespondCanceledEvent:
 		return "RespondCanceled"
-	case model.RequestCancelKind:
+	case model.RequestCancelEvent:
 		return "RequestCancel"
-	case model.TerminateKind:
+	case model.TerminateEvent:
 		return "Terminate"
-	case model.PauseKind:
+	case model.PauseEvent:
 		return "Pause"
-	case model.UnpauseKind:
+	case model.UnpauseEvent:
 		return "Unpause"
-	case model.ResetKind:
+	case model.ResetEvent:
 		return "Reset"
-	case model.UpdateOptionsKind:
+	case model.UpdateOptionsEvent:
 		return "UpdateOptions"
 	default:
-		return fmt.Sprintf("EventKind(%d)", k)
+		return fmt.Sprintf("EventType(%d)", k)
 	}
 }

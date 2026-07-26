@@ -13,15 +13,15 @@ func Fingerprint(s AbstractState) string {
 		s.ResetRestoreOptions, s.FirstAttemptStarted, s.DispatchTimeSet, s.Dispatchability)
 }
 
-// CellKey identifies a (state, event kind) cell at fingerprint granularity.
-func CellKey(s AbstractState, k EventKind) string {
-	return Fingerprint(s) + " / " + KindName(k)
+// CellKey identifies a (state, event type) cell at fingerprint granularity.
+func CellKey(s AbstractState, k EventType) string {
+	return Fingerprint(s) + " / " + EventTypeName(k)
 }
 
 // NeedsToken reports whether an event is a worker RPC that requires a dispatched task token.
-func NeedsToken(k EventKind) bool {
+func NeedsToken(k EventType) bool {
 	switch k {
-	case HeartbeatKind, RespondCompletedKind, RespondFailedKind, RespondCanceledKind:
+	case HeartbeatEvent, RespondCompletedEvent, RespondFailedEvent, RespondCanceledEvent:
 		return true
 	default:
 		return false
@@ -29,9 +29,9 @@ func NeedsToken(k EventKind) bool {
 }
 
 // CarriesReqID reports whether an operator command's server-side idempotency is keyed on its request id.
-func CarriesReqID(k EventKind) bool {
+func CarriesReqID(k EventType) bool {
 	switch k {
-	case RequestCancelKind, TerminateKind, PauseKind:
+	case RequestCancelEvent, TerminateEvent, PauseEvent:
 		return true
 	default:
 		return false
@@ -50,7 +50,7 @@ func Reachable(cfg Config, events []Event) map[string]bool {
 		for _, s := range frontier {
 			for _, e := range events {
 				out := Transition(cfg, s, e)
-				cells[CellKey(s, e.Kind)] = true
+				cells[CellKey(s, e.Type)] = true
 				if out.Reject != NoError {
 					continue
 				}
@@ -66,45 +66,45 @@ func Reachable(cfg Config, events []Event) map[string]bool {
 	return cells
 }
 
-// KindName is a stable label for an event kind, for logs and failure reports.
-func KindName(k EventKind) string {
-	switch k {
-	case PollKind:
+// EventTypeName is a stable label for an event type, for logs and failure reports.
+func EventTypeName(e EventType) string {
+	switch e {
+	case PollEvent:
 		return "Poll"
-	case HeartbeatKind:
+	case HeartbeatEvent:
 		return "Heartbeat"
-	case RespondCompletedKind:
+	case RespondCompletedEvent:
 		return "RespondCompleted"
-	case RespondFailedKind:
+	case RespondFailedEvent:
 		return "RespondFailed"
-	case RespondCanceledKind:
+	case RespondCanceledEvent:
 		return "RespondCanceled"
-	case RequestCancelKind:
+	case RequestCancelEvent:
 		return "RequestCancel"
-	case TerminateKind:
+	case TerminateEvent:
 		return "Terminate"
-	case PauseKind:
+	case PauseEvent:
 		return "Pause"
-	case UnpauseKind:
+	case UnpauseEvent:
 		return "Unpause"
-	case ResetKind:
+	case ResetEvent:
 		return "Reset"
-	case UpdateOptionsKind:
+	case UpdateOptionsEvent:
 		return "UpdateOptions"
-	case ScheduleToStartElapsesKind:
+	case ScheduleToStartElapsesEvent:
 		return "ScheduleToStartElapses"
-	case ScheduleToCloseElapsesKind:
+	case ScheduleToCloseElapsesEvent:
 		return "ScheduleToCloseElapses"
-	case StartToCloseElapsesKind:
+	case StartToCloseElapsesEvent:
 		return "StartToCloseElapses"
-	case HeartbeatElapsesKind:
+	case HeartbeatElapsesEvent:
 		return "HeartbeatElapses"
-	case StartDelayElapsesKind:
+	case StartDelayElapsesEvent:
 		return "StartDelayElapses"
-	case BackoffElapsesKind:
+	case BackoffElapsesEvent:
 		return "BackoffElapses"
 	default:
-		return fmt.Sprintf("EventKind(%d)", k)
+		return fmt.Sprintf("EventType(%d)", e)
 	}
 }
 
@@ -116,23 +116,23 @@ func EventLabel(e Event) string {
 			flags = append(flags, name)
 		}
 	}
-	switch e.Kind {
-	case RespondFailedKind:
+	switch e.Type {
+	case RespondFailedEvent:
 		flags = append(flags, fmt.Sprintf("retryable=%v", e.Retryable))
-	case ResetKind:
+	case ResetEvent:
 		add(e.KeepPaused, "keepPaused")
 		add(e.RestoreOriginal, "restoreOriginal")
-	case UnpauseKind:
+	case UnpauseEvent:
 		add(e.ResetAttempts, "resetAttempts")
 		add(e.ResetHeartbeat, "resetHeartbeat")
-	case PauseKind, TerminateKind, RequestCancelKind:
+	case PauseEvent, TerminateEvent, RequestCancelEvent:
 		add(e.SameRequestID, "sameRequestID")
-	case UpdateOptionsKind:
+	case UpdateOptionsEvent:
 		add(e.SetsStartDelay, "setsStartDelay")
 		add(e.RestoreOriginal, "restoreOriginal")
 	}
 	if len(flags) == 0 {
-		return KindName(e.Kind)
+		return EventTypeName(e.Type)
 	}
-	return fmt.Sprintf("%s[%s]", KindName(e.Kind), strings.Join(flags, ","))
+	return fmt.Sprintf("%s[%s]", EventTypeName(e.Type), strings.Join(flags, ","))
 }

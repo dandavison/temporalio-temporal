@@ -58,38 +58,38 @@ type Config struct {
 	MaxAttempts        int32 // 0 = unlimited
 }
 
-// EventKind enumerates the events the model covers.
-type EventKind int
+// EventType enumerates the events the model covers.
+type EventType int
 
 const (
-	PollKind EventKind = iota
-	HeartbeatKind
-	RespondCompletedKind
-	RespondFailedKind
-	RespondCanceledKind
-	RequestCancelKind
-	TerminateKind
-	PauseKind
-	UnpauseKind
-	ResetKind
-	UpdateOptionsKind
+	PollEvent EventType = iota
+	HeartbeatEvent
+	RespondCompletedEvent
+	RespondFailedEvent
+	RespondCanceledEvent
+	RequestCancelEvent
+	TerminateEvent
+	PauseEvent
+	UnpauseEvent
+	ResetEvent
+	UpdateOptionsEvent
 
 	// Timeout deadlines elapsing: the configured deadline window has passed in wall-clock (a timer
 	// may or may not have actually fired)
-	ScheduleToStartElapsesKind
-	ScheduleToCloseElapsesKind
-	StartToCloseElapsesKind
-	HeartbeatElapsesKind
+	ScheduleToStartElapsesEvent
+	ScheduleToCloseElapsesEvent
+	StartToCloseElapsesEvent
+	HeartbeatElapsesEvent
 
 	// Dispatch-delay clocks elapsing. On elapse the delayed dispatch becomes available
 	// (Dispatchability -> Dispatchable).
-	StartDelayElapsesKind
-	BackoffElapsesKind
+	StartDelayElapsesEvent
+	BackoffElapsesEvent
 )
 
 // Event carries the variant flags that affect the outcome.
 type Event struct {
-	Kind EventKind
+	Type EventType
 
 	Retryable       bool // RespondFailed: the failure is retryable. Whether it actually retries also depends on cfg.MaxAttempts and s.AttemptCount.
 	KeepPaused      bool // Reset
@@ -244,13 +244,13 @@ func mapStatus(s activitypb.ActivityExecutionStatus) Status {
 // rather than of struct literals. Kinds whose flags matter get one value per variant. These are the
 // short names because traces are where they are read; the EventKind of the same name is suffixed.
 var (
-	Poll                = Event{Kind: PollKind}
-	Complete            = Event{Kind: RespondCompletedKind}
-	FailRetryably       = Event{Kind: RespondFailedKind, Retryable: true}
-	FailNonRetryably    = Event{Kind: RespondFailedKind, Retryable: false}
-	Pause               = Event{Kind: PauseKind}
-	RequestCancel       = Event{Kind: RequestCancelKind}
-	StartDelayElapses   = Event{Kind: StartDelayElapsesKind}
-	BackoffElapses      = Event{Kind: BackoffElapsesKind}
-	StartToCloseElapses = Event{Kind: StartToCloseElapsesKind}
+	Poll                = Event{Type: PollEvent}
+	Complete            = Event{Type: RespondCompletedEvent}
+	FailRetryably       = Event{Type: RespondFailedEvent, Retryable: true}
+	FailNonRetryably    = Event{Type: RespondFailedEvent, Retryable: false}
+	Pause               = Event{Type: PauseEvent}
+	RequestCancel       = Event{Type: RequestCancelEvent}
+	StartDelayElapses   = Event{Type: StartDelayElapsesEvent}
+	BackoffElapses      = Event{Type: BackoffElapsesEvent}
+	StartToCloseElapses = Event{Type: StartToCloseElapsesEvent}
 )
