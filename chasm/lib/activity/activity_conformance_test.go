@@ -1,10 +1,10 @@
 package activity
 
-// Model-conformance explorer for the activity archetype, one tier below the onebox one in tests/. It
-// drives the event alphabet of chasm/lib/activity/model against a real in-memory CHASM engine
-// (chasm/chasmtest) with a virtual clock, and checks every step against that model. Timeouts and
-// backoffs are realized by advancing clock.EventTimeSource, so the BFS traversal and random walk pay no
-// wall-clock waits.
+// Model-conformance explorer for the activity archetype. It drives the event alphabet of
+// chasm/lib/activity/model against a real in-memory CHASM engine (chasm/chasmtest) with a virtual
+// clock, and checks every step against that model. Timeouts and backoffs are realized by advancing
+// clock.EventTimeSource, so the BFS traversal and random walk pay no wall-clock waits. The counterpart
+// explorer over a onebox server is in tests/activity_standalone_conformance.go.
 
 import (
 	"context"
@@ -379,9 +379,7 @@ func rejectKind(err error) model.ErrorKind {
 
 // --- conformance + explorers -----------------------------------------------------------------
 
-// candidateEvents is the tier-2 event alphabet: the worker RPCs plus the wall-clock timeouts and
-// backoff, which are prohibitively slow at tier 3 but instant here. The operator commands are
-// tier-3-only.
+// candidateEvents is the event alphabet: the worker RPCs plus the wall-clock timeouts and backoff.
 func (d *driver) candidateEvents() []model.Event {
 	events := []model.Event{
 		{Type: model.PollType},

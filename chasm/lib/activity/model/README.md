@@ -125,9 +125,9 @@ go test -tags test_dep -run 'TestStandaloneActivityTestSuite/Test.*_Declarative'
 
 ### Graph tools
 ```bash
-go run ./chasm/lib/activity/model/cmd/graph                          # counts+nodes+edges, tier-3 configs
+go run ./chasm/lib/activity/model/cmd/graph                          # counts+nodes+edges, onebox configs
 go run ./chasm/lib/activity/model/cmd/graph -show skeleton           # status-level transition relation
-go run ./chasm/lib/activity/model/cmd/graph -tier 2 -show counts
+go run ./chasm/lib/activity/model/cmd/graph -explorer engine -show counts
 go run ./chasm/lib/activity/model/cmd/graph -config 1 -show nodes,edges
 ```
-Flags: -tier {2,3}, -config N (index into the tier's set, default all), -show (comma list of counts,nodes,edges,skeleton).
+Flags: -explorer {engine,onebox} (the tier-2 and tier-3 explorers respectively), -config N (index into that explorer's set, default all), -show (comma list of counts,nodes,edges,skeleton).

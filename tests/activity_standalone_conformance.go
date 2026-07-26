@@ -570,8 +570,8 @@ func saaStepDesc(cur model.AbstractState, e model.Event, out model.Outcome, res 
 	return desc
 }
 
-// saaCandidateEvents is the tier-3 event alphabet: the worker RPCs and the operator commands, with a
-// variant per outcome-affecting flag.
+// saaCandidateEvents is the event alphabet: the worker RPCs and the operator commands, with a variant
+// per outcome-affecting flag.
 func saaCandidateEvents() []model.Event {
 	var out []model.Event
 	simple := []model.EventType{
