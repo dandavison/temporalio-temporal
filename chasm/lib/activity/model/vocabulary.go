@@ -1,9 +1,9 @@
-// Package model is an implementation-independent vocabulary for driving a CHASM activity: the events
-// that can be applied to one, independently of which product surface exposes them.
-//
-// Drivers realize these events for Standalone Activity or for Workflow Activity, so one trace can be
-// driven through both and their observable results compared.
+// Package model is an implementation-independent vocabulary for driving a CHASM activity through a
+// sequence of events (a 'trace').  Drivers realize these events for Standalone Activity or for
+// Workflow Activity, so the same trace can be driven for both.
 package model
+
+import "strconv"
 
 // EventType enumerates the events a driver can realize.
 type EventType int
@@ -67,7 +67,7 @@ func EventTypeName(t EventType) string {
 	case BackoffElapsesType:
 		return "BackoffElapses"
 	default:
-		return "EventType(?)"
+		panic("Unknown EventType: " + strconv.Itoa(int(t)))
 	}
 }
 

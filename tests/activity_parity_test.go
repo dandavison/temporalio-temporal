@@ -1,15 +1,6 @@
 package tests
 
-// SAA↔WFA parity repros. For each behavior at the intersection of the standalone activity (SAA) and the
-// workflow activity (WFA), a test drives the same trace through both surfaces as "WorkflowActivity" and
-// "StandaloneActivity" subtests, and asserts the same public activity info.
-//
-// There is no oracle. Each `want` encodes how the product should behave, not what either implementation
-// currently does, and both subtests are checked against it. Never adjust a `want` to match observed
-// behavior; if the intended behavior is unclear, stop and resolve that instead.
-//
-// The drivers are activity_standalone_driver.go and activity_workflow_driver.go, over the
-// event vocabulary in chasm/lib/activity/model.
+// SAA <-> WFA parity tests
 
 import (
 	"testing"
@@ -33,8 +24,7 @@ func TestActivityParityTestSuite(t *testing.T) {
 	parallelsuite.Run(t, &activityParityTestSuite{})
 }
 
-// newActivityParityEnv is a test env with the standalone activity enabled. A workflow activity needs nothing
-// enabled, so one env drives both surfaces.
+// newActivityParityEnv is a test env with standalone activity enabled.
 func newActivityParityEnv(t *testing.T) *testcore.TestEnv {
 	env := testcore.NewEnv(t)
 	nsValues := func(value any) []dynamicconfig.ConstrainedValue {
@@ -98,13 +88,13 @@ func (s *activityParityTestSuite) TestParityNonRetryableTimeout() {
 func (s *activityParityTestSuite) TestParityCurrentRetryInterval() {
 	env := newActivityParityEnv(s.T())
 
-	// both drives a trace through both surfaces, asserting each reports want.
-	both := func(t *testing.T, cfg activityConfig, trace []model.Event, want activityInfoProjection) {
+	// both drives a trace through both surfaces, asserting each reports expected.
+	both := func(t *testing.T, cfg activityConfig, trace []model.Event, expected activityInfoProjection) {
 		t.Run("WorkflowActivity", func(t *testing.T) {
-			require.Equal(t, want, newWFADriver(t, env, cfg).driveTrace(t, trace).projection(t))
+			require.Equal(t, expected, newWFADriver(t, env, cfg).driveTrace(t, trace).projection(t))
 		})
 		t.Run("StandaloneActivity", func(t *testing.T) {
-			require.Equal(t, want, newSAADriver(t, env, cfg).driveTrace(t, trace).projection(t))
+			require.Equal(t, expected, newSAADriver(t, env, cfg).driveTrace(t, trace).projection(t))
 		})
 	}
 
@@ -144,7 +134,7 @@ func (s *activityParityTestSuite) TestParityCurrentRetryInterval() {
 	// override.
 	s.T().Run("NextRetryDelayOverride", func(t *testing.T) {
 		trace := []model.Event{model.Poll, model.FailRetryably}
-		want := activityInfoProjection{
+		expected := activityInfoProjection{
 			State:                  enumspb.PENDING_ACTIVITY_STATE_SCHEDULED,
 			Attempt:                2,
 			CurrentRetryInterval:   nextRetryDelayOverride,
@@ -152,10 +142,10 @@ func (s *activityParityTestSuite) TestParityCurrentRetryInterval() {
 		}
 		cfg := activityConfig{MaxAttempts: 3, RetryInterval: backingOffInterval, NextRetryDelay: nextRetryDelayOverride}
 		t.Run("WorkflowActivity", func(t *testing.T) {
-			require.Equal(t, want, newWFADriver(t, env, cfg).driveTrace(t, trace).projection(t))
+			require.Equal(t, expected, newWFADriver(t, env, cfg).driveTrace(t, trace).projection(t))
 		})
 		t.Run("StandaloneActivity", func(t *testing.T) {
-			require.Equal(t, want, newSAADriver(t, env, cfg).driveTrace(t, trace).projection(t))
+			require.Equal(t, expected, newSAADriver(t, env, cfg).driveTrace(t, trace).projection(t))
 		})
 	})
 
