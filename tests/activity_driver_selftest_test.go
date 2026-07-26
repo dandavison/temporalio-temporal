@@ -81,7 +81,7 @@ func (s *activityParityTestSuite) TestSAADriverReportsUnrealizedWallClockEvents(
 			return recordDriverReports(func(rt require.TestingT) {
 				d := newSAADriver(t, env, activityConfig{
 					MaxAttempts:  1,
-					StartToClose: saaShortTimeout, // the window the driver will wait out
+					StartToClose: activityShortTimeout, // the window the driver will wait out
 				})
 				d.customizeStart = customize
 				d.driveTrace(rt, []model.Event{model.Poll, model.StartToCloseElapses})
@@ -111,7 +111,7 @@ func (s *activityParityTestSuite) TestSAADriverBlamesItselfWhenItOutrunsTheDispa
 	// returns everything the driver reported.
 	negativePoll := func(t *testing.T, customize func(*workflowservice.StartActivityExecutionRequest)) []string {
 		return recordDriverReports(func(rt require.TestingT) {
-			d := newSAADriver(t, env, activityConfig{MaxAttempts: 1, StartDelay: saaLongStartDelay})
+			d := newSAADriver(t, env, activityConfig{MaxAttempts: 1, StartDelay: activityLongStartDelay})
 			d.customizeStart = customize
 			a := d.start(rt)
 			_, err := a.observed() // seed the stamp baseline, as the model-checking driver does after Start

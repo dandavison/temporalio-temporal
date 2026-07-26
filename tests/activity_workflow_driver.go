@@ -73,7 +73,7 @@ type wfaDriver struct {
 	ctx context.Context
 	cfg activityConfig
 
-	positivePollTimeout time.Duration // bounds a "must dispatch" poll; 0 => saaPositivePollTimeout
+	positivePollTimeout time.Duration // bounds a "must dispatch" poll; 0 => driverPositivePollTimeout
 }
 
 // newWFADriver builds a driver with the test-scoped context. cfg.StartDelay is ignored: a
@@ -167,10 +167,10 @@ func (a *wfaHandle) driveEvent(t require.TestingT, e model.Event) {
 	switch {
 	case e.Type == model.PollType:
 		// A poll captures the dispatched task token.
-		if resp := a.pollForTask(t, cmp.Or(d.positivePollTimeout, saaPositivePollTimeout)); resp != nil {
+		if resp := a.pollForTask(t, cmp.Or(d.positivePollTimeout, driverPositivePollTimeout)); resp != nil {
 			a.token = resp.GetTaskToken()
 		}
-	case saaIsWallClock(e.Type):
+	case isWallClockEvent(e.Type):
 		// A wall-clock event is realized by waiting out its configured window.
 		a.awaitWallClock(t, e)
 	default:
@@ -184,17 +184,17 @@ func (a *wfaHandle) driveEvent(t require.TestingT, e model.Event) {
 // so this polls.
 func (a *wfaHandle) awaitWallClock(t require.TestingT, e model.Event) {
 	before, beforePending := a.pendingSnapshot(t)
-	deadline := time.Now().Add(a.d.cfg.window(e) + saaWallClockSettle)
+	deadline := time.Now().Add(a.d.cfg.window(e) + driverWallClockSettle)
 	for {
 		if now, nowPending := a.pendingSnapshot(t); nowPending != beforePending || (nowPending && now != before) {
 			return
 		}
 		if !time.Now().Before(deadline) {
 			t.Errorf("%s: the activity did not change within %s of driving the event, so the event did not "+
-				"take effect. Last observed: %+v", model.EventLabel(e), a.d.cfg.window(e)+saaWallClockSettle, before)
+				"take effect. Last observed: %+v", model.EventLabel(e), a.d.cfg.window(e)+driverWallClockSettle, before)
 			return
 		}
-		time.Sleep(saaPollInterval)
+		time.Sleep(driverPollInterval)
 	}
 }
 
@@ -304,7 +304,7 @@ func (a *wfaHandle) rpc(e model.Event) error {
 	switch e.Type {
 	case model.HeartbeatType:
 		_, err := fc.RecordActivityTaskHeartbeat(a.d.ctx, &workflowservice.RecordActivityTaskHeartbeatRequest{
-			Namespace: ns, TaskToken: a.token, Details: saaHeartbeatDetails,
+			Namespace: ns, TaskToken: a.token, Details: activityHeartbeatDetails,
 		})
 		return err
 	case model.RespondCompletedType:
@@ -314,7 +314,7 @@ func (a *wfaHandle) rpc(e model.Event) error {
 		return err
 	case model.RespondFailedType:
 		_, err := fc.RespondActivityTaskFailed(a.d.ctx, &workflowservice.RespondActivityTaskFailedRequest{
-			Namespace: ns, TaskToken: a.token, Identity: "worker", Failure: saaFailure(e.Retryable, a.d.cfg.NextRetryDelay),
+			Namespace: ns, TaskToken: a.token, Identity: "worker", Failure: activityFailure(e.Retryable, a.d.cfg.NextRetryDelay),
 		})
 		return err
 	case model.RespondCanceledType:

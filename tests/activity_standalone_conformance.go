@@ -273,7 +273,7 @@ func (a *saaHandle) apply(t require.TestingT, e model.Event, cur model.AbstractS
 	if e.Type == model.PollType {
 		return a.applyPoll(cur, out, final, t)
 	}
-	if saaIsWallClock(e.Type) {
+	if isWallClockEvent(e.Type) {
 		return a.applyWallClock(t, e, cur, out, final)
 	}
 	// A worker RPC needs a task token, held only after a poll. An empty token yields a different error
@@ -360,7 +360,7 @@ func (a *saaHandle) applyPoll(cur model.AbstractState, out model.Outcome, final 
 	case cur.Status == model.Scheduled && out.Next.Status == model.Started:
 		// A dispatchable activity must dispatch. The traces bound the deadline, so "Dispatchable" means
 		// "dispatches promptly".
-		timeout := cmp.Or(a.d.positivePollTimeout, saaPositivePollTimeout)
+		timeout := cmp.Or(a.d.positivePollTimeout, driverPositivePollTimeout)
 		resp := a.pollForTask(t, timeout)
 		if resp == nil {
 			if final {
@@ -426,9 +426,9 @@ func (a *saaHandle) applyPoll(cur model.AbstractState, out model.Outcome, final 
 // out.Next. Where the model predicts an observable change it polls for that state; where it predicts
 // none, the only way to confirm is to wait the window out and see nothing move.
 func (a *saaHandle) applyWallClock(t require.TestingT, e model.Event, cur model.AbstractState, out model.Outcome, final bool) saaApply {
-	deadline := time.Now().Add(a.d.cfg.window(e) + saaWallClockSettle)
+	deadline := time.Now().Add(a.d.cfg.window(e) + driverWallClockSettle)
 	switch {
-	case saaIsDispatchDelay(e.Type) && out.Next.Dispatchability == model.Dispatchable &&
+	case isDispatchDelayEvent(e.Type) && out.Next.Dispatchability == model.Dispatchable &&
 		cur.Dispatchability != model.Dispatchable:
 		// The delay elapsing is not visible in the component state the oracle compares — Dispatchability is
 		// masked out of SameObserved — so assert the public dispatch time passing instead.
@@ -829,7 +829,7 @@ func (a *saaHandle) awaitObservedMatch(want model.AbstractState, deadline time.T
 		if !time.Now().Before(deadline) {
 			return
 		}
-		time.Sleep(saaPollInterval)
+		time.Sleep(driverPollInterval)
 	}
 }
 
@@ -889,13 +889,13 @@ func (tr saaTrace) config() activityConfig {
 	for _, e := range tr.trace {
 		switch e.Type {
 		case model.ScheduleToStartElapsesType:
-			c.ScheduleToStart = saaShortTimeout
+			c.ScheduleToStart = activityShortTimeout
 		case model.ScheduleToCloseElapsesType:
-			c.ScheduleToClose = saaShortTimeout
+			c.ScheduleToClose = activityShortTimeout
 		case model.StartToCloseElapsesType:
-			c.StartToClose = saaShortTimeout
+			c.StartToClose = activityShortTimeout
 		case model.HeartbeatElapsesType:
-			c.Heartbeat = saaShortTimeout
+			c.Heartbeat = activityShortTimeout
 		}
 	}
 	c.StartDelay = tr.startDelay()
@@ -910,15 +910,15 @@ func (tr saaTrace) startDelay() time.Duration {
 	}
 	for _, e := range tr.trace {
 		if e.Type == model.StartDelayElapsesType {
-			return saaDelayWindow
+			return activityDelayWindow
 		}
 	}
-	return saaLongStartDelay
+	return activityLongStartDelay
 }
 
-// saaDelayWindow is a dispatch-delay window long enough to outlast a valid negative long poll, so that
+// activityDelayWindow is a dispatch-delay window long enough to outlast a valid negative long poll, so that
 // "not dispatchable yet" is observable within it.
-const saaDelayWindow = 5 * time.Second
+const activityDelayWindow = 5 * time.Second
 
-// saaLongStartDelay keeps a first attempt in its start-delay window for the whole trace.
-const saaLongStartDelay = time.Hour
+// activityLongStartDelay keeps a first attempt in its start-delay window for the whole trace.
+const activityLongStartDelay = time.Hour

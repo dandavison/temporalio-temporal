@@ -82,7 +82,7 @@ var activityMetricsScenarios = []activityMetricsScenario{
 	{name: "Success", trace: []model.Event{model.Poll, model.Complete}, cfg: activityConfig{MaxAttempts: 1}},
 	{name: "TerminalFailure", trace: []model.Event{model.Poll, model.FailNonRetryably}, cfg: activityConfig{MaxAttempts: 1}},
 	{name: "Cancel", trace: []model.Event{model.Poll, model.RequestCancel, {Type: model.RespondCanceledType}}, cfg: activityConfig{MaxAttempts: 1}},
-	{name: "TerminalTimeout", trace: []model.Event{model.Poll, model.StartToCloseElapses}, cfg: activityConfig{MaxAttempts: 1, StartToClose: saaShortTimeout}, anchor: metrics.ActivityTimeout.Name()},
+	{name: "TerminalTimeout", trace: []model.Event{model.Poll, model.StartToCloseElapses}, cfg: activityConfig{MaxAttempts: 1, StartToClose: activityShortTimeout}, anchor: metrics.ActivityTimeout.Name()},
 	{name: "RetryableTaskFailure", trace: []model.Event{model.Poll, model.FailRetryably}, cfg: activityConfig{MaxAttempts: 2}},
 	{name: "Heartbeat", trace: []model.Event{model.Poll, {Type: model.HeartbeatType}}, cfg: activityConfig{MaxAttempts: 1}},
 	{name: "Pause", trace: []model.Event{model.Poll, model.Pause}, cfg: activityConfig{MaxAttempts: 1}},

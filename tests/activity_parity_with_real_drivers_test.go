@@ -68,7 +68,7 @@ func (s *activityParityTestSuite) TestWFASAAStartToCloseTimeout() {
 	trace := []model.Event{model.Poll, model.StartToCloseElapses}
 	want := activityTerminalProjection{Status: enumspb.ACTIVITY_EXECUTION_STATUS_TIMED_OUT, FailureType: enumspb.TIMEOUT_TYPE_START_TO_CLOSE.String()}
 
-	cfg := activityConfig{MaxAttempts: 1, StartToClose: saaShortTimeout}
+	cfg := activityConfig{MaxAttempts: 1, StartToClose: activityShortTimeout}
 
 	s.T().Run("WorkflowActivity", func(t *testing.T) {
 		require.Equal(t, want, newWFADriver(t, env, cfg).driveTrace(t, trace).terminal(t))
@@ -87,7 +87,7 @@ func (s *activityParityTestSuite) TestWFASAAScheduleToCloseTimeout() {
 	trace := []model.Event{model.Poll, {Type: model.ScheduleToCloseElapsesType}}
 	want := activityTerminalProjection{Status: enumspb.ACTIVITY_EXECUTION_STATUS_TIMED_OUT, FailureType: enumspb.TIMEOUT_TYPE_SCHEDULE_TO_CLOSE.String()}
 
-	cfg := activityConfig{MaxAttempts: 1, ScheduleToClose: saaShortTimeout}
+	cfg := activityConfig{MaxAttempts: 1, ScheduleToClose: activityShortTimeout}
 
 	s.T().Run("WorkflowActivity", func(t *testing.T) {
 		require.Equal(t, want, newWFADriver(t, env, cfg).driveTrace(t, trace).terminal(t))
@@ -104,7 +104,7 @@ func (s *activityParityTestSuite) TestWFASAAScheduleToCloseTimeout() {
 func (s *activityParityTestSuite) TestWFASAATimeoutPreservesUnderlyingFailureCause() {
 	env := newParityEnv(s.T())
 
-	// The application failure driven on attempt 1; see saaFailure. The terminal timeout must chain it
+	// The application failure driven on attempt 1; see activityFailure. The terminal timeout must chain it
 	// verbatim, both Type and Message.
 	wantCause := failureCause{Type: "drive", Message: "drive"}
 
@@ -127,18 +127,18 @@ func (s *activityParityTestSuite) TestWFASAATimeoutPreservesUnderlyingFailureCau
 
 	// Retries exhausted by a StartToClose timeout on the final attempt (attempt 1 failed retryably).
 	s.T().Run("StartToClose", func(t *testing.T) {
-		assertCausePreserved(t, activityConfig{MaxAttempts: 2, StartToClose: saaShortTimeout},
+		assertCausePreserved(t, activityConfig{MaxAttempts: 2, StartToClose: activityShortTimeout},
 			[]model.Event{model.Poll, model.FailRetryably, model.Poll, model.StartToCloseElapses}, enumspb.TIMEOUT_TYPE_START_TO_CLOSE)
 	})
 	// Retries exhausted by a Heartbeat timeout on the final attempt: the attempt starts but never
 	// heartbeats. A distinct code path that must chain the same cause.
 	s.T().Run("Heartbeat", func(t *testing.T) {
-		assertCausePreserved(t, activityConfig{MaxAttempts: 2, Heartbeat: saaShortTimeout},
+		assertCausePreserved(t, activityConfig{MaxAttempts: 2, Heartbeat: activityShortTimeout},
 			[]model.Event{model.Poll, model.FailRetryably, model.Poll, model.HeartbeatElapses}, enumspb.TIMEOUT_TYPE_HEARTBEAT)
 	})
 	// Schedule-to-close deadline closes the activity while it backs off to retry. A third code path.
 	s.T().Run("ScheduleToClose", func(t *testing.T) {
-		assertCausePreserved(t, activityConfig{ScheduleToClose: saaShortTimeout},
+		assertCausePreserved(t, activityConfig{ScheduleToClose: activityShortTimeout},
 			[]model.Event{model.Poll, model.FailRetryably, model.ScheduleToCloseElapses}, enumspb.TIMEOUT_TYPE_SCHEDULE_TO_CLOSE)
 	})
 }
@@ -155,7 +155,7 @@ func (s *activityParityTestSuite) TestWFASAATimeoutTypeOnRetryDeadline() {
 	want := activityTerminalProjection{Status: enumspb.ACTIVITY_EXECUTION_STATUS_TIMED_OUT, FailureType: enumspb.TIMEOUT_TYPE_SCHEDULE_TO_CLOSE.String()}
 
 	cfg := activityConfig{
-		MaxAttempts: 2, RetryInterval: retryInterval, ScheduleToClose: scheduleToClose, Heartbeat: saaShortTimeout,
+		MaxAttempts: 2, RetryInterval: retryInterval, ScheduleToClose: scheduleToClose, Heartbeat: activityShortTimeout,
 	}
 
 	s.T().Run("WorkflowActivity", func(t *testing.T) {
@@ -192,7 +192,7 @@ func (s *activityParityTestSuite) TestWFASAAQueuedRetryInterval() {
 // TestWFASAAHeartBeat ports the core of TestActivityHeartBeatWorkflow_Success: a worker polls the
 // activity and heartbeats a checkpoint payload, the checkpoint is readable while it runs, then the
 // worker completes it.
-var heartbeatWant = []byte(`"hb"`) // == saaHeartbeatDetails
+var heartbeatWant = []byte(`"hb"`) // == activityHeartbeatDetails
 
 func (s *activityParityTestSuite) TestWFASAAHeartBeat() {
 	env := newParityEnv(s.T())
@@ -240,7 +240,7 @@ func (s *activityParityTestSuite) TestWFASAAHeartbeatTimeout() {
 	trace := []model.Event{model.Poll, {Type: model.HeartbeatElapsesType}}
 	want := activityTerminalProjection{Status: enumspb.ACTIVITY_EXECUTION_STATUS_TIMED_OUT, FailureType: enumspb.TIMEOUT_TYPE_HEARTBEAT.String()}
 
-	cfg := activityConfig{MaxAttempts: 1, Heartbeat: saaShortTimeout}
+	cfg := activityConfig{MaxAttempts: 1, Heartbeat: activityShortTimeout}
 
 	s.T().Run("WorkflowActivity", func(t *testing.T) {
 		require.Equal(t, want, newWFADriver(t, env, cfg).driveTrace(t, trace).terminal(t))
@@ -393,33 +393,33 @@ func (s *activityParityTestSuite) TestWFASAANextAttemptScheduleTimeAndCurrentRet
 
 	// First attempt running: no pending next dispatch, and no preceding backoff, so no retry interval.
 	t.Run("FirstAttemptRunning", func(t *testing.T) {
-		both(t, activityConfig{MaxAttempts: 3, RetryInterval: saaDelayWindow}, []model.Event{model.Poll},
+		both(t, activityConfig{MaxAttempts: 3, RetryInterval: activityDelayWindow}, []model.Event{model.Poll},
 			activityInfoProjection{State: enumspb.PENDING_ACTIVITY_STATE_STARTED, Attempt: 1})
 	})
 
 	// Backing off before the retry dispatches: the retry is pending, so both the interval and the
 	// next-attempt schedule time are populated.
 	t.Run("BackingOffBeforeRetry", func(t *testing.T) {
-		both(t, activityConfig{MaxAttempts: 3, RetryInterval: saaDelayWindow}, []model.Event{model.Poll, model.FailRetryably},
-			activityInfoProjection{State: enumspb.PENDING_ACTIVITY_STATE_SCHEDULED, Attempt: 2, CurrentRetryInterval: saaDelayWindow, NextAttemptScheduleSet: true})
+		both(t, activityConfig{MaxAttempts: 3, RetryInterval: activityDelayWindow}, []model.Event{model.Poll, model.FailRetryably},
+			activityInfoProjection{State: enumspb.PENDING_ACTIVITY_STATE_SCHEDULED, Attempt: 2, CurrentRetryInterval: activityDelayWindow, NextAttemptScheduleSet: true})
 	})
 
 	// Retry dispatched to Matching but not yet polled: schedulable now, not backing off, so no current
 	// retry interval and no future dispatch time.
 	t.Run("RetryQueuedNotStarted", func(t *testing.T) {
-		both(t, activityConfig{MaxAttempts: 3, RetryInterval: saaDelayWindow}, []model.Event{model.Poll, model.FailRetryably, model.BackoffElapses},
+		both(t, activityConfig{MaxAttempts: 3, RetryInterval: activityDelayWindow}, []model.Event{model.Poll, model.FailRetryably, model.BackoffElapses},
 			activityInfoProjection{State: enumspb.PENDING_ACTIVITY_STATE_SCHEDULED, Attempt: 2})
 	})
 
 	// Retry attempt running with a further retry permitted: nothing pending.
 	t.Run("RetryAttemptRunning", func(t *testing.T) {
-		both(t, activityConfig{MaxAttempts: 3, RetryInterval: saaDelayWindow}, []model.Event{model.Poll, model.FailRetryably, model.BackoffElapses, model.Poll},
+		both(t, activityConfig{MaxAttempts: 3, RetryInterval: activityDelayWindow}, []model.Event{model.Poll, model.FailRetryably, model.BackoffElapses, model.Poll},
 			activityInfoProjection{State: enumspb.PENDING_ACTIVITY_STATE_STARTED, Attempt: 2})
 	})
 
 	// Final attempt running with no retry remaining: nothing pending.
 	t.Run("FinalAttemptRunning", func(t *testing.T) {
-		both(t, activityConfig{MaxAttempts: 2, RetryInterval: saaDelayWindow}, []model.Event{model.Poll, model.FailRetryably, model.BackoffElapses, model.Poll},
+		both(t, activityConfig{MaxAttempts: 2, RetryInterval: activityDelayWindow}, []model.Event{model.Poll, model.FailRetryably, model.BackoffElapses, model.Poll},
 			activityInfoProjection{State: enumspb.PENDING_ACTIVITY_STATE_STARTED, Attempt: 2})
 	})
 
@@ -427,7 +427,7 @@ func (s *activityParityTestSuite) TestWFASAANextAttemptScheduleTimeAndCurrentRet
 	t.Run("Completed", func(t *testing.T) {
 		trace := []model.Event{model.Poll, model.FailRetryably, model.BackoffElapses, model.Poll, model.Complete}
 		want := activityTerminalProjection{Status: enumspb.ACTIVITY_EXECUTION_STATUS_COMPLETED}
-		cfg := activityConfig{MaxAttempts: 3, RetryInterval: saaDelayWindow}
+		cfg := activityConfig{MaxAttempts: 3, RetryInterval: activityDelayWindow}
 		t.Run("WorkflowActivity", func(t *testing.T) {
 			require.Equal(t, want, newWFADriver(t, env, cfg).driveTrace(t, trace).terminal(t))
 		})
@@ -439,7 +439,7 @@ func (s *activityParityTestSuite) TestWFASAANextAttemptScheduleTimeAndCurrentRet
 	// Paused while backing off, before the retry dispatches. No dispatch will occur while paused, so there
 	// is neither a next attempt scheduled nor a current retry interval to report.
 	t.Run("PausedBeforeDispatch", func(t *testing.T) {
-		both(t, activityConfig{MaxAttempts: 3, RetryInterval: saaDelayWindow}, []model.Event{model.Poll, model.FailRetryably, model.Pause},
+		both(t, activityConfig{MaxAttempts: 3, RetryInterval: activityDelayWindow}, []model.Event{model.Poll, model.FailRetryably, model.Pause},
 			activityInfoProjection{State: enumspb.PENDING_ACTIVITY_STATE_PAUSED, Attempt: 2})
 	})
 
@@ -449,7 +449,7 @@ func (s *activityParityTestSuite) TestWFASAANextAttemptScheduleTimeAndCurrentRet
 	// behavioral difference — whether an unpause dispatches at once — is covered by the
 	// backoff/pause-{before,after}-dispatch-then-unpause traces.
 	t.Run("PausedAfterDispatch", func(t *testing.T) {
-		both(t, activityConfig{MaxAttempts: 3, RetryInterval: saaDelayWindow}, []model.Event{model.Poll, model.FailRetryably, model.BackoffElapses, model.Pause},
+		both(t, activityConfig{MaxAttempts: 3, RetryInterval: activityDelayWindow}, []model.Event{model.Poll, model.FailRetryably, model.BackoffElapses, model.Pause},
 			activityInfoProjection{State: enumspb.PENDING_ACTIVITY_STATE_PAUSED, Attempt: 2})
 	})
 }
@@ -525,10 +525,10 @@ func (s *activityParityTestSuite) TestWFASAANonRetryableTimeout() {
 	}
 
 	t.Run("StartToClose", func(t *testing.T) {
-		both(t, activityConfig{StartToClose: saaShortTimeout}, model.StartToCloseElapses, enumspb.TIMEOUT_TYPE_START_TO_CLOSE)
+		both(t, activityConfig{StartToClose: activityShortTimeout}, model.StartToCloseElapses, enumspb.TIMEOUT_TYPE_START_TO_CLOSE)
 	})
 	t.Run("Heartbeat", func(t *testing.T) {
-		both(t, activityConfig{Heartbeat: saaShortTimeout}, model.HeartbeatElapses, enumspb.TIMEOUT_TYPE_HEARTBEAT)
+		both(t, activityConfig{Heartbeat: activityShortTimeout}, model.HeartbeatElapses, enumspb.TIMEOUT_TYPE_HEARTBEAT)
 	})
 }
 
@@ -586,13 +586,13 @@ func (s *activityParityTestSuite) TestBackoff_Declarative() {
 	t.Run("backoff/retry-dispatch", func(t *testing.T) {
 		s.driveTrace(t, env, saaTrace{
 			trace: []model.Event{model.Poll, model.FailRetryably, model.Poll, model.BackoffElapses, model.Poll},
-			cfg:   activityConfig{MaxAttempts: 3, RetryInterval: saaDelayWindow},
+			cfg:   activityConfig{MaxAttempts: 3, RetryInterval: activityDelayWindow},
 		})
 	})
 	t.Run("backoff/next-retry-delay-override", func(t *testing.T) {
 		s.driveTrace(t, env, saaTrace{
 			trace: []model.Event{model.Poll, model.FailRetryably, model.Poll, model.BackoffElapses, model.Poll},
-			cfg:   activityConfig{MaxAttempts: 3, NextRetryDelay: saaDelayWindow},
+			cfg:   activityConfig{MaxAttempts: 3, NextRetryDelay: activityDelayWindow},
 		})
 	})
 	// Paused mid-backoff: the unpause resumes waiting, so the next poll must find nothing until the
@@ -600,7 +600,7 @@ func (s *activityParityTestSuite) TestBackoff_Declarative() {
 	t.Run("backoff/pause-before-dispatch-then-unpause", func(t *testing.T) {
 		s.driveTrace(t, env, saaTrace{
 			trace: []model.Event{model.Poll, model.FailRetryably, model.Pause, {Type: model.UnpauseType}, model.Poll, model.BackoffElapses, model.Poll},
-			cfg:   activityConfig{MaxAttempts: 3, RetryInterval: saaDelayWindow},
+			cfg:   activityConfig{MaxAttempts: 3, RetryInterval: activityDelayWindow},
 		})
 	})
 	// The counterpart: paused after the backoff already elapsed, so the unpause must dispatch at once
@@ -608,25 +608,25 @@ func (s *activityParityTestSuite) TestBackoff_Declarative() {
 	t.Run("backoff/pause-after-dispatch-then-unpause", func(t *testing.T) {
 		s.driveTrace(t, env, saaTrace{
 			trace: []model.Event{model.Poll, model.FailRetryably, model.BackoffElapses, model.Pause, {Type: model.UnpauseType}, model.Poll},
-			cfg:   activityConfig{MaxAttempts: 3, RetryInterval: saaDelayWindow},
+			cfg:   activityConfig{MaxAttempts: 3, RetryInterval: activityDelayWindow},
 		})
 	})
 	t.Run("backoff/pause-unpause-then-update", func(t *testing.T) {
 		s.driveTrace(t, env, saaTrace{
 			trace: []model.Event{model.Poll, model.FailRetryably, model.Pause, {Type: model.UnpauseType}, {Type: model.UpdateOptionsType}, model.Poll, model.BackoffElapses, model.Poll},
-			cfg:   activityConfig{MaxAttempts: 3, RetryInterval: saaDelayWindow},
+			cfg:   activityConfig{MaxAttempts: 3, RetryInterval: activityDelayWindow},
 		})
 	})
 	t.Run("backoff/next-retry-delay-override-then-update", func(t *testing.T) {
 		s.driveTrace(t, env, saaTrace{
 			trace: []model.Event{model.Poll, model.FailRetryably, {Type: model.UpdateOptionsType}, model.Poll, model.BackoffElapses, model.Poll},
-			cfg:   activityConfig{MaxAttempts: 3, NextRetryDelay: saaDelayWindow},
+			cfg:   activityConfig{MaxAttempts: 3, NextRetryDelay: activityDelayWindow},
 		})
 	})
 	t.Run("backoff/reset", func(t *testing.T) {
 		s.driveTrace(t, env, saaTrace{
 			trace: []model.Event{model.Poll, model.FailRetryably, {Type: model.ResetType}, model.Poll},
-			cfg:   activityConfig{MaxAttempts: 3, RetryInterval: saaDelayWindow},
+			cfg:   activityConfig{MaxAttempts: 3, RetryInterval: activityDelayWindow},
 		})
 	})
 }
