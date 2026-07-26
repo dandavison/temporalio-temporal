@@ -48,31 +48,13 @@ func recordDriverReports(drive func(require.TestingT)) (failures []string) {
 // TestSAADriverReportsUnrealizedWallClockEvents drives a trace whose wall-clock event provably cannot
 // take effect inside the window the driver waits, and requires the driver to report it.
 func (s *activityParityTestSuite) TestSAADriverReportsUnrealizedWallClockEvents() {
-	// realRetryInterval and realStartToClose are far longer than the windows the driver derives below,
-	// so the corresponding event cannot possibly have taken effect when the driver moves on.
-	const realRetryInterval, realStartToClose = 30 * time.Second, 30 * time.Second
+	// realStartToClose is far longer than the window the driver derives below, so the timeout cannot
+	// possibly have fired when the driver moves on.
+	const realStartToClose = 30 * time.Second
 
-	s.T().Run("BackoffElapses", func(t *testing.T) {
-		drive := func(customize func(*workflowservice.StartActivityExecutionRequest)) []string {
-			return recordDriverReports(func(rt require.TestingT) {
-				d := newSAADriver(t, newActivityParityEnv(t), activityConfig{
-					MaxAttempts:   3,
-					RetryInterval: time.Second, // the window the driver will wait out
-				})
-				d.customizeStart = customize
-				d.driveTrace(rt, []model.Event{model.Poll, model.FailRetryably, model.BackoffElapses})
-			})
-		}
-
-		require.Empty(t, drive(nil), "control: an uninjected trace must drive cleanly")
-
-		injected := drive(func(req *workflowservice.StartActivityExecutionRequest) {
-			req.RetryPolicy.InitialInterval = durationpb.New(realRetryInterval)
-			req.RetryPolicy.MaximumInterval = durationpb.New(realRetryInterval)
-		})
-		require.NotEmpty(t, injected,
-			"the retry was still backing off when the driver moved past BackoffElapses; the driver must report that")
-	})
+	// There is no BackoffElapses case: that wait takes its deadline from the server's
+	// NextAttemptScheduleTime, so a configured interval shorter than the real one cannot make the driver
+	// move on early. Only a dispatch the server never makes fails it, which no start-time config injects.
 
 	s.T().Run("StartToCloseElapses", func(t *testing.T) {
 		drive := func(customize func(*workflowservice.StartActivityExecutionRequest)) []string {
