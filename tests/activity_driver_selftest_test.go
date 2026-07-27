@@ -91,7 +91,7 @@ func (s *activityParityTestSuite) TestSAADriverBlamesItselfWhenItOutrunsTheDispa
 		return recordDriverReports(func(rt require.TestingT) {
 			d := newSAADriver(t, newActivityParityEnv(t), activityConfig{MaxAttempts: 1, StartDelay: activityLongStartDelay})
 			d.customizeStart = customize
-			a := d.start(rt)
+			a := d.start(rt, d.cfg)
 			_, err := a.observed() // seed the stamp baseline, as the model-checking driver does after Start
 			require.NoError(rt, err)
 			cur, poll := model.Initial(d.cfg.modelConfig()), model.Poll

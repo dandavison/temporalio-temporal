@@ -173,7 +173,7 @@ func (d *saaDriver) checkCompleteness(t *testing.T, verifiedFine, skippedFine ma
 // that diverges aborts the replay silently; that edge is reported when it is the final edge of its own
 // shorter path.
 func (d *saaDriver) verifyPath(t require.TestingT, path []model.Event) (saaApply, bool) {
-	a := d.start(t)
+	a := d.start(t, d.cfg)
 	a.path = path
 	cur := model.Initial(d.cfg.modelConfig())
 
@@ -530,7 +530,7 @@ func (d *saaDriver) randomWalk(t *testing.T, rng *rand.Rand, maxSteps int) {
 
 // walkStart begins a fresh activity and asserts it matches Initial(cfg).
 func (d *saaDriver) walkStart(t *testing.T) (*saaHandle, model.AbstractState) {
-	a := d.start(t)
+	a := d.start(t, d.cfg)
 	cur := model.Initial(d.cfg.modelConfig())
 	obs, err := a.observed()
 	require.NoError(t, err)
@@ -789,7 +789,7 @@ func saaRejectKindName(k model.ErrorKind) string {
 // step against model.Transition (see apply). The state after Start must equal model.Initial(cfg).
 // Requires a config the model can see in full, so no customizeStart.
 func (d *saaDriver) driveTraceWithModelConformanceChecking(t *testing.T, trace []model.Event) *saaHandle {
-	a := d.start(t)
+	a := d.start(t, d.cfg)
 	a.path = trace
 	cur := model.Initial(d.cfg.modelConfig())
 	obs, err := a.observed()

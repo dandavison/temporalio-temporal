@@ -59,6 +59,7 @@ func newWFADriver(t *testing.T, env *testcore.TestEnv, cfg activityConfig) *wfaD
 // wfaHandle is a handle to one workflow-scheduled activity: the ids that address it and the workflow
 // that owns it, plus the token last dispatched to it.
 type wfaHandle struct {
+	cfg        activityConfig // d.cfg with the windows this trace needs; see activityConfig.forTrace
 	d          *wfaDriver
 	run        sdkclient.WorkflowRun
 	workflowID string
@@ -131,9 +132,9 @@ func wfaOneActivityWorkflow(ctx workflow.Context, p wfaActivityParams) error {
 // driveTrace runs a trace on a fresh workflow-scheduled activity and returns a handle at the reached
 // state. Model-free.
 func (d *wfaDriver) driveTrace(t *testing.T, trace []model.Event) *wfaHandle {
-	d.cfg = d.cfg.forTrace(trace)
-	validateTrace(t, d.cfg, trace)
-	a := d.start(t)
+	cfg := d.cfg.forTrace(trace)
+	validateTrace(t, cfg, trace)
+	a := d.start(t, cfg)
 	for _, e := range trace {
 		a.driveEvent(t, e)
 	}
@@ -168,7 +169,7 @@ func (a *wfaHandle) awaitWallClock(t require.TestingT, e model.Event) {
 		a.awaitDispatchTimePassed(t, e)
 		return
 	}
-	deadline := time.Now().Add(a.d.cfg.window(e) + activityDriverWallClockSettle)
+	deadline := time.Now().Add(a.cfg.window(e) + activityDriverWallClockSettle)
 	before, beforePending := a.pendingSnapshot(t)
 	changed := func() bool {
 		now, nowPending := a.pendingSnapshot(t)
@@ -178,7 +179,7 @@ func (a *wfaHandle) awaitWallClock(t require.TestingT, e model.Event) {
 		return
 	}
 	t.Errorf("%s: the activity did not change within %s of driving the event, so the event did not "+
-		"take effect. Last observed: %+v", e, a.d.cfg.window(e)+activityDriverWallClockSettle, before)
+		"take effect. Last observed: %+v", e, a.cfg.window(e)+activityDriverWallClockSettle, before)
 }
 
 // pendingSnapshot is the activity's pending-activity projection, and whether it is currently pending. A
@@ -228,7 +229,7 @@ func (a *wfaHandle) pendingSnapshot(t require.TestingT) (activityInfo, bool) {
 	return wfaActivityInfo(pa), true
 }
 
-func (d *wfaDriver) start(t *testing.T) *wfaHandle {
+func (d *wfaDriver) start(t *testing.T, cfg activityConfig) *wfaHandle {
 	wfTQ := testcore.RandomizeStr("wfa-wf")
 	actTQ := testcore.RandomizeStr("wfa-act")
 	const actID = "act"
@@ -240,7 +241,7 @@ func (d *wfaDriver) start(t *testing.T) *wfaHandle {
 	require.NoError(t, w.Start())
 	t.Cleanup(w.Stop)
 
-	c := d.cfg
+	c := cfg
 	wfID := testcore.RandomizeStr("wfa-run")
 	run, err := d.env.SdkClient().ExecuteWorkflow(d.ctx,
 		sdkclient.StartWorkflowOptions{ID: wfID, TaskQueue: wfTQ},
@@ -258,7 +259,7 @@ func (d *wfaDriver) start(t *testing.T) *wfaHandle {
 			NonRetryableErrorTypes: c.NonRetryableErrorTypes,
 		})
 	require.NoError(t, err)
-	return &wfaHandle{d: d, run: run, workflowID: wfID, runID: run.GetRunID(), activityID: actID, activityTQ: actTQ}
+	return &wfaHandle{d: d, cfg: cfg, run: run, workflowID: wfID, runID: run.GetRunID(), activityID: actID, activityTQ: actTQ}
 }
 
 // terminal waits for the activity to reach a terminal state and reports it. A workflow activity's
@@ -336,7 +337,7 @@ func (a *wfaHandle) rpc(e model.Event) error {
 		return err
 	case model.RespondFailedType:
 		_, err := fc.RespondActivityTaskFailed(a.d.ctx, &workflowservice.RespondActivityTaskFailedRequest{
-			Namespace: ns, TaskToken: a.token, Identity: a.d.env.Tv().WorkerIdentity(), Failure: activityFailure(e.Retryable, a.d.cfg.NextRetryDelay),
+			Namespace: ns, TaskToken: a.token, Identity: a.d.env.Tv().WorkerIdentity(), Failure: activityFailure(e.Retryable, a.cfg.NextRetryDelay),
 		})
 		return err
 	case model.RespondCanceledType:
