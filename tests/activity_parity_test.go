@@ -359,3 +359,12 @@ func (s *activityParityTestSuite) TestDriversDoNotLeakInferredTimeoutsAcrossTrac
 		})
 	}
 }
+
+func (s *activityParityTestSuite) TestWFADriverWaitsForActivityToBeScheduled() {
+	t := s.T()
+	env := newActivityParityEnv(t)
+
+	info := newWFADriver(t, env, activityConfig{}).driveTrace(t, nil).activityInfo(t)
+	require.Equal(t, enumspb.PENDING_ACTIVITY_STATE_SCHEDULED, info.RunState)
+	require.Equal(t, int32(1), info.Attempt)
+}
