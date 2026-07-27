@@ -152,9 +152,8 @@ func timeoutType(e model.Event) enumspb.TimeoutType {
 	}
 }
 
-// activityModelCursor is the model state a driver has reached, so that each event can be checked
-// against the state it is actually driven from. Validating the whole trace up front would miss an
-// event driven directly with driveEvent, which is how a trace's steps are taken one at a time.
+// activityModelCursor is the model state a driver has reached, so that driveEvent can check each
+// event against the state it is driven from.
 type activityModelCursor struct {
 	cfg   model.Config
 	state model.AbstractState

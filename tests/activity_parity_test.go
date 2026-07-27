@@ -289,11 +289,9 @@ func (s *activityParityTestSuite) TestParityTimeoutTypeOnInsufficientTimeForRetr
 	}
 
 	s.T().Run("WorkflowActivity", func(t *testing.T) {
-		// The driver cannot drive HeartbeatElapses here: it waits for the activity to report the
-		// heartbeat timeout, and a workflow activity stops reporting one the moment it closes. The
-		// terminal error carries only ScheduleToClose, with no cause, so the heartbeat that caused the
-		// give-up is indistinguishable from a schedule-to-close that fired on its own. The standalone
-		// surface keeps the attempt's failure and so can tell them apart.
+		// A workflow activity stops reporting the timeout that ended its attempt the moment it closes:
+		// the terminal error carries ScheduleToClose and no cause. The standalone surface keeps the
+		// attempt's failure, so only it can drive HeartbeatElapses here.
 		t.Skip("a closed workflow activity does not report the timeout that ended its attempt")
 		require.Equal(t, expected, newWFADriver(t, env, cfg).driveTrace(t, trace).terminal(t))
 	})

@@ -40,9 +40,8 @@ func CarriesReqID(k EventType) bool {
 
 // Possible reports whether event type t can occur in state s. This is not whether the state machine
 // would accept it: a client can always send an RPC, and a rejection is an occurrence a trace may
-// legitimately assert. A clock event, though, cannot occur unless its clock is running, which is what
-// its transition function already decides — so this asks that function rather than restating the
-// conditions and leaving the model with two accounts of when a clock runs.
+// assert. A clock event cannot occur unless its clock is running, which its transition function
+// already decides, so this asks that function.
 func Possible(cfg Config, s AbstractState, t EventType) bool {
 	return !Transition(cfg, s, Event{Type: t}).Impossible
 }

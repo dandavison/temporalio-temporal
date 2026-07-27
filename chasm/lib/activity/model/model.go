@@ -26,7 +26,7 @@ type Outcome struct {
 	Reject                         ErrorKind
 	AttemptTasksInvalidated        bool // this transition invalidates the pending attempt dispatch/timer tasks
 	ScheduleToCloseTaskInvalidated bool // this transition restarts/invalidates the schedule-to-close timer
-	Impossible                     bool // the event could not occur here: a clock that is not running. See Possible.
+	Impossible                     bool // the event could not occur here: a clock that is not running
 }
 
 // Initial is the state immediately after a successful StartActivityExecution.
