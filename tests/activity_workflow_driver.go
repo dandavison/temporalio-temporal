@@ -129,6 +129,8 @@ func (a *wfaHandle) timeoutMark(t require.TestingT) activityTimeoutMark {
 // if it is still pending, or if the activity ended first and so never dispatched at all.
 // See saaHandle.awaitDispatchDelay.
 func (a *wfaHandle) awaitDispatchDelay(t require.TestingT, e model.Event) {
+	// Nothing to wait for: an activity that is no longer pending dispatches nothing more, and a
+	// running attempt means whatever was pending has already been dispatched and taken.
 	pa := a.pendingActivity(t)
 	switch {
 	case pa == nil:
@@ -143,6 +145,8 @@ func (a *wfaHandle) awaitDispatchDelay(t require.TestingT, e model.Event) {
 	if next := pa.GetNextAttemptScheduleTime(); next != nil {
 		deadline = next.AsTime().Add(activityDriverTimerMargin)
 	}
+	// Three things end the wait: the dispatch time passing, a worker having taken the task, or the
+	// activity leaving the pending set. Only the last is a failure.
 	settled := func() bool {
 		pa = a.pendingActivity(t)
 		return pa == nil || pa.GetState() == enumspb.PENDING_ACTIVITY_STATE_STARTED ||
