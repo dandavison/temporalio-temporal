@@ -30,7 +30,7 @@ import (
 // its exact duration is what the test is about.
 type activityConfig struct {
 	MaxAttempts            int32         // RetryPolicy MaximumAttempts; 0 = unlimited
-	RetryInterval          time.Duration // RetryPolicy InitialInterval; 0 => activityShortDuration
+	RetryInterval          time.Duration // RetryPolicy InitialInterval; 0 => activityShortDispatchDelay
 	BackoffCoefficient     float64       // RetryPolicy BackoffCoefficient; 0 => 1.0 (constant interval)
 	MaxRetryInterval       time.Duration // RetryPolicy MaximumInterval; 0 => RetryInterval
 	NextRetryDelay         time.Duration // ApplicationFailureInfo.NextRetryDelay sent with RespondFailed
@@ -55,14 +55,16 @@ var timerProcessorMaxShift = dynamicconfig.TimerProcessorMaxTimeShift.Get(
 // test. Anything from thirty seconds up would do; a day outlasts even a slow CI run.
 const activityLongDuration = 24 * time.Hour
 
-// activityShortDuration is a timeout, retry interval or start delay short enough to wait for while
-// driving a trace. Two shifts, because nothing shorter than one is useful — the queue will not fire
-// the timer behind it any earlier — and the second leaves the driver room to observe the state the
-// event is driven from before it fires.
-var activityShortDuration = 2 * timerProcessorMaxShift
+// activityShortTimeout is a timeout short enough to wait for while driving a trace.
+var activityShortTimeout = 2 * timerProcessorMaxShift
+
+// activityShortDispatchDelay is a retry interval or start delay short enough to wait for while
+// driving a trace. Note that the queue will not fire the dispatch timer any earlier than
+// timerProcessorMaxShift.
+var activityShortDispatchDelay = timerProcessorMaxShift
 
 func (c activityConfig) retryInterval() time.Duration {
-	return cmp.Or(c.RetryInterval, activityShortDuration)
+	return cmp.Or(c.RetryInterval, activityShortDispatchDelay)
 }
 
 func (c activityConfig) startToClose() time.Duration {
@@ -76,13 +78,13 @@ func (c activityConfig) forTrace(trace []model.Event) activityConfig {
 	for _, e := range trace {
 		switch e.Type {
 		case model.ScheduleToStartElapsesType:
-			c.ScheduleToStart = cmp.Or(c.ScheduleToStart, activityShortDuration)
+			c.ScheduleToStart = cmp.Or(c.ScheduleToStart, activityShortTimeout)
 		case model.ScheduleToCloseElapsesType:
-			c.ScheduleToClose = cmp.Or(c.ScheduleToClose, activityShortDuration)
+			c.ScheduleToClose = cmp.Or(c.ScheduleToClose, activityShortTimeout)
 		case model.StartToCloseElapsesType:
-			c.StartToClose = cmp.Or(c.StartToClose, activityShortDuration)
+			c.StartToClose = cmp.Or(c.StartToClose, activityShortTimeout)
 		case model.HeartbeatElapsesType:
-			c.HeartbeatTimeout = cmp.Or(c.HeartbeatTimeout, activityShortDuration)
+			c.HeartbeatTimeout = cmp.Or(c.HeartbeatTimeout, activityShortTimeout)
 		}
 	}
 	return c
@@ -96,7 +98,7 @@ func (c activityConfig) timerDuration(e model.Event) time.Duration {
 		return c.StartDelay
 	case model.BackoffElapsesType:
 		// The first backoff only: a later one is longer under a non-constant policy. Waiting for a
-		// dispatch uses the server's schedule time instead; see awaitDispatchTimePassed.
+		// dispatch uses the server's schedule time instead; see awaitDispatchDelay.
 		return cmp.Or(c.NextRetryDelay, c.retryInterval())
 	case model.StartToCloseElapsesType:
 		return c.startToClose()

@@ -432,7 +432,7 @@ func (a *saaHandle) applyWallClock(t require.TestingT, e model.Event, cur model.
 		cur.Dispatchability != model.Dispatchable:
 		// The delay elapsing is not visible in the component state the oracle compares — Dispatchability is
 		// masked out of SameObserved — so assert the public dispatch time passing instead.
-		a.awaitDispatchTimePassed(t, e)
+		a.awaitDispatchDelay(t, e)
 	case out.Next.SameObserved(cur):
 		time.Sleep(time.Until(deadline))
 	default:

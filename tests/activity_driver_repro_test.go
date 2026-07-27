@@ -30,7 +30,7 @@ func (s *activityParityTestSuite) TestDriversRejectBackoffElapseWhenScheduleToCl
 	cfg := activityConfig{
 		MaxAttempts:     3,
 		RetryInterval:   activityLongDuration,
-		ScheduleToClose: activityShortDuration,
+		ScheduleToClose: activityShortTimeout,
 	}
 	trace := []model.Event{model.Poll, model.FailRetryably}
 
@@ -82,8 +82,8 @@ func (s *activityParityTestSuite) TestDriversRejectTimeoutElapseWhenDifferentTim
 	env := newActivityParityEnv(s.T())
 	cfg := activityConfig{
 		MaxAttempts:      1,
-		StartToClose:     activityShortDuration,
-		HeartbeatTimeout: 2 * activityShortDuration,
+		StartToClose:     activityShortTimeout,
+		HeartbeatTimeout: 2 * activityShortTimeout,
 	}
 	trace := []model.Event{model.Poll}
 
@@ -111,7 +111,7 @@ func (s *activityParityTestSuite) TestDriversAllowTimeoutsOnSeparateAttempts() {
 	env := newActivityParityEnv(s.T())
 	cfg := activityConfig{
 		MaxAttempts:   2,
-		RetryInterval: activityShortDuration,
+		RetryInterval: activityShortDispatchDelay,
 	}
 	trace := []model.Event{
 		model.Poll,
@@ -137,7 +137,7 @@ func (s *activityParityTestSuite) TestDriversAcceptTimeoutElapseThatAlreadyOccur
 	env := newActivityParityEnv(s.T())
 	cfg := activityConfig{
 		MaxAttempts:  1,
-		StartToClose: activityShortDuration,
+		StartToClose: activityShortTimeout,
 	}
 	trace := []model.Event{model.Poll}
 

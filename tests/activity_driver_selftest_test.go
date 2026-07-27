@@ -61,7 +61,7 @@ func (s *activityParityTestSuite) TestSAADriverReportsUnrealizedWallClockEvents(
 			return recordDriverReports(func(rt require.TestingT) {
 				d := newSAADriver(t, newActivityParityEnv(t), activityConfig{
 					MaxAttempts:  1,
-					StartToClose: activityShortDuration, // the window the driver will wait out
+					StartToClose: activityShortTimeout, // the window the driver will wait out
 				})
 				d.customizeStart = customize
 				d.driveTrace(rt, []model.Event{model.Poll, model.StartToCloseElapses})

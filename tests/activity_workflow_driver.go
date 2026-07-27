@@ -149,7 +149,7 @@ func (a *wfaHandle) driveEvent(t require.TestingT, e model.Event) {
 // activity, and fails if it does not within (window + settle).
 func (a *wfaHandle) awaitTimerEvent(t require.TestingT, e model.Event) {
 	if isDispatchDelayEvent(e.Type) {
-		a.awaitDispatchTimePassed(t, e)
+		a.awaitDispatchDelay(t, e)
 		return
 	}
 	a.awaitTimeout(t, e, time.Now().Add(a.cfg.timerDuration(e)+activityDriverTimerMargin))
@@ -192,10 +192,10 @@ func (a *wfaHandle) timeoutMark(t require.TestingT) activityTimeoutMark {
 	return m
 }
 
-// awaitDispatchTimePassed polls the activity until the delayed dispatch is no longer pending, and
+// awaitDispatchDelay polls the activity until the delayed dispatch is no longer pending, and
 // fails if it is still pending, or if the activity ended first and so never dispatched at all.
-// See saaHandle.awaitDispatchTimePassed.
-func (a *wfaHandle) awaitDispatchTimePassed(t require.TestingT, e model.Event) {
+// See saaHandle.awaitDispatchDelay.
+func (a *wfaHandle) awaitDispatchDelay(t require.TestingT, e model.Event) {
 	pa := a.pendingActivity(t)
 	deadline := time.Now().Add(activityDriverTimerMargin)
 	if next := pa.GetNextAttemptScheduleTime(); next != nil {
