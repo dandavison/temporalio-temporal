@@ -59,7 +59,8 @@ func newWFADriver(t *testing.T, env *testcore.TestEnv, cfg activityConfig) *wfaD
 // wfaHandle is a handle to one workflow-scheduled activity: the ids that address it and the workflow
 // that owns it, plus the token last dispatched to it.
 type wfaHandle struct {
-	cfg        activityConfig // d.cfg with the windows this trace needs; see activityConfig.forTrace
+	cursor     *activityModelCursor // the model state reached, so driveEvent can check each event
+	cfg        activityConfig       // d.cfg with the windows this trace needs; see activityConfig.forTrace
 	d          *wfaDriver
 	run        sdkclient.WorkflowRun
 	workflowID string
@@ -133,7 +134,6 @@ func wfaOneActivityWorkflow(ctx workflow.Context, p wfaActivityParams) error {
 // state. Model-free.
 func (d *wfaDriver) driveTrace(t *testing.T, trace []model.Event) *wfaHandle {
 	cfg := d.cfg.forTrace(trace)
-	validateTrace(t, cfg, trace)
 	a := d.start(t, cfg)
 	for _, e := range trace {
 		a.driveEvent(t, e)
@@ -143,6 +143,7 @@ func (d *wfaDriver) driveTrace(t *testing.T, trace []model.Event) *wfaHandle {
 
 // driveEvent advances the activity by one event.
 func (a *wfaHandle) driveEvent(t require.TestingT, e model.Event) {
+	a.cursor.check(t, e)
 	d := a.d
 	switch {
 	case e.Type == model.PollType:
@@ -285,7 +286,7 @@ func (d *wfaDriver) start(t *testing.T, cfg activityConfig) *wfaHandle {
 			NonRetryableErrorTypes: c.NonRetryableErrorTypes,
 		})
 	require.NoError(t, err)
-	return &wfaHandle{d: d, cfg: cfg, run: run, workflowID: wfID, runID: run.GetRunID(), activityID: actID, activityTQ: actTQ}
+	return &wfaHandle{d: d, cfg: cfg, cursor: newActivityModelCursor(cfg), run: run, workflowID: wfID, runID: run.GetRunID(), activityID: actID, activityTQ: actTQ}
 }
 
 // terminal waits for the activity to reach a terminal state and reports it. A workflow activity's

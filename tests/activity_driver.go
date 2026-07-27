@@ -157,14 +157,28 @@ func timeoutType(e model.Event) enumspb.TimeoutType {
 	}
 }
 
-// validateTrace rejects a trace no activity could produce: one that drives an event when the clock
-// behind it is not running. Config is passed after forTrace, so a timeout the trace fires is
-// configured by then and only the state conditions remain to be checked.
-//
-// Only driveTrace validates. driveTraceWithModelConformanceChecking drives stopped clocks on purpose,
-// to assert the server does nothing, and the model already predicts that.
-func validateTrace(t require.TestingT, cfg activityConfig, trace []model.Event) {
-	require.NoError(t, model.ValidateTrace(cfg.modelConfig(), trace))
+// activityModelCursor is the model state a driver has reached, so that each event can be checked
+// against the state it is actually driven from. Validating the whole trace up front would miss an
+// event driven directly with driveEvent, which is how a trace's steps are taken one at a time.
+type activityModelCursor struct {
+	cfg   model.Config
+	state model.AbstractState
+}
+
+func newActivityModelCursor(cfg activityConfig) *activityModelCursor {
+	mc := cfg.modelConfig()
+	return &activityModelCursor{cfg: mc, state: model.Initial(mc)}
+}
+
+// check fails if e cannot occur in the state reached so far, then advances past it.
+func (c *activityModelCursor) check(t require.TestingT, e model.Event) {
+	if !model.Possible(c.cfg, c.state, e.Type) {
+		require.Failf(t, "the trace drives an event that cannot occur",
+			"%s cannot occur in %v/%v: its clock is not running there. Remove it, or drive the events "+
+				"that start its clock first.", e, c.state.Status, c.state.Dispatchability)
+		return
+	}
+	c.state = model.Transition(c.cfg, c.state, e).Next
 }
 
 // isWallClockEvent reports whether an event fires on wall-clock time rather than synchronously.
