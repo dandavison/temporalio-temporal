@@ -47,7 +47,7 @@ type wfaDriver struct {
 	ctx context.Context
 	cfg activityConfig
 
-	positivePollTimeout time.Duration // bounds a "must dispatch" poll; 0 => activityDriverPositivePollTimeout
+	positivePollTimeout time.Duration // bounds a "must dispatch" poll; 0 => activityDriverTimeout
 }
 
 // newWFADriver builds a driver with the test-scoped context. cfg.StartDelay is ignored: a
@@ -149,26 +149,26 @@ func (a *wfaHandle) driveEvent(t require.TestingT, e model.Event) {
 	case e.Type == model.PollType:
 		// A poll captures the dispatched task token. Every Poll a trace drives is a positive poll — the
 		// activity is meant to be dispatchable — so finding no task is a failure, not a step to skip.
-		timeout := cmp.Or(d.positivePollTimeout, activityDriverPositivePollTimeout)
+		timeout := cmp.Or(d.positivePollTimeout, activityDriverTimeout)
 		resp := a.pollForTask(t, timeout)
 		require.NotNilf(t, resp, "%s: no task was dispatched within %s", e, timeout)
 		a.token = resp.GetTaskToken()
-	case isWallClockEvent(e.Type):
+	case isTimerEvent(e.Type):
 		// A wall-clock event is realized by waiting out its configured window.
-		a.awaitWallClock(t, e)
+		a.awaitTimerEvent(t, e)
 	default:
 		require.NoError(t, a.rpc(e))
 	}
 }
 
-// awaitWallClock blocks until a wall-clock event's effect shows up in the workflow's view of the
+// awaitTimerEvent blocks until a wall-clock event's effect shows up in the workflow's view of the
 // activity, and fails if it does not within (window + settle).
-func (a *wfaHandle) awaitWallClock(t require.TestingT, e model.Event) {
+func (a *wfaHandle) awaitTimerEvent(t require.TestingT, e model.Event) {
 	if isDispatchDelayEvent(e.Type) {
 		a.awaitDispatchTimePassed(t, e)
 		return
 	}
-	a.awaitTimeout(t, e, time.Now().Add(a.cfg.window(e)+activityDriverWallClockSettle))
+	a.awaitTimeout(t, e, time.Now().Add(a.cfg.timerDuration(e)+activityDriverTimerMargin))
 }
 
 // awaitTimeout blocks until the activity reports the timeout the event names, and fails if it does
@@ -186,7 +186,7 @@ func (a *wfaHandle) awaitTimeout(t require.TestingT, e model.Event, deadline tim
 	}
 	t.Errorf("%s: the activity did not report a %s timeout within %s of driving the event; it reports %+v. "+
 		"Check that the config makes this the timeout that fires.",
-		e, want, a.cfg.window(e)+activityDriverWallClockSettle, got)
+		e, want, a.cfg.timerDuration(e)+activityDriverTimerMargin, got)
 }
 
 // timeoutMark reads the pending activity while there is one. A closed activity has left the pending
@@ -213,9 +213,9 @@ func (a *wfaHandle) timeoutMark(t require.TestingT) activityTimeoutMark {
 // See saaHandle.awaitDispatchTimePassed.
 func (a *wfaHandle) awaitDispatchTimePassed(t require.TestingT, e model.Event) {
 	pa := a.pendingActivity(t)
-	deadline := time.Now().Add(activityDriverWallClockSettle)
+	deadline := time.Now().Add(activityDriverTimerMargin)
 	if next := pa.GetNextAttemptScheduleTime(); next != nil {
-		deadline = next.AsTime().Add(activityDriverWallClockSettle)
+		deadline = next.AsTime().Add(activityDriverTimerMargin)
 	}
 	for {
 		switch {
@@ -226,7 +226,7 @@ func (a *wfaHandle) awaitDispatchTimePassed(t require.TestingT, e model.Event) {
 			return
 		case !time.Now().Before(deadline):
 			t.Errorf("%s: a dispatch is still pending %s after the time the server scheduled it for. "+
-				"Last observed: %+v", e, activityDriverWallClockSettle, wfaActivityInfo(pa))
+				"Last observed: %+v", e, activityDriverTimerMargin, wfaActivityInfo(pa))
 			return
 		}
 		time.Sleep(activityDriverPollInterval)
@@ -278,7 +278,7 @@ func (d *wfaDriver) start(t *testing.T, cfg activityConfig) *wfaHandle {
 			StartToClose:           c.startToClose(),
 			ScheduleToClose:        c.ScheduleToClose,
 			ScheduleToStart:        c.ScheduleToStart,
-			Heartbeat:              c.Heartbeat,
+			Heartbeat:              c.HeartbeatTimeout,
 			RetryInterval:          c.retryInterval(),
 			BackoffCoefficient:     c.BackoffCoefficient,
 			MaxInterval:            c.MaxRetryInterval,

@@ -89,7 +89,7 @@ func (s *activityParityTestSuite) TestSAADriverBlamesItselfWhenItOutrunsTheDispa
 	// returns everything the driver reported.
 	negativePoll := func(t *testing.T, customize func(*workflowservice.StartActivityExecutionRequest)) []string {
 		return recordDriverReports(func(rt require.TestingT) {
-			d := newSAADriver(t, newActivityParityEnv(t), activityConfig{MaxAttempts: 1, StartDelay: activityLongStartDelay})
+			d := newSAADriver(t, newActivityParityEnv(t), activityConfig{MaxAttempts: 1, StartDelay: activityLongDuration})
 			d.customizeStart = customize
 			a := d.start(rt, d.cfg)
 			_, err := a.observed() // seed the stamp baseline, as the model-checking driver does after Start

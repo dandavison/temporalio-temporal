@@ -273,7 +273,7 @@ func (a *saaHandle) apply(t require.TestingT, e model.Event, cur model.AbstractS
 	if e.Type == model.PollType {
 		return a.applyPoll(cur, out, final, t)
 	}
-	if isWallClockEvent(e.Type) {
+	if isTimerEvent(e.Type) {
 		return a.applyWallClock(t, e, cur, out, final)
 	}
 	// A worker RPC needs a task token, held only after a poll. An empty token yields a different error
@@ -360,7 +360,7 @@ func (a *saaHandle) applyPoll(cur model.AbstractState, out model.Outcome, final 
 	case cur.Status == model.Scheduled && out.Next.Status == model.Started:
 		// A dispatchable activity must dispatch. The traces bound the deadline, so "Dispatchable" means
 		// "dispatches promptly".
-		timeout := cmp.Or(a.d.positivePollTimeout, activityDriverPositivePollTimeout)
+		timeout := cmp.Or(a.d.positivePollTimeout, activityDriverTimeout)
 		resp := a.pollForTask(t, timeout)
 		if resp == nil {
 			if final {
@@ -426,7 +426,7 @@ func (a *saaHandle) applyPoll(cur model.AbstractState, out model.Outcome, final 
 // out.Next. Where the model predicts an observable change it polls for that state; where it predicts
 // none, the only way to confirm is to wait the window out and see nothing move.
 func (a *saaHandle) applyWallClock(t require.TestingT, e model.Event, cur model.AbstractState, out model.Outcome, final bool) saaApply {
-	deadline := time.Now().Add(a.d.cfg.window(e) + activityDriverWallClockSettle)
+	deadline := time.Now().Add(a.d.cfg.timerDuration(e) + activityDriverTimerMargin)
 	switch {
 	case isDispatchDelayEvent(e.Type) && out.Next.Dispatchability == model.Dispatchable &&
 		cur.Dispatchability != model.Dispatchable:
@@ -902,7 +902,7 @@ func (tr saaTrace) startDelay() time.Duration {
 			return activityDelayWindow
 		}
 	}
-	return activityLongStartDelay
+	return activityLongDuration
 }
 
 // activityDelayWindow is a dispatch-delay window long enough to outlast a valid negative long poll, so that

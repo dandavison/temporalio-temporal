@@ -21,6 +21,7 @@ import (
 	"go.temporal.io/api/workflowservice/v1"
 	"go.temporal.io/server/chasm/lib/activity/model"
 	"go.temporal.io/server/common"
+	"go.temporal.io/server/common/payloads"
 	"go.temporal.io/server/common/testing/testcontext"
 	"go.temporal.io/server/tests/testcore"
 	"google.golang.org/protobuf/types/known/durationpb"
@@ -40,7 +41,7 @@ type saaDriver struct {
 	numStarted int
 	idBase     string // activity-id prefix
 
-	positivePollTimeout time.Duration // bounds a "must dispatch" poll; 0 => activityDriverPositivePollTimeout
+	positivePollTimeout time.Duration // bounds a "must dispatch" poll; 0 => activityDriverTimeout
 
 	// customizeStart mutates the StartActivityExecutionRequest before it is sent.
 	customizeStart func(*workflowservice.StartActivityExecutionRequest)
@@ -102,28 +103,28 @@ func (a *saaHandle) driveEvent(t require.TestingT, e model.Event) {
 	case e.Type == model.PollType:
 		// A poll captures the dispatched task token. Every Poll a trace drives is a positive poll — the
 		// activity is meant to be dispatchable — so finding no task is a failure, not a step to skip.
-		timeout := cmp.Or(d.positivePollTimeout, activityDriverPositivePollTimeout)
+		timeout := cmp.Or(d.positivePollTimeout, activityDriverTimeout)
 		resp := a.pollForTask(t, timeout)
 		require.NotNilf(t, resp, "%s: no task was dispatched within %s", e, timeout)
 		a.token = resp.GetTaskToken()
-	case isWallClockEvent(e.Type):
+	case isTimerEvent(e.Type):
 		// A wall-clock event is realized by waiting out its configured window.
-		a.awaitWallClock(t, e)
+		a.awaitTimerEvent(t, e)
 	default:
 		require.NoError(t, a.rpc(e))
 	}
 }
 
-// awaitWallClock blocks until a wall-clock event's effect is visible, and fails if it is not within
+// awaitTimerEvent blocks until a wall-clock event's effect is visible, and fails if it is not within
 // (window + settle). A timeout advances the transition-history version, so it is waited for with a long
 // poll; a dispatch-delay elapse advances no version, so it is detected by NextAttemptScheduleTime
 // clearing.
-func (a *saaHandle) awaitWallClock(t require.TestingT, e model.Event) {
+func (a *saaHandle) awaitTimerEvent(t require.TestingT, e model.Event) {
 	if isDispatchDelayEvent(e.Type) {
 		a.awaitDispatchTimePassed(t, e)
 		return
 	}
-	a.awaitTimeout(t, e, time.Now().Add(a.cfg.window(e)+activityDriverWallClockSettle))
+	a.awaitTimeout(t, e, time.Now().Add(a.cfg.timerDuration(e)+activityDriverTimerMargin))
 }
 
 // awaitTimeout blocks until the activity reports the timeout the event names, and fails if it does
@@ -145,7 +146,7 @@ func (a *saaHandle) awaitTimeout(t require.TestingT, e model.Event, deadline tim
 	}
 	t.Errorf("%s: the activity did not report a %s timeout within %s of driving the event; it reports %+v. "+
 		"Check that the config makes this the timeout that fires.",
-		e, want, a.cfg.window(e)+activityDriverWallClockSettle, got)
+		e, want, a.cfg.timerDuration(e)+activityDriverTimerMargin, got)
 }
 
 func (a *saaHandle) timeoutMark(t require.TestingT) activityTimeoutMark {
@@ -164,9 +165,9 @@ func (a *saaHandle) timeoutMark(t require.TestingT) activityTimeoutMark {
 // fails if it is still pending, or if the activity ended first and so never dispatched at all.
 func (a *saaHandle) awaitDispatchTimePassed(t require.TestingT, e model.Event) {
 	info := a.describe(t).GetInfo()
-	deadline := time.Now().Add(activityDriverWallClockSettle)
+	deadline := time.Now().Add(activityDriverTimerMargin)
 	if next := info.GetNextAttemptScheduleTime(); next != nil {
-		deadline = next.AsTime().Add(activityDriverWallClockSettle)
+		deadline = next.AsTime().Add(activityDriverTimerMargin)
 	}
 	for {
 		switch {
@@ -178,7 +179,7 @@ func (a *saaHandle) awaitDispatchTimePassed(t require.TestingT, e model.Event) {
 			return
 		case !time.Now().Before(deadline):
 			t.Errorf("%s: a dispatch is still pending %s after the time the server scheduled it for. "+
-				"Last observed: %+v", e, activityDriverWallClockSettle, saaActivityInfo(info))
+				"Last observed: %+v", e, activityDriverTimerMargin, saaActivityInfo(info))
 			return
 		}
 		time.Sleep(activityDriverPollInterval)
@@ -206,12 +207,12 @@ func (d *saaDriver) startRequest(c activityConfig, activityID, taskQueue string)
 		ActivityId:             activityID,
 		ActivityType:           d.env.Tv().ActivityType(),
 		Identity:               d.env.Tv().ClientIdentity(),
-		Input:                  activityParityDefaultInput,
+		Input:                  payloads.EncodeString(activityInput),
 		TaskQueue:              &taskqueuepb.TaskQueue{Name: taskQueue},
 		StartToCloseTimeout:    durationpb.New(c.startToClose()),
 		ScheduleToCloseTimeout: opt(c.ScheduleToClose),
 		ScheduleToStartTimeout: opt(c.ScheduleToStart),
-		HeartbeatTimeout:       opt(c.Heartbeat),
+		HeartbeatTimeout:       opt(c.HeartbeatTimeout),
 		StartDelay:             opt(c.StartDelay),
 		RetryPolicy: &commonpb.RetryPolicy{
 			InitialInterval:        durationpb.New(c.retryInterval()),
@@ -274,7 +275,7 @@ func (a *saaHandle) terminalCause(t require.TestingT) failureCause {
 // longer running; it returns an empty response when its window expires, so resubmit. Each poll is
 // bounded by the deadline.
 func (a *saaHandle) awaitTerminal(t require.TestingT) *workflowservice.DescribeActivityExecutionResponse {
-	deadline := time.Now().Add(activityDriverTerminalTimeout)
+	deadline := time.Now().Add(activityDriverTimeout)
 	for time.Now().Before(deadline) {
 		ctx, cancel := context.WithDeadline(a.d.ctx, deadline)
 		resp, err := a.d.env.FrontendClient().PollActivityExecution(ctx, &workflowservice.PollActivityExecutionRequest{
@@ -294,7 +295,7 @@ func (a *saaHandle) awaitTerminal(t require.TestingT) *workflowservice.DescribeA
 		}
 	}
 	t.Errorf("the activity did not reach a terminal status within %s of the trace finishing. Last observed: %+v",
-		activityDriverTerminalTimeout, a.activityInfo(t))
+		activityDriverTimeout, a.activityInfo(t))
 	return a.describe(t)
 }
 

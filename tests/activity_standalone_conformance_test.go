@@ -23,15 +23,15 @@ func (s *activityParityTestSuite) TestConformance() {
 // saaTraversalConfigs are the activity configurations the graph traversal and random walk explore.
 var saaTraversalConfigs = []activityConfig{
 	{}, // no schedule-to-close, unlimited attempts
-	{ScheduleToClose: activityLongTimeout, ScheduleToStart: activityLongTimeout, Heartbeat: activityLongTimeout, MaxAttempts: 3},
+	{ScheduleToClose: activityLongDuration, ScheduleToStart: activityLongDuration, HeartbeatTimeout: activityLongDuration, MaxAttempts: 3},
 	// Retries exhaust after the first attempt, putting the retryable-failure-with-no-retries-left edge at
 	// depth 2 rather than past the depth bound.
 	{MaxAttempts: 1},
 	// No RPC event leaves StartDelayPending, so the activity stays in the start-delay window for the whole
 	// traversal: this crosses every operator command with that window, and the per-Poll negative poll
 	// checks that none of them dispatches early. The second adds schedule-to-close.
-	{StartDelay: activityLongStartDelay},
-	{StartDelay: activityLongStartDelay, ScheduleToClose: activityLongTimeout},
+	{StartDelay: activityLongDuration},
+	{StartDelay: activityLongDuration, ScheduleToClose: activityLongDuration},
 }
 
 // saaConformanceContextBudget is TestConformance's overall context deadline: the larger of
