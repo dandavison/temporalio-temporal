@@ -151,10 +151,23 @@ func (a *saaHandle) timeoutMark(t require.TestingT) activityTimeoutMark {
 	}
 }
 
-// awaitDispatchTimePassed polls the activity until the delayed dispatch is no longer pending, and
-// fails if it is still pending, or if the activity ended first and so never dispatched at all.
+// awaitDispatchDelay polls the activity until the delayed dispatch is no longer pending, and fails
+// if it is still pending, or if the activity ended first and so never dispatched at all.
+//
+// Whether a dispatch is pending is only observable while it is pending, so the two states that say
+// none is are checked once, before waiting. Afterwards a running attempt means the opposite: the
+// dispatch happened and a worker took it inside a poll interval.
 func (a *saaHandle) awaitDispatchDelay(t require.TestingT, e model.Event) {
 	info := a.describe(t).GetInfo()
+	switch {
+	case info.GetStatus() != enumspb.ACTIVITY_EXECUTION_STATUS_RUNNING:
+		t.Errorf("%s: the activity is %s, so no dispatch is pending and none can elapse", e, info.GetStatus())
+		return
+	case info.GetRunState() == enumspb.PENDING_ACTIVITY_STATE_STARTED:
+		t.Errorf("%s: an attempt is running, so no dispatch is pending and none can elapse", e)
+		return
+	default:
+	}
 	deadline := time.Now().Add(activityDriverTimerMargin)
 	if next := info.GetNextAttemptScheduleTime(); next != nil {
 		deadline = next.AsTime().Add(activityDriverTimerMargin)
@@ -170,12 +183,9 @@ func (a *saaHandle) awaitDispatchDelay(t require.TestingT, e model.Event) {
 			"Last observed: %+v", e, activityDriverTimerMargin, saaActivityInfo(info))
 		return
 	}
-	switch {
-	case info.GetStatus() != enumspb.ACTIVITY_EXECUTION_STATUS_RUNNING:
+	if info.GetStatus() != enumspb.ACTIVITY_EXECUTION_STATUS_RUNNING {
 		t.Errorf("%s: the activity ended as %s before its delayed dispatch, so the dispatch never happened",
 			e, info.GetStatus())
-	case info.GetRunState() == enumspb.PENDING_ACTIVITY_STATE_STARTED:
-		t.Errorf("%s: an attempt is running, so no dispatch is pending and none can elapse", e)
 	}
 }
 
