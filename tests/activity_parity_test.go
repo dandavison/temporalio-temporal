@@ -425,10 +425,12 @@ func (s *activityParityTestSuite) TestParityCancel() {
 
 	cfg := activityConfig{MaxAttempts: 1}
 
-	s.T().Run("WorkflowActivity", func(t *testing.T) {
+	s.Run("WorkflowActivity", func(s *activityParityTestSuite) {
+		t := s.T()
 		require.Equal(t, expected, newWFADriver(t, env, cfg).driveTrace(t, trace).terminal(t))
 	})
-	s.T().Run("StandaloneActivity", func(t *testing.T) {
+	s.Run("StandaloneActivity", func(s *activityParityTestSuite) {
+		t := s.T()
 		require.Equal(t, expected, newSAADriver(t, env, cfg).driveTrace(t, trace).terminal(t))
 	})
 }
