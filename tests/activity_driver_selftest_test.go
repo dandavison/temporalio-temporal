@@ -45,6 +45,65 @@ func recordDriverReports(drive func(require.TestingT)) (failures []string) {
 	return rt.failures
 }
 
+// TestAwaitActivityDispatchDelay pins the surface-independent wait policy. A disappearing deadline
+// establishes only that the dispatch is due; Started is also accepted because it proves a racing
+// poller consumed it. A state that hides/removes the dispatch without either observation is rejected.
+func TestAwaitActivityDispatchDelay(t *testing.T) {
+	pending := func(due time.Time) activityDispatchDelayObservation {
+		return activityDispatchDelayObservation{
+			state:   activityDispatchPending,
+			dueTime: due,
+			summary: "scheduled with a future dispatch deadline",
+		}
+	}
+	observation := func(state activityDispatchDelayState) activityDispatchDelayObservation {
+		return activityDispatchDelayObservation{state: state, summary: fmt.Sprint(state)}
+	}
+
+	cases := []struct {
+		name         string
+		observations []activityDispatchDelayObservation
+		wantFailure  bool
+	}{
+		{"already due", []activityDispatchDelayObservation{observation(activityDispatchDue)}, false},
+		{"already started", []activityDispatchDelayObservation{observation(activityDispatchStarted)}, false},
+		{"initially unavailable", []activityDispatchDelayObservation{observation(activityDispatchUnavailable)}, true},
+		{"pending then due", []activityDispatchDelayObservation{
+			pending(time.Now().Add(time.Second)),
+			observation(activityDispatchDue),
+		}, false},
+		{"pending then started", []activityDispatchDelayObservation{
+			pending(time.Now().Add(time.Second)),
+			observation(activityDispatchStarted),
+		}, false},
+		{"pending then unavailable", []activityDispatchDelayObservation{
+			pending(time.Now().Add(time.Second)),
+			observation(activityDispatchUnavailable),
+		}, true},
+		{"still pending after deadline", []activityDispatchDelayObservation{
+			pending(time.Now().Add(-activityDriverTimerMargin)),
+		}, true},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			i := 0
+			observe := func() activityDispatchDelayObservation {
+				if i < len(tc.observations) {
+					got := tc.observations[i]
+					i++
+					return got
+				}
+				return tc.observations[len(tc.observations)-1]
+			}
+			failures := recordDriverReports(func(rt require.TestingT) {
+				awaitActivityDispatchDelay(rt, model.BackoffElapses, observe)
+			})
+			require.Equal(t, tc.wantFailure, len(failures) > 0, "reports: %v", failures)
+		})
+	}
+}
+
 // TestSAADriverReportsUnrealizedWallClockEvents drives a trace whose wall-clock event provably cannot
 // take effect inside the window the driver waits, and requires the driver to report it.
 func (s *activityParityTestSuite) TestSAADriverReportsUnrealizedWallClockEvents() {

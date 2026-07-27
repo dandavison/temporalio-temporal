@@ -244,6 +244,62 @@ func activityDriverPollUntil(deadline time.Time, cond func() bool) bool {
 	}
 }
 
+// activityDispatchDelayState is what a surface's public description can establish about a delayed
+// dispatch. "Due" deliberately does not mean that the dispatch task reached Matching:
+// NextAttemptScheduleTime disappears when the server's clock reaches it, independently of task
+// processing. A subsequent Poll is what proves end-to-end dispatch.
+type activityDispatchDelayState int
+
+const (
+	activityDispatchPending activityDispatchDelayState = iota
+	activityDispatchDue
+	activityDispatchStarted
+	activityDispatchUnavailable
+)
+
+// activityDispatchDelayObservation is the common projection used to wait out a start delay or retry
+// backoff on either activity surface.
+type activityDispatchDelayObservation struct {
+	state   activityDispatchDelayState
+	dueTime time.Time // set only while state == activityDispatchPending
+	summary string    // last public observation, for a useful failure
+}
+
+// awaitActivityDispatchDelay waits until the server no longer reports a future dispatch deadline.
+// It also accepts Started: a worker may consume the dispatch between two descriptions, which is
+// stronger evidence that the delay elapsed. It rejects states such as Paused or terminal, where the
+// public API hides/removes the pending dispatch and therefore cannot establish this trace event.
+func awaitActivityDispatchDelay(
+	t require.TestingT,
+	e model.Event,
+	observe func() activityDispatchDelayObservation,
+) {
+	observation := observe()
+	switch observation.state {
+	case activityDispatchDue, activityDispatchStarted:
+		return
+	case activityDispatchUnavailable:
+		t.Errorf("%s: no delayed dispatch can elapse; last observed: %s", e, observation.summary)
+		return
+	case activityDispatchPending:
+	}
+
+	deadline := observation.dueTime.Add(activityDriverTimerMargin)
+	settled := activityDriverPollUntil(deadline, func() bool {
+		observation = observe()
+		return observation.state != activityDispatchPending
+	})
+	if !settled {
+		t.Errorf("%s: the dispatch deadline was still pending %s after it was due; last observed: %s",
+			e, activityDriverTimerMargin, observation.summary)
+		return
+	}
+	if observation.state == activityDispatchUnavailable {
+		t.Errorf("%s: the delayed dispatch became unavailable before the driver observed it becoming due; last observed: %s",
+			e, observation.summary)
+	}
+}
+
 // activityHeartbeatDetails is the checkpoint payload both drivers send with a Heartbeat event.
 var activityHeartbeatDetails = &commonpb.Payloads{Payloads: []*commonpb.Payload{{
 	Metadata: map[string][]byte{"encoding": []byte("json/plain")},
