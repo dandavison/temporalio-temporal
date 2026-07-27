@@ -36,16 +36,16 @@ func (s *activityParityTestSuite) TestDriversRecognizeTimeoutObservedBeforeWait(
 	s.Run("WorkflowActivity", func(s *activityParityTestSuite) {
 		t := s.T()
 		a := newWFADriver(t, newActivityParityEnv(t), cfg).start(t, cfg)
-		a.driveEvent(t, model.Poll)
+		driveActivityEvent(t, a, model.Poll)
 		waitUntilTimeoutVisible(t, a.timeoutInfo)
-		a.awaitTimeout(t, model.StartToCloseElapses, time.Now().Add(waitForDriver))
+		awaitActivityTimeout(t, a, model.StartToCloseElapses, time.Now().Add(waitForDriver))
 	})
 
 	s.Run("StandaloneActivity", func(s *activityParityTestSuite) {
 		t := s.T()
 		a := newSAADriver(t, newActivityParityEnv(t), cfg).start(t, cfg)
-		a.driveEvent(t, model.Poll)
+		driveActivityEvent(t, a, model.Poll)
 		waitUntilTimeoutVisible(t, a.timeoutInfo)
-		a.awaitTimeout(t, model.StartToCloseElapses, time.Now().Add(waitForDriver))
+		awaitActivityTimeout(t, a, model.StartToCloseElapses, time.Now().Add(waitForDriver))
 	})
 }
