@@ -30,7 +30,7 @@ import (
 // absent when unset.
 type activityConfig struct {
 	MaxAttempts            int32         // RetryPolicy MaximumAttempts; 0 = unlimited
-	RetryInterval          time.Duration // RetryPolicy InitialInterval; 0 => activityShortRetryInterval
+	RetryInterval          time.Duration // RetryPolicy InitialInterval; 0 => activityShortDuration
 	BackoffCoefficient     float64       // RetryPolicy BackoffCoefficient; 0 => 1.0 (constant interval)
 	MaxRetryInterval       time.Duration // RetryPolicy MaximumInterval; 0 => RetryInterval
 	NextRetryDelay         time.Duration // ApplicationFailureInfo.NextRetryDelay sent with RespondFailed
@@ -55,15 +55,14 @@ var timerProcessorMaxShift = dynamicconfig.TimerProcessorMaxTimeShift.Get(
 // test.
 const activityLongDuration = 24 * time.Hour
 
-// activityShortTimeout is a timeout short enough to wait for while driving a trace
-var activityShortTimeout = 2 * timerProcessorMaxShift
-
-// activityShortRetryInterval is a retry interval short enough to wait for while driving a trace.
-// Nothing shorter is useful: the queue will not fire the dispatch timer any earlier.
-var activityShortRetryInterval = timerProcessorMaxShift
+// activityShortDuration is a timeout, retry interval or start delay short enough to wait for while
+// driving a trace. Two shifts, because nothing shorter than one is useful — the queue will not fire
+// the timer behind it any earlier — and the second leaves the driver room to observe the state the
+// event is driven from before it fires.
+var activityShortDuration = 2 * timerProcessorMaxShift
 
 func (c activityConfig) retryInterval() time.Duration {
-	return cmp.Or(c.RetryInterval, activityShortRetryInterval)
+	return cmp.Or(c.RetryInterval, activityShortDuration)
 }
 func (c activityConfig) startToClose() time.Duration {
 	return cmp.Or(c.StartToClose, activityLongDuration)
@@ -74,13 +73,13 @@ func (c activityConfig) forTrace(trace []model.Event) activityConfig {
 	for _, e := range trace {
 		switch e.Type {
 		case model.ScheduleToStartElapsesType:
-			c.ScheduleToStart = cmp.Or(c.ScheduleToStart, activityShortTimeout)
+			c.ScheduleToStart = cmp.Or(c.ScheduleToStart, activityShortDuration)
 		case model.ScheduleToCloseElapsesType:
-			c.ScheduleToClose = cmp.Or(c.ScheduleToClose, activityShortTimeout)
+			c.ScheduleToClose = cmp.Or(c.ScheduleToClose, activityShortDuration)
 		case model.StartToCloseElapsesType:
-			c.StartToClose = cmp.Or(c.StartToClose, activityShortTimeout)
+			c.StartToClose = cmp.Or(c.StartToClose, activityShortDuration)
 		case model.HeartbeatElapsesType:
-			c.HeartbeatTimeout = cmp.Or(c.HeartbeatTimeout, activityShortTimeout)
+			c.HeartbeatTimeout = cmp.Or(c.HeartbeatTimeout, activityShortDuration)
 		}
 	}
 	return c

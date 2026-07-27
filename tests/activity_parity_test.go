@@ -152,7 +152,7 @@ func (s *activityParityTestSuite) TestParityCurrentRetryIntervalAndNextAttemptSc
 
 	// Retry dispatched to Matching but not yet polled: both fields are nil.
 	s.T().Run("RetryDispatched", func(t *testing.T) {
-		both(t, activityConfig{MaxAttempts: 3, RetryInterval: activityShortRetryInterval}, []model.Event{model.Poll, model.FailRetryably, model.BackoffElapses},
+		both(t, activityConfig{MaxAttempts: 3, RetryInterval: activityShortDuration}, []model.Event{model.Poll, model.FailRetryably, model.BackoffElapses},
 			activityInfo{
 				RunState: enumspb.PENDING_ACTIVITY_STATE_SCHEDULED,
 				Attempt:  2,
@@ -161,7 +161,7 @@ func (s *activityParityTestSuite) TestParityCurrentRetryIntervalAndNextAttemptSc
 
 	// Retry attempt running with a further retry still permitted (max 3): nothing pending while running.
 	s.T().Run("RetryAttemptRunning", func(t *testing.T) {
-		both(t, activityConfig{MaxAttempts: 3, RetryInterval: activityShortRetryInterval}, []model.Event{model.Poll, model.FailRetryably, model.BackoffElapses, model.Poll},
+		both(t, activityConfig{MaxAttempts: 3, RetryInterval: activityShortDuration}, []model.Event{model.Poll, model.FailRetryably, model.BackoffElapses, model.Poll},
 			activityInfo{
 				RunState: enumspb.PENDING_ACTIVITY_STATE_STARTED,
 				Attempt:  2,
@@ -170,7 +170,7 @@ func (s *activityParityTestSuite) TestParityCurrentRetryIntervalAndNextAttemptSc
 
 	// Final attempt running with no retry remaining (max 2): still nothing pending while running.
 	s.T().Run("FinalAttemptRunning", func(t *testing.T) {
-		both(t, activityConfig{MaxAttempts: 2, RetryInterval: activityShortRetryInterval}, []model.Event{model.Poll, model.FailRetryably, model.BackoffElapses, model.Poll},
+		both(t, activityConfig{MaxAttempts: 2, RetryInterval: activityShortDuration}, []model.Event{model.Poll, model.FailRetryably, model.BackoffElapses, model.Poll},
 			activityInfo{
 				RunState: enumspb.PENDING_ACTIVITY_STATE_STARTED,
 				Attempt:  2,
@@ -192,7 +192,7 @@ func (s *activityParityTestSuite) TestParityCurrentRetryIntervalAndNextAttemptSc
 	// from PausedBeforeDispatch on either surface, so the two subtests differ in the state they reach,
 	// not in what they assert.
 	s.T().Run("PausedAfterDispatch", func(t *testing.T) {
-		both(t, activityConfig{MaxAttempts: 3, RetryInterval: activityShortRetryInterval}, []model.Event{model.Poll, model.FailRetryably, model.BackoffElapses, model.Pause},
+		both(t, activityConfig{MaxAttempts: 3, RetryInterval: activityShortDuration}, []model.Event{model.Poll, model.FailRetryably, model.BackoffElapses, model.Pause},
 			activityInfo{
 				RunState: enumspb.PENDING_ACTIVITY_STATE_PAUSED,
 				Attempt:  2,
@@ -205,7 +205,7 @@ func (s *activityParityTestSuite) TestDriversRejectBackoffElapseWhenScheduleToCl
 	cfg := activityConfig{
 		MaxAttempts:     3,
 		RetryInterval:   activityLongDuration,
-		ScheduleToClose: activityShortTimeout,
+		ScheduleToClose: activityShortDuration,
 	}
 	trace := []model.Event{model.Poll, model.FailRetryably}
 
@@ -257,8 +257,8 @@ func (s *activityParityTestSuite) TestDriversRejectTimeoutElapseWhenDifferentTim
 	env := newActivityParityEnv(s.T())
 	cfg := activityConfig{
 		MaxAttempts:      1,
-		StartToClose:     activityShortTimeout,
-		HeartbeatTimeout: 2 * activityShortTimeout,
+		StartToClose:     activityShortDuration,
+		HeartbeatTimeout: 2 * activityShortDuration,
 	}
 	trace := []model.Event{model.Poll}
 
@@ -286,7 +286,7 @@ func (s *activityParityTestSuite) TestDriversAllowTimeoutsOnSeparateAttempts() {
 	env := newActivityParityEnv(s.T())
 	cfg := activityConfig{
 		MaxAttempts:   2,
-		RetryInterval: activityShortRetryInterval,
+		RetryInterval: activityShortDuration,
 	}
 	trace := []model.Event{
 		model.Poll,
@@ -312,7 +312,7 @@ func (s *activityParityTestSuite) TestDriversAcceptTimeoutElapseThatAlreadyOccur
 	env := newActivityParityEnv(s.T())
 	cfg := activityConfig{
 		MaxAttempts:  1,
-		StartToClose: activityShortTimeout,
+		StartToClose: activityShortDuration,
 	}
 	trace := []model.Event{model.Poll}
 
