@@ -229,6 +229,30 @@ func (s *activityParityTestSuite) TestDriversRejectBackoffElapseWhenScheduleToCl
 	}
 }
 
+func (s *activityParityTestSuite) TestDriversRejectBackoffElapseWithoutPendingBackoff() {
+	env := newActivityParityEnv(s.T())
+	trace := []model.Event{model.Poll}
+
+	tests := map[string]func(*testing.T) func(require.TestingT, model.Event){
+		"WorkflowActivity": func(t *testing.T) func(require.TestingT, model.Event) {
+			return newWFADriver(t, env, activityConfig{}).driveTrace(t, trace).driveEvent
+		},
+		"StandaloneActivity": func(t *testing.T) func(require.TestingT, model.Event) {
+			return newSAADriver(t, env, activityConfig{}).driveTrace(t, trace).driveEvent
+		},
+	}
+	for name, setup := range tests {
+		s.Run(name, func(s *activityParityTestSuite) {
+			t := s.T()
+			drive := setup(t)
+			recorder := &activityDriverErrorRecorder{}
+			drive(recorder, model.BackoffElapses)
+			require.True(t, recorder.failed,
+				"BackoffElapses must fail while the first attempt is running and no backoff is pending")
+		})
+	}
+}
+
 func (s *activityParityTestSuite) TestDriversRejectTimeoutElapseWhenDifferentTimeoutWins() {
 	env := newActivityParityEnv(s.T())
 	cfg := activityConfig{
