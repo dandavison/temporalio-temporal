@@ -22,7 +22,6 @@ import (
 	"go.temporal.io/server/chasm/lib/activity/model"
 	"go.temporal.io/server/common"
 	"go.temporal.io/server/common/payloads"
-	"go.temporal.io/server/common/testing/await"
 	"go.temporal.io/server/common/testing/testcontext"
 	"go.temporal.io/server/tests/testcore"
 	"google.golang.org/protobuf/types/known/durationpb"
@@ -65,13 +64,12 @@ const saaPollTimeout = common.MinLongPollTimeout + time.Second
 
 // saaHandle is a handle to an activity instance.
 type saaHandle struct {
+	activityDriverState
 	cursor        *activityModelCursor // the model state reached, so driveEvent can check each event
-	cfg           activityConfig       // d.cfg with the windows this trace needs; see activityConfig.forTrace
 	d             *saaDriver
 	activityID    string
 	runID         string
 	taskQueue     string
-	token         []byte
 	lastHeartbeat *workflowservice.RecordActivityTaskHeartbeatResponse
 	// establishedReqID[eventType] is the request id that established the current state for an operator
 	// command; a SameRequestID event reuses it. lastReqID is the most recent operator RPC's id, promoted
@@ -83,8 +81,6 @@ type saaHandle struct {
 	// Raw stamps, shifted cur->prev by each observed() read; see checkTaskInvalidation.
 	prevStamp, curStamp       int32
 	prevSTCStamp, curSTCStamp int32
-	// startedAttempt is the attempt number returned by the last successful Poll.
-	startedAttempt int32
 }
 
 // driveTrace schedules an activity, and then advances that activity through a sequence of events (a
@@ -98,39 +94,13 @@ func (d *saaDriver) driveTrace(t testing.TB, trace []model.Event) *saaHandle {
 	return a
 }
 
-// driveEvent advances the activity by one event.
 func (a *saaHandle) driveEvent(t testing.TB, e model.Event) {
 	a.cursor.check(t, e)
-	d := a.d
-	switch {
-	case e.Type == model.PollType:
-		timeout := cmp.Or(d.positivePollTimeout, activityDriverTimeout)
-		resp := a.pollForTask(t, timeout)
-		require.NotNilf(t, resp, "%s: no task was dispatched within %s", e, timeout)
-		a.token = resp.GetTaskToken()
-		a.startedAttempt = resp.GetAttempt()
-	case isDispatchDelayEvent(e.Type):
-		a.awaitDispatchDelay(t, e)
-	case isTimerEvent(e.Type):
-		a.awaitTimeout(t, e, time.Now().Add(a.cfg.timerDuration(e)+activityDriverTimerMargin))
-	default:
-		// An RPC
-		require.NoError(t, a.rpc(e))
-	}
+	driveActivityEvent(t, a, e)
 }
 
-// awaitTimeout blocks until the activity reports the timeout the event names, and fails if it does
-// not within (window + margin).
 func (a *saaHandle) awaitTimeout(t testing.TB, e model.Event, deadline time.Time) {
-	want := timeoutType(e)
-	var got activityTimeoutInfo
-	await.Require(a.d.ctx, t, func(t *await.T) {
-		got = a.timeoutInfo(t)
-		fired := got.timeout == want && (got.terminal || got.attempt > a.startedAttempt)
-		t.Require().Truef(fired,
-			"%s: activity reports timeout %s at attempt %d (terminal=%v), want %s after attempt %d",
-			e, got.timeout, got.attempt, got.terminal, want, a.startedAttempt)
-	}, max(0, time.Until(deadline)), activityDriverPollInterval)
+	awaitActivityTimeout(t, a, e, deadline)
 }
 
 // timeoutInfo is the most recent timeout the activity reports.
@@ -167,7 +137,19 @@ func (d *saaDriver) start(t require.TestingT, cfg activityConfig) *saaHandle {
 	id := fmt.Sprintf("%s-%d", d.activityIDPrefix, d.numStarted)
 	resp, err := d.env.FrontendClient().StartActivityExecution(d.ctx, d.startRequest(cfg, id, id))
 	require.NoError(t, err)
-	return &saaHandle{d: d, cfg: cfg, cursor: newActivityModelCursor(cfg), activityID: id, taskQueue: id, runID: resp.RunId, establishedReqID: map[model.EventType]string{}}
+	return &saaHandle{
+		activityDriverState: activityDriverState{
+			ctx:                 d.ctx,
+			cfg:                 cfg,
+			positivePollTimeout: d.positivePollTimeout,
+		},
+		d:                d,
+		cursor:           newActivityModelCursor(cfg),
+		activityID:       id,
+		runID:            resp.RunId,
+		taskQueue:        id,
+		establishedReqID: map[model.EventType]string{},
+	}
 }
 
 func (d *saaDriver) startRequest(c activityConfig, activityID, taskQueue string) *workflowservice.StartActivityExecutionRequest {
@@ -303,7 +285,7 @@ func saaActivityInfo(i *apiactivitypb.ActivityExecutionInfo) activityInfo {
 }
 
 // rpc performs the frontend RPC for a non-Poll, non-timer event and returns its error.
-func (a *saaHandle) rpc(e model.Event) error {
+func (a *saaHandle) rpc(_ testing.TB, e model.Event) error {
 	fc := a.d.env.FrontendClient()
 	ns := a.d.env.Namespace().String()
 	switch e.Type {

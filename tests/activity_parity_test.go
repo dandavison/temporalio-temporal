@@ -82,7 +82,7 @@ func (s *activityParityTestSuite) TestNonRetryableErrorTypes() {
 func (s *activityParityTestSuite) TestCurrentRetryIntervalAndNextAttemptScheduleTime() {
 	env := newActivityParityEnv(s.T())
 
-	// both drives a trace through both surfaces, asserting each reports expected.
+	// both drives a trace through both implementations, asserting each reports expected.
 	both := func(t *testing.T, cfg activityConfig, trace []model.Event, expected activityInfo) {
 		t.Run("WorkflowActivity", func(t *testing.T) {
 			require.Equal(t, expected, newWFADriver(t, env, cfg).driveTrace(t, trace).activityInfo(t))
@@ -178,7 +178,7 @@ func (s *activityParityTestSuite) TestCurrentRetryIntervalAndNextAttemptSchedule
 
 	// Paused after the retry was dispatched: the dispatched code path already nils both fields, and the
 	// pause preserves that. No field of ActivityExecutionInfo or PendingActivityInfo distinguishes this
-	// from PausedBeforeDispatch on either surface, so the two subtests differ in the state they reach,
+	// from PausedBeforeDispatch in either implementation, so the two subtests differ in the state they reach,
 	// not in what they assert.
 	s.T().Run("PausedAfterDispatch", func(t *testing.T) {
 		both(t, activityConfig{MaxAttempts: 3, RetryInterval: activityShortDispatchDelay}, []model.Event{model.Poll, model.FailRetryably, model.BackoffElapses, model.Pause},
@@ -194,7 +194,7 @@ func (s *activityParityTestSuite) TestCurrentRetryIntervalAndNextAttemptSchedule
 // TimeoutType.
 //
 // The failure message differs by construction — SAA carries a proto message, WFA's SDK TimeoutError
-// formats its own — so TimeoutType is the cross-surface discriminant.
+// formats its own — so TimeoutType is the shared discriminant.
 func (s *activityParityTestSuite) TestParityStartToCloseTimeout() {
 	env := newActivityParityEnv(s.T())
 	trace := []model.Event{model.Poll, model.StartToCloseElapses}

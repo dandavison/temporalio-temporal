@@ -282,7 +282,7 @@ func (a *saaHandle) apply(t testing.TB, e model.Event, cur model.AbstractState, 
 	if model.NeedsToken(e.Type) && a.token == nil {
 		return saaSkippedNoToken
 	}
-	err := a.rpc(e)
+	err := a.rpc(t, e)
 	if model.CarriesReqID(e.Type) && out.Reject == model.NoError && out.Next.Status != cur.Status {
 		// This request established a new state, so its id is the one a later SameRequestID reuses. An
 		// intervening rejected or no-op request must not overwrite it.
