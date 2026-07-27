@@ -1,8 +1,7 @@
 package tests
 
-// Shared by the two activity drivers, activity_standalone_driver.go and activity_workflow_driver.go:
-// the activity a trace configures, the activity info both surfaces expose, and the event vocabulary
-// and waiting machinery that belongs to neither.
+// Config shared by the two activity drivers, activity_standalone_driver.go and
+// activity_workflow_driver.go.
 
 import (
 	"cmp"
@@ -18,16 +17,18 @@ import (
 	"google.golang.org/protobuf/types/known/durationpb"
 )
 
-// activityConfig is the activity a driver starts. One value configures either surface, so a parity
-// test describes a single activity rather than two that might differ.
+// activityConfig is the activity a driver starts.
 //
-// Every field is the value it names. A zero duration leaves that option unset, which for a timeout
-// means it never fires; the exceptions are noted.
+// activityConfig.forTrace takes a trace and computes defaults for the config, so you will often be
+// able to supply a trace and not worry about the config. Timeouts are usually left unset:
+// activityConfig.forTrace gives a short window to each one the trace fires, so that adding e.g.
+// model.HeartbeatElapses to a trace is all you need to do to specify that the activity has a
+// heartbeat timeout. Set a timeout explicitly in the config only to say something the trace cannot
+// — that it exists without firing, or that its exact duration is what the test is about.
 //
-// Timeouts are usually left unset: forTrace gives a short window to each one the trace fires, so
-// writing model.HeartbeatElapses is itself the statement that this activity has a heartbeat timeout.
-// Set one explicitly only to say something the trace cannot — that it exists without firing, or that
-// its exact duration is what the test is about.
+// The server rejects an activity with neither start-to-close nor schedule-to-close set. The drivers
+// always send start-to-close, defaulted long enough not to fire. The other timeouts are simply
+// absent when unset.
 type activityConfig struct {
 	MaxAttempts            int32         // RetryPolicy MaximumAttempts; 0 = unlimited
 	RetryInterval          time.Duration // RetryPolicy InitialInterval; 0 => activityShortDispatchDelay
@@ -52,10 +53,10 @@ var timerProcessorMaxShift = dynamicconfig.TimerProcessorMaxTimeShift.Get(
 	dynamicconfig.NewCollection(dynamicconfig.StaticClient(nil), log.NewNoopLogger()))()
 
 // activityLongDuration is a timeout, retry interval or start delay long enough not to elapse during a
-// test. Anything from thirty seconds up would do; a day outlasts even a slow CI run.
+// test.
 const activityLongDuration = 24 * time.Hour
 
-// activityShortTimeout is a timeout short enough to wait for while driving a trace.
+// activityShortTimeout is a timeout short enough to wait for while driving a trace
 var activityShortTimeout = 2 * timerProcessorMaxShift
 
 // activityShortDispatchDelay is a retry interval or start delay short enough to wait for while
@@ -71,9 +72,7 @@ func (c activityConfig) startToClose() time.Duration {
 	return cmp.Or(c.StartToClose, activityLongDuration)
 }
 
-// forTrace is the config with a short window for each timeout the trace fires, so that it can. A
-// timeout the author set is left alone: only they can say how long a timeout that the trace does not
-// fire should be, or that a fired one has a duration the test depends on.
+// forTrace replaces missing values in the config with appropriate values for the given trace.
 func (c activityConfig) forTrace(trace []model.Event) activityConfig {
 	for _, e := range trace {
 		switch e.Type {
@@ -90,8 +89,7 @@ func (c activityConfig) forTrace(trace []model.Event) activityConfig {
 	return c
 }
 
-// window is how long the clock behind a wall-clock event takes to elapse, from the option that event
-// fires on. Zero for an event whose option is not configured, which no trace should drive.
+// timerDuration is how long the timer behind a timer event takes to elapse.
 func (c activityConfig) timerDuration(e model.Event) time.Duration {
 	switch e.Type {
 	case model.StartDelayElapsesType:
@@ -130,8 +128,7 @@ func (c activityConfig) modelConfig() model.Config {
 // wait for a configured window is bounded by that window plus activityDriverTimerMargin instead.
 const activityDriverTimeout = 10 * time.Second
 
-// activityDriverTimerMargin is slack added to a timer event's window when waiting for its
-// effect, covering the timer queue's jitter.
+// activityDriverTimerMargin is margin added to a timer event's duration when polling for its effect.
 var activityDriverTimerMargin = 2 * timerProcessorMaxShift
 
 // activityDriverPollInterval is the gap between reads when polling for a timer event's effect.
@@ -179,7 +176,7 @@ func (c *activityModelCursor) check(t require.TestingT, e model.Event) {
 	c.state = model.Transition(c.cfg, c.state, e).Next
 }
 
-// isTimerEvent reports whether an event fires on wall-clock time rather than synchronously.
+// isTimerEvent reports whether an event represents a timer elapsing, as opposed to an RPC.
 func isTimerEvent(et model.EventType) bool {
 	switch et {
 	case model.ScheduleToStartElapsesType, model.ScheduleToCloseElapsesType, model.StartToCloseElapsesType,
@@ -208,10 +205,8 @@ func activityFailure(retryable bool, nextRetryDelay time.Duration) *failurepb.Fa
 	}
 }
 
-// activityTimeoutMark is the timeouts an activity reports, and enough of its history to tell a fresh
-// one from a leftover. A timeout can appear in more than one place: an attempt ended by a heartbeat
-// timeout that then has no room to retry closes the activity as schedule-to-close, and both are true
-// of it.
+// activityTimeoutMark is what a driver compares to decide that the timeout an event names is this
+// event's, rather than one left over from an earlier attempt.
 type activityTimeoutMark struct {
 	attemptFailure enumspb.TimeoutType // ended the last attempt
 	outcome        enumspb.TimeoutType // closed the activity
@@ -261,8 +256,8 @@ func firstPayloadData(p *commonpb.Payloads) []byte {
 	return nil
 }
 
-// activityInfo is user-visible activity state projected out of the two different messages that
-// carry it: SAA's ActivityExecutionInfo and WFA's PendingActivityInfo.
+// activityInfo is user-visible activity state projected out of SAA's ActivityExecutionInfo and
+// WFA's PendingActivityInfo.
 //
 // CurrentRetryInterval is rounded to the second, because WFA derives it by subtracting two stored
 // timestamps while SAA stores it exactly. NextAttemptScheduleTime is reduced to whether it is set

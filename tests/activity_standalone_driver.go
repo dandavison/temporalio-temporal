@@ -1,8 +1,8 @@
 package tests
 
-// Driver for standalone-activity (SAA) tests: starts an activity and drives it through a sequence
-// of events (a trace). Each event is either a frontend RPC, a poll, or a wall-clock wait. The event
-// vocabulary is in chasm/lib/activity/model.
+// Driver for standalone-activity (SAA) tests: it starts an activity and drives it through a
+// sequence of events (a 'trace'). Each event is either a frontend RPC, a poll, or a timer
+// wait. The event vocabulary is in chasm/lib/activity/model.
 
 import (
 	"cmp"
@@ -47,7 +47,7 @@ type saaDriver struct {
 	customizeStart func(*workflowservice.StartActivityExecutionRequest)
 }
 
-// newSAADriver builds a driver with the test-scoped context and its own activity-id prefix.
+// newSAADriver builds a driver.
 func newSAADriver(t *testing.T, env *testcore.TestEnv, cfg activityConfig) *saaDriver {
 	return &saaDriver{
 		env:              env,
@@ -61,8 +61,7 @@ func newSAADriver(t *testing.T, env *testcore.TestEnv, cfg activityConfig) *saaD
 // rejects the poll rather than reaching matching.
 const saaPollTimeout = common.MinLongPollTimeout + time.Second
 
-// saaHandle is a handle to one activity instance: the ids that address it, plus the token last
-// dispatched to it.
+// saaHandle is a handle to an activity instance.
 type saaHandle struct {
 	cursor        *activityModelCursor // the model state reached, so driveEvent can check each event
 	cfg           activityConfig       // d.cfg with the windows this trace needs; see activityConfig.forTrace
@@ -84,8 +83,8 @@ type saaHandle struct {
 	prevSTCStamp, curSTCStamp int32
 }
 
-// driveTrace runs a trace on a fresh activity and returns a handle at the reached state. Model-free:
-// each RPC must succeed.
+// driveTrace schedules an activity, and then advances that activity through a sequence of events (a
+// 'trace'). Returns a handle to the activity at the reached state.
 func (d *saaDriver) driveTrace(t require.TestingT, trace []model.Event) *saaHandle {
 	cfg := d.cfg.forTrace(trace)
 	a := d.start(t, cfg)
@@ -101,24 +100,24 @@ func (a *saaHandle) driveEvent(t require.TestingT, e model.Event) {
 	d := a.d
 	switch {
 	case e.Type == model.PollType:
-		// A poll captures the dispatched task token. Every Poll a trace drives is a positive poll — the
-		// activity is meant to be dispatchable — so finding no task is a failure, not a step to skip.
+		// When a trace includes a poll event, the implication is that the activity should be
+		// dispatchable and that the poll will yield an activity task, so finding no task is a
+		// failure.
 		timeout := cmp.Or(d.positivePollTimeout, activityDriverTimeout)
 		resp := a.pollForTask(t, timeout)
 		require.NotNilf(t, resp, "%s: no task was dispatched within %s", e, timeout)
 		a.token = resp.GetTaskToken()
 	case isTimerEvent(e.Type):
-		// A wall-clock event is realized by waiting out its configured window.
+		// A timer event is realized by waiting out its configured window.
 		a.awaitTimerEvent(t, e)
 	default:
+		// An RPC
 		require.NoError(t, a.rpc(e))
 	}
 }
 
-// awaitTimerEvent blocks until a wall-clock event's effect is visible, and fails if it is not within
-// (window + settle). A timeout advances the transition-history version, so it is waited for with a long
-// poll; a dispatch-delay elapse advances no version, so it is detected by NextAttemptScheduleTime
-// clearing.
+// awaitTimerEvent blocks until a timer event's effect is visible, and fails if it does not
+// become visible within (window + margin).
 func (a *saaHandle) awaitTimerEvent(t require.TestingT, e model.Event) {
 	if isDispatchDelayEvent(e.Type) {
 		a.awaitDispatchDelay(t, e)
@@ -128,16 +127,12 @@ func (a *saaHandle) awaitTimerEvent(t require.TestingT, e model.Event) {
 }
 
 // awaitTimeout blocks until the activity reports the timeout the event names, and fails if it does
-// not within (window + settle). Waiting for the activity to change instead accepts a different
+// not within (window + margin). Waiting for the activity to change instead accepts a different
 // timeout firing, and misses one that fired before the wait began.
 //
-// A timeout ends an attempt, so a reported one only belongs to this event if the activity has moved
-// on since the wait began, or has closed and so can report nothing further.
-//
-// It polls, though DescribeActivityExecution offers a long poll, because the long poll only reports
-// that the transition history advanced: it says nothing about which timeout fired, and never wakes
-// for one that fired before the caller asked. Reading the state answers both. The workflow surface
-// has no long poll here at all, so polling also leaves the two waiting alike.
+// A timeout ends an attempt, so a reported type only belongs to this event if the activity has
+// moved on since the wait began, or has closed and so can report nothing further. Otherwise the
+// same type left over from an earlier attempt would satisfy the wait at once.
 func (a *saaHandle) awaitTimeout(t require.TestingT, e model.Event, deadline time.Time) {
 	want := timeoutType(e)
 	before := a.timeoutMark(t)
@@ -154,6 +149,8 @@ func (a *saaHandle) awaitTimeout(t require.TestingT, e model.Event, deadline tim
 		e, want, a.cfg.timerDuration(e)+activityDriverTimerMargin, got)
 }
 
+// timeoutMark is the most recent timeout the activity reports, with the attempt and closed-ness that
+// place it in the activity's history.
 func (a *saaHandle) timeoutMark(t require.TestingT) activityTimeoutMark {
 	r := a.describe(t)
 	outcome := r.GetOutcome().GetFailure()
@@ -166,7 +163,7 @@ func (a *saaHandle) timeoutMark(t require.TestingT) activityTimeoutMark {
 	}
 }
 
-// awaitDispatchDelay polls the activity until the delayed dispatch is no longer pending, and
+// awaitDispatchTimePassed polls the activity until the delayed dispatch is no longer pending, and
 // fails if it is still pending, or if the activity ended first and so never dispatched at all.
 func (a *saaHandle) awaitDispatchDelay(t require.TestingT, e model.Event) {
 	info := a.describe(t).GetInfo()
@@ -236,8 +233,8 @@ func (d *saaDriver) startRequest(c activityConfig, activityID, taskQueue string)
 	return req
 }
 
-// describe returns the DescribeActivityExecution response, including the outcome, the last failure, and
-// the heartbeat details.
+// describe returns the DescribeActivityExecution response, including the outcome, the last failure,
+// and the heartbeat details.
 func (a *saaHandle) describe(t require.TestingT) *workflowservice.DescribeActivityExecutionResponse {
 	resp, err := a.d.env.FrontendClient().DescribeActivityExecution(a.d.ctx, &workflowservice.DescribeActivityExecutionRequest{
 		Namespace:               a.d.env.Namespace().String(),
@@ -251,7 +248,8 @@ func (a *saaHandle) describe(t require.TestingT) *workflowservice.DescribeActivi
 	return resp
 }
 
-// activityInfo is the activity's ActivityExecutionInfo, projected.
+// activityInfo is the activity's ActivityExecutionInfo, projected down to a schema shared with
+// workflow activity.
 func (a *saaHandle) activityInfo(t require.TestingT) activityInfo {
 	return saaActivityInfo(a.describe(t).GetInfo())
 }
@@ -265,7 +263,9 @@ func (a *saaHandle) terminal(t require.TestingT) activityTerminalProjection {
 	}
 }
 
-// terminalStatus is the terminal status alone, for a test that asserts nothing about the failure.
+// terminalStatus waits for the activity to reach a terminal state and reports it.
+// PollActivityExecution resolves once the activity is no longer running. An empty response means the
+// server's long-poll window expired, so resubmit.
 func (a *saaHandle) terminalStatus(t require.TestingT) enumspb.ActivityExecutionStatus {
 	return a.terminal(t).Status
 }
@@ -331,7 +331,7 @@ func saaActivityInfo(i *apiactivitypb.ActivityExecutionInfo) activityInfo {
 	}
 }
 
-// rpc performs the frontend RPC for a non-Poll, non-wall-clock event and returns its error.
+// rpc performs the frontend RPC for a non-Poll, non-timer event and returns its error.
 func (a *saaHandle) rpc(e model.Event) error {
 	fc := a.d.env.FrontendClient()
 	ns := a.d.env.Namespace().String()

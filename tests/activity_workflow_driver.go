@@ -1,7 +1,8 @@
 package tests
 
 // Driver for workflow-activity (WFA) tests: it drives an activity scheduled by a workflow through a
-// sequence of events (a 'trace'), and observes it via DescribeWorkflowExecution.
+// sequence of events (a 'trace'). Each event is either a frontend RPC, a poll, or a timer
+// wait. The event vocabulary is in chasm/lib/activity/model.
 
 import (
 	"cmp"
@@ -50,14 +51,13 @@ type wfaDriver struct {
 	positivePollTimeout time.Duration // bounds a "must dispatch" poll; 0 => activityDriverTimeout
 }
 
-// newWFADriver builds a driver with the test-scoped context. cfg.StartDelay is ignored: a
-// workflow activity has no per-activity start delay.
+// newWFADriver builds a driver. cfg.StartDelay is ignored: a workflow activity has no per-activity
+// start delay.
 func newWFADriver(t *testing.T, env *testcore.TestEnv, cfg activityConfig) *wfaDriver {
 	return &wfaDriver{env: env, ctx: testcontext.For(t), cfg: cfg}
 }
 
-// wfaHandle is a handle to one workflow-scheduled activity: the ids that address it and the workflow
-// that owns it, plus the token last dispatched to it.
+// wfaHandle is a handle to a workflow-scheduled activity.
 type wfaHandle struct {
 	cursor     *activityModelCursor // the model state reached, so driveEvent can check each event
 	cfg        activityConfig       // d.cfg with the windows this trace needs; see activityConfig.forTrace
@@ -70,6 +70,8 @@ type wfaHandle struct {
 	token      []byte
 }
 
+// wfaActivityParams is what the helper workflow needs to schedule the activity: the activity the
+// test described, and where to put it.
 type wfaActivityParams struct {
 	Cfg        activityConfig
 	ActivityTQ string
@@ -83,10 +85,10 @@ const activityDriverCancelRequestedTimeout = 10 * time.Second
 // cancelled rather than by a direct RPC.
 const wfaCancelSignal = "cancel"
 
-// wfaSingleActivityWorkflow schedules a single activity with the given options on its own task queue and
-// waits for it to finish. No worker executes the activity — the test drives it with raw worker RPCs.
-// WaitForCancellation makes the workflow wait for RespondActivityTaskCanceled, so a cancelled activity
-// reaches CANCELED before the workflow closes.
+// wfaSingleActivityWorkflow is a workflow that schedules a single activity with the given options
+// on its own task queue and waits for it to finish. No worker executes the activity — the test
+// drives it with worker poll RPCs. WaitForCancellation makes the workflow wait for
+// RespondActivityTaskCanceled, so a cancelled activity reaches CANCELED before the workflow closes.
 func wfaSingleActivityWorkflow(ctx workflow.Context, p wfaActivityParams) error {
 	c := p.Cfg
 	actCtx, cancelActivity := workflow.WithCancel(ctx)
@@ -114,8 +116,8 @@ func wfaSingleActivityWorkflow(ctx workflow.Context, p wfaActivityParams) error 
 	return fut.Get(ctx, nil)
 }
 
-// driveTrace runs a trace on a fresh workflow-scheduled activity and returns a handle at the reached
-// state. Model-free.
+// driveTrace starts a workflow, which schedules an activity, and then advances that activity
+// through a sequence of events (a 'trace'). Returns a handle to the activity at the reached state.
 func (d *wfaDriver) driveTrace(t *testing.T, trace []model.Event) *wfaHandle {
 	cfg := d.cfg.forTrace(trace)
 	a := d.start(t, cfg)
@@ -131,21 +133,23 @@ func (a *wfaHandle) driveEvent(t require.TestingT, e model.Event) {
 	d := a.d
 	switch {
 	case e.Type == model.PollType:
-		// A poll captures the dispatched task token. Every Poll a trace drives is a positive poll — the
-		// activity is meant to be dispatchable — so finding no task is a failure, not a step to skip.
+		// When a trace includes a poll event, the implication is that the activity should be
+		// dispatchable and that the poll will yield an activity task, so finding no task is a
+		// failure.
 		timeout := cmp.Or(d.positivePollTimeout, activityDriverTimeout)
 		resp := a.pollForTask(t, timeout)
 		require.NotNilf(t, resp, "%s: no task was dispatched within %s", e, timeout)
 		a.token = resp.GetTaskToken()
 	case isTimerEvent(e.Type):
-		// A wall-clock event is realized by waiting out its configured window.
+		// A timer event is realized by waiting out its configured window.
 		a.awaitTimerEvent(t, e)
 	default:
+		// An RPC
 		require.NoError(t, a.rpc(e))
 	}
 }
 
-// awaitTimerEvent blocks until a wall-clock event's effect shows up in the workflow's view of the
+// awaitWallClock blocks until a timer event's effect shows up in the workflow's view of the
 // activity, and fails if it does not within (window + settle).
 func (a *wfaHandle) awaitTimerEvent(t require.TestingT, e model.Event) {
 	if isDispatchDelayEvent(e.Type) {
@@ -173,9 +177,8 @@ func (a *wfaHandle) awaitTimeout(t require.TestingT, e model.Event, deadline tim
 		e, want, a.cfg.timerDuration(e)+activityDriverTimerMargin, got)
 }
 
-// timeoutMark reads the pending activity while there is one. A closed activity has left the pending
-// set, and the workflow result reports only the timeout it closed with: an attempt ended by one
-// timeout and closed by another is no longer distinguishable here, unlike on the SAA surface.
+// timeoutMark is the most recent timeout the activity reports. A closed activity has left the pending
+// set, so its timeout comes from the workflow result instead.
 func (a *wfaHandle) timeoutMark(t require.TestingT) activityTimeoutMark {
 	if pa := a.pendingActivity(t); pa != nil {
 		return activityTimeoutMark{attemptFailure: timeoutTypeOf(pa.GetLastFailure()), attempt: pa.GetAttempt()}
@@ -220,7 +223,7 @@ func (a *wfaHandle) awaitDispatchDelay(t require.TestingT, e model.Event) {
 }
 
 // pendingActivity is the activity's entry in the workflow's pending set, nil once it is no longer
-// pending. A Describe error is reported rather than treated as absence.
+// pending.
 func (a *wfaHandle) pendingActivity(t require.TestingT) *workflowpb.PendingActivityInfo {
 	resp, err := a.d.env.SdkClient().DescribeWorkflowExecution(a.d.ctx, a.workflowID, a.runID)
 	require.NoError(t, err)
@@ -232,7 +235,8 @@ func (a *wfaHandle) pendingActivity(t require.TestingT) *workflowpb.PendingActiv
 	return nil
 }
 
-// pendingActivityInfo is the activity's info, and whether it is currently pending.
+// pendingActivityInfo is the activityInfo if activity is currently a pending activity, and whether
+// it is pending.
 func (a *wfaHandle) pendingActivityInfo(t require.TestingT) (activityInfo, bool) {
 	pa := a.pendingActivity(t)
 	if pa == nil {
@@ -246,8 +250,8 @@ func (d *wfaDriver) start(t *testing.T, cfg activityConfig) *wfaHandle {
 	actTQ := testcore.RandomizeStr("wfa-act")
 	const actID = "act"
 
-	// A dedicated workflow worker runs the helper workflow. Nothing polls the activity task queue, so the
-	// test is the only consumer of the activity's tasks.
+	// Run a workflow worker for the wrapper workflow, but not an activity worker: the tests poll
+	// for activity tasks.
 	w := sdkworker.New(d.env.SdkClient(), wfTQ, sdkworker.Options{})
 	w.RegisterWorkflow(wfaSingleActivityWorkflow)
 	require.NoError(t, w.Start())
@@ -291,7 +295,8 @@ func (a *wfaHandle) terminal(t require.TestingT) activityTerminalProjection {
 	}
 }
 
-// terminalStatus is the terminal status alone, for a test that asserts nothing about the failure.
+// terminalStatus waits for the activity to reach a terminal state and reports it. A workflow activity's
+// terminal status is not in PendingActivities, so it is read from the workflow-result error's cause.
 func (a *wfaHandle) terminalStatus(t require.TestingT) enumspb.ActivityExecutionStatus {
 	return a.terminal(t).Status
 }
@@ -324,8 +329,7 @@ func (a *wfaHandle) pollForTask(t require.TestingT, timeout time.Duration) *work
 	return resp
 }
 
-// rpc performs the frontend RPC for a non-Poll, non-wall-clock event and returns its error. The operator
-// commands are the same *Execution APIs with WorkflowId set; cancel is the exception, see below.
+// rpc performs the frontend RPC for a non-Poll, non-timer event and returns its error.
 func (a *wfaHandle) rpc(e model.Event) error {
 	fc := a.d.env.FrontendClient()
 	ns := a.d.env.Namespace().String()
@@ -436,7 +440,8 @@ func (a *wfaHandle) heartbeatDetails(t require.TestingT) []byte {
 	return nil
 }
 
-// activityInfo is the activity's PendingActivityInfo, projected.
+// activityInfo is the activity's PendingActivityInfo, projected down to a schema shared with
+// standalone activity.
 func (a *wfaHandle) activityInfo(t require.TestingT) activityInfo {
 	p, pending := a.pendingActivityInfo(t)
 	require.Truef(t, pending, "activity %q not pending; workflow may have closed", a.activityID)
