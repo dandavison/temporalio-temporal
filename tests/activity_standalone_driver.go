@@ -67,8 +67,8 @@ type saaHandle struct {
 	cfg           activityConfig       // d.cfg with the windows this trace needs; see activityConfig.forTrace
 	d             *saaDriver
 	activityID    string
-	taskQueue     string
 	runID         string
+	taskQueue     string
 	token         []byte
 	lastHeartbeat *workflowservice.RecordActivityTaskHeartbeatResponse
 	// establishedReqID[eventType] is the request id that established the current state for an operator
@@ -100,18 +100,13 @@ func (a *saaHandle) driveEvent(t require.TestingT, e model.Event) {
 	d := a.d
 	switch {
 	case e.Type == model.PollType:
-		// When a trace includes a poll event, the implication is that the activity should be
-		// dispatchable and that the poll will yield an activity task, so finding no task is a
-		// failure.
 		timeout := cmp.Or(d.positivePollTimeout, activityDriverTimeout)
 		resp := a.pollForTask(t, timeout)
 		require.NotNilf(t, resp, "%s: no task was dispatched within %s", e, timeout)
 		a.token = resp.GetTaskToken()
 	case isDispatchDelayEvent(e.Type):
-		// A dispatch delay is realized by waiting for the delayed dispatch.
 		a.awaitDispatchDelay(t, e)
 	case isTimerEvent(e.Type):
-		// A timer event is realized by waiting out its configured window.
 		a.awaitTimeout(t, e, time.Now().Add(a.cfg.timerDuration(e)+activityDriverTimerMargin))
 	default:
 		// An RPC
