@@ -31,32 +31,6 @@ import (
 
 // --- the activity info both surfaces expose --------------------------------------------------
 
-// activityInfo is user-visible activity state projected out of the two different messages that
-// carry it: SAA's ActivityExecutionInfo and WFA's PendingActivityInfo.
-//
-// CurrentRetryInterval is rounded to the second, because WFA derives it by subtracting two stored
-// timestamps while SAA stores it exactly. NextAttemptScheduleTime is reduced to whether it is set
-// to facilitate test assertions.
-type activityInfo struct {
-	RunState                   enumspb.PendingActivityState
-	Attempt                    int32
-	CurrentRetryInterval       time.Duration
-	NextAttemptScheduleTimeSet bool
-}
-
-// activityTerminalProjection is the terminal status plus the failure discriminant a user sees: the
-// application failure Type for FAILED, the TimeoutType string for TIMED_OUT, empty otherwise.
-type activityTerminalProjection struct {
-	Status      enumspb.ActivityExecutionStatus
-	FailureType string
-}
-
-// failureCause is the Type and Message of the failure a terminal outcome chains as its Cause.
-type failureCause struct {
-	Type    string
-	Message string
-}
-
 func wfaActivityInfo(p *workflowpb.PendingActivityInfo) activityInfo {
 	return activityInfo{
 		RunState:                   p.GetState(),
