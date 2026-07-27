@@ -133,6 +133,11 @@ func (a *saaHandle) awaitTimerEvent(t require.TestingT, e model.Event) {
 //
 // A timeout ends an attempt, so a reported one only belongs to this event if the activity has moved
 // on since the wait began, or has closed and so can report nothing further.
+//
+// It polls, though DescribeActivityExecution offers a long poll, because the long poll only reports
+// that the transition history advanced: it says nothing about which timeout fired, and never wakes
+// for one that fired before the caller asked. Reading the state answers both. The workflow surface
+// has no long poll here at all, so polling also leaves the two waiting alike.
 func (a *saaHandle) awaitTimeout(t require.TestingT, e model.Event, deadline time.Time) {
 	want := timeoutType(e)
 	before := a.timeoutMark(t)
