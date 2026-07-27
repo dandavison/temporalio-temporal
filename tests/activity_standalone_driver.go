@@ -60,9 +60,17 @@ func (d *saaDriver) driveTrace(t testing.TB, trace []model.Event) *saaHandle {
 	validateTrace(t, trace)
 	a := d.start(t, d.cfg.forTrace(trace))
 	for _, e := range trace {
-		driveActivityEvent(t, a, e)
+		a.driveEvent(t, e)
 	}
 	return a
+}
+
+func (a *saaHandle) driveEvent(t testing.TB, e model.Event) {
+	driveActivityEvent(t, a, e)
+}
+
+func (a *saaHandle) awaitTimeout(t testing.TB, e model.Event, deadline time.Time) {
+	awaitActivityTimeout(t, a, e, deadline)
 }
 
 // timeoutInfo is the most recent timeout the activity reports.

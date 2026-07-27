@@ -58,9 +58,17 @@ func (d *wfaDriver) driveTrace(t *testing.T, trace []model.Event) *wfaHandle {
 	validateTrace(t, trace)
 	a := d.start(t, d.cfg.forTrace(trace))
 	for _, e := range trace {
-		driveActivityEvent(t, a, e)
+		a.driveEvent(t, e)
 	}
 	return a
+}
+
+func (a *wfaHandle) driveEvent(t testing.TB, e model.Event) {
+	driveActivityEvent(t, a, e)
+}
+
+func (a *wfaHandle) awaitTimeout(t testing.TB, e model.Event, deadline time.Time) {
+	awaitActivityTimeout(t, a, e, deadline)
 }
 
 // timeoutInfo is the most recent timeout the activity reports. DescribeWorkflowExecution exposes the
