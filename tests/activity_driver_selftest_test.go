@@ -6,8 +6,8 @@ package tests
 // Each case injects a mismatch between what the driver believes it configured and what the server
 // actually got, via customizeStart, and is paired with an uninjected control.
 //
-// The driver reports through the require.TestingT it is handed, so these tests hand it a recorder and
-// assert on what it recorded, rather than failing themselves.
+// These tests hand the driver a recorder and assert on what it recorded, rather than failing
+// themselves.
 
 import (
 	"fmt"
@@ -19,11 +19,15 @@ import (
 	enumspb "go.temporal.io/api/enums/v1"
 	"go.temporal.io/api/workflowservice/v1"
 	"go.temporal.io/server/chasm/lib/activity/model"
+	"go.temporal.io/server/common/testing/await"
 	"google.golang.org/protobuf/types/known/durationpb"
 )
 
 // recordingT collects what the driver reports instead of failing the enclosing test.
-type recordingT struct{ failures []string }
+type recordingT struct {
+	testing.TB
+	failures []string
+}
 
 var errRecordedFailNow = fmt.Errorf("recordingT.FailNow")
 
@@ -34,8 +38,8 @@ func (r *recordingT) Errorf(format string, args ...any) {
 func (r *recordingT) FailNow() { panic(errRecordedFailNow) }
 
 // recordDriverReports runs drive against a recorder and returns everything the driver reported.
-func recordDriverReports(drive func(require.TestingT)) (failures []string) {
-	rt := &recordingT{}
+func recordDriverReports(t testing.TB, drive func(testing.TB)) (failures []string) {
+	rt := &recordingT{TB: t}
 	defer func() {
 		if p := recover(); p != nil && p != errRecordedFailNow {
 			panic(p)
@@ -59,7 +63,7 @@ func (s *activityParityTestSuite) TestSAADriverReportsUnrealizedWallClockEvents(
 
 	s.T().Run("StartToCloseElapses", func(t *testing.T) {
 		drive := func(customize func(*workflowservice.StartActivityExecutionRequest)) []string {
-			return recordDriverReports(func(rt require.TestingT) {
+			return recordDriverReports(t, func(rt testing.TB) {
 				d := newSAADriver(t, newActivityParityEnv(t), activityConfig{
 					MaxAttempts:  1,
 					StartToClose: activityShortTimeout, // the window the driver will wait out
@@ -89,7 +93,7 @@ func (s *activityParityTestSuite) TestSAADriverBlamesItselfWhenItOutrunsTheDispa
 	// negativePoll drives the one Poll of a start-delayed activity through the model-checking path, and
 	// returns everything the driver reported.
 	negativePoll := func(t *testing.T, customize func(*workflowservice.StartActivityExecutionRequest)) []string {
-		return recordDriverReports(func(rt require.TestingT) {
+		return recordDriverReports(t, func(rt testing.TB) {
 			d := newSAADriver(t, newActivityParityEnv(t), activityConfig{MaxAttempts: 1, StartDelay: activityLongDuration})
 			d.customizeStart = customize
 			a := d.start(rt, d.cfg)
@@ -150,28 +154,26 @@ func (s *activityParityTestSuite) TestDriversRecognizeTimeoutObservedBeforeWait(
 		StartToClose:  activityShortTimeout,
 	}
 
-	waitUntilTimeoutVisible := func(t *testing.T, timeoutInfo func() activityTimeoutInfo) {
+	waitUntilTimeoutVisible := func(t *testing.T, timeoutInfo func(require.TestingT) activityTimeoutInfo) {
 		var got activityTimeoutInfo
-		require.Truef(t, activityDriverPollUntil(
-			time.Now().Add(cfg.StartToClose+activityDriverTimerMargin),
-			func() bool {
-				got = timeoutInfo()
-				return got.timeout == enumspb.TIMEOUT_TYPE_START_TO_CLOSE && got.attempt == 2
-			},
-		), "attempt 1 did not time out and reschedule attempt 2; last observed: %+v", got)
+		await.Require(t.Context(), t, func(t *await.T) {
+			got = timeoutInfo(t)
+			t.Require().Equal(enumspb.TIMEOUT_TYPE_START_TO_CLOSE, got.timeout)
+			t.Require().Equal(int32(2), got.attempt)
+		}, cfg.StartToClose+activityDriverTimerMargin, activityDriverPollInterval)
 	}
 
 	s.T().Run("WorkflowActivity", func(t *testing.T) {
 		a := newWFADriver(t, newActivityParityEnv(t), cfg).start(t, cfg)
 		a.driveEvent(t, model.Poll)
-		waitUntilTimeoutVisible(t, func() activityTimeoutInfo { return a.timeoutInfo(t) })
+		waitUntilTimeoutVisible(t, a.timeoutInfo)
 		a.awaitTimeout(t, model.StartToCloseElapses, time.Now().Add(waitForDriver))
 	})
 
 	s.T().Run("StandaloneActivity", func(t *testing.T) {
 		a := newSAADriver(t, newActivityParityEnv(t), cfg).start(t, cfg)
 		a.driveEvent(t, model.Poll)
-		waitUntilTimeoutVisible(t, func() activityTimeoutInfo { return a.timeoutInfo(t) })
+		waitUntilTimeoutVisible(t, a.timeoutInfo)
 		a.awaitTimeout(t, model.StartToCloseElapses, time.Now().Add(waitForDriver))
 	})
 }

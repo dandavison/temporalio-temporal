@@ -26,6 +26,7 @@ import (
 	"go.temporal.io/server/chasm/lib/activity"
 	"go.temporal.io/server/chasm/lib/activity/model"
 	"go.temporal.io/server/common"
+	"go.temporal.io/server/common/testing/await"
 )
 
 // --- tuning knobs --------------------------------------------------------------------------
@@ -172,7 +173,7 @@ func (d *saaDriver) checkCompleteness(t *testing.T, verifiedFine, skippedFine ma
 // verifyPath starts a fresh activity, replays the path, and asserts only its final edge. A prefix edge
 // that diverges aborts the replay silently; that edge is reported when it is the final edge of its own
 // shorter path.
-func (d *saaDriver) verifyPath(t require.TestingT, path []model.Event) (saaApply, bool) {
+func (d *saaDriver) verifyPath(t testing.TB, path []model.Event) (saaApply, bool) {
 	a := d.start(t, d.cfg)
 	a.path = path
 	cur := model.Initial(d.cfg.modelConfig())
@@ -269,7 +270,7 @@ type saaCell struct {
 	eventType model.EventType
 }
 
-func (a *saaHandle) apply(t require.TestingT, e model.Event, cur model.AbstractState, out model.Outcome, final bool) saaApply {
+func (a *saaHandle) apply(t testing.TB, e model.Event, cur model.AbstractState, out model.Outcome, final bool) saaApply {
 	if e.Type == model.PollType {
 		return a.applyPoll(cur, out, final, t)
 	}
@@ -354,7 +355,7 @@ func (a *saaHandle) checkTaskInvalidation(t require.TestingT, e model.Event, cur
 
 // applyPoll drives a Poll and checks the dispatch against the model: a dispatchable activity must
 // dispatch a task, and a delayed or paused one must not.
-func (a *saaHandle) applyPoll(cur model.AbstractState, out model.Outcome, final bool, t require.TestingT) saaApply {
+func (a *saaHandle) applyPoll(cur model.AbstractState, out model.Outcome, final bool, t testing.TB) saaApply {
 	poll := model.Poll
 	switch {
 	case cur.Status == model.Scheduled && out.Next.Status == model.Started:
@@ -425,7 +426,7 @@ func (a *saaHandle) applyPoll(cur model.AbstractState, out model.Outcome, final 
 // applyWallClock waits for a wall-clock event to take effect, then asserts the observed state equals
 // out.Next. Where the model predicts an observable change it polls for that state; where it predicts
 // none, the only way to confirm is to wait the window out and see nothing move.
-func (a *saaHandle) applyWallClock(t require.TestingT, e model.Event, cur model.AbstractState, out model.Outcome, final bool) saaApply {
+func (a *saaHandle) applyWallClock(t testing.TB, e model.Event, cur model.AbstractState, out model.Outcome, final bool) saaApply {
 	deadline := time.Now().Add(a.d.cfg.timerDuration(e) + activityDriverTimerMargin)
 	switch {
 	case isDispatchDelayEvent(e.Type) && out.Next.Dispatchability == model.Dispatchable &&
@@ -436,7 +437,7 @@ func (a *saaHandle) applyWallClock(t require.TestingT, e model.Event, cur model.
 	case out.Next.SameObserved(cur):
 		time.Sleep(time.Until(deadline))
 	default:
-		a.awaitObservedMatch(out.Next, deadline)
+		a.awaitObservedMatch(t, out.Next, deadline)
 	}
 	obs, err := a.observed()
 	require.NoError(t, err)
@@ -827,11 +828,12 @@ func (a *saaHandle) observedRaw() (model.AbstractState, error) {
 }
 
 // awaitObservedMatch polls the internal state until it matches expected, or the deadline passes.
-func (a *saaHandle) awaitObservedMatch(expected model.AbstractState, deadline time.Time) {
-	activityDriverPollUntil(deadline, func() bool {
+func (a *saaHandle) awaitObservedMatch(t testing.TB, expected model.AbstractState, deadline time.Time) {
+	await.Require(a.d.ctx, t, func(t *await.T) {
 		obs, err := a.observedRaw()
-		return err == nil && expected.SameObserved(obs)
-	})
+		t.Require().NoError(err)
+		t.Require().True(expected.SameObserved(obs))
+	}, max(0, time.Until(deadline)), activityDriverPollInterval)
 }
 
 // chasmContext is the context ReadComponent needs to read internal component state, memoized.

@@ -17,6 +17,7 @@ import (
 )
 
 type activityDriverErrorRecorder struct {
+	testing.TB
 	failed bool
 }
 
@@ -37,11 +38,11 @@ func (s *activityParityTestSuite) TestDriversRejectBackoffElapseWhenScheduleToCl
 	}
 	trace := []model.Event{model.Poll, model.FailRetryably}
 
-	tests := map[string]func(*testing.T) func(require.TestingT, model.Event){
-		"WorkflowActivity": func(t *testing.T) func(require.TestingT, model.Event) {
+	tests := map[string]func(*testing.T) func(testing.TB, model.Event){
+		"WorkflowActivity": func(t *testing.T) func(testing.TB, model.Event) {
 			return newWFADriver(t, env, cfg).driveTrace(t, trace).driveEvent
 		},
-		"StandaloneActivity": func(t *testing.T) func(require.TestingT, model.Event) {
+		"StandaloneActivity": func(t *testing.T) func(testing.TB, model.Event) {
 			return newSAADriver(t, env, cfg).driveTrace(t, trace).driveEvent
 		},
 	}
@@ -49,7 +50,7 @@ func (s *activityParityTestSuite) TestDriversRejectBackoffElapseWhenScheduleToCl
 		s.Run(name, func(s *activityParityTestSuite) {
 			t := s.T()
 			drive := setup(t)
-			recorder := &activityDriverErrorRecorder{}
+			recorder := &activityDriverErrorRecorder{TB: t}
 			drive(recorder, model.BackoffElapses)
 			require.True(t, recorder.failed,
 				"BackoffElapses must fail when ScheduleToClose removes the activity before its retry time")
@@ -61,11 +62,11 @@ func (s *activityParityTestSuite) TestDriversRejectBackoffElapseWithoutPendingBa
 	env := newActivityParityEnv(s.T())
 	trace := []model.Event{model.Poll}
 
-	tests := map[string]func(*testing.T) func(require.TestingT, model.Event){
-		"WorkflowActivity": func(t *testing.T) func(require.TestingT, model.Event) {
+	tests := map[string]func(*testing.T) func(testing.TB, model.Event){
+		"WorkflowActivity": func(t *testing.T) func(testing.TB, model.Event) {
 			return newWFADriver(t, env, activityConfig{}).driveTrace(t, trace).driveEvent
 		},
-		"StandaloneActivity": func(t *testing.T) func(require.TestingT, model.Event) {
+		"StandaloneActivity": func(t *testing.T) func(testing.TB, model.Event) {
 			return newSAADriver(t, env, activityConfig{}).driveTrace(t, trace).driveEvent
 		},
 	}
@@ -73,7 +74,7 @@ func (s *activityParityTestSuite) TestDriversRejectBackoffElapseWithoutPendingBa
 		s.Run(name, func(s *activityParityTestSuite) {
 			t := s.T()
 			drive := setup(t)
-			recorder := &activityDriverErrorRecorder{}
+			recorder := &activityDriverErrorRecorder{TB: t}
 			drive(recorder, model.BackoffElapses)
 			require.True(t, recorder.failed,
 				"BackoffElapses must fail while the first attempt is running and no backoff is pending")
@@ -90,11 +91,11 @@ func (s *activityParityTestSuite) TestDriversRejectTimeoutElapseWhenDifferentTim
 	}
 	trace := []model.Event{model.Poll}
 
-	tests := map[string]func(*testing.T) func(require.TestingT, model.Event){
-		"WorkflowActivity": func(t *testing.T) func(require.TestingT, model.Event) {
+	tests := map[string]func(*testing.T) func(testing.TB, model.Event){
+		"WorkflowActivity": func(t *testing.T) func(testing.TB, model.Event) {
 			return newWFADriver(t, env, cfg).driveTrace(t, trace).driveEvent
 		},
-		"StandaloneActivity": func(t *testing.T) func(require.TestingT, model.Event) {
+		"StandaloneActivity": func(t *testing.T) func(testing.TB, model.Event) {
 			return newSAADriver(t, env, cfg).driveTrace(t, trace).driveEvent
 		},
 	}
@@ -102,7 +103,7 @@ func (s *activityParityTestSuite) TestDriversRejectTimeoutElapseWhenDifferentTim
 		s.Run(name, func(s *activityParityTestSuite) {
 			t := s.T()
 			drive := setup(t)
-			recorder := &activityDriverErrorRecorder{}
+			recorder := &activityDriverErrorRecorder{TB: t}
 			drive(recorder, model.HeartbeatElapses)
 			require.True(t, recorder.failed,
 				"HeartbeatElapses must fail when StartToClose times out first")
@@ -144,13 +145,13 @@ func (s *activityParityTestSuite) TestDriversAcceptTimeoutElapseThatAlreadyOccur
 	}
 	trace := []model.Event{model.Poll}
 
-	tests := map[string]func(*testing.T) func(require.TestingT, model.Event){
-		"WorkflowActivity": func(t *testing.T) func(require.TestingT, model.Event) {
+	tests := map[string]func(*testing.T) func(testing.TB, model.Event){
+		"WorkflowActivity": func(t *testing.T) func(testing.TB, model.Event) {
 			a := newWFADriver(t, env, cfg).driveTrace(t, trace)
 			require.Equal(t, enumspb.ACTIVITY_EXECUTION_STATUS_TIMED_OUT, a.terminalStatus(t))
 			return a.driveEvent
 		},
-		"StandaloneActivity": func(t *testing.T) func(require.TestingT, model.Event) {
+		"StandaloneActivity": func(t *testing.T) func(testing.TB, model.Event) {
 			a := newSAADriver(t, env, cfg).driveTrace(t, trace)
 			require.Equal(t, enumspb.ACTIVITY_EXECUTION_STATUS_TIMED_OUT, a.terminalStatus(t))
 			return a.driveEvent
@@ -246,7 +247,7 @@ func (s *activityParityTestSuite) TestDriversAcceptDispatchPolledDuringTheWait()
 		d := newSAADriver(t, env, cfg)
 		a := d.driveTrace(t, trace)
 		wait := pollInBackground(d.ctx, a.taskQueue)
-		rec := &activityDriverErrorRecorder{}
+		rec := &activityDriverErrorRecorder{TB: t}
 		a.driveEvent(rec, model.BackoffElapses)
 		wait()
 		require.False(t, rec.failed, "a dispatch taken by a worker during the wait is still a dispatch")
@@ -256,7 +257,7 @@ func (s *activityParityTestSuite) TestDriversAcceptDispatchPolledDuringTheWait()
 		d := newWFADriver(t, env, cfg)
 		a := d.driveTrace(t, trace)
 		wait := pollInBackground(d.ctx, a.taskQueue)
-		rec := &activityDriverErrorRecorder{}
+		rec := &activityDriverErrorRecorder{TB: t}
 		a.driveEvent(rec, model.BackoffElapses)
 		wait()
 		require.False(t, rec.failed, "a dispatch taken by a worker during the wait is still a dispatch")
@@ -273,14 +274,14 @@ func (s *activityParityTestSuite) TestDriversRejectDispatchDelayWhilePaused() {
 	s.Run("StandaloneActivity", func(s *activityParityTestSuite) {
 		t := s.T()
 		a := newSAADriver(t, env, cfg).driveTrace(t, trace)
-		rec := &activityDriverErrorRecorder{}
+		rec := &activityDriverErrorRecorder{TB: t}
 		a.driveEvent(rec, model.BackoffElapses)
 		require.True(t, rec.failed, "a paused activity shows no pending dispatch, so none can be seen to elapse")
 	})
 	s.Run("WorkflowActivity", func(s *activityParityTestSuite) {
 		t := s.T()
 		a := newWFADriver(t, env, cfg).driveTrace(t, trace)
-		rec := &activityDriverErrorRecorder{}
+		rec := &activityDriverErrorRecorder{TB: t}
 		a.driveEvent(rec, model.BackoffElapses)
 		require.True(t, rec.failed, "a paused activity shows no pending dispatch, so none can be seen to elapse")
 	})
@@ -298,14 +299,14 @@ func (s *activityParityTestSuite) TestDriversRejectDispatchDelayAlreadyDispatche
 	s.Run("StandaloneActivity", func(s *activityParityTestSuite) {
 		t := s.T()
 		a := newSAADriver(t, env, cfg).driveTrace(t, trace)
-		rec := &activityDriverErrorRecorder{}
+		rec := &activityDriverErrorRecorder{TB: t}
 		a.driveEvent(rec, model.BackoffElapses)
 		require.True(t, rec.failed, "the dispatch already happened, so no second delay can elapse")
 	})
 	s.Run("WorkflowActivity", func(s *activityParityTestSuite) {
 		t := s.T()
 		a := newWFADriver(t, env, cfg).driveTrace(t, trace)
-		rec := &activityDriverErrorRecorder{}
+		rec := &activityDriverErrorRecorder{TB: t}
 		a.driveEvent(rec, model.BackoffElapses)
 		require.True(t, rec.failed, "the dispatch already happened, so no second delay can elapse")
 	})
