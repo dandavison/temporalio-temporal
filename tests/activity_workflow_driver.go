@@ -129,15 +129,17 @@ func (a *wfaHandle) timeoutMark(t require.TestingT) activityTimeoutMark {
 // if it is still pending, or if the activity ended first and so never dispatched at all.
 // See saaHandle.awaitDispatchDelay.
 func (a *wfaHandle) awaitDispatchDelay(t require.TestingT, e model.Event) {
-	// Nothing to wait for: an activity that is no longer pending dispatches nothing more, and a
-	// running attempt means whatever was pending has already been dispatched and taken.
+	// Nothing to wait for unless the activity is waiting to be dispatched. An activity that is no
+	// longer pending dispatches nothing more; a running attempt means whatever was pending has
+	// already been dispatched and taken; and a paused one reports no pending dispatch whatever its
+	// backoff is doing, so none can be seen to elapse.
 	pa := a.pendingActivity(t)
 	switch {
 	case pa == nil:
 		t.Errorf("%s: the activity is not pending, so no dispatch is pending and none can elapse", e)
 		return
-	case pa.GetState() == enumspb.PENDING_ACTIVITY_STATE_STARTED:
-		t.Errorf("%s: an attempt is running, so no dispatch is pending and none can elapse", e)
+	case pa.GetState() != enumspb.PENDING_ACTIVITY_STATE_SCHEDULED:
+		t.Errorf("%s: the activity is %s, so no dispatch is pending and none can elapse", e, pa.GetState())
 		return
 	default:
 	}
