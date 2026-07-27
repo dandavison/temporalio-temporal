@@ -296,11 +296,13 @@ func (s *activityParityTestSuite) TestDriversAllowTimeoutsOnSeparateAttempts() {
 		model.StartToCloseElapses,
 	}
 
-	s.T().Run("WorkflowActivity", func(t *testing.T) {
+	s.Run("WorkflowActivity", func(s *activityParityTestSuite) {
+		t := s.T()
 		require.Equal(t, enumspb.ACTIVITY_EXECUTION_STATUS_TIMED_OUT,
 			newWFADriver(t, env, cfg).driveTrace(t, trace).terminalStatus(t))
 	})
-	s.T().Run("StandaloneActivity", func(t *testing.T) {
+	s.Run("StandaloneActivity", func(s *activityParityTestSuite) {
+		t := s.T()
 		require.Equal(t, enumspb.ACTIVITY_EXECUTION_STATUS_TIMED_OUT,
 			newSAADriver(t, env, cfg).driveTrace(t, trace).terminalStatus(t))
 	})
@@ -367,4 +369,23 @@ func (s *activityParityTestSuite) TestWFADriverWaitsForActivityToBeScheduled() {
 	info := newWFADriver(t, env, activityConfig{}).driveTrace(t, nil).activityInfo(t)
 	require.Equal(t, enumspb.PENDING_ACTIVITY_STATE_SCHEDULED, info.RunState)
 	require.Equal(t, int32(1), info.Attempt)
+}
+
+func (s *activityParityTestSuite) TestParityActivityInput() {
+	env := newActivityParityEnv(s.T())
+
+	s.Run("WorkflowActivity", func(s *activityParityTestSuite) {
+		t := s.T()
+		a := newWFADriver(t, env, activityConfig{}).driveTrace(t, nil)
+		task := a.pollForTask(t, activityDriverPositivePollTimeout)
+		require.NotNil(t, task)
+		require.Equal(t, "Input", testcore.DecodeString(t, task.GetInput()))
+	})
+	s.Run("StandaloneActivity", func(s *activityParityTestSuite) {
+		t := s.T()
+		a := newSAADriver(t, env, activityConfig{}).driveTrace(t, nil)
+		task := a.pollForTask(t, activityDriverPositivePollTimeout)
+		require.NotNil(t, task)
+		require.Equal(t, "Input", testcore.DecodeString(t, task.GetInput()))
+	})
 }
