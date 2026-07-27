@@ -33,13 +33,13 @@ import (
 // --- driver --------------------------------------------------------------------------------
 
 type saaDriver struct {
-	env        *testcore.TestEnv
-	ctx        context.Context
-	chasmCtx   context.Context // memoized by chasmContext
-	cfg        activityConfig
-	cfgIdx     int // labels this driver's config in the conformance explorer's logs
-	numStarted int
-	idBase     string // activity-id prefix
+	env              *testcore.TestEnv
+	ctx              context.Context
+	chasmCtx         context.Context // memoized by chasmContext
+	cfg              activityConfig
+	cfgIdx           int // labels this driver's config in the conformance explorer's logs
+	numStarted       int
+	activityIDPrefix string // activity-id prefix
 
 	positivePollTimeout time.Duration // bounds a "must dispatch" poll; 0 => activityDriverTimeout
 
@@ -50,10 +50,10 @@ type saaDriver struct {
 // newSAADriver builds a driver with the test-scoped context and its own activity-id prefix.
 func newSAADriver(t *testing.T, env *testcore.TestEnv, cfg activityConfig) *saaDriver {
 	return &saaDriver{
-		env:    env,
-		ctx:    testcontext.For(t),
-		cfg:    cfg,
-		idBase: t.Name(),
+		env:              env,
+		ctx:              testcontext.For(t),
+		cfg:              cfg,
+		activityIDPrefix: t.Name(),
 	}
 }
 
@@ -175,6 +175,9 @@ func (a *saaHandle) awaitDispatchTimePassed(t require.TestingT, e model.Event) {
 			t.Errorf("%s: the activity ended as %s before its delayed dispatch, so the dispatch never happened",
 				e, info.GetStatus())
 			return
+		case info.GetRunState() == enumspb.PENDING_ACTIVITY_STATE_STARTED:
+			t.Errorf("%s: an attempt is running, so no dispatch is pending and none can elapse", e)
+			return
 		case info.GetNextAttemptScheduleTime() == nil:
 			return
 		case !time.Now().Before(deadline):
@@ -189,7 +192,7 @@ func (a *saaHandle) awaitDispatchTimePassed(t require.TestingT, e model.Event) {
 
 func (d *saaDriver) start(t require.TestingT, cfg activityConfig) *saaHandle {
 	d.numStarted++
-	id := fmt.Sprintf("%s-%d", d.idBase, d.numStarted)
+	id := fmt.Sprintf("%s-%d", d.activityIDPrefix, d.numStarted)
 	resp, err := d.env.FrontendClient().StartActivityExecution(d.ctx, d.startRequest(cfg, id, id))
 	require.NoError(t, err)
 	return &saaHandle{d: d, cfg: cfg, cursor: newActivityModelCursor(cfg), activityID: id, taskQueue: id, runID: resp.RunId, establishedReqID: map[model.EventType]string{}}
