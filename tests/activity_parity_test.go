@@ -282,6 +282,30 @@ func (s *activityParityTestSuite) TestDriversRejectTimeoutElapseWhenDifferentTim
 	}
 }
 
+func (s *activityParityTestSuite) TestDriversAllowTimeoutsOnSeparateAttempts() {
+	env := newActivityParityEnv(s.T())
+	cfg := activityConfig{
+		MaxAttempts:   2,
+		RetryInterval: activityShortRetryInterval,
+	}
+	trace := []model.Event{
+		model.Poll,
+		model.StartToCloseElapses,
+		model.BackoffElapses,
+		model.Poll,
+		model.StartToCloseElapses,
+	}
+
+	s.T().Run("WorkflowActivity", func(t *testing.T) {
+		require.Equal(t, enumspb.ACTIVITY_EXECUTION_STATUS_TIMED_OUT,
+			newWFADriver(t, env, cfg).driveTrace(t, trace).terminalStatus(t))
+	})
+	s.T().Run("StandaloneActivity", func(t *testing.T) {
+		require.Equal(t, enumspb.ACTIVITY_EXECUTION_STATUS_TIMED_OUT,
+			newSAADriver(t, env, cfg).driveTrace(t, trace).terminalStatus(t))
+	})
+}
+
 func (s *activityParityTestSuite) TestDriversAcceptTimeoutElapseThatAlreadyOccurred() {
 	env := newActivityParityEnv(s.T())
 	cfg := activityConfig{
