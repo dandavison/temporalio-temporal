@@ -96,11 +96,11 @@ func (a *wfaHandle) driveEvent(t require.TestingT, e model.Event) {
 // not within (window + margin). See saaHandle.awaitTimeout.
 func (a *wfaHandle) awaitTimeout(t require.TestingT, e model.Event, deadline time.Time) {
 	want := timeoutType(e)
-	before := a.timeoutMark(t)
-	var got activityTimeoutMark
+	before := a.timeoutInfo(t)
+	var got activityTimeoutInfo
 	fired := func() bool {
-		got = a.timeoutMark(t)
-		return got.reports(want) && (got.closed || got != before)
+		got = a.timeoutInfo(t)
+		return got.timeout == want && (got.closed || got != before)
 	}
 	if activityDriverPollUntil(deadline, fired) {
 		return
@@ -110,21 +110,21 @@ func (a *wfaHandle) awaitTimeout(t require.TestingT, e model.Event, deadline tim
 		e, want, a.cfg.timerDuration(e)+activityDriverTimerMargin, got)
 }
 
-// timeoutMark is the most recent timeout the activity reports. DescribeWorkflowExecution exposes the
+// timeoutInfo is the most recent timeout the activity reports. DescribeWorkflowExecution exposes the
 // last failure only while the activity is in progress; once it closes, the timeout comes from the
 // workflow result instead.
-func (a *wfaHandle) timeoutMark(t require.TestingT) activityTimeoutMark {
+func (a *wfaHandle) timeoutInfo(t require.TestingT) activityTimeoutInfo {
 	if pa := a.pendingActivityInfo(t); pa != nil {
-		return activityTimeoutMark{attemptFailure: timeoutTypeOf(pa.GetLastFailure()), attempt: pa.GetAttempt()}
-	}
-	m := activityTimeoutMark{closed: true}
-	if outcome, ok := errors.AsType[*temporal.TimeoutError](a.run.Get(a.d.ctx, nil)); ok {
-		m.outcome = outcome.TimeoutType()
-		if cause, ok := errors.AsType[*temporal.TimeoutError](outcome.Unwrap()); ok {
-			m.cause = cause.TimeoutType()
+		return activityTimeoutInfo{
+			timeout: pa.GetLastFailure().GetTimeoutFailureInfo().GetTimeoutType(),
+			attempt: pa.GetAttempt(),
 		}
 	}
-	return m
+	var timeoutErr *temporal.TimeoutError
+	if errors.As(a.run.Get(a.d.ctx, nil), &timeoutErr) {
+		return activityTimeoutInfo{timeout: timeoutErr.TimeoutType(), closed: true}
+	}
+	return activityTimeoutInfo{closed: true}
 }
 
 // awaitDispatchDelay waits for the public dispatch deadline to become due. A following Poll is what

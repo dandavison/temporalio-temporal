@@ -124,11 +124,11 @@ func (a *saaHandle) driveEvent(t require.TestingT, e model.Event) {
 // same type left over from an earlier attempt would satisfy the wait at once.
 func (a *saaHandle) awaitTimeout(t require.TestingT, e model.Event, deadline time.Time) {
 	want := timeoutType(e)
-	before := a.timeoutMark(t)
-	var got activityTimeoutMark
+	before := a.timeoutInfo(t)
+	var got activityTimeoutInfo
 	fired := func() bool {
-		got = a.timeoutMark(t)
-		return got.reports(want) && (got.closed || got != before)
+		got = a.timeoutInfo(t)
+		return got.timeout == want && (got.closed || got != before)
 	}
 	if activityDriverPollUntil(deadline, fired) {
 		return
@@ -138,17 +138,21 @@ func (a *saaHandle) awaitTimeout(t require.TestingT, e model.Event, deadline tim
 		e, want, a.cfg.timerDuration(e)+activityDriverTimerMargin, got)
 }
 
-// timeoutMark is the most recent timeout the activity reports, with the attempt and closed-ness that
+// timeoutInfo is the most recent timeout the activity reports, with the attempt and closed-ness that
 // place it in the activity's history.
-func (a *saaHandle) timeoutMark(t require.TestingT) activityTimeoutMark {
-	r := a.describe(t)
-	outcome := r.GetOutcome().GetFailure()
-	return activityTimeoutMark{
-		attemptFailure: timeoutTypeOf(r.GetInfo().GetLastFailure()),
-		outcome:        timeoutTypeOf(outcome),
-		cause:          timeoutTypeOf(outcome.GetCause()),
-		attempt:        r.GetInfo().GetAttempt(),
-		closed:         r.GetInfo().GetStatus() != enumspb.ACTIVITY_EXECUTION_STATUS_RUNNING,
+func (a *saaHandle) timeoutInfo(t require.TestingT) activityTimeoutInfo {
+	response := a.describe(t)
+	info := response.GetInfo()
+	timeout := info.GetLastFailure().GetTimeoutFailureInfo().GetTimeoutType()
+	if timeout == enumspb.TIMEOUT_TYPE_UNSPECIFIED {
+		// Per-attempt timeouts are reported as LastFailure. Schedule timeouts close the activity
+		// directly and are reported only in the terminal Outcome.
+		timeout = response.GetOutcome().GetFailure().GetTimeoutFailureInfo().GetTimeoutType()
+	}
+	return activityTimeoutInfo{
+		timeout: timeout,
+		attempt: info.GetAttempt(),
+		closed:  info.GetStatus() != enumspb.ACTIVITY_EXECUTION_STATUS_RUNNING,
 	}
 }
 

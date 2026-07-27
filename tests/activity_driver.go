@@ -207,24 +207,12 @@ func activityFailure(retryable bool, nextRetryDelay time.Duration) *failurepb.Fa
 	}
 }
 
-// activityTimeoutMark is what a driver compares to decide that the timeout an event names is this
+// activityTimeoutInfo is what a driver compares to decide that the timeout an event names is this
 // event's, rather than one left over from an earlier attempt.
-type activityTimeoutMark struct {
-	attemptFailure enumspb.TimeoutType // ended the last attempt
-	outcome        enumspb.TimeoutType // closed the activity
-	cause          enumspb.TimeoutType // chained by outcome as what led to it
-	attempt        int32
-	closed         bool
-}
-
-// reports says whether the activity reports tt as having occurred.
-func (m activityTimeoutMark) reports(tt enumspb.TimeoutType) bool {
-	return tt != enumspb.TIMEOUT_TYPE_UNSPECIFIED &&
-		(m.attemptFailure == tt || m.outcome == tt || m.cause == tt)
-}
-
-func timeoutTypeOf(f *failurepb.Failure) enumspb.TimeoutType {
-	return f.GetTimeoutFailureInfo().GetTimeoutType()
+type activityTimeoutInfo struct {
+	timeout enumspb.TimeoutType
+	attempt int32
+	closed  bool
 }
 
 // activityDriverPollUntil reports whether cond held before the deadline, reading every activityDriverPollInterval.
