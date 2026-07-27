@@ -196,6 +196,28 @@ func activityFailure(retryable bool, nextRetryDelay time.Duration) *failurepb.Fa
 	}
 }
 
+// activityTimeoutMark is the timeouts an activity reports, and enough of its history to tell a fresh
+// one from a leftover. A timeout can appear in more than one place: an attempt ended by a heartbeat
+// timeout that then has no room to retry closes the activity as schedule-to-close, and both are true
+// of it.
+type activityTimeoutMark struct {
+	attemptFailure enumspb.TimeoutType // ended the last attempt
+	outcome        enumspb.TimeoutType // closed the activity
+	cause          enumspb.TimeoutType // chained by outcome as what led to it
+	attempt        int32
+	closed         bool
+}
+
+// reports says whether the activity reports tt as having occurred.
+func (m activityTimeoutMark) reports(tt enumspb.TimeoutType) bool {
+	return tt != enumspb.TIMEOUT_TYPE_UNSPECIFIED &&
+		(m.attemptFailure == tt || m.outcome == tt || m.cause == tt)
+}
+
+func timeoutTypeOf(f *failurepb.Failure) enumspb.TimeoutType {
+	return f.GetTimeoutFailureInfo().GetTimeoutType()
+}
+
 // activityDriverPollUntil reports whether cond held before the deadline, reading every activityDriverPollInterval.
 //
 // common/testing/await is the usual way to write this, but await.Require and await.RequireTrue take a

@@ -161,52 +161,78 @@ func (a *wfaHandle) driveEvent(t require.TestingT, e model.Event) {
 }
 
 // awaitWallClock blocks until a wall-clock event's effect shows up in the workflow's view of the
-// activity, and fails if it does not within (window + settle). The effect is a change in the
-// pending-activity projection, or the activity leaving the pending set. WFA has no long-poll Describe,
-// so this polls.
+// activity, and fails if it does not within (window + settle).
 func (a *wfaHandle) awaitWallClock(t require.TestingT, e model.Event) {
 	if isDispatchDelayEvent(e.Type) {
 		a.awaitDispatchTimePassed(t, e)
 		return
 	}
-	deadline := time.Now().Add(a.cfg.window(e) + activityDriverWallClockSettle)
-	before, beforePending := a.pendingSnapshot(t)
-	changed := func() bool {
-		now, nowPending := a.pendingSnapshot(t)
-		return nowPending != beforePending || (nowPending && now != before)
-	}
-	if activityDriverPollUntil(deadline, changed) {
-		return
-	}
-	t.Errorf("%s: the activity did not change within %s of driving the event, so the event did not "+
-		"take effect. Last observed: %+v", e, a.cfg.window(e)+activityDriverWallClockSettle, before)
+	a.awaitTimeout(t, e, time.Now().Add(a.cfg.window(e)+activityDriverWallClockSettle))
 }
 
-// pendingSnapshot is the activity's pending-activity projection, and whether it is currently pending. A
-// Describe error is reported rather than treated as absence.
-// awaitDispatchTimePassed polls the pending-activity projection until the pending dispatch time has
-// passed, and fails if it has not. The deadline is the server's own NextAttemptScheduleTime; see
-// saaHandle.awaitDispatchTimePassed.
+// awaitTimeout blocks until the activity reports the timeout the event names, and fails if it does
+// not within (window + settle). See saaHandle.awaitTimeout.
+func (a *wfaHandle) awaitTimeout(t require.TestingT, e model.Event, deadline time.Time) {
+	want := timeoutType(e)
+	before := a.timeoutMark(t)
+	var got activityTimeoutMark
+	fired := func() bool {
+		got = a.timeoutMark(t)
+		return got.reports(want) && (got.closed || got != before)
+	}
+	if activityDriverPollUntil(deadline, fired) {
+		return
+	}
+	t.Errorf("%s: the activity did not report a %s timeout within %s of driving the event; it reports %+v. "+
+		"Check that the config makes this the timeout that fires.",
+		e, want, a.cfg.window(e)+activityDriverWallClockSettle, got)
+}
+
+// timeoutMark reads the pending activity while there is one. A closed activity has left the pending
+// set, and the workflow result reports only the timeout it closed with: an attempt ended by one
+// timeout and closed by another is no longer distinguishable here, unlike on the SAA surface.
+func (a *wfaHandle) timeoutMark(t require.TestingT) activityTimeoutMark {
+	if pa := a.pendingActivity(t); pa != nil {
+		return activityTimeoutMark{attemptFailure: timeoutTypeOf(pa.GetLastFailure()), attempt: pa.GetAttempt()}
+	}
+	m := activityTimeoutMark{closed: true}
+	var outcome *temporal.TimeoutError
+	if errors.As(a.run.Get(a.d.ctx, nil), &outcome) {
+		m.outcome = outcome.TimeoutType()
+		var cause *temporal.TimeoutError
+		if errors.As(outcome.Unwrap(), &cause) {
+			m.cause = cause.TimeoutType()
+		}
+	}
+	return m
+}
+
+// awaitDispatchTimePassed polls the activity until the delayed dispatch is no longer pending, and
+// fails if it is still pending, or if the activity ended first and so never dispatched at all.
+// See saaHandle.awaitDispatchTimePassed.
 func (a *wfaHandle) awaitDispatchTimePassed(t require.TestingT, e model.Event) {
-	next := a.pendingActivity(t).GetNextAttemptScheduleTime()
-	if next == nil {
-		return // the dispatch time has already passed, or the activity is no longer pending
+	pa := a.pendingActivity(t)
+	deadline := time.Now().Add(activityDriverWallClockSettle)
+	if next := pa.GetNextAttemptScheduleTime(); next != nil {
+		deadline = next.AsTime().Add(activityDriverWallClockSettle)
 	}
-	deadline := next.AsTime().Add(activityDriverWallClockSettle)
-	var p activityInfo
-	dispatched := func() bool {
-		var pending bool
-		p, pending = a.pendingSnapshot(t)
-		return !pending || !p.NextAttemptScheduleTimeSet
+	for {
+		switch {
+		case pa == nil:
+			t.Errorf("%s: the activity is no longer pending, so its delayed dispatch never happened", e)
+			return
+		case pa.GetNextAttemptScheduleTime() == nil:
+			return
+		case !time.Now().Before(deadline):
+			t.Errorf("%s: a dispatch is still pending %s after the time the server scheduled it for. "+
+				"Last observed: %+v", e, activityDriverWallClockSettle, wfaActivityInfo(pa))
+			return
+		}
+		time.Sleep(activityDriverPollInterval)
+		pa = a.pendingActivity(t)
 	}
-	if activityDriverPollUntil(deadline, dispatched) {
-		return
-	}
-	t.Errorf("%s: a dispatch is still pending %s after the time the server scheduled it for, so the "+
-		"window did not elapse. Last observed: %+v", e, activityDriverWallClockSettle, p)
 }
 
-// nextAttemptScheduleTime is when the server will dispatch the pending attempt, nil if none is pending.
 // pendingActivity is the activity's entry in the workflow's pending set, nil once it is no longer
 // pending. A Describe error is reported rather than treated as absence.
 func (a *wfaHandle) pendingActivity(t require.TestingT) *workflowpb.PendingActivityInfo {
