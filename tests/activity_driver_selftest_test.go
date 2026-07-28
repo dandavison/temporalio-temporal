@@ -35,6 +35,11 @@ func (r *recordingT) Errorf(format string, args ...any) {
 	r.failures = append(r.failures, fmt.Sprintf(format, args...))
 }
 
+func (r *recordingT) Fatalf(format string, args ...any) {
+	r.failures = append(r.failures, fmt.Sprintf(format, args...))
+	panic(errRecordedFailNow)
+}
+
 func (r *recordingT) FailNow() { panic(errRecordedFailNow) }
 
 // recordDriverReports runs drive against a recorder and returns everything the driver reported.

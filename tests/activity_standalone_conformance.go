@@ -1,6 +1,6 @@
 package tests
 
-// Model-conformance engine for the standalone-activity surface: it drives each event with the driver in
+// Model-conformance engine for standalone activities: it drives each event with the driver in
 // activity_standalone_driver.go and checks the result against model.Transition(). Holds the graph
 // traversal, the random-walk explorer, the per-step checker, and the tuning knobs; below the "helpers"
 // divider, event enumeration, error classification, and failure formatting. The configs and test entry

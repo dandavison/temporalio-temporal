@@ -244,7 +244,7 @@ func (a *wfaHandle) terminalStatus(t require.TestingT) enumspb.ActivityExecution
 }
 
 // terminalCause is the failure the terminal outcome chains as its Cause, empty if there is none. The
-// SDK surfaces it via TimeoutError.Unwrap().
+// The SDK exposes it via TimeoutError.Unwrap().
 func (a *wfaHandle) terminalCause(_ require.TestingT) failureCause {
 	if toErr, ok := errors.AsType[*temporal.TimeoutError](a.run.Get(a.d.ctx, nil)); ok {
 		if appErr, ok := errors.AsType[*temporal.ApplicationError](toErr.Unwrap()); ok {

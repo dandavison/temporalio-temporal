@@ -1,6 +1,6 @@
 package tests
 
-// Model-based conformance entry points for the standalone-activity (SAA) surface. model.Transition is
+// Model-based conformance entry points for standalone activities (SAA). model.Transition is
 // the specification; these tests drive a real onebox server through the same event alphabet and assert
 // it conforms at every step. The RPC-graph and random-walk explorers are here; the wall-clock scenarios
 // are covered by Test{StartDelay,Backoff,Timeout}_Declarative in

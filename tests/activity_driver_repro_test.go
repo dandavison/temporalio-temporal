@@ -25,6 +25,10 @@ func (r *activityDriverErrorRecorder) Errorf(string, ...any) {
 	r.failed = true
 }
 
+func (r *activityDriverErrorRecorder) Fatalf(string, ...any) {
+	r.failed = true
+}
+
 func (r *activityDriverErrorRecorder) FailNow() {
 	r.failed = true
 }

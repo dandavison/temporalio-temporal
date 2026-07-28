@@ -1,12 +1,12 @@
 package tests
 
 // SAA↔WFA metrics parity. For the exhaustive catalog of activity metrics (dandavison/log#275), this
-// establishes which ones each surface emits: it drives one activity through each behavior on both
-// surfaces, captures the metrics emitted, prints the WFA-vs-SAA emission matrix, and asserts that both
-// surfaces emit the same metrics with the same tag keys for each behavior.
+// establishes which ones each implementation emits: it drives one activity through each behavior in
+// both implementations, captures the metrics emitted, prints the WFA-vs-SAA emission matrix, and
+// asserts that both implementations emit the same metrics with the same tag keys for each behavior.
 //
 // There is no oracle. The equality assertion encodes the intended contract, so a failure can mean SAA is
-// missing a metric, WFA is missing one, or the metric belongs on one surface by design.
+// missing a metric, WFA is missing one, or the metric belongs to one implementation by design.
 //
 // Two asymmetries are intended and excluded from the equality assertion: the deprecated
 // activity_end_to_end_latency alias, and activity_terminate (a workflow activity has no individual
@@ -66,7 +66,7 @@ var activityMetricCatalog = []activityMetric{
 }
 
 // activityMetricsScenario drives one activity behavior. cfg.MaxAttempts caps retries, so a terminal
-// outcome is actually terminal. saaOnly marks a behavior with no WFA analog. anchor is a metric both surfaces
+// outcome is actually terminal. saaOnly marks a behavior with no WFA analog. anchor is a metric both implementations
 // emit at the end of the trace; when set, the driver waits for it before snapshotting, absorbing the
 // async gap between an observed timeout transition and its metric emission. It is empty for a trace
 // whose final effect is a synchronous RPC.
@@ -121,12 +121,12 @@ func (sc activityMetricsScenario) expectedTimeoutType() string {
 	}
 }
 
-// activityMetricSets holds, per surface, the metrics emitted for one scenario, keyed by name, with a
+// activityMetricSets holds, per implementation, the metrics emitted for one scenario, keyed by name, with a
 // representative recording's tag map as the value. wfa is nil for a SAA-only scenario.
 type activityMetricSets struct {
 	wfa map[string]map[string]string
 	saa map[string]map[string]string
-	// The namespace each surface drove in. They differ, which is what separates the two captures.
+	// The namespace each implementation drove in. They differ, which is what separates the two captures.
 	wfaNS, saaNS string
 }
 
@@ -174,7 +174,7 @@ func (s *activityParityTestSuite) wfaActivityMetrics(t *testing.T, sc activityMe
 }
 
 // captureActivityMetrics captures the activity metrics emitted while drive runs, scoped to env's
-// namespace. Each surface drives in its own namespace, so the capture separates them.
+// namespace. Each implementation drives in its own namespace, so the capture separates them.
 func (s *activityParityTestSuite) captureActivityMetrics(t *testing.T, env *testcore.TestEnv, sc activityMetricsScenario, drive func()) map[string]map[string]string {
 	capture := env.StartNamespaceMetricCapture()
 	drive()
@@ -296,19 +296,19 @@ func tagKeys(tags map[string]string) []string {
 }
 
 // assertActivityMetricLabels asserts that every metric carries the test namespace, that the two timeout
-// counters carry the timeout_type that fired, and that a metric both surfaces emit carries the same tag
-// keys, so that one dashboard works for either surface.
+// counters carry the timeout_type that fired, and that a metric both implementations emit carries the
+// same tag keys, so that one dashboard works for either implementation.
 func assertActivityMetricLabels(t *testing.T, sc activityMetricsScenario, sets activityMetricSets) {
-	checkTags := func(surface string, emitted map[string]map[string]string, ns string) {
+	checkTags := func(implementation string, emitted map[string]map[string]string, ns string) {
 		for name, tags := range emitted {
 			require.Equal(t, ns, tags["namespace"],
-				"%s %s must be tagged with the namespace it was driven in", surface, name)
+				"%s %s must be tagged with the namespace it was driven in", implementation, name)
 		}
 		if timeoutType := sc.expectedTimeoutType(); timeoutType != "" {
 			for _, name := range []string{metrics.ActivityTaskTimeout.Name(), metrics.ActivityTimeout.Name()} {
 				if tags, ok := emitted[name]; ok {
 					require.Equal(t, timeoutType, tags["timeout_type"],
-						"%s %s must carry the timeout_type that fired", surface, name)
+						"%s %s must carry the timeout_type that fired", implementation, name)
 				}
 			}
 		}

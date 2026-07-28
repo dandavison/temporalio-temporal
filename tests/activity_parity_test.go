@@ -213,7 +213,7 @@ func (s *activityParityTestSuite) TestParityStartToCloseTimeout() {
 // TestParityScheduleToCloseTimeout ports the schedule-to-close slice of Test_ActivityTimeouts: the
 // activity is started, then its ScheduleToClose deadline elapses while it runs, so it ends TIMED_OUT
 // with the ScheduleToClose TimeoutType. The trace polls first because a never-started activity that
-// hits the deadline times out as ScheduleToStart instead, on both surfaces.
+// hits the deadline times out as ScheduleToStart instead, in both implementations.
 func (s *activityParityTestSuite) TestParityScheduleToCloseTimeout() {
 	env := newActivityParityEnv(s.T())
 	trace := []model.Event{model.Poll, {Type: model.ScheduleToCloseElapsesType}}
@@ -231,7 +231,7 @@ func (s *activityParityTestSuite) TestParityScheduleToCloseTimeout() {
 
 // TestParityTimeoutPreservesUnderlyingFailureCause ports TestTimeoutPreservesUnderlyingFailureCause:
 // when a timeout closes an activity whose retries were driven by an application failure, the terminal
-// TimedOut failure must chain that application failure as its Cause, so an SDK can surface the real
+// TimedOut failure must chain that application failure as its Cause, so an SDK can expose the real
 // failure. See mutable_state_impl.go AddActivityTaskTimedOutEvent and temporalio/temporal#3667.
 func (s *activityParityTestSuite) TestParityTimeoutPreservesUnderlyingFailureCause() {
 	env := newActivityParityEnv(s.T())
@@ -240,7 +240,7 @@ func (s *activityParityTestSuite) TestParityTimeoutPreservesUnderlyingFailureCau
 	// verbatim, both Type and Message.
 	wantCause := failureCause{Type: "drive", Message: "drive"}
 
-	// assertCausePreserved drives the trace on both surfaces and asserts each ends TIMED_OUT with the given
+	// assertCausePreserved drives the trace in both implementations and asserts each ends TIMED_OUT with the given
 	// timeout type, chaining wantCause.
 	assertCausePreserved := func(t *testing.T, cfg activityConfig, trace []model.Event, timeoutType enumspb.TimeoutType) {
 		expected := activityTerminalProjection{Status: enumspb.ACTIVITY_EXECUTION_STATUS_TIMED_OUT, FailureType: timeoutType.String()}
@@ -292,7 +292,7 @@ func (s *activityParityTestSuite) TestParityTimeoutTypeOnInsufficientTimeForRetr
 
 	s.T().Run("WorkflowActivity", func(t *testing.T) {
 		// A workflow activity stops reporting the timeout that ended its attempt the moment it closes:
-		// the terminal error carries ScheduleToClose and no cause. The standalone surface keeps the
+		// the terminal error carries ScheduleToClose and no cause. The standalone implementation keeps the
 		// attempt's failure, so only it can drive HeartbeatElapses here.
 		t.Skip("a closed workflow activity does not report the timeout that ended its attempt")
 		require.Equal(t, expected, newWFADriver(t, env, cfg).driveTrace(t, trace).terminal(t))
@@ -415,7 +415,7 @@ func (s *activityParityTestSuite) TestParityCompleteAfterRetry() {
 
 // TestParityCancel ports the core of TestTryActivityCancellationFromWorkflow: a running activity is
 // cancel-requested, the worker acknowledges with RespondActivityTaskCanceled, and the activity ends
-// CANCELED. The RequestCancel event realizes differently per surface — SAA's direct
+// CANCELED. The RequestCancel event realizes differently in each implementation — SAA's direct
 // RequestCancelActivityExecution RPC vs WFA's signal-then-RequestCancelActivity — which the drivers
 // hide.
 func (s *activityParityTestSuite) TestParityCancel() {
