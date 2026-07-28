@@ -181,8 +181,9 @@ var TransitionStarted = chasm.NewTransition(
 )
 
 type completeEvent struct {
-	req            *historyservice.RespondActivityTaskCompletedRequest
-	metricsHandler metrics.Handler
+	req             *historyservice.RespondActivityTaskCompletedRequest
+	baseHandler     metrics.Handler
+	enrichedHandler metrics.Handler
 }
 
 // TransitionCompleted transitions to Completed status.
@@ -208,7 +209,7 @@ var TransitionCompleted = chasm.NewTransition(
 				},
 			}
 
-			a.emitOnCompletedMetrics(ctx, event.metricsHandler)
+			a.emitOnCompletedMetrics(ctx, event.baseHandler, event.enrichedHandler, req.GetResult())
 
 			return nil
 		})
@@ -216,8 +217,9 @@ var TransitionCompleted = chasm.NewTransition(
 )
 
 type failedEvent struct {
-	req            *historyservice.RespondActivityTaskFailedRequest
-	metricsHandler metrics.Handler
+	req             *historyservice.RespondActivityTaskFailedRequest
+	baseHandler     metrics.Handler
+	enrichedHandler metrics.Handler
 }
 
 // TransitionFailed transitions to Failed status.
@@ -245,7 +247,7 @@ var TransitionFailed = chasm.NewTransition(
 				return err
 			}
 
-			a.emitOnFailedMetrics(ctx, event.metricsHandler)
+			a.emitOnFailedMetrics(ctx, event.baseHandler, event.enrichedHandler, req.GetFailure())
 
 			return nil
 		})
@@ -360,7 +362,6 @@ type timeoutEvent struct {
 	metricsHandler metrics.Handler
 	timeoutType    enumspb.TimeoutType
 	retryState     enumspb.RetryState
-	fromStatus     activitypb.ActivityExecutionStatus
 }
 
 // TransitionTimedOut transitions to TimedOut status.
@@ -411,7 +412,7 @@ var TransitionTimedOut = chasm.NewTransition(
 				}
 			}
 
-			a.emitOnTimedOutMetrics(ctx, event.metricsHandler, timeoutType, event.fromStatus)
+			a.emitOnTimedOutMetrics(event.metricsHandler, timeoutType)
 
 			return nil
 		})
@@ -498,8 +499,8 @@ var TransitionAttemptFailedWhilePauseRequested = chasm.NewTransition(
 )
 
 type resetEvent struct {
-	resetTime time.Time
-	handler   metrics.Handler
+	resetTime      time.Time
+	metricsHandler metrics.Handler
 }
 
 // TransitionReset resets a SCHEDULED or PAUSED activity back to attempt 1. The stamp is bumped to
