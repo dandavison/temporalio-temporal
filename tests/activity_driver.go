@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/stretchr/testify/require"
+	commonpb "go.temporal.io/api/common/v1"
 	enumspb "go.temporal.io/api/enums/v1"
 	failurepb "go.temporal.io/api/failure/v1"
 	"go.temporal.io/api/workflowservice/v1"
@@ -49,6 +50,12 @@ type activityConfig struct {
 
 // activityInput is what both SAA and WFA send, so a worker sees the same input either way.
 const activityInput = "Input"
+
+// activityHeartbeatDetails is the heartbeat checkpointing data stored by SAA and WFA
+var activityHeartbeatDetails = &commonpb.Payloads{Payloads: []*commonpb.Payload{{
+	Metadata: map[string][]byte{"encoding": []byte("json/plain")},
+	Data:     []byte(`"hb"`),
+}}}
 
 // timerProcessorMaxShift is the floor the timer queue puts on a task's fire time: it will not fire one
 // earlier than now + this.
