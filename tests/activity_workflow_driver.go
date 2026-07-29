@@ -24,6 +24,7 @@ import (
 	sdkworker "go.temporal.io/sdk/worker"
 	"go.temporal.io/sdk/workflow"
 	"go.temporal.io/server/chasm/lib/activity/model"
+	"go.temporal.io/server/common/payloads"
 	"go.temporal.io/server/common/testing/await"
 	"go.temporal.io/server/common/testing/testcontext"
 	"go.temporal.io/server/tests/testcore"
@@ -260,12 +261,13 @@ func (a *wfaHandle) rpc(t testing.TB, e model.Event) error {
 	switch e.Type {
 	case model.HeartbeatType:
 		_, err := fc.RecordActivityTaskHeartbeat(a.d.ctx, &workflowservice.RecordActivityTaskHeartbeatRequest{
-			Namespace: ns, TaskToken: a.token, Details: activityHeartbeatDetails,
+			Namespace: ns, TaskToken: a.token, Details: payloads.EncodeString("heartbeat details"),
 		})
 		return err
 	case model.RespondCompletedType:
 		_, err := fc.RespondActivityTaskCompleted(a.d.ctx, &workflowservice.RespondActivityTaskCompletedRequest{
 			Namespace: ns, TaskToken: a.token, Identity: a.d.env.Tv().WorkerIdentity(),
+			Result: payloads.EncodeString("result"),
 		})
 		return err
 	case model.RespondFailedType:

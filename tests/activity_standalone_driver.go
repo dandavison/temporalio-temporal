@@ -212,12 +212,13 @@ func (a *saaHandle) rpc(_ testing.TB, e model.Event) error {
 	switch e.Type {
 	case model.HeartbeatType:
 		_, err := fc.RecordActivityTaskHeartbeat(a.d.ctx, &workflowservice.RecordActivityTaskHeartbeatRequest{
-			Namespace: ns, TaskToken: a.token, Details: activityHeartbeatDetails,
+			Namespace: ns, TaskToken: a.token, Details: payloads.EncodeString("heartbeat details"),
 		})
 		return err
 	case model.RespondCompletedType:
 		_, err := fc.RespondActivityTaskCompleted(a.d.ctx, &workflowservice.RespondActivityTaskCompletedRequest{
 			Namespace: ns, TaskToken: a.token, Identity: a.d.env.Tv().WorkerIdentity(),
+			Result: payloads.EncodeString("result"),
 		})
 		return err
 	case model.RespondFailedType:
