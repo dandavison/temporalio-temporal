@@ -1947,6 +1947,13 @@ func (a *Activity) validateActivityTaskToken(
 	return nil
 }
 
+// Metrics handlers mirror the WFA emission sites. Lifecycle and attempt metrics use this
+// per-task-queue scope, adding operation, activity type, workflow type, and versioning behavior to
+// the base CHASM handler's namespace and service tags. Payload and heartbeat metrics instead add
+// only operation to the base handler because WFA emits them from HistoryBuilder or MutableState;
+// heartbeat count adds has_details when recorded. Pause, unpause, reset, and update-options use the
+// base handler because WFA's API handlers add only namespace and activity_targeting_method, which
+// does not apply to SAA. Per-record tags such as timeout_type are added when recording the metric.
 func (a *Activity) enrichMetricsHandler(ctx chasm.Context, operationTag string) (metrics.Handler, error) {
 	// activityContextFromChasm panics if the context value is missing; this is intentional and
 	// indicates a library registration bug rather than a runtime error.
