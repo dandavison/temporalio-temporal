@@ -26,6 +26,7 @@ import (
 	"fmt"
 	"math/rand"
 	"slices"
+	"strconv"
 	"time"
 
 	"github.com/nexus-rpc/sdk-go/nexus"
@@ -1599,10 +1600,11 @@ func (a *Activity) RecordHeartbeat(
 	if err != nil {
 		return nil, err
 	}
+	details := input.Request.GetHeartbeatRequest().GetDetails()
 	prevHeartbeat, _ := a.LastHeartbeat.TryGet(ctx)
 	a.LastHeartbeat = chasm.NewDataField(ctx, &activitypb.ActivityHeartbeatState{
 		RecordedTime:        timestamppb.New(ctx.Now(a)),
-		Details:             input.Request.GetHeartbeatRequest().GetDetails(),
+		Details:             details,
 		TotalHeartbeatCount: prevHeartbeat.GetTotalHeartbeatCount() + 1,
 	})
 	if heartbeatTimeout := a.GetHeartbeatTimeout().AsDuration(); heartbeatTimeout > 0 {
@@ -1616,6 +1618,18 @@ func (a *Activity) RecordHeartbeat(
 			},
 		)
 	}
+	detailsSize := details.Size()
+	// Workflow-backed heartbeats use the namespace-scoped mutable-state handler without
+	// per-task-queue enrichment.
+	metricsHandler := ctx.MetricsHandler().WithTags(
+		metrics.OperationTag(metrics.HistoryRecordActivityTaskHeartbeatScope),
+	)
+	emitPayloadSizeMetric(metricsHandler, detailsSize)
+	metrics.ActivityHeartbeatCount.With(metricsHandler).Record(
+		1,
+		metrics.StringTag("has_details", strconv.FormatBool(detailsSize > 0)),
+	)
+
 	response := &historyservice.RecordActivityTaskHeartbeatResponse{}
 	switch a.Status {
 	case activitypb.ACTIVITY_EXECUTION_STATUS_CANCEL_REQUESTED:
