@@ -21,6 +21,7 @@ func (s *activityParityTestSuite) TestWFASAAMetricsParity() {
 		name     string
 		compared bool
 		counter  bool
+		tags     []string
 	}
 	type scenario struct {
 		name    string
@@ -31,6 +32,15 @@ func (s *activityParityTestSuite) TestWFASAAMetricsParity() {
 	}
 	type recordings map[string][]*metricstest.CapturedRecording
 
+	perActivityTags := []string{
+		"activityType",
+		"namespace",
+		"operation",
+		"service_name",
+		"taskqueue",
+		"versioning_behavior",
+		"workflowType",
+	}
 	catalog := []activityMetric{
 		{name: metrics.ActivitySuccess.Name(), compared: true, counter: true},
 		{name: metrics.ActivityFail.Name(), compared: true, counter: true},
@@ -41,10 +51,10 @@ func (s *activityParityTestSuite) TestWFASAAMetricsParity() {
 		{name: metrics.ActivityTaskTimeout.Name(), compared: true, counter: true},
 		{name: metrics.ActivityStartToCloseLatency.Name(), compared: true},
 		{name: metrics.ActivityScheduleToCloseLatency.Name(), compared: true},
-		{name: metrics.ActivityPause.Name(), compared: true, counter: true},
-		{name: metrics.ActivityUnpause.Name(), compared: true, counter: true},
-		{name: metrics.ActivityReset.Name(), compared: true, counter: true},
-		{name: metrics.ActivityUpdateOptions.Name(), compared: true, counter: true},
+		{name: metrics.ActivityPause.Name(), compared: true, counter: true, tags: perActivityTags},
+		{name: metrics.ActivityUnpause.Name(), compared: true, counter: true, tags: perActivityTags},
+		{name: metrics.ActivityReset.Name(), compared: true, counter: true, tags: perActivityTags},
+		{name: metrics.ActivityUpdateOptions.Name(), compared: true, counter: true, tags: perActivityTags},
 		{name: metrics.ActivityHeartbeatCount.Name(), compared: true, counter: true},
 		{name: metrics.ActivityPayloadSize.Name(), compared: true, counter: true},
 	}
@@ -105,10 +115,6 @@ func (s *activityParityTestSuite) TestWFASAAMetricsParity() {
 		seen := make(map[string]struct{})
 		for _, rec := range recs {
 			for key := range rec.Tags {
-				// activity_targeting_method is not relevant to, and not emitted by, SAA.
-				if key == "activity_targeting_method" {
-					continue
-				}
 				seen[key] = struct{}{}
 			}
 		}
@@ -191,6 +197,9 @@ func (s *activityParityTestSuite) TestWFASAAMetricsParity() {
 					tagKeys := seriesTagKeys(wfa[metric.name])
 					require.Equal(t, tagKeys, seriesTagKeys(saa[metric.name]),
 						"WFA and SAA tag keys must match")
+					if metric.tags != nil && len(wfa[metric.name]) > 0 {
+						require.Equal(t, metric.tags, tagKeys, "metric must have the per-activity tag set")
+					}
 					wfaSeries := metricSeries(t, "WFA", wfa[metric.name], tagKeys, metric.counter)
 					saaSeries := metricSeries(t, "SAA", saa[metric.name], tagKeys, metric.counter)
 					if metric.counter {
