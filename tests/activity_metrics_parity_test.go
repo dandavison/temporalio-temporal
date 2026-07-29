@@ -135,8 +135,7 @@ func (s *activityParityTestSuite) TestWFASAAMetricsParity() {
 				return
 			}
 			require.Equal(t, comparedSet(sets.wfa), comparedSet(sets.saa),
-				"WFA and SAA must emit the same activity metrics for %q "+
-					"(excluding the deprecated e2e-latency alias and non-lifecycle aggregates)", sc.name)
+				"WFA and SAA must emit the same activity metrics for %q", sc.name)
 		})
 	}
 
