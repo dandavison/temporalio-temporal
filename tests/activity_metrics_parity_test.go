@@ -271,6 +271,24 @@ func emittedList(emitted map[string]map[string]string) string {
 	return strings.Join(names, ", ")
 }
 
+// wfaOnlyTagKeys are tag keys that WFA emits and SAA is not required to. activity_targeting_method
+// distinguishes the Id and Type branches of the legacy PauseActivityRequest oneof; the CHASM RPCs
+// address a single activity and have no such branch, so the tag would carry no information there.
+var wfaOnlyTagKeys = map[string]bool{
+	"activity_targeting_method": true,
+}
+
+// comparedTagKeys is tagKeys without the keys SAA is not required to carry.
+func comparedTagKeys(tags map[string]string) []string {
+	keys := make([]string, 0, len(tags))
+	for _, k := range tagKeys(tags) {
+		if !wfaOnlyTagKeys[k] {
+			keys = append(keys, k)
+		}
+	}
+	return keys
+}
+
 func tagKeys(tags map[string]string) []string {
 	keys := make([]string, 0, len(tags))
 	for k := range tags {
@@ -281,8 +299,11 @@ func tagKeys(tags map[string]string) []string {
 }
 
 // assertActivityMetricLabels asserts that every metric carries the test namespace, that the two timeout
-// counters carry the timeout_type that fired, and that a metric both implementations emit carries the
-// same tag keys, so that one dashboard works for either implementation.
+// counters carry the timeout_type that fired, and that SAA tags a metric with at least the keys WFA
+// tags it with, so that a query written against WFA keeps working against SAA.
+//
+// Superset rather than equality: the CHASM implementation carries the richer tag set, and requiring
+// equality would stop it doing so. A WFA-only key has to be justified instead, in wfaOnlyTagKeys.
 func assertActivityMetricLabels(t *testing.T, sc activityMetricsScenario, sets activityMetricSets) {
 	checkTags := func(implementation string, emitted map[string]map[string]string, ns string) {
 		for name, tags := range emitted {
@@ -311,8 +332,8 @@ func assertActivityMetricLabels(t *testing.T, sc activityMetricsScenario, sets a
 		wfaTags, wfaOK := sets.wfa[m.name]
 		saaTags, saaOK := sets.saa[m.name]
 		if wfaOK && saaOK {
-			require.Equal(t, tagKeys(wfaTags), tagKeys(saaTags),
-				"WFA and SAA must tag %s with the same label keys", m.name)
+			require.Subset(t, tagKeys(saaTags), comparedTagKeys(wfaTags),
+				"SAA must tag %s with at least the keys WFA tags it with", m.name)
 		}
 	}
 }
