@@ -7,7 +7,6 @@ import (
 	"go.temporal.io/server/api/historyservice/v1"
 	"go.temporal.io/server/common/definition"
 	"go.temporal.io/server/common/metrics"
-	"go.temporal.io/server/common/namespace"
 	"go.temporal.io/server/service/history/api"
 	"go.temporal.io/server/service/history/consts"
 	historyi "go.temporal.io/server/service/history/interfaces"
@@ -21,6 +20,7 @@ func Invoke(
 	workflowConsistencyChecker api.WorkflowConsistencyChecker,
 ) (resp *historyservice.ResetActivityResponse, retError error) {
 	request := req.GetFrontendRequest()
+	var metricsHandlers []metrics.Handler
 
 	workflowKey := definition.NewWorkflowKey(
 		req.NamespaceId,
@@ -33,6 +33,7 @@ func Invoke(
 		nil,
 		workflowKey,
 		func(workflowLease api.WorkflowLease) (*api.UpdateWorkflowAction, error) {
+			metricsHandlers = nil
 			mutableState := workflowLease.GetMutableState()
 			var activityIDs []string
 			switch a := request.GetActivity().(type) {
@@ -64,6 +65,16 @@ func Invoke(
 				); err != nil {
 					return nil, err
 				}
+				activityInfo, ok := mutableState.GetActivityByActivityID(activityId)
+				if !ok {
+					return nil, consts.ErrActivityNotFound
+				}
+				metricsHandlers = append(metricsHandlers, workflow.GetPerActivityScope(
+					shardContext,
+					mutableState,
+					activityInfo,
+					metrics.ActivityResetScope,
+				))
 			}
 			return &api.UpdateWorkflowAction{
 				Noop:               false,
@@ -79,17 +90,8 @@ func Invoke(
 		return nil, err
 	}
 
-	targetingMethod := "type"
-	if _, ok := req.GetFrontendRequest().GetActivity().(*workflowservice.ResetActivityRequest_Id); ok {
-		targetingMethod = "id"
-	} else if _, ok := req.GetFrontendRequest().GetActivity().(*workflowservice.ResetActivityRequest_MatchAll); ok {
-		targetingMethod = "match_all"
-	}
-	if ns, err := shardContext.GetNamespaceRegistry().GetNamespaceByID(namespace.ID(req.NamespaceId)); err == nil {
-		metrics.ActivityReset.With(shardContext.GetMetricsHandler().WithTags(
-			metrics.NamespaceTag(ns.Name().String()),
-			metrics.ActivityTargetingMethodTag(targetingMethod),
-		)).Record(1)
+	for _, handler := range metricsHandlers {
+		metrics.ActivityReset.With(handler).Record(1)
 	}
 
 	return &historyservice.ResetActivityResponse{}, nil

@@ -6,10 +6,11 @@ import (
 
 	enumspb "go.temporal.io/api/enums/v1"
 	enumsspb "go.temporal.io/server/api/enums/v1"
+	persistencespb "go.temporal.io/server/api/persistence/v1"
 	"go.temporal.io/server/chasm"
 	"go.temporal.io/server/common/metrics"
 	"go.temporal.io/server/common/namespace"
-	"go.temporal.io/server/common/persistence"
+	commonpersistence "go.temporal.io/server/common/persistence"
 	"go.temporal.io/server/common/tqid"
 	"go.temporal.io/server/service/history/configs"
 	historyi "go.temporal.io/server/service/history/interfaces"
@@ -38,7 +39,7 @@ func emitMutableStateStatus(
 	metricsHandler metrics.Handler,
 	chasmRegistry *chasm.Registry,
 	archetypeID chasm.ArchetypeID,
-	stats *persistence.MutableStateStatistics,
+	stats *commonpersistence.MutableStateStatistics,
 ) {
 	if stats == nil {
 		return
@@ -158,6 +159,24 @@ func GetPerTaskQueueFamilyScope(
 		tqid.UnsafeTaskQueueFamily(namespaceName.String(), taskQueueFamily),
 		config.BreakdownMetricsByTaskQueue(namespaceName.String(), taskQueueFamily, enumspb.TASK_QUEUE_TYPE_WORKFLOW),
 		tags...,
+	)
+}
+
+func GetPerActivityScope(
+	shard historyi.ShardContext,
+	mutableState historyi.MutableState,
+	activityInfo *persistencespb.ActivityInfo,
+	operation string,
+) metrics.Handler {
+	return GetPerTaskQueueFamilyScope(
+		shard.GetMetricsHandler(),
+		mutableState.GetNamespaceEntry().Name(),
+		activityInfo.GetTaskQueue(),
+		shard.GetConfig(),
+		metrics.OperationTag(operation),
+		metrics.WorkflowTypeTag(mutableState.GetWorkflowType().GetName()),
+		metrics.ActivityTypeTag(activityInfo.GetActivityType().GetName()),
+		metrics.VersioningBehaviorTag(mutableState.GetEffectiveVersioningBehavior()),
 	)
 }
 

@@ -772,7 +772,11 @@ func (a *Activity) UpdateActivityExecutionOptions(
 		a.reissueDispatchAndScheduleToStart(ctx, attempt)
 	}
 
-	a.emitOnUpdateOptionsMetrics(ctx.MetricsHandler())
+	metricsHandler, err := a.enrichMetricsHandler(ctx, metrics.ActivityUpdateOptionsScope)
+	if err != nil {
+		return nil, err
+	}
+	a.emitOnUpdateOptionsMetrics(metricsHandler)
 
 	return &activitypb.UpdateActivityExecutionOptionsResponse{
 		FrontendResponse: &workflowservice.UpdateActivityExecutionOptionsResponse{
@@ -958,7 +962,10 @@ func (a *Activity) handlePauseRequested(ctx chasm.MutableContext, req *activityp
 		return nil, serviceerror.NewFailedPrecondition("activity is already paused")
 	}
 
-	metricsHandler := ctx.MetricsHandler()
+	metricsHandler, err := a.enrichMetricsHandler(ctx, metrics.ActivityPausedScope)
+	if err != nil {
+		return nil, err
+	}
 	event := pauseEvent{req: req.GetFrontendRequest(), metricsHandler: metricsHandler}
 	switch a.GetStatus() {
 	case activitypb.ACTIVITY_EXECUTION_STATUS_SCHEDULED:
@@ -985,7 +992,10 @@ func (a *Activity) handleUnpauseRequested(ctx chasm.MutableContext, req *activit
 		return &activitypb.UnpauseActivityExecutionResponse{}, nil
 	}
 
-	metricsHandler := ctx.MetricsHandler()
+	metricsHandler, err := a.enrichMetricsHandler(ctx, metrics.ActivityUnpausedScope)
+	if err != nil {
+		return nil, err
+	}
 	event := unpauseEvent{req: req.GetFrontendRequest(), metricsHandler: metricsHandler}
 	switch a.GetStatus() {
 	case activitypb.ACTIVITY_EXECUTION_STATUS_PAUSED:
@@ -1136,7 +1146,10 @@ func (a *Activity) handleReset(ctx chasm.MutableContext, req *activitypb.ResetAc
 		}
 	}
 
-	metricsHandler := ctx.MetricsHandler()
+	metricsHandler, err := a.enrichMetricsHandler(ctx, metrics.ActivityResetScope)
+	if err != nil {
+		return nil, err
+	}
 
 	switch a.Status {
 	case activitypb.ACTIVITY_EXECUTION_STATUS_CANCEL_REQUESTED:
@@ -1947,13 +1960,12 @@ func (a *Activity) validateActivityTaskToken(
 	return nil
 }
 
-// Metrics handlers mirror the WFA emission sites. Lifecycle and attempt metrics use this
-// per-task-queue scope, adding operation, activity type, workflow type, and versioning behavior to
-// the base CHASM handler's namespace and service tags. Payload and heartbeat metrics instead add
-// only operation to the base handler because WFA emits them from HistoryBuilder or MutableState;
-// heartbeat count adds has_details when recorded. Pause, unpause, reset, and update-options use the
-// base handler because WFA's API handlers add only namespace and activity_targeting_method, which
-// does not apply to SAA. Per-record tags such as timeout_type are added when recording the metric.
+// Metrics handlers mirror the WFA emission sites. Lifecycle, attempt, and single-activity operation
+// metrics use this per-task-queue scope, adding operation, activity type, workflow type, and
+// versioning behavior to the base CHASM handler's namespace and service tags. Payload and heartbeat
+// metrics instead add only operation to the base handler because WFA emits them from HistoryBuilder
+// or MutableState; heartbeat count adds has_details when recorded. Per-record tags such as
+// timeout_type are added when recording the metric.
 func (a *Activity) enrichMetricsHandler(ctx chasm.Context, operationTag string) (metrics.Handler, error) {
 	// activityContextFromChasm panics if the context value is missing; this is intentional and
 	// indicates a library registration bug rather than a runtime error.

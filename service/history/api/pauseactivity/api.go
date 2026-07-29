@@ -8,7 +8,6 @@ import (
 	persistencespb "go.temporal.io/server/api/persistence/v1"
 	"go.temporal.io/server/common/definition"
 	"go.temporal.io/server/common/metrics"
-	"go.temporal.io/server/common/namespace"
 	"go.temporal.io/server/service/history/api"
 	"go.temporal.io/server/service/history/consts"
 	historyi "go.temporal.io/server/service/history/interfaces"
@@ -22,6 +21,7 @@ func Invoke(
 	shardContext historyi.ShardContext,
 	workflowConsistencyChecker api.WorkflowConsistencyChecker,
 ) (resp *historyservice.PauseActivityResponse, retError error) {
+	var metricsHandlers []metrics.Handler
 
 	err := api.GetAndUpdateWorkflowWithNew(
 		ctx,
@@ -32,6 +32,7 @@ func Invoke(
 			request.GetFrontendRequest().GetExecution().GetRunId(),
 		),
 		func(workflowLease api.WorkflowLease) (*api.UpdateWorkflowAction, error) {
+			metricsHandlers = nil
 			mutableState := workflowLease.GetMutableState()
 			frontendRequest := request.GetFrontendRequest()
 			var activityIDs []string
@@ -63,10 +64,20 @@ func Invoke(
 			}
 
 			for _, activityId := range activityIDs {
+				activityInfo, ok := mutableState.GetActivityByActivityID(activityId)
+				if !ok {
+					return nil, consts.ErrActivityNotFound
+				}
 				err := workflow.PauseActivity(mutableState, activityId, pauseInfo)
 				if err != nil {
 					return nil, err
 				}
+				metricsHandlers = append(metricsHandlers, workflow.GetPerActivityScope(
+					shardContext,
+					mutableState,
+					activityInfo,
+					metrics.ActivityPausedScope,
+				))
 			}
 			return &api.UpdateWorkflowAction{
 				Noop:               false,
@@ -82,15 +93,8 @@ func Invoke(
 		return nil, err
 	}
 
-	targetingMethod := "type"
-	if _, ok := request.GetFrontendRequest().GetActivity().(*workflowservice.PauseActivityRequest_Id); ok {
-		targetingMethod = "id"
-	}
-	if ns, err := shardContext.GetNamespaceRegistry().GetNamespaceByID(namespace.ID(request.NamespaceId)); err == nil {
-		metrics.ActivityPause.With(shardContext.GetMetricsHandler().WithTags(
-			metrics.NamespaceTag(ns.Name().String()),
-			metrics.ActivityTargetingMethodTag(targetingMethod),
-		)).Record(1)
+	for _, handler := range metricsHandlers {
+		metrics.ActivityPause.With(handler).Record(1)
 	}
 
 	return &historyservice.PauseActivityResponse{}, nil

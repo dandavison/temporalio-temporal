@@ -51,6 +51,7 @@ func Invoke(
 	)
 
 	var response *historyservice.UpdateActivityOptionsResponse
+	var metricsHandlers []metrics.Handler
 
 	err := api.GetAndUpdateWorkflowWithNew(
 		ctx,
@@ -61,6 +62,7 @@ func Invoke(
 			updateRequest.GetExecution().GetRunId(),
 		),
 		func(workflowLease api.WorkflowLease) (*api.UpdateWorkflowAction, error) {
+			metricsHandlers = nil
 			mutableState := workflowLease.GetMutableState()
 			var err error
 			if updateRequest.RestoreOriginal {
@@ -71,6 +73,18 @@ func Invoke(
 
 			if err != nil {
 				return nil, err
+			}
+			for _, activityID := range getActivityIDs(updateRequest, mutableState) {
+				activityInfo, ok := mutableState.GetActivityByActivityID(activityID)
+				if !ok {
+					return nil, consts.ErrActivityNotFound
+				}
+				metricsHandlers = append(metricsHandlers, workflow.GetPerActivityScope(
+					shardContext,
+					mutableState,
+					activityInfo,
+					metrics.ActivityUpdateOptionsScope,
+				))
 			}
 			return &api.UpdateWorkflowAction{
 				Noop:               false,
@@ -86,17 +100,8 @@ func Invoke(
 		return nil, err
 	}
 
-	targetingMethod := "type"
-	if _, ok := updateRequest.GetActivity().(*workflowservice.UpdateActivityOptionsRequest_Id); ok {
-		targetingMethod = "id"
-	} else if _, ok := updateRequest.GetActivity().(*workflowservice.UpdateActivityOptionsRequest_MatchAll); ok {
-		targetingMethod = "match_all"
-	}
-	if ns, err := shardContext.GetNamespaceRegistry().GetNamespaceByID(namespace.ID(request.NamespaceId)); err == nil {
-		metrics.ActivityUpdateOptions.With(shardContext.GetMetricsHandler().WithTags(
-			metrics.NamespaceTag(ns.Name().String()),
-			metrics.ActivityTargetingMethodTag(targetingMethod),
-		)).Record(1)
+	for _, handler := range metricsHandlers {
+		metrics.ActivityUpdateOptions.With(handler).Record(1)
 	}
 
 	logger := shardContext.GetLogger()
