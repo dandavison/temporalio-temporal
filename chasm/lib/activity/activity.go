@@ -569,8 +569,8 @@ func (a *Activity) HandleCompleted(
 		return nil, err
 	}
 
-	payloadMetricsHandler := a.operationMetricsHandler(ctx, metrics.HistoryRespondActivityTaskCompletedScope)
-	metricsHandler, err := a.activityOperationMetricsHandler(ctx, metrics.HistoryRespondActivityTaskCompletedScope)
+	payloadMetricsHandler := a.baseActivityMetricsHandler(ctx, metrics.HistoryRespondActivityTaskCompletedScope)
+	metricsHandler, err := a.enrichedActivityMetricsHandler(ctx, metrics.HistoryRespondActivityTaskCompletedScope)
 	if err != nil {
 		return nil, err
 	}
@@ -596,8 +596,8 @@ func (a *Activity) HandleFailed(
 		return nil, err
 	}
 
-	payloadMetricsHandler := a.operationMetricsHandler(ctx, metrics.HistoryRespondActivityTaskFailedScope)
-	metricsHandler, err := a.activityOperationMetricsHandler(ctx, metrics.HistoryRespondActivityTaskFailedScope)
+	payloadMetricsHandler := a.baseActivityMetricsHandler(ctx, metrics.HistoryRespondActivityTaskFailedScope)
+	metricsHandler, err := a.enrichedActivityMetricsHandler(ctx, metrics.HistoryRespondActivityTaskFailedScope)
 	if err != nil {
 		return nil, err
 	}
@@ -638,7 +638,7 @@ func (a *Activity) HandleCanceled(
 		return nil, err
 	}
 
-	metricsHandler, err := a.activityOperationMetricsHandler(ctx, metrics.HistoryRespondActivityTaskCanceledScope)
+	metricsHandler, err := a.enrichedActivityMetricsHandler(ctx, metrics.HistoryRespondActivityTaskCanceledScope)
 	if err != nil {
 		return nil, err
 	}
@@ -672,7 +672,7 @@ func (a *Activity) Terminate(
 		return chasm.TerminateComponentResponse{}, nil
 	}
 
-	metricsHandler, err := a.activityOperationMetricsHandler(ctx, metrics.ActivityTerminatedScope)
+	metricsHandler, err := a.enrichedActivityMetricsHandler(ctx, metrics.ActivityTerminatedScope)
 	if err != nil {
 		return chasm.TerminateComponentResponse{}, err
 	}
@@ -770,7 +770,7 @@ func (a *Activity) UpdateActivityExecutionOptions(
 		a.reissueDispatchAndScheduleToStart(ctx, attempt)
 	}
 
-	metricsHandler, err := a.activityOperationMetricsHandler(ctx, metrics.ActivityUpdateOptionsScope)
+	metricsHandler, err := a.enrichedActivityMetricsHandler(ctx, metrics.ActivityUpdateOptionsScope)
 	if err != nil {
 		return nil, err
 	}
@@ -918,7 +918,7 @@ func (a *Activity) handleCancellationRequested(ctx chasm.MutableContext, request
 
 	// Transition to Canceled if no attempt in progress; otherwise wait for worker response.
 	if !hasAttemptInProgress {
-		metricsHandler, err := a.activityOperationMetricsHandler(ctx, metrics.HistoryRespondActivityTaskCanceledScope)
+		metricsHandler, err := a.enrichedActivityMetricsHandler(ctx, metrics.HistoryRespondActivityTaskCanceledScope)
 		if err != nil {
 			return nil, err
 		}
@@ -960,7 +960,7 @@ func (a *Activity) handlePauseRequested(ctx chasm.MutableContext, req *activityp
 		return nil, serviceerror.NewFailedPrecondition("activity is already paused")
 	}
 
-	metricsHandler, err := a.activityOperationMetricsHandler(ctx, metrics.ActivityPausedScope)
+	metricsHandler, err := a.enrichedActivityMetricsHandler(ctx, metrics.ActivityPausedScope)
 	if err != nil {
 		return nil, err
 	}
@@ -991,7 +991,7 @@ func (a *Activity) handleUnpauseRequested(ctx chasm.MutableContext, req *activit
 		return &activitypb.UnpauseActivityExecutionResponse{}, nil
 	}
 
-	metricsHandler, err := a.activityOperationMetricsHandler(ctx, metrics.ActivityUnpausedScope)
+	metricsHandler, err := a.enrichedActivityMetricsHandler(ctx, metrics.ActivityUnpausedScope)
 	if err != nil {
 		return nil, err
 	}
@@ -1146,7 +1146,7 @@ func (a *Activity) handleReset(ctx chasm.MutableContext, req *activitypb.ResetAc
 		}
 	}
 
-	metricsHandler, err := a.activityOperationMetricsHandler(ctx, metrics.ActivityResetScope)
+	metricsHandler, err := a.enrichedActivityMetricsHandler(ctx, metrics.ActivityResetScope)
 	if err != nil {
 		return nil, err
 	}
@@ -1623,7 +1623,7 @@ func (a *Activity) RecordHeartbeat(
 		)
 	}
 	detailsSize := details.Size()
-	metricsHandler := a.operationMetricsHandler(ctx, metrics.HistoryRecordActivityTaskHeartbeatScope)
+	metricsHandler := a.baseActivityMetricsHandler(ctx, metrics.HistoryRecordActivityTaskHeartbeatScope)
 	emitPayloadSizeMetric(metricsHandler, detailsSize)
 	metrics.ActivityHeartbeatCount.With(metricsHandler).Record(
 		1,
@@ -1956,17 +1956,18 @@ func (a *Activity) validateActivityTaskToken(
 	return nil
 }
 
-// Metrics handlers mirror the WFA emission sites. Lifecycle, attempt, and single-activity operation
-// metrics use this per-task-queue scope, adding operation, activity type, workflow type, and
-// versioning behavior to the base CHASM handler's namespace and service tags. Payload and heartbeat
-// metrics instead add only operation to the base handler because WFA emits them from HistoryBuilder
-// or MutableState; heartbeat count adds has_details when recorded. Per-record tags such as
-// timeout_type are added when recording the metric.
-func (a *Activity) operationMetricsHandler(ctx chasm.Context, operation string) metrics.Handler {
+// SAA metrics handlers mirror the WFA emission paths. Metrics about data carried by activity tasks
+// use the base handler plus operation. Metrics about the activity lifecycle additionally use task
+// queue, activity type, workflow type, and versioning behavior. Per-record tags such as timeout_type
+// and has_details are added when recording the metric.
+
+// baseActivityMetricsHandler returns the handler used for payload and heartbeat metrics.
+func (a *Activity) baseActivityMetricsHandler(ctx chasm.Context, operation string) metrics.Handler {
 	return ctx.MetricsHandler().WithTags(metrics.OperationTag(operation))
 }
 
-func (a *Activity) activityOperationMetricsHandler(ctx chasm.Context, operation string) (metrics.Handler, error) {
+// enrichedActivityMetricsHandler returns the handler used for lifecycle and control metrics.
+func (a *Activity) enrichedActivityMetricsHandler(ctx chasm.Context, operation string) (metrics.Handler, error) {
 	// activityContextFromChasm panics if the context value is missing; this is intentional and
 	// indicates a library registration bug rather than a runtime error.
 	actCtx := activityContextFromChasm(ctx)
