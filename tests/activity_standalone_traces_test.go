@@ -155,6 +155,47 @@ func (s *activityParityTestSuite) TestBackoff_Declarative() {
 	})
 }
 
+func (s *activityParityTestSuite) TestUnpause_Declarative() {
+	env := newActivityParityEnv(s.T())
+	t := s.T()
+
+	for _, tc := range []struct {
+		name        string
+		maxAttempts int32
+	}{
+		{"retries-remain", 3},
+		{"at-maximum-attempts", 2},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			a := s.driveTrace(t, env, saaTrace{
+				trace: []model.Event{
+					model.Poll,
+					model.FailRetryably,
+					model.BackoffElapses,
+					model.Poll,
+					model.Heartbeat,
+					model.Pause,
+					{Type: model.UnpauseType, ResetAttempts: true, ResetHeartbeat: true},
+					model.FailRetryably,
+					model.Poll,
+				},
+				cfg: activityConfig{MaxAttempts: tc.maxAttempts},
+			})
+			got := struct {
+				attempt   int32
+				heartbeat []byte
+			}{
+				attempt:   a.activityInfo(t).Attempt,
+				heartbeat: a.heartbeatDetails(t),
+			}
+			require.Equal(t, struct {
+				attempt   int32
+				heartbeat []byte
+			}{attempt: 1}, got)
+		})
+	}
+}
+
 // TestTimeout_Declarative drives the activity-timeout scenarios, including the start-delay and paused
 // variants that have no WFA counterpart. Model-checked by driveTrace.
 func (s *activityParityTestSuite) TestTimeout_Declarative() {

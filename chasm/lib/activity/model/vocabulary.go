@@ -46,6 +46,10 @@ type AbstractState struct {
 	ResetKeepPaused     bool
 	ResetHeartbeats     bool
 	ResetRestoreOptions bool
+
+	// Latent intent recorded by Unpause while the current attempt is still running.
+	UnpauseResetAttempts  bool
+	UnpauseResetHeartbeat bool
 }
 
 // Config captures the start-time options that change transition behavior.
@@ -188,6 +192,7 @@ func (s AbstractState) SameObserved(o AbstractState) bool {
 // compares each field where it is live. Dispatchability is always latent (verified by polling).
 func (s AbstractState) mask() AbstractState {
 	s.Dispatchability = Dispatchable
+	s.UnpauseResetAttempts, s.UnpauseResetHeartbeat = false, false
 	if s.Status != ResetRequested {
 		// The pending-reset intent is only meaningful while a reset is deferred.
 		s.ResetKeepPaused, s.ResetHeartbeats, s.ResetRestoreOptions = false, false, false

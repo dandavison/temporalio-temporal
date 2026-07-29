@@ -8,9 +8,10 @@ import (
 // Fingerprint identifies a state for graph exploration, bucketing the attempt count so retry loops
 // converge to a finite reachable set.
 func Fingerprint(s AbstractState) string {
-	return fmt.Sprintf("%v|%d|%v|%v|%v|%v|%v|%v",
+	return fmt.Sprintf("%v|%d|%v|%v|%v|%v|%v|%v|%v|%v",
 		s.Status, min(s.AttemptCount, 3), s.ResetKeepPaused, s.ResetHeartbeats,
-		s.ResetRestoreOptions, s.FirstAttemptStarted, s.DispatchTimeSet, s.Dispatchability)
+		s.ResetRestoreOptions, s.UnpauseResetAttempts, s.UnpauseResetHeartbeat,
+		s.FirstAttemptStarted, s.DispatchTimeSet, s.Dispatchability)
 }
 
 // CellKey identifies a (state, event type) cell at fingerprint granularity.

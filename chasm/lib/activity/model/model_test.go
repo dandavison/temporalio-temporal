@@ -63,6 +63,28 @@ func TestPauseWhileStartedIsPauseRequested(t *testing.T) {
 	}
 }
 
+func TestUnpauseWhilePauseRequestedDefersReset(t *testing.T) {
+	cfg := Config{MaxAttempts: 2}
+	s := Initial(cfg)
+	for _, e := range []Event{
+		Poll,
+		FailRetryably,
+		BackoffElapses,
+		Poll,
+		Pause,
+		{Type: UnpauseType, ResetAttempts: true, ResetHeartbeat: true},
+	} {
+		s = Transition(cfg, s, e).Next
+	}
+	if s.Status != Started || !s.UnpauseResetAttempts || !s.UnpauseResetHeartbeat {
+		t.Fatalf("unpause must preserve reset intent without disturbing the running attempt: %+v", s)
+	}
+	s = Transition(cfg, s, FailRetryably).Next
+	if s.Status != Scheduled || s.AttemptCount != 1 || s.Dispatchability != Dispatchable {
+		t.Fatalf("worker yield must apply the deferred reset: %+v", s)
+	}
+}
+
 // The tests below pin the dispatch-delay requirements (start_delay and retry backoff interacting
 // with timeouts and operator commands) at the model level.
 

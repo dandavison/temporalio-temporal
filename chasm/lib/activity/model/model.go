@@ -115,6 +115,7 @@ func respondCompleted(_ Config, s AbstractState, _ Event) Outcome {
 	case Started, PauseRequested, CancelRequested, ResetRequested:
 		n := s
 		n.Status = Completed
+		n.clearDeferredUnpauseReset()
 		return Outcome{Next: n}
 	case Scheduled, Paused:
 		return reject(s, NotFound)
@@ -125,7 +126,7 @@ func respondCompleted(_ Config, s AbstractState, _ Event) Outcome {
 
 // Worker RespondActivityTaskFailed with task token fails an in-progress attempt
 func respondFailed(cfg Config, s AbstractState, e Event) Outcome {
-	retriesRemaining := cfg.MaxAttempts == 0 || s.AttemptCount < cfg.MaxAttempts
+	retriesRemaining := cfg.MaxAttempts == 0 || s.AttemptCount < cfg.MaxAttempts || s.UnpauseResetAttempts
 	switch s.Status {
 	case ResetRequested:
 		return applyDeferredReset(cfg, s)
@@ -137,15 +138,17 @@ func respondFailed(cfg Config, s AbstractState, e Event) Outcome {
 			if s.Status == PauseRequested {
 				n.Status = Paused // pause takes effect on the retry
 			}
-			n.AttemptCount++
+			n.applyDeferredUnpauseReset()
 			return Outcome{Next: n, AttemptTasksInvalidated: true} // new attempt invalidates last attempt's tasks
 		}
 		// no retry: terminal failure
 		n.Status = Failed
+		n.clearDeferredUnpauseReset()
 		return Outcome{Next: n}
 	case CancelRequested:
 		n := s
 		n.Status = Failed
+		n.clearDeferredUnpauseReset()
 		return Outcome{Next: n}
 	case Scheduled, Paused:
 		return reject(s, NotFound) // task token invalid
@@ -196,6 +199,7 @@ func requestCancel(_ Config, s AbstractState, e Event) Outcome {
 	case Started, PauseRequested, ResetRequested:
 		n := s
 		n.Status = CancelRequested
+		n.clearDeferredUnpauseReset()
 		return Outcome{Next: n}
 	case CancelRequested:
 		if e.SameRequestID {
@@ -214,6 +218,7 @@ func terminate(_ Config, s AbstractState, _ Event) Outcome {
 	case Scheduled, Paused, Started, PauseRequested, CancelRequested, ResetRequested:
 		n := s
 		n.Status = Terminated
+		n.clearDeferredUnpauseReset()
 		return Outcome{Next: n}
 	default:
 		panic("model does not handle Terminate while in status " + s.Status.String())
@@ -266,6 +271,8 @@ func unpause(_ Config, s AbstractState, e Event) Outcome {
 		// TODO(dan): Unlike CancelRequested and ResetRequested, PauseRequested can be "undone" (by Unpause).
 		n := s
 		n.Status = Started
+		n.UnpauseResetAttempts = e.ResetAttempts
+		n.UnpauseResetHeartbeat = e.ResetHeartbeat
 		return Outcome{Next: n}
 	case ResetRequested:
 		n := s
@@ -306,6 +313,7 @@ func reset(cfg Config, s AbstractState, e Event) Outcome {
 	case Started, PauseRequested:
 		n := s
 		n.Status = ResetRequested
+		n.clearDeferredUnpauseReset()
 		n.ResetKeepPaused = s.Status == PauseRequested && e.KeepPaused // Reset during PauseRequested honors KeepPaused
 		n.ResetRestoreOptions = e.RestoreOriginal
 		// Current attempt stays live; do not invalidate its tasks.
@@ -448,28 +456,45 @@ func attemptTimedOut(cfg Config, s AbstractState) Outcome {
 		return applyDeferredReset(cfg, s)
 	case Started, PauseRequested:
 		n := s
-		if cfg.MaxAttempts == 0 || s.AttemptCount < cfg.MaxAttempts {
+		if cfg.MaxAttempts == 0 || s.AttemptCount < cfg.MaxAttempts || s.UnpauseResetAttempts {
 			// retry
 			n.Status = Scheduled
 			if s.Status == PauseRequested {
 				n.Status = Paused
 			}
 			n.Dispatchability = BackoffPending
-			n.AttemptCount++
+			n.applyDeferredUnpauseReset()
 			return Outcome{Next: n, AttemptTasksInvalidated: true} // new attempt invalidates last attempt's tasks
 		}
 		n.Status = TimedOut
+		n.clearDeferredUnpauseReset()
 		return Outcome{Next: n}
 	case CancelRequested:
 		// Timeout -> TimedOut, not Canceled.
 		n := s
 		n.Status = TimedOut
+		n.clearDeferredUnpauseReset()
 		return Outcome{Next: n}
 	case Scheduled, Paused:
 		return impossible(s) // no running attempt, so neither per-attempt clock is running
 	default:
 		panic("model does not handle a per-attempt timeout while in status " + s.Status.String())
 	}
+}
+
+func (s *AbstractState) applyDeferredUnpauseReset() {
+	if s.UnpauseResetAttempts {
+		s.AttemptCount = 1
+		s.Dispatchability = Dispatchable
+	} else {
+		s.AttemptCount++
+	}
+	s.clearDeferredUnpauseReset()
+}
+
+func (s *AbstractState) clearDeferredUnpauseReset() {
+	s.UnpauseResetAttempts = false
+	s.UnpauseResetHeartbeat = false
 }
 
 // applyDeferredReset is triggered by failure or timeout. It consumes the reset flags stored while
