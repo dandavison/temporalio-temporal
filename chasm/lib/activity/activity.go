@@ -569,16 +569,16 @@ func (a *Activity) HandleCompleted(
 		return nil, err
 	}
 
-	payloadMetricsHandler := a.baseActivityMetricsHandler(ctx, metrics.HistoryRespondActivityTaskCompletedScope)
-	metricsHandler, err := a.enrichedActivityMetricsHandler(ctx, metrics.HistoryRespondActivityTaskCompletedScope)
+	baseHandler := a.baseMetricsHandler(ctx, metrics.HistoryRespondActivityTaskCompletedScope)
+	enrichedHandler, err := a.enrichedMetricsHandler(ctx, metrics.HistoryRespondActivityTaskCompletedScope)
 	if err != nil {
 		return nil, err
 	}
 
 	if err := TransitionCompleted.Apply(a, ctx, completeEvent{
-		req:                   event.Request,
-		metricsHandler:        metricsHandler,
-		payloadMetricsHandler: payloadMetricsHandler,
+		req:             event.Request,
+		baseHandler:     baseHandler,
+		enrichedHandler: enrichedHandler,
 	}); err != nil {
 		return nil, err
 	}
@@ -596,8 +596,8 @@ func (a *Activity) HandleFailed(
 		return nil, err
 	}
 
-	payloadMetricsHandler := a.baseActivityMetricsHandler(ctx, metrics.HistoryRespondActivityTaskFailedScope)
-	metricsHandler, err := a.enrichedActivityMetricsHandler(ctx, metrics.HistoryRespondActivityTaskFailedScope)
+	baseHandler := a.baseMetricsHandler(ctx, metrics.HistoryRespondActivityTaskFailedScope)
+	enrichedHandler, err := a.enrichedMetricsHandler(ctx, metrics.HistoryRespondActivityTaskFailedScope)
 	if err != nil {
 		return nil, err
 	}
@@ -613,15 +613,15 @@ func (a *Activity) HandleFailed(
 		return nil, err
 	}
 	if retryState == enumspb.RETRY_STATE_IN_PROGRESS {
-		a.emitOnAttemptFailedMetrics(ctx, metricsHandler)
+		a.emitOnAttemptFailedMetrics(ctx, enrichedHandler)
 
 		return &historyservice.RespondActivityTaskFailedResponse{}, nil
 	}
 
 	if err := TransitionFailed.Apply(a, ctx, failedEvent{
-		req:                   event.Request,
-		metricsHandler:        metricsHandler,
-		payloadMetricsHandler: payloadMetricsHandler,
+		req:             event.Request,
+		baseHandler:     baseHandler,
+		enrichedHandler: enrichedHandler,
 	}); err != nil {
 		return nil, err
 	}
@@ -638,7 +638,7 @@ func (a *Activity) HandleCanceled(
 		return nil, err
 	}
 
-	metricsHandler, err := a.enrichedActivityMetricsHandler(ctx, metrics.HistoryRespondActivityTaskCanceledScope)
+	metricsHandler, err := a.enrichedMetricsHandler(ctx, metrics.HistoryRespondActivityTaskCanceledScope)
 	if err != nil {
 		return nil, err
 	}
@@ -672,7 +672,7 @@ func (a *Activity) Terminate(
 		return chasm.TerminateComponentResponse{}, nil
 	}
 
-	metricsHandler, err := a.enrichedActivityMetricsHandler(ctx, metrics.ActivityTerminatedScope)
+	metricsHandler, err := a.enrichedMetricsHandler(ctx, metrics.ActivityTerminatedScope)
 	if err != nil {
 		return chasm.TerminateComponentResponse{}, err
 	}
@@ -770,7 +770,7 @@ func (a *Activity) UpdateActivityExecutionOptions(
 		a.reissueDispatchAndScheduleToStart(ctx, attempt)
 	}
 
-	metricsHandler, err := a.enrichedActivityMetricsHandler(ctx, metrics.ActivityUpdateOptionsScope)
+	metricsHandler, err := a.enrichedMetricsHandler(ctx, metrics.ActivityUpdateOptionsScope)
 	if err != nil {
 		return nil, err
 	}
@@ -918,7 +918,7 @@ func (a *Activity) handleCancellationRequested(ctx chasm.MutableContext, request
 
 	// Transition to Canceled if no attempt in progress; otherwise wait for worker response.
 	if !hasAttemptInProgress {
-		metricsHandler, err := a.enrichedActivityMetricsHandler(ctx, metrics.HistoryRespondActivityTaskCanceledScope)
+		metricsHandler, err := a.enrichedMetricsHandler(ctx, metrics.HistoryRespondActivityTaskCanceledScope)
 		if err != nil {
 			return nil, err
 		}
@@ -960,7 +960,7 @@ func (a *Activity) handlePauseRequested(ctx chasm.MutableContext, req *activityp
 		return nil, serviceerror.NewFailedPrecondition("activity is already paused")
 	}
 
-	metricsHandler, err := a.enrichedActivityMetricsHandler(ctx, metrics.ActivityPausedScope)
+	metricsHandler, err := a.enrichedMetricsHandler(ctx, metrics.ActivityPausedScope)
 	if err != nil {
 		return nil, err
 	}
@@ -991,7 +991,7 @@ func (a *Activity) handleUnpauseRequested(ctx chasm.MutableContext, req *activit
 		return &activitypb.UnpauseActivityExecutionResponse{}, nil
 	}
 
-	metricsHandler, err := a.enrichedActivityMetricsHandler(ctx, metrics.ActivityUnpausedScope)
+	metricsHandler, err := a.enrichedMetricsHandler(ctx, metrics.ActivityUnpausedScope)
 	if err != nil {
 		return nil, err
 	}
@@ -1116,7 +1116,7 @@ func (a *Activity) reset(ctx chasm.MutableContext, event resetEvent) {
 		chasm.TaskAttributes{ScheduledTime: dispatchTime},
 		a.newActivityDispatchTask(ctx),
 	)
-	a.emitOnResetMetrics(event.handler)
+	a.emitOnResetMetrics(event.metricsHandler)
 }
 
 // handleReset handles the activity execution reset.
@@ -1146,7 +1146,7 @@ func (a *Activity) handleReset(ctx chasm.MutableContext, req *activitypb.ResetAc
 		}
 	}
 
-	metricsHandler, err := a.enrichedActivityMetricsHandler(ctx, metrics.ActivityResetScope)
+	metricsHandler, err := a.enrichedMetricsHandler(ctx, metrics.ActivityResetScope)
 	if err != nil {
 		return nil, err
 	}
@@ -1242,8 +1242,8 @@ func (a *Activity) resetImmediately(
 		resetTime = resetTime.Add(time.Duration(rand.Int63n(int64(jitter)))) //nolint:gosec
 	}
 	if err := TransitionReset.Apply(a, ctx, resetEvent{
-		resetTime: resetTime,
-		handler:   metricsHandler,
+		resetTime:      resetTime,
+		metricsHandler: metricsHandler,
 	}); err != nil {
 		return nil, err
 	}
@@ -1623,7 +1623,7 @@ func (a *Activity) RecordHeartbeat(
 		)
 	}
 	detailsSize := details.Size()
-	metricsHandler := a.baseActivityMetricsHandler(ctx, metrics.HistoryRecordActivityTaskHeartbeatScope)
+	metricsHandler := a.baseMetricsHandler(ctx, metrics.HistoryRecordActivityTaskHeartbeatScope)
 	emitPayloadSizeMetric(metricsHandler, detailsSize)
 	metrics.ActivityHeartbeatCount.With(metricsHandler).Record(
 		1,
@@ -1956,18 +1956,18 @@ func (a *Activity) validateActivityTaskToken(
 	return nil
 }
 
-// SAA metrics handlers mirror the WFA emission paths. Metrics about data carried by activity tasks
-// use the base handler plus operation. Metrics about the activity lifecycle additionally use task
-// queue, activity type, workflow type, and versioning behavior. Per-record tags such as timeout_type
-// and has_details are added when recording the metric.
+// Metrics about data carried by activity tasks use the base handler plus operation. Metrics about
+// the activity lifecycle additionally use task queue, activity type, workflow type, and versioning
+// behavior. Per-record tags such as timeout_type and has_details are added when recording the
+// metric.
 
-// baseActivityMetricsHandler returns the handler used for payload and heartbeat metrics.
-func (a *Activity) baseActivityMetricsHandler(ctx chasm.Context, operation string) metrics.Handler {
+// baseMetricsHandler adds only the operation tag.
+func (a *Activity) baseMetricsHandler(ctx chasm.Context, operation string) metrics.Handler {
 	return ctx.MetricsHandler().WithTags(metrics.OperationTag(operation))
 }
 
-// enrichedActivityMetricsHandler returns the handler used for lifecycle and control metrics.
-func (a *Activity) enrichedActivityMetricsHandler(ctx chasm.Context, operation string) (metrics.Handler, error) {
+// enrichedMetricsHandler adds standard activity tags in addition to the operation tag.
+func (a *Activity) enrichedMetricsHandler(ctx chasm.Context, operation string) (metrics.Handler, error) {
 	// activityContextFromChasm panics if the context value is missing; this is intentional and
 	// indicates a library registration bug rather than a runtime error.
 	actCtx := activityContextFromChasm(ctx)
@@ -1989,78 +1989,78 @@ func (a *Activity) enrichedActivityMetricsHandler(ctx chasm.Context, operation s
 	), nil
 }
 
-func (a *Activity) emitOnAttemptTimedOutMetrics(handler metrics.Handler, timeoutType enumspb.TimeoutType) {
+func (a *Activity) emitOnAttemptTimedOutMetrics(metricsHandler metrics.Handler, timeoutType enumspb.TimeoutType) {
 	timeoutTag := metrics.StringTag("timeout_type", timeoutType.String())
-	metrics.ActivityTaskTimeout.With(handler).Record(1, timeoutTag)
+	metrics.ActivityTaskTimeout.With(metricsHandler).Record(1, timeoutTag)
 }
 
-func (a *Activity) emitOnAttemptFailedMetrics(ctx chasm.Context, handler metrics.Handler) {
+func (a *Activity) emitOnAttemptFailedMetrics(ctx chasm.Context, metricsHandler metrics.Handler) {
 	attempt := a.LastAttempt.Get(ctx)
 	startedTime := attempt.GetStartedTime().AsTime()
 
 	latency := time.Since(startedTime)
-	metrics.ActivityStartToCloseLatency.With(handler).Record(latency)
+	metrics.ActivityStartToCloseLatency.With(metricsHandler).Record(latency)
 
-	metrics.ActivityTaskFail.With(handler).Record(1)
+	metrics.ActivityTaskFail.With(metricsHandler).Record(1)
 }
 
 // emitPayloadSizeMetric records the serialized size of a user payload.
-func emitPayloadSizeMetric(handler metrics.Handler, size int) {
+func emitPayloadSizeMetric(metricsHandler metrics.Handler, size int) {
 	if size > 0 {
-		metrics.ActivityPayloadSize.With(handler).Record(int64(size))
+		metrics.ActivityPayloadSize.With(metricsHandler).Record(int64(size))
 	}
 }
 
 func (a *Activity) emitOnCompletedMetrics(
 	ctx chasm.Context,
-	handler metrics.Handler,
-	payloadHandler metrics.Handler,
+	baseHandler metrics.Handler,
+	enrichedHandler metrics.Handler,
 	result *commonpb.Payloads,
 ) {
 	attempt := a.LastAttempt.Get(ctx)
 	startedTime := attempt.GetStartedTime().AsTime()
 
 	startToCloseLatency := time.Since(startedTime)
-	metrics.ActivityStartToCloseLatency.With(handler).Record(startToCloseLatency)
+	metrics.ActivityStartToCloseLatency.With(enrichedHandler).Record(startToCloseLatency)
 
 	scheduleToCloseLatency := time.Since(a.GetScheduleTime().AsTime())
-	metrics.ActivityScheduleToCloseLatency.With(handler).Record(scheduleToCloseLatency)
+	metrics.ActivityScheduleToCloseLatency.With(enrichedHandler).Record(scheduleToCloseLatency)
 
-	metrics.ActivitySuccess.With(handler).Record(1)
-	emitPayloadSizeMetric(payloadHandler, result.Size())
+	metrics.ActivitySuccess.With(enrichedHandler).Record(1)
+	emitPayloadSizeMetric(baseHandler, result.Size())
 }
 
 func (a *Activity) emitOnFailedMetrics(
 	ctx chasm.Context,
-	handler metrics.Handler,
-	payloadHandler metrics.Handler,
+	baseHandler metrics.Handler,
+	enrichedHandler metrics.Handler,
 	failure *failurepb.Failure,
 ) {
 	attempt := a.LastAttempt.Get(ctx)
 	startedTime := attempt.GetStartedTime().AsTime()
 
 	startToCloseLatency := time.Since(startedTime)
-	metrics.ActivityStartToCloseLatency.With(handler).Record(startToCloseLatency)
+	metrics.ActivityStartToCloseLatency.With(enrichedHandler).Record(startToCloseLatency)
 
 	scheduleToCloseLatency := time.Since(a.GetScheduleTime().AsTime())
-	metrics.ActivityScheduleToCloseLatency.With(handler).Record(scheduleToCloseLatency)
+	metrics.ActivityScheduleToCloseLatency.With(enrichedHandler).Record(scheduleToCloseLatency)
 
-	metrics.ActivityTaskFail.With(handler).Record(1)
-	metrics.ActivityFail.With(handler).Record(1)
-	emitPayloadSizeMetric(payloadHandler, failure.Size())
+	metrics.ActivityTaskFail.With(enrichedHandler).Record(1)
+	metrics.ActivityFail.With(enrichedHandler).Record(1)
+	emitPayloadSizeMetric(baseHandler, failure.Size())
 }
 
 func (a *Activity) emitOnTerminatedMetrics(
-	handler metrics.Handler,
+	metricsHandler metrics.Handler,
 ) {
 	// Terminated activities do not count as properly finished activities so we do not
 	// record any of the latency metrics.
-	metrics.ActivityTerminate.With(handler).Record(1)
+	metrics.ActivityTerminate.With(metricsHandler).Record(1)
 }
 
 func (a *Activity) emitOnCanceledMetrics(
 	ctx chasm.Context,
-	handler metrics.Handler,
+	metricsHandler metrics.Handler,
 	fromStatus activitypb.ActivityExecutionStatus,
 ) {
 	// Record start-to-close latency only while an attempt is running. SCHEDULED (incl. retry
@@ -2069,50 +2069,50 @@ func (a *Activity) emitOnCanceledMetrics(
 		fromStatus != activitypb.ACTIVITY_EXECUTION_STATUS_PAUSED
 	if attemptRunning {
 		if startedTime := a.LastAttempt.Get(ctx).GetStartedTime(); startedTime != nil {
-			metrics.ActivityStartToCloseLatency.With(handler).Record(time.Since(startedTime.AsTime()))
+			metrics.ActivityStartToCloseLatency.With(metricsHandler).Record(time.Since(startedTime.AsTime()))
 		}
 	}
 
 	scheduleToCloseLatency := time.Since(a.GetScheduleTime().AsTime())
-	metrics.ActivityScheduleToCloseLatency.With(handler).Record(scheduleToCloseLatency)
+	metrics.ActivityScheduleToCloseLatency.With(metricsHandler).Record(scheduleToCloseLatency)
 
-	metrics.ActivityCancel.With(handler).Record(1)
+	metrics.ActivityCancel.With(metricsHandler).Record(1)
 }
 
 func (a *Activity) emitOnTimedOutMetrics(
-	handler metrics.Handler,
+	metricsHandler metrics.Handler,
 	timeoutType enumspb.TimeoutType,
 ) {
 	scheduleToCloseLatency := time.Since(a.GetScheduleTime().AsTime())
-	metrics.ActivityScheduleToCloseLatency.With(handler).Record(scheduleToCloseLatency)
+	metrics.ActivityScheduleToCloseLatency.With(metricsHandler).Record(scheduleToCloseLatency)
 
 	timeoutTag := metrics.StringTag("timeout_type", timeoutType.String())
-	metrics.ActivityTaskTimeout.With(handler).Record(1, timeoutTag)
-	metrics.ActivityTimeout.With(handler).Record(1, timeoutTag)
+	metrics.ActivityTaskTimeout.With(metricsHandler).Record(1, timeoutTag)
+	metrics.ActivityTimeout.With(metricsHandler).Record(1, timeoutTag)
 }
 
 func (a *Activity) emitOnPausedMetrics(
-	handler metrics.Handler,
+	metricsHandler metrics.Handler,
 ) {
-	metrics.ActivityPause.With(handler).Record(1)
+	metrics.ActivityPause.With(metricsHandler).Record(1)
 }
 
 func (a *Activity) emitOnUpdateOptionsMetrics(
-	handler metrics.Handler,
+	metricsHandler metrics.Handler,
 ) {
-	metrics.ActivityUpdateOptions.With(handler).Record(1)
+	metrics.ActivityUpdateOptions.With(metricsHandler).Record(1)
 }
 
 func (a *Activity) emitOnUnpausedMetrics(
-	handler metrics.Handler,
+	metricsHandler metrics.Handler,
 ) {
-	metrics.ActivityUnpause.With(handler).Record(1)
+	metrics.ActivityUnpause.With(metricsHandler).Record(1)
 }
 
 func (a *Activity) emitOnResetMetrics(
-	handler metrics.Handler,
+	metricsHandler metrics.Handler,
 ) {
-	metrics.ActivityReset.With(handler).Record(1)
+	metrics.ActivityReset.With(metricsHandler).Record(1)
 }
 
 // SearchAttributes implements chasm.VisibilitySearchAttributesProvider interface.

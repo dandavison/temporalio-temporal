@@ -557,23 +557,24 @@ func TestTransitionCompleted(t *testing.T) {
 	payload := payloads.EncodeString("Done")
 
 	controller := gomock.NewController(t)
-	metricsHandler := metrics.NewMockHandler(controller)
+	baseHandler := metrics.NewMockHandler(controller)
+	enrichedHandler := metrics.NewMockHandler(controller)
 
 	timerStartToCloseLatency := metrics.NewMockTimerIface(controller)
 	timerStartToCloseLatency.EXPECT().Record(gomock.Any()).Times(1)
-	metricsHandler.EXPECT().Timer(metrics.ActivityStartToCloseLatency.Name()).Return(timerStartToCloseLatency)
+	enrichedHandler.EXPECT().Timer(metrics.ActivityStartToCloseLatency.Name()).Return(timerStartToCloseLatency)
 
 	timerScheduleToCloseLatency := metrics.NewMockTimerIface(controller)
 	timerScheduleToCloseLatency.EXPECT().Record(gomock.Any()).Times(1)
-	metricsHandler.EXPECT().Timer(metrics.ActivityScheduleToCloseLatency.Name()).Return(timerScheduleToCloseLatency)
+	enrichedHandler.EXPECT().Timer(metrics.ActivityScheduleToCloseLatency.Name()).Return(timerScheduleToCloseLatency)
 
 	counterSuccess := metrics.NewMockCounterIface(controller)
 	counterSuccess.EXPECT().Record(int64(1)).Times(1)
-	metricsHandler.EXPECT().Counter(metrics.ActivitySuccess.Name()).Return(counterSuccess)
+	enrichedHandler.EXPECT().Counter(metrics.ActivitySuccess.Name()).Return(counterSuccess)
 
 	counterPayloadSize := metrics.NewMockCounterIface(controller)
 	counterPayloadSize.EXPECT().Record(int64(payload.Size())).Times(1)
-	metricsHandler.EXPECT().Counter(metrics.ActivityPayloadSize.Name()).Return(counterPayloadSize)
+	baseHandler.EXPECT().Counter(metrics.ActivityPayloadSize.Name()).Return(counterPayloadSize)
 
 	req := &historyservice.RespondActivityTaskCompletedRequest{
 		CompleteRequest: &workflowservice.RespondActivityTaskCompletedRequest{
@@ -583,9 +584,9 @@ func TestTransitionCompleted(t *testing.T) {
 	}
 
 	err := TransitionCompleted.Apply(activity, ctx, completeEvent{
-		req:                   req,
-		metricsHandler:        metricsHandler,
-		payloadMetricsHandler: metricsHandler,
+		req:             req,
+		baseHandler:     baseHandler,
+		enrichedHandler: enrichedHandler,
 	})
 	require.NoError(t, err)
 	require.Equal(t, activitypb.ACTIVITY_EXECUTION_STATUS_COMPLETED, activity.Status)
@@ -627,27 +628,28 @@ func TestTransitionFailed(t *testing.T) {
 	}
 
 	controller := gomock.NewController(t)
-	metricsHandler := metrics.NewMockHandler(controller)
+	baseHandler := metrics.NewMockHandler(controller)
+	enrichedHandler := metrics.NewMockHandler(controller)
 
 	timerStartToCloseLatency := metrics.NewMockTimerIface(controller)
 	timerStartToCloseLatency.EXPECT().Record(gomock.Any()).Times(1)
-	metricsHandler.EXPECT().Timer(metrics.ActivityStartToCloseLatency.Name()).Return(timerStartToCloseLatency)
+	enrichedHandler.EXPECT().Timer(metrics.ActivityStartToCloseLatency.Name()).Return(timerStartToCloseLatency)
 
 	timerScheduleToCloseLatency := metrics.NewMockTimerIface(controller)
 	timerScheduleToCloseLatency.EXPECT().Record(gomock.Any()).Times(1)
-	metricsHandler.EXPECT().Timer(metrics.ActivityScheduleToCloseLatency.Name()).Return(timerScheduleToCloseLatency)
+	enrichedHandler.EXPECT().Timer(metrics.ActivityScheduleToCloseLatency.Name()).Return(timerScheduleToCloseLatency)
 
 	counterFail := metrics.NewMockCounterIface(controller)
 	counterFail.EXPECT().Record(int64(1)).Times(1)
-	metricsHandler.EXPECT().Counter(metrics.ActivityFail.Name()).Return(counterFail)
+	enrichedHandler.EXPECT().Counter(metrics.ActivityFail.Name()).Return(counterFail)
 
 	counterTaskFail := metrics.NewMockCounterIface(controller)
 	counterTaskFail.EXPECT().Record(int64(1)).Times(1)
-	metricsHandler.EXPECT().Counter(metrics.ActivityTaskFail.Name()).Return(counterTaskFail)
+	enrichedHandler.EXPECT().Counter(metrics.ActivityTaskFail.Name()).Return(counterTaskFail)
 
 	counterPayloadSize := metrics.NewMockCounterIface(controller)
 	counterPayloadSize.EXPECT().Record(int64(failure.Size())).Times(1)
-	metricsHandler.EXPECT().Counter(metrics.ActivityPayloadSize.Name()).Return(counterPayloadSize)
+	baseHandler.EXPECT().Counter(metrics.ActivityPayloadSize.Name()).Return(counterPayloadSize)
 
 	req := &historyservice.RespondActivityTaskFailedRequest{
 		FailedRequest: &workflowservice.RespondActivityTaskFailedRequest{
@@ -658,9 +660,9 @@ func TestTransitionFailed(t *testing.T) {
 	}
 
 	err := TransitionFailed.Apply(activity, ctx, failedEvent{
-		req:                   req,
-		metricsHandler:        metricsHandler,
-		payloadMetricsHandler: metricsHandler,
+		req:             req,
+		baseHandler:     baseHandler,
+		enrichedHandler: enrichedHandler,
 	})
 
 	require.NoError(t, err)
@@ -891,7 +893,7 @@ func TestTransitionResetClearsHeartbeat(t *testing.T) {
 		Outcome:       chasm.NewDataField(ctx, &activitypb.ActivityOutcome{}),
 	}
 
-	err := TransitionReset.Apply(act, ctx, resetEvent{resetTime: defaultTime, handler: metrics.NoopMetricsHandler})
+	err := TransitionReset.Apply(act, ctx, resetEvent{resetTime: defaultTime, metricsHandler: metrics.NoopMetricsHandler})
 	require.NoError(t, err)
 	require.Nil(t, act.LastHeartbeat.Get(ctx).GetDetails())
 	require.Nil(t, act.LastHeartbeat.Get(ctx).GetRecordedTime())
@@ -1011,7 +1013,7 @@ func TestTransitionResetFromPaused(t *testing.T) {
 				Outcome:     chasm.NewDataField(ctx, &activitypb.ActivityOutcome{}),
 			}
 
-			err := TransitionReset.Apply(act, ctx, resetEvent{resetTime: defaultTime, handler: metrics.NoopMetricsHandler})
+			err := TransitionReset.Apply(act, ctx, resetEvent{resetTime: defaultTime, metricsHandler: metrics.NoopMetricsHandler})
 			require.NoError(t, err)
 			require.Equal(t, activitypb.ACTIVITY_EXECUTION_STATUS_SCHEDULED, act.Status)
 			require.Equal(t, int32(1), attemptState.Count)
@@ -1049,7 +1051,7 @@ func TestTransitionResetClearsCurrentRetryInterval(t *testing.T) {
 		Outcome:     chasm.NewDataField(ctx, &activitypb.ActivityOutcome{}),
 	}
 
-	err := TransitionReset.Apply(act, ctx, resetEvent{resetTime: defaultTime, handler: metrics.NoopMetricsHandler})
+	err := TransitionReset.Apply(act, ctx, resetEvent{resetTime: defaultTime, metricsHandler: metrics.NoopMetricsHandler})
 	require.NoError(t, err)
 	require.Nil(t, attemptState.GetCurrentRetryInterval(), "TransitionReset must clear CurrentRetryInterval")
 	require.Equal(t, int32(1), attemptState.Count, "TransitionReset must reset Count to 1")

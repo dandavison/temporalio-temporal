@@ -88,7 +88,7 @@ func (h *handler) StartActivityExecution(ctx context.Context, req *activitypb.St
 				return nil, err
 			}
 
-			metricsHandler := newActivity.baseActivityMetricsHandler(
+			metricsHandler := newActivity.baseMetricsHandler(
 				mutableContext,
 				metrics.HistoryRecordActivityTaskStartedScope,
 			)
