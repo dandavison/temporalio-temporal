@@ -596,6 +596,10 @@ func TestTransitionCompleted(t *testing.T) {
 	counterSuccess.EXPECT().Record(int64(1)).Times(1)
 	metricsHandler.EXPECT().Counter(metrics.ActivitySuccess.Name()).Return(counterSuccess)
 
+	counterPayloadSize := metrics.NewMockCounterIface(controller)
+	counterPayloadSize.EXPECT().Record(int64(payload.Size())).Times(1)
+	metricsHandler.EXPECT().Counter(metrics.ActivityPayloadSize.Name()).Return(counterPayloadSize)
+
 	req := &historyservice.RespondActivityTaskCompletedRequest{
 		CompleteRequest: &workflowservice.RespondActivityTaskCompletedRequest{
 			Result:   payload,
@@ -664,6 +668,10 @@ func TestTransitionFailed(t *testing.T) {
 	counterTaskFail := metrics.NewMockCounterIface(controller)
 	counterTaskFail.EXPECT().Record(int64(1)).Times(1)
 	metricsHandler.EXPECT().Counter(metrics.ActivityTaskFail.Name()).Return(counterTaskFail)
+
+	counterPayloadSize := metrics.NewMockCounterIface(controller)
+	counterPayloadSize.EXPECT().Record(int64(failure.Size())).Times(1)
+	metricsHandler.EXPECT().Counter(metrics.ActivityPayloadSize.Name()).Return(counterPayloadSize)
 
 	req := &historyservice.RespondActivityTaskFailedRequest{
 		FailedRequest: &workflowservice.RespondActivityTaskFailedRequest{
