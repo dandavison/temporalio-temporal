@@ -105,9 +105,8 @@ func (s *activityParityTestSuite) TestWFASAAMetricsParity() {
 		seen := make(map[string]struct{})
 		for _, rec := range recs {
 			for key := range rec.Tags {
-				// Namespace is checked separately because subtests use different namespaces;
 				// activity_targeting_method is not relevant to, and not emitted by, SAA.
-				if key == "namespace" || key == "activity_targeting_method" {
+				if key == "activity_targeting_method" {
 					continue
 				}
 				seen[key] = struct{}{}
@@ -135,7 +134,7 @@ func (s *activityParityTestSuite) TestWFASAAMetricsParity() {
 				require.True(t, ok, "%s metric recording must have tag %q", implementation, key)
 				// These identify the distinct test executions rather than metric behavior.
 				switch key {
-				case "activityType", "taskqueue", "workflowType":
+				case "activityType", "namespace", "taskqueue", "workflowType":
 					value = ""
 				default:
 				}
