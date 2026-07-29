@@ -360,7 +360,6 @@ type timeoutEvent struct {
 	metricsHandler metrics.Handler
 	timeoutType    enumspb.TimeoutType
 	retryState     enumspb.RetryState
-	fromStatus     activitypb.ActivityExecutionStatus
 }
 
 // TransitionTimedOut transitions to TimedOut status.
@@ -411,7 +410,7 @@ var TransitionTimedOut = chasm.NewTransition(
 				}
 			}
 
-			a.emitOnTimedOutMetrics(ctx, event.metricsHandler, timeoutType, event.fromStatus)
+			a.emitOnTimedOutMetrics(event.metricsHandler, timeoutType)
 
 			return nil
 		})

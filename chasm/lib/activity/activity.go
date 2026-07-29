@@ -1619,8 +1619,8 @@ func (a *Activity) RecordHeartbeat(
 		)
 	}
 	detailsSize := details.Size()
-	// Workflow-backed heartbeats use the namespace-scoped mutable-state handler without
-	// per-task-queue enrichment.
+	// We do not use enrichMetricsHandler because WFA heartbeat metrics use only namespace,
+	// operation, and  has_details tags.
 	metricsHandler := ctx.MetricsHandler().WithTags(
 		metrics.OperationTag(metrics.HistoryRecordActivityTaskHeartbeatScope),
 	)
@@ -1978,13 +1978,7 @@ func (a *Activity) enrichMetricsHandler(ctx chasm.Context, operationTag string) 
 	), nil
 }
 
-func (a *Activity) emitOnAttemptTimedOutMetrics(ctx chasm.Context, handler metrics.Handler, timeoutType enumspb.TimeoutType) {
-	attempt := a.LastAttempt.Get(ctx)
-	startedTime := attempt.GetStartedTime().AsTime()
-
-	latency := time.Since(startedTime)
-	metrics.ActivityStartToCloseLatency.With(handler).Record(latency)
-
+func (a *Activity) emitOnAttemptTimedOutMetrics(handler metrics.Handler, timeoutType enumspb.TimeoutType) {
 	timeoutTag := metrics.StringTag("timeout_type", timeoutType.String())
 	metrics.ActivityTaskTimeout.With(handler).Record(1, timeoutTag)
 }
@@ -1999,8 +1993,7 @@ func (a *Activity) emitOnAttemptFailedMetrics(ctx chasm.Context, handler metrics
 	metrics.ActivityTaskFail.With(handler).Record(1)
 }
 
-// emitPayloadSizeMetric records the serialized size of a user payload. A size of zero is not
-// recorded, so that the counter reflects payloads that were actually carried.
+// emitPayloadSizeMetric records the serialized size of a user payload.
 func emitPayloadSizeMetric(handler metrics.Handler, size int) {
 	if size > 0 {
 		metrics.ActivityPayloadSize.With(handler).Record(int64(size))
@@ -2066,21 +2059,9 @@ func (a *Activity) emitOnCanceledMetrics(
 }
 
 func (a *Activity) emitOnTimedOutMetrics(
-	ctx chasm.Context,
 	handler metrics.Handler,
 	timeoutType enumspb.TimeoutType,
-	fromStatus activitypb.ActivityExecutionStatus,
 ) {
-	// Record start-to-close latency only while an attempt is running. SCHEDULED (incl. retry
-	// backoff) and PAUSED have no running attempt and a possibly-stale StartedTime.
-	attemptRunning := fromStatus != activitypb.ACTIVITY_EXECUTION_STATUS_SCHEDULED &&
-		fromStatus != activitypb.ACTIVITY_EXECUTION_STATUS_PAUSED
-	if attemptRunning {
-		if startedTime := a.LastAttempt.Get(ctx).GetStartedTime(); startedTime != nil {
-			metrics.ActivityStartToCloseLatency.With(handler).Record(time.Since(startedTime.AsTime()))
-		}
-	}
-
 	scheduleToCloseLatency := time.Since(a.GetScheduleTime().AsTime())
 	metrics.ActivityScheduleToCloseLatency.With(handler).Record(scheduleToCloseLatency)
 
