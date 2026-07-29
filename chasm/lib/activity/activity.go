@@ -1274,9 +1274,35 @@ func (a *Activity) recordScheduleToStartOrCloseTimeoutFailure(
 // applyFailedAttempt mutates activity state when a worker yields with retries remaining.
 func (a *Activity) applyFailedAttempt(ctx chasm.MutableContext, event rescheduleEvent) error {
 	attempt := a.LastAttempt.Get(ctx)
-	attempt.Count++
+	resetAttempts := a.applyDeferredUnpauseReset(ctx)
+	if resetAttempts {
+		attempt.Count = 1
+	} else {
+		attempt.Count++
+	}
 	attempt.Stamp++
-	return a.recordFailedAttempt(ctx, event.retryInterval, event.retryIntervalSource, event.failure, ctx.Now(a), false)
+	if err := a.recordFailedAttempt(ctx, event.retryInterval, event.retryIntervalSource, event.failure, ctx.Now(a), false); err != nil {
+		return err
+	}
+	if resetAttempts {
+		attempt.CurrentRetryInterval = nil
+		attempt.CurrentRetryIntervalSource = activitypb.ACTIVITY_RETRY_INTERVAL_SOURCE_UNSPECIFIED
+	}
+	return nil
+}
+
+func (a *Activity) applyDeferredUnpauseReset(ctx chasm.MutableContext) bool {
+	resetAttempts := a.GetUnpauseResetAttempts()
+	if a.GetUnpauseResetHeartbeat() {
+		a.clearHeartbeatDetails(ctx)
+	}
+	a.clearDeferredUnpauseReset()
+	return resetAttempts
+}
+
+func (a *Activity) clearDeferredUnpauseReset() {
+	a.UnpauseResetAttempts = false
+	a.UnpauseResetHeartbeat = false
 }
 
 // recordFailedAttempt records any failures resulting from a tried attempt, including worker application failures and
@@ -1325,6 +1351,7 @@ func (a *Activity) tryReschedule(
 	resetRequested := a.GetStatus() == activitypb.ACTIVITY_EXECUTION_STATUS_RESET_REQUESTED
 	// A pending reset request is always honored, regardless of retryability or the should retry result.
 	if !resetRequested && retryState != enumspb.RETRY_STATE_IN_PROGRESS {
+		a.clearDeferredUnpauseReset()
 		return retryState, nil
 	}
 	retryIntervalSource := activitypb.ACTIVITY_RETRY_INTERVAL_SOURCE_RETRY_POLICY
@@ -1356,7 +1383,9 @@ func (a *Activity) shouldRetry(ctx chasm.Context, overridingRetryInterval time.D
 	retryPolicy := a.RetryPolicy
 	enoughTime, retryInterval := a.hasEnoughTimeForRetry(ctx, overridingRetryInterval)
 
-	if retryPolicy.GetMaximumAttempts() > 0 && attempt.GetCount() >= retryPolicy.GetMaximumAttempts() {
+	if retryPolicy.GetMaximumAttempts() > 0 &&
+		attempt.GetCount() >= retryPolicy.GetMaximumAttempts() &&
+		!a.GetUnpauseResetAttempts() {
 		return enumspb.RETRY_STATE_MAXIMUM_ATTEMPTS_REACHED, retryInterval
 	}
 	if !enoughTime {

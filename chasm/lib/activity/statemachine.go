@@ -474,6 +474,8 @@ var TransitionUnpausedWhilePauseRequested = chasm.NewTransition(
 	},
 	activitypb.ACTIVITY_EXECUTION_STATUS_STARTED,
 	func(a *Activity, ctx chasm.MutableContext, event unpauseEvent) error {
+		a.UnpauseResetAttempts = event.req.GetResetAttempts()
+		a.UnpauseResetHeartbeat = event.req.GetResetHeartbeat()
 		return nil
 	},
 )
@@ -527,6 +529,7 @@ var TransitionResetRequested = chasm.NewTransition(
 	},
 	activitypb.ACTIVITY_EXECUTION_STATUS_RESET_REQUESTED,
 	func(a *Activity, ctx chasm.MutableContext, _ any) error {
+		a.clearDeferredUnpauseReset()
 		return nil
 	},
 )

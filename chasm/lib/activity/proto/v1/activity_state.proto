@@ -146,6 +146,12 @@ message ActivityState {
   // non-running activity (SCHEDULED / PAUSED) the restore is applied immediately and this flag is
   // not set. Reset while in CANCEL_REQUESTED or RESET_REQUESTED is rejected.
   bool reset_restore_options = 20;
+
+  // Unpause reset_attempts deferred until the running worker yields.
+  bool unpause_reset_attempts = 21;
+
+  // Unpause reset_heartbeat deferred until the running worker yields.
+  bool unpause_reset_heartbeat = 22;
 }
 
 message ActivityCancelState {
