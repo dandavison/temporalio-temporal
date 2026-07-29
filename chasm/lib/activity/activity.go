@@ -569,10 +569,8 @@ func (a *Activity) HandleCompleted(
 		return nil, err
 	}
 
-	payloadMetricsHandler := ctx.MetricsHandler().WithTags(
-		metrics.OperationTag(metrics.HistoryRespondActivityTaskCompletedScope),
-	)
-	metricsHandler, err := a.enrichMetricsHandler(ctx, metrics.HistoryRespondActivityTaskCompletedScope)
+	payloadMetricsHandler := a.operationMetricsHandler(ctx, metrics.HistoryRespondActivityTaskCompletedScope)
+	metricsHandler, err := a.activityOperationMetricsHandler(ctx, metrics.HistoryRespondActivityTaskCompletedScope)
 	if err != nil {
 		return nil, err
 	}
@@ -598,10 +596,8 @@ func (a *Activity) HandleFailed(
 		return nil, err
 	}
 
-	payloadMetricsHandler := ctx.MetricsHandler().WithTags(
-		metrics.OperationTag(metrics.HistoryRespondActivityTaskFailedScope),
-	)
-	metricsHandler, err := a.enrichMetricsHandler(ctx, metrics.HistoryRespondActivityTaskFailedScope)
+	payloadMetricsHandler := a.operationMetricsHandler(ctx, metrics.HistoryRespondActivityTaskFailedScope)
+	metricsHandler, err := a.activityOperationMetricsHandler(ctx, metrics.HistoryRespondActivityTaskFailedScope)
 	if err != nil {
 		return nil, err
 	}
@@ -642,7 +638,7 @@ func (a *Activity) HandleCanceled(
 		return nil, err
 	}
 
-	metricsHandler, err := a.enrichMetricsHandler(ctx, metrics.HistoryRespondActivityTaskCanceledScope)
+	metricsHandler, err := a.activityOperationMetricsHandler(ctx, metrics.HistoryRespondActivityTaskCanceledScope)
 	if err != nil {
 		return nil, err
 	}
@@ -676,7 +672,7 @@ func (a *Activity) Terminate(
 		return chasm.TerminateComponentResponse{}, nil
 	}
 
-	metricsHandler, err := a.enrichMetricsHandler(ctx, metrics.ActivityTerminatedScope)
+	metricsHandler, err := a.activityOperationMetricsHandler(ctx, metrics.ActivityTerminatedScope)
 	if err != nil {
 		return chasm.TerminateComponentResponse{}, err
 	}
@@ -774,7 +770,7 @@ func (a *Activity) UpdateActivityExecutionOptions(
 		a.reissueDispatchAndScheduleToStart(ctx, attempt)
 	}
 
-	metricsHandler, err := a.enrichMetricsHandler(ctx, metrics.ActivityUpdateOptionsScope)
+	metricsHandler, err := a.activityOperationMetricsHandler(ctx, metrics.ActivityUpdateOptionsScope)
 	if err != nil {
 		return nil, err
 	}
@@ -922,7 +918,7 @@ func (a *Activity) handleCancellationRequested(ctx chasm.MutableContext, request
 
 	// Transition to Canceled if no attempt in progress; otherwise wait for worker response.
 	if !hasAttemptInProgress {
-		metricsHandler, err := a.enrichMetricsHandler(ctx, metrics.HistoryRespondActivityTaskCanceledScope)
+		metricsHandler, err := a.activityOperationMetricsHandler(ctx, metrics.HistoryRespondActivityTaskCanceledScope)
 		if err != nil {
 			return nil, err
 		}
@@ -964,7 +960,7 @@ func (a *Activity) handlePauseRequested(ctx chasm.MutableContext, req *activityp
 		return nil, serviceerror.NewFailedPrecondition("activity is already paused")
 	}
 
-	metricsHandler, err := a.enrichMetricsHandler(ctx, metrics.ActivityPausedScope)
+	metricsHandler, err := a.activityOperationMetricsHandler(ctx, metrics.ActivityPausedScope)
 	if err != nil {
 		return nil, err
 	}
@@ -995,7 +991,7 @@ func (a *Activity) handleUnpauseRequested(ctx chasm.MutableContext, req *activit
 		return &activitypb.UnpauseActivityExecutionResponse{}, nil
 	}
 
-	metricsHandler, err := a.enrichMetricsHandler(ctx, metrics.ActivityUnpausedScope)
+	metricsHandler, err := a.activityOperationMetricsHandler(ctx, metrics.ActivityUnpausedScope)
 	if err != nil {
 		return nil, err
 	}
@@ -1150,7 +1146,7 @@ func (a *Activity) handleReset(ctx chasm.MutableContext, req *activitypb.ResetAc
 		}
 	}
 
-	metricsHandler, err := a.enrichMetricsHandler(ctx, metrics.ActivityResetScope)
+	metricsHandler, err := a.activityOperationMetricsHandler(ctx, metrics.ActivityResetScope)
 	if err != nil {
 		return nil, err
 	}
@@ -1627,11 +1623,7 @@ func (a *Activity) RecordHeartbeat(
 		)
 	}
 	detailsSize := details.Size()
-	// We do not use enrichMetricsHandler because WFA heartbeat metrics use only namespace,
-	// operation, and  has_details tags.
-	metricsHandler := ctx.MetricsHandler().WithTags(
-		metrics.OperationTag(metrics.HistoryRecordActivityTaskHeartbeatScope),
-	)
+	metricsHandler := a.operationMetricsHandler(ctx, metrics.HistoryRecordActivityTaskHeartbeatScope)
 	emitPayloadSizeMetric(metricsHandler, detailsSize)
 	metrics.ActivityHeartbeatCount.With(metricsHandler).Record(
 		1,
@@ -1970,7 +1962,11 @@ func (a *Activity) validateActivityTaskToken(
 // metrics instead add only operation to the base handler because WFA emits them from HistoryBuilder
 // or MutableState; heartbeat count adds has_details when recorded. Per-record tags such as
 // timeout_type are added when recording the metric.
-func (a *Activity) enrichMetricsHandler(ctx chasm.Context, operationTag string) (metrics.Handler, error) {
+func (a *Activity) operationMetricsHandler(ctx chasm.Context, operation string) metrics.Handler {
+	return ctx.MetricsHandler().WithTags(metrics.OperationTag(operation))
+}
+
+func (a *Activity) activityOperationMetricsHandler(ctx chasm.Context, operation string) (metrics.Handler, error) {
 	// activityContextFromChasm panics if the context value is missing; this is intentional and
 	// indicates a library registration bug rather than a runtime error.
 	actCtx := activityContextFromChasm(ctx)
@@ -1985,7 +1981,7 @@ func (a *Activity) enrichMetricsHandler(ctx chasm.Context, operationTag string) 
 		namespaceName.String(),
 		tqid.UnsafeTaskQueueFamily(namespaceName.String(), taskQueueFamily),
 		breakdownMetricsByTaskQueue(namespaceName.String(), taskQueueFamily, enumspb.TASK_QUEUE_TYPE_ACTIVITY),
-		metrics.OperationTag(operationTag),
+		metrics.OperationTag(operation),
 		metrics.ActivityTypeTag(a.GetActivityType().GetName()),
 		metrics.VersioningBehaviorTag(enumspb.VERSIONING_BEHAVIOR_UNSPECIFIED),
 		metrics.WorkflowTypeTag(WorkflowTypeTag),

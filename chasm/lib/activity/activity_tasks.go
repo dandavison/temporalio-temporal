@@ -102,7 +102,7 @@ func (h *scheduleToStartTimeoutTaskHandler) Execute(
 	_ chasm.TaskAttributes,
 	_ *activitypb.ScheduleToStartTimeoutTask,
 ) error {
-	metricsHandler, err := activity.enrichMetricsHandler(ctx, metrics.TimerActiveTaskActivityTimeoutScope)
+	metricsHandler, err := activity.activityOperationMetricsHandler(ctx, metrics.TimerActiveTaskActivityTimeoutScope)
 	if err != nil {
 		return err
 	}
@@ -148,7 +148,7 @@ func (h *scheduleToCloseTimeoutTaskHandler) Execute(
 	_ chasm.TaskAttributes,
 	_ *activitypb.ScheduleToCloseTimeoutTask,
 ) error {
-	metricsHandler, err := activity.enrichMetricsHandler(ctx, metrics.TimerActiveTaskActivityTimeoutScope)
+	metricsHandler, err := activity.activityOperationMetricsHandler(ctx, metrics.TimerActiveTaskActivityTimeoutScope)
 	if err != nil {
 		return err
 	}
@@ -195,7 +195,7 @@ func (h *startToCloseTimeoutTaskHandler) Execute(
 		return err
 	}
 
-	metricsHandler, err := activity.enrichMetricsHandler(ctx, metrics.TimerActiveTaskActivityTimeoutScope)
+	metricsHandler, err := activity.activityOperationMetricsHandler(ctx, metrics.TimerActiveTaskActivityTimeoutScope)
 	if err != nil {
 		return err
 	}
@@ -278,7 +278,7 @@ func (h *heartbeatTimeoutTaskHandler) Execute(
 		return err
 	}
 
-	metricsHandler, err := activity.enrichMetricsHandler(ctx, metrics.TimerActiveTaskActivityTimeoutScope)
+	metricsHandler, err := activity.activityOperationMetricsHandler(ctx, metrics.TimerActiveTaskActivityTimeoutScope)
 	if err != nil {
 		return err
 	}

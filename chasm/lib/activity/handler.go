@@ -88,8 +88,9 @@ func (h *handler) StartActivityExecution(ctx context.Context, req *activitypb.St
 				return nil, err
 			}
 
-			metricsHandler := mutableContext.MetricsHandler().WithTags(
-				metrics.OperationTag(metrics.HistoryRecordActivityTaskStartedScope),
+			metricsHandler := newActivity.operationMetricsHandler(
+				mutableContext,
+				metrics.HistoryRecordActivityTaskStartedScope,
 			)
 			emitPayloadSizeMetric(metricsHandler, request.GetInput().Size())
 
