@@ -88,13 +88,9 @@ func (h *handler) StartActivityExecution(ctx context.Context, req *activitypb.St
 				return nil, err
 			}
 
-			// The operation tag matches the one the workflow path uses for the same payload in
-			// historybuilder.AddActivityTaskScheduledEvent, so that a query spanning the two
-			// implementations sees both.
-			metricsHandler, err := newActivity.enrichMetricsHandler(mutableContext, metrics.HistoryRecordActivityTaskStartedScope)
-			if err != nil {
-				return nil, err
-			}
+			metricsHandler := mutableContext.MetricsHandler().WithTags(
+				metrics.OperationTag(metrics.HistoryRecordActivityTaskStartedScope),
+			)
 			emitPayloadSizeMetric(metricsHandler, request.GetInput().Size())
 
 			if cbs := request.GetCompletionCallbacks(); len(cbs) > 0 {

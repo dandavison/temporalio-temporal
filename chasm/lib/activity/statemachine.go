@@ -181,8 +181,9 @@ var TransitionStarted = chasm.NewTransition(
 )
 
 type completeEvent struct {
-	req            *historyservice.RespondActivityTaskCompletedRequest
-	metricsHandler metrics.Handler
+	req                   *historyservice.RespondActivityTaskCompletedRequest
+	metricsHandler        metrics.Handler
+	payloadMetricsHandler metrics.Handler
 }
 
 // TransitionCompleted transitions to Completed status.
@@ -208,7 +209,7 @@ var TransitionCompleted = chasm.NewTransition(
 				},
 			}
 
-			a.emitOnCompletedMetrics(ctx, event.metricsHandler, req.GetResult())
+			a.emitOnCompletedMetrics(ctx, event.metricsHandler, event.payloadMetricsHandler, req.GetResult())
 
 			return nil
 		})
@@ -216,8 +217,9 @@ var TransitionCompleted = chasm.NewTransition(
 )
 
 type failedEvent struct {
-	req            *historyservice.RespondActivityTaskFailedRequest
-	metricsHandler metrics.Handler
+	req                   *historyservice.RespondActivityTaskFailedRequest
+	metricsHandler        metrics.Handler
+	payloadMetricsHandler metrics.Handler
 }
 
 // TransitionFailed transitions to Failed status.
@@ -245,7 +247,7 @@ var TransitionFailed = chasm.NewTransition(
 				return err
 			}
 
-			a.emitOnFailedMetrics(ctx, event.metricsHandler, req.GetFailure())
+			a.emitOnFailedMetrics(ctx, event.metricsHandler, event.payloadMetricsHandler, req.GetFailure())
 
 			return nil
 		})

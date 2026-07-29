@@ -583,8 +583,9 @@ func TestTransitionCompleted(t *testing.T) {
 	}
 
 	err := TransitionCompleted.Apply(activity, ctx, completeEvent{
-		req:            req,
-		metricsHandler: metricsHandler,
+		req:                   req,
+		metricsHandler:        metricsHandler,
+		payloadMetricsHandler: metricsHandler,
 	})
 	require.NoError(t, err)
 	require.Equal(t, activitypb.ACTIVITY_EXECUTION_STATUS_COMPLETED, activity.Status)
@@ -657,8 +658,9 @@ func TestTransitionFailed(t *testing.T) {
 	}
 
 	err := TransitionFailed.Apply(activity, ctx, failedEvent{
-		req:            req,
-		metricsHandler: metricsHandler,
+		req:                   req,
+		metricsHandler:        metricsHandler,
+		payloadMetricsHandler: metricsHandler,
 	})
 
 	require.NoError(t, err)

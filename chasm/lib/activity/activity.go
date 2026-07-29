@@ -577,6 +577,9 @@ func (a *Activity) HandleCompleted(
 	if err := TransitionCompleted.Apply(a, ctx, completeEvent{
 		req:            event.Request,
 		metricsHandler: metricsHandler,
+		payloadMetricsHandler: ctx.MetricsHandler().WithTags(
+			metrics.OperationTag(metrics.HistoryRespondActivityTaskCompletedScope),
+		),
 	}); err != nil {
 		return nil, err
 	}
@@ -618,6 +621,9 @@ func (a *Activity) HandleFailed(
 	if err := TransitionFailed.Apply(a, ctx, failedEvent{
 		req:            event.Request,
 		metricsHandler: metricsHandler,
+		payloadMetricsHandler: ctx.MetricsHandler().WithTags(
+			metrics.OperationTag(metrics.HistoryRespondActivityTaskFailedScope),
+		),
 	}); err != nil {
 		return nil, err
 	}
@@ -766,11 +772,7 @@ func (a *Activity) UpdateActivityExecutionOptions(
 		a.reissueDispatchAndScheduleToStart(ctx, attempt)
 	}
 
-	metricsHandler, err := a.enrichMetricsHandler(ctx, metrics.ActivityUpdateOptionsScope)
-	if err != nil {
-		return nil, err
-	}
-	a.emitOnUpdateOptionsMetrics(metricsHandler)
+	a.emitOnUpdateOptionsMetrics(ctx.MetricsHandler())
 
 	return &activitypb.UpdateActivityExecutionOptionsResponse{
 		FrontendResponse: &workflowservice.UpdateActivityExecutionOptionsResponse{
@@ -956,11 +958,7 @@ func (a *Activity) handlePauseRequested(ctx chasm.MutableContext, req *activityp
 		return nil, serviceerror.NewFailedPrecondition("activity is already paused")
 	}
 
-	metricsHandler, err := a.enrichMetricsHandler(ctx, metrics.ActivityPausedScope)
-	if err != nil {
-		return nil, err
-	}
-
+	metricsHandler := ctx.MetricsHandler()
 	event := pauseEvent{req: req.GetFrontendRequest(), metricsHandler: metricsHandler}
 	switch a.GetStatus() {
 	case activitypb.ACTIVITY_EXECUTION_STATUS_SCHEDULED:
@@ -987,11 +985,7 @@ func (a *Activity) handleUnpauseRequested(ctx chasm.MutableContext, req *activit
 		return &activitypb.UnpauseActivityExecutionResponse{}, nil
 	}
 
-	metricsHandler, err := a.enrichMetricsHandler(ctx, metrics.ActivityUnpausedScope)
-	if err != nil {
-		return nil, err
-	}
-
+	metricsHandler := ctx.MetricsHandler()
 	event := unpauseEvent{req: req.GetFrontendRequest(), metricsHandler: metricsHandler}
 	switch a.GetStatus() {
 	case activitypb.ACTIVITY_EXECUTION_STATUS_PAUSED:
@@ -1142,10 +1136,7 @@ func (a *Activity) handleReset(ctx chasm.MutableContext, req *activitypb.ResetAc
 		}
 	}
 
-	metricsHandler, err := a.enrichMetricsHandler(ctx, metrics.ActivityResetScope)
-	if err != nil {
-		return nil, err
-	}
+	metricsHandler := ctx.MetricsHandler()
 
 	switch a.Status {
 	case activitypb.ACTIVITY_EXECUTION_STATUS_CANCEL_REQUESTED:
@@ -2000,7 +1991,12 @@ func emitPayloadSizeMetric(handler metrics.Handler, size int) {
 	}
 }
 
-func (a *Activity) emitOnCompletedMetrics(ctx chasm.Context, handler metrics.Handler, result *commonpb.Payloads) {
+func (a *Activity) emitOnCompletedMetrics(
+	ctx chasm.Context,
+	handler metrics.Handler,
+	payloadHandler metrics.Handler,
+	result *commonpb.Payloads,
+) {
 	attempt := a.LastAttempt.Get(ctx)
 	startedTime := attempt.GetStartedTime().AsTime()
 
@@ -2011,10 +2007,15 @@ func (a *Activity) emitOnCompletedMetrics(ctx chasm.Context, handler metrics.Han
 	metrics.ActivityScheduleToCloseLatency.With(handler).Record(scheduleToCloseLatency)
 
 	metrics.ActivitySuccess.With(handler).Record(1)
-	emitPayloadSizeMetric(handler, result.Size())
+	emitPayloadSizeMetric(payloadHandler, result.Size())
 }
 
-func (a *Activity) emitOnFailedMetrics(ctx chasm.Context, handler metrics.Handler, failure *failurepb.Failure) {
+func (a *Activity) emitOnFailedMetrics(
+	ctx chasm.Context,
+	handler metrics.Handler,
+	payloadHandler metrics.Handler,
+	failure *failurepb.Failure,
+) {
 	attempt := a.LastAttempt.Get(ctx)
 	startedTime := attempt.GetStartedTime().AsTime()
 
@@ -2026,7 +2027,7 @@ func (a *Activity) emitOnFailedMetrics(ctx chasm.Context, handler metrics.Handle
 
 	metrics.ActivityTaskFail.With(handler).Record(1)
 	metrics.ActivityFail.With(handler).Record(1)
-	emitPayloadSizeMetric(handler, failure.Size())
+	emitPayloadSizeMetric(payloadHandler, failure.Size())
 }
 
 func (a *Activity) emitOnTerminatedMetrics(
