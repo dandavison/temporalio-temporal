@@ -388,11 +388,6 @@ func TestTransitionTimedout(t *testing.T) {
 		timeoutType      enumspb.TimeoutType
 		attemptCount     int32
 		heartbeatDetails *commonpb.Payloads
-		// hasStartedTime seeds the attempt with a StartedTime. It is stale (from a prior attempt)
-		// when the activity is not currently running, e.g. during retry backoff.
-		hasStartedTime bool
-		// expectStartToCloseLatency is true only when an attempt was actively running at timeout.
-		expectStartToCloseLatency bool
 	}{
 		{
 			name:         "schedule to start timeout, never started",
@@ -407,22 +402,18 @@ func TestTransitionTimedout(t *testing.T) {
 			attemptCount: 1,
 		},
 		{
-			name:                      "schedule to close timeout from started status with heartbeat details",
-			startStatus:               activitypb.ACTIVITY_EXECUTION_STATUS_STARTED,
-			timeoutType:               enumspb.TIMEOUT_TYPE_SCHEDULE_TO_CLOSE,
-			attemptCount:              4,
-			heartbeatDetails:          payloads.EncodeString("schedule-to-close-heartbeat"),
-			hasStartedTime:            true,
-			expectStartToCloseLatency: true,
+			name:             "schedule to close timeout from started status with heartbeat details",
+			startStatus:      activitypb.ACTIVITY_EXECUTION_STATUS_STARTED,
+			timeoutType:      enumspb.TIMEOUT_TYPE_SCHEDULE_TO_CLOSE,
+			attemptCount:     4,
+			heartbeatDetails: payloads.EncodeString("schedule-to-close-heartbeat"),
 		},
 		{
-			name:                      "start to close timeout with heartbeat details",
-			startStatus:               activitypb.ACTIVITY_EXECUTION_STATUS_STARTED,
-			timeoutType:               enumspb.TIMEOUT_TYPE_START_TO_CLOSE,
-			attemptCount:              5,
-			heartbeatDetails:          payloads.EncodeString("start-to-close-heartbeat"),
-			hasStartedTime:            true,
-			expectStartToCloseLatency: true,
+			name:             "start to close timeout with heartbeat details",
+			startStatus:      activitypb.ACTIVITY_EXECUTION_STATUS_STARTED,
+			timeoutType:      enumspb.TIMEOUT_TYPE_START_TO_CLOSE,
+			attemptCount:     5,
+			heartbeatDetails: payloads.EncodeString("start-to-close-heartbeat"),
 		},
 		{
 			name:             "heartbeat timeout with heartbeat details",
@@ -438,28 +429,22 @@ func TestTransitionTimedout(t *testing.T) {
 			attemptCount: 2,
 		},
 		{
-			name:                      "schedule to close timeout from started status",
-			startStatus:               activitypb.ACTIVITY_EXECUTION_STATUS_STARTED,
-			timeoutType:               enumspb.TIMEOUT_TYPE_SCHEDULE_TO_CLOSE,
-			attemptCount:              4,
-			hasStartedTime:            true,
-			expectStartToCloseLatency: true,
+			name:         "schedule to close timeout from started status",
+			startStatus:  activitypb.ACTIVITY_EXECUTION_STATUS_STARTED,
+			timeoutType:  enumspb.TIMEOUT_TYPE_SCHEDULE_TO_CLOSE,
+			attemptCount: 4,
 		},
 		{
-			name:                      "start to close timeout",
-			startStatus:               activitypb.ACTIVITY_EXECUTION_STATUS_STARTED,
-			timeoutType:               enumspb.TIMEOUT_TYPE_START_TO_CLOSE,
-			attemptCount:              5,
-			hasStartedTime:            true,
-			expectStartToCloseLatency: true,
+			name:         "start to close timeout",
+			startStatus:  activitypb.ACTIVITY_EXECUTION_STATUS_STARTED,
+			timeoutType:  enumspb.TIMEOUT_TYPE_START_TO_CLOSE,
+			attemptCount: 5,
 		},
 		{
-			name:                      "heartbeat timeout",
-			startStatus:               activitypb.ACTIVITY_EXECUTION_STATUS_STARTED,
-			timeoutType:               enumspb.TIMEOUT_TYPE_HEARTBEAT,
-			attemptCount:              2,
-			hasStartedTime:            true,
-			expectStartToCloseLatency: true,
+			name:         "heartbeat timeout",
+			startStatus:  activitypb.ACTIVITY_EXECUTION_STATUS_STARTED,
+			timeoutType:  enumspb.TIMEOUT_TYPE_HEARTBEAT,
+			attemptCount: 2,
 		},
 	}
 
@@ -467,9 +452,6 @@ func TestTransitionTimedout(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			ctx := &chasm.MockMutableContext{}
 			attemptState := &activitypb.ActivityAttemptState{Count: tc.attemptCount}
-			if tc.hasStartedTime {
-				attemptState.StartedTime = timestamppb.New(defaultTime)
-			}
 			outcome := &activitypb.ActivityOutcome{}
 
 			activity := &Activity{
@@ -494,12 +476,6 @@ func TestTransitionTimedout(t *testing.T) {
 			controller := gomock.NewController(t)
 			metricsHandler := metrics.NewMockHandler(controller)
 
-			if tc.expectStartToCloseLatency {
-				timerStartToCloseLatency := metrics.NewMockTimerIface(controller)
-				timerStartToCloseLatency.EXPECT().Record(gomock.Any()).Times(1)
-				metricsHandler.EXPECT().Timer(metrics.ActivityStartToCloseLatency.Name()).Return(timerStartToCloseLatency)
-			}
-
 			timerScheduleToCloseLatency := metrics.NewMockTimerIface(controller)
 			timerScheduleToCloseLatency.EXPECT().Record(gomock.Any()).Times(1)
 			metricsHandler.EXPECT().Timer(metrics.ActivityScheduleToCloseLatency.Name()).Return(timerScheduleToCloseLatency)
@@ -517,7 +493,6 @@ func TestTransitionTimedout(t *testing.T) {
 			event := timeoutEvent{
 				timeoutType:    tc.timeoutType,
 				metricsHandler: metricsHandler,
-				fromStatus:     tc.startStatus,
 			}
 
 			err := TransitionTimedOut.Apply(activity, ctx, event)
