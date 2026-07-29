@@ -1985,7 +1985,15 @@ func (a *Activity) emitOnAttemptFailedMetrics(ctx chasm.Context, handler metrics
 	metrics.ActivityTaskFail.With(handler).Record(1)
 }
 
-func (a *Activity) emitOnCompletedMetrics(ctx chasm.Context, handler metrics.Handler) {
+// emitPayloadSizeMetric records the serialized size of a user payload. A size of zero is not
+// recorded, so that the counter reflects payloads that were actually carried.
+func emitPayloadSizeMetric(handler metrics.Handler, size int) {
+	if size > 0 {
+		metrics.ActivityPayloadSize.With(handler).Record(int64(size))
+	}
+}
+
+func (a *Activity) emitOnCompletedMetrics(ctx chasm.Context, handler metrics.Handler, result *commonpb.Payloads) {
 	attempt := a.LastAttempt.Get(ctx)
 	startedTime := attempt.GetStartedTime().AsTime()
 
@@ -1996,9 +2004,10 @@ func (a *Activity) emitOnCompletedMetrics(ctx chasm.Context, handler metrics.Han
 	metrics.ActivityScheduleToCloseLatency.With(handler).Record(scheduleToCloseLatency)
 
 	metrics.ActivitySuccess.With(handler).Record(1)
+	emitPayloadSizeMetric(handler, result.Size())
 }
 
-func (a *Activity) emitOnFailedMetrics(ctx chasm.Context, handler metrics.Handler) {
+func (a *Activity) emitOnFailedMetrics(ctx chasm.Context, handler metrics.Handler, failure *failurepb.Failure) {
 	attempt := a.LastAttempt.Get(ctx)
 	startedTime := attempt.GetStartedTime().AsTime()
 
@@ -2010,6 +2019,7 @@ func (a *Activity) emitOnFailedMetrics(ctx chasm.Context, handler metrics.Handle
 
 	metrics.ActivityTaskFail.With(handler).Record(1)
 	metrics.ActivityFail.With(handler).Record(1)
+	emitPayloadSizeMetric(handler, failure.Size())
 }
 
 func (a *Activity) emitOnTerminatedMetrics(
