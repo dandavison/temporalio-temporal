@@ -569,17 +569,18 @@ func (a *Activity) HandleCompleted(
 		return nil, err
 	}
 
+	payloadMetricsHandler := ctx.MetricsHandler().WithTags(
+		metrics.OperationTag(metrics.HistoryRespondActivityTaskCompletedScope),
+	)
 	metricsHandler, err := a.enrichMetricsHandler(ctx, metrics.HistoryRespondActivityTaskCompletedScope)
 	if err != nil {
 		return nil, err
 	}
 
 	if err := TransitionCompleted.Apply(a, ctx, completeEvent{
-		req:            event.Request,
-		metricsHandler: metricsHandler,
-		payloadMetricsHandler: ctx.MetricsHandler().WithTags(
-			metrics.OperationTag(metrics.HistoryRespondActivityTaskCompletedScope),
-		),
+		req:                   event.Request,
+		metricsHandler:        metricsHandler,
+		payloadMetricsHandler: payloadMetricsHandler,
 	}); err != nil {
 		return nil, err
 	}
@@ -597,6 +598,9 @@ func (a *Activity) HandleFailed(
 		return nil, err
 	}
 
+	payloadMetricsHandler := ctx.MetricsHandler().WithTags(
+		metrics.OperationTag(metrics.HistoryRespondActivityTaskFailedScope),
+	)
 	metricsHandler, err := a.enrichMetricsHandler(ctx, metrics.HistoryRespondActivityTaskFailedScope)
 	if err != nil {
 		return nil, err
@@ -619,11 +623,9 @@ func (a *Activity) HandleFailed(
 	}
 
 	if err := TransitionFailed.Apply(a, ctx, failedEvent{
-		req:            event.Request,
-		metricsHandler: metricsHandler,
-		payloadMetricsHandler: ctx.MetricsHandler().WithTags(
-			metrics.OperationTag(metrics.HistoryRespondActivityTaskFailedScope),
-		),
+		req:                   event.Request,
+		metricsHandler:        metricsHandler,
+		payloadMetricsHandler: payloadMetricsHandler,
 	}); err != nil {
 		return nil, err
 	}
@@ -966,6 +968,7 @@ func (a *Activity) handlePauseRequested(ctx chasm.MutableContext, req *activityp
 	if err != nil {
 		return nil, err
 	}
+
 	event := pauseEvent{req: req.GetFrontendRequest(), metricsHandler: metricsHandler}
 	switch a.GetStatus() {
 	case activitypb.ACTIVITY_EXECUTION_STATUS_SCHEDULED:
@@ -996,6 +999,7 @@ func (a *Activity) handleUnpauseRequested(ctx chasm.MutableContext, req *activit
 	if err != nil {
 		return nil, err
 	}
+
 	event := unpauseEvent{req: req.GetFrontendRequest(), metricsHandler: metricsHandler}
 	switch a.GetStatus() {
 	case activitypb.ACTIVITY_EXECUTION_STATUS_PAUSED:
