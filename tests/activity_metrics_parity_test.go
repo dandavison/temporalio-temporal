@@ -105,9 +105,12 @@ func (s *activityParityTestSuite) TestWFASAAMetricsParity() {
 		seen := make(map[string]struct{})
 		for _, rec := range recs {
 			for key := range rec.Tags {
-				if key != "namespace" && key != "activity_targeting_method" {
-					seen[key] = struct{}{}
+				// Namespace is checked separately because subtests use different namespaces;
+				// activity_targeting_method is not relevant to, and not emitted by, SAA.
+				if key == "namespace" || key == "activity_targeting_method" {
+					continue
 				}
+				seen[key] = struct{}{}
 			}
 		}
 		keys := make([]string, 0, len(seen))
@@ -187,6 +190,8 @@ func (s *activityParityTestSuite) TestWFASAAMetricsParity() {
 				s.Run(metric.name, func(s *activityParityTestSuite) {
 					t := s.T()
 					tagKeys := seriesTagKeys(wfa[metric.name])
+					require.Equal(t, tagKeys, seriesTagKeys(saa[metric.name]),
+						"WFA and SAA tag keys must match")
 					wfaSeries := metricSeries(t, "WFA", wfa[metric.name], tagKeys, metric.counter)
 					saaSeries := metricSeries(t, "SAA", saa[metric.name], tagKeys, metric.counter)
 					if metric.counter {
