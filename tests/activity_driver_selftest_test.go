@@ -8,9 +8,50 @@ import (
 
 	"github.com/stretchr/testify/require"
 	enumspb "go.temporal.io/api/enums/v1"
+	"go.temporal.io/api/workflowservice/v1"
 	"go.temporal.io/server/chasm/lib/activity/model"
 	"go.temporal.io/server/common/testing/await"
 )
+
+func TestActivityTimeoutDriverRejectsUnrelatedScheduleToClose(t *testing.T) {
+	activity := &timeoutSequenceActivity{
+		activityDriverState: activityDriverState{
+			ctx:            t.Context(),
+			startedAttempt: 1,
+		},
+		observations: []activityTimeoutInfo{
+			{timeout: enumspb.TIMEOUT_TYPE_SCHEDULE_TO_CLOSE, terminal: true},
+			{timeout: enumspb.TIMEOUT_TYPE_START_TO_CLOSE, terminal: true},
+		},
+	}
+
+	awaitActivityTimeout(t, activity, model.StartToCloseElapses, time.Now().Add(time.Second))
+
+	require.Equal(t, 2, activity.calls)
+}
+
+type timeoutSequenceActivity struct {
+	activityDriverState
+	observations []activityTimeoutInfo
+	calls        int
+}
+
+func (a *timeoutSequenceActivity) timeoutInfo(require.TestingT) activityTimeoutInfo {
+	observation := a.observations[a.calls]
+	a.calls++
+	return observation
+}
+
+func (*timeoutSequenceActivity) pollForTask(require.TestingT, time.Duration) *workflowservice.PollActivityTaskQueueResponse {
+	return nil
+}
+
+func (*timeoutSequenceActivity) awaitDispatchDelay(testing.TB, model.Event) {
+}
+
+func (*timeoutSequenceActivity) rpc(testing.TB, model.Event) error {
+	return nil
+}
 
 // TestDriversRecognizeTimeoutObservedBeforeWait reproduces a race in awaitTimeout: a retryable timeout
 // may fire after Poll returns but before awaitTimeout takes its first observation. The timeout has
