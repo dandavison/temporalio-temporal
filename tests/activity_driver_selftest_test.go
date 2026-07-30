@@ -12,6 +12,15 @@ import (
 	"go.temporal.io/server/common/testing/await"
 )
 
+func TestActivityTimeoutInfoRejectsUnrelatedScheduleToClose(t *testing.T) {
+	info := activityTimeoutInfo{
+		timeout:  enumspb.TIMEOUT_TYPE_SCHEDULE_TO_CLOSE,
+		terminal: true,
+	}
+
+	require.False(t, info.reportsTimeout(model.StartToCloseElapses, 1))
+}
+
 // TestDriversRecognizeTimeoutObservedBeforeWait reproduces a race in awaitTimeout: a retryable timeout
 // may fire after Poll returns but before awaitTimeout takes its first observation. The timeout has
 // already rescheduled attempt 2 by then, and the driver must recognize it rather than wait for a
