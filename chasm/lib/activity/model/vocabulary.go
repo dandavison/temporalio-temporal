@@ -3,7 +3,62 @@
 // Standalone Activity and Workflow Activity.
 package model
 
-import "fmt"
+import (
+	"fmt"
+	"strings"
+
+	activitypb "go.temporal.io/server/chasm/lib/activity/gen/activitypb/v1"
+)
+
+type Status int
+
+const (
+	Unspecified Status = iota
+	Scheduled
+	Started
+	Completed
+	Failed
+	CancelRequested
+	Canceled
+	Terminated
+	TimedOut
+	PauseRequested
+	Paused
+	ResetRequested
+)
+
+// Dispatchability says whether a SCHEDULED attempt's next dispatch is available now, or still delayed
+// by a start_delay or retry backoff.
+type Dispatchability int
+
+const (
+	Dispatchable Dispatchability = iota // pollable now
+	StartDelayPending
+	BackoffPending
+)
+
+// AbstractState is the projection of observable internal state that the model predicts.
+type AbstractState struct {
+	Status              Status
+	AttemptCount        int32
+	FirstAttemptStarted bool
+	Dispatchability     Dispatchability
+	DispatchTimeSet     bool
+
+	// Flags supporting deferred reset/update
+	ResetKeepPaused     bool
+	ResetHeartbeats     bool
+	ResetRestoreOptions bool
+}
+
+// Config captures the start-time options that change transition behavior.
+type Config struct {
+	HasScheduleToClose bool
+	HasScheduleToStart bool
+	HasHeartbeat       bool
+	HasStartDelay      bool
+	MaxAttempts        int32 // 0 = unlimited
+}
 
 // EventType enumerates the events a driver can realize.
 type EventType int
@@ -17,6 +72,7 @@ const (
 	RespondFailedType
 	RespondFailedByIDType
 	RespondCanceledType
+	RespondCanceledByIDType
 	RequestCancelType
 	TerminateType
 	PauseType
@@ -45,6 +101,9 @@ type Event struct {
 	ResetHeartbeat      bool     // Reset: discard the persisted heartbeat checkpoint instead of carrying it into the new attempt.
 	HasHeartbeatDetails bool     // Failure response: attach last_heartbeat_details, to be stored as the activity's heartbeat progress.
 	Failure             *Failure // RespondFailed: the failure to send, or nil to respond with no failure at all (as a worker may). A nil failure is retryable.
+	RestoreOriginal     bool     // Reset / UpdateOptions
+	SameRequestID       bool     // Pause / Terminate / RequestCancel: repeat of the previous op's request id
+	SetsStartDelay      bool     // UpdateOptions
 }
 
 // Failure specifies the failure a RespondFailed event sends.
@@ -67,6 +126,33 @@ const (
 	UnknownFailureType
 )
 
+// String names the kind of failure.
+func (t FailureType) String() string {
+	switch t {
+	case ApplicationFailureType:
+		return "application"
+	case ServerFailureType:
+		return "server"
+	case StartToCloseTimeoutFailureType:
+		return "startToCloseTimeout"
+	case HeartbeatTimeoutFailureType:
+		return "heartbeatTimeout"
+	case ScheduleToStartTimeoutFailureType:
+		return "scheduleToStartTimeout"
+	case ScheduleToCloseTimeoutFailureType:
+		return "scheduleToCloseTimeout"
+	case UnknownFailureType:
+		return "unknown"
+	default:
+		return fmt.Sprintf("FailureType(%d)", int(t))
+	}
+}
+
+// Retries reports whether the failure asks to be retried. An omitted failure does.
+func (f *Failure) Retries() bool {
+	return f == nil || f.Retryable
+}
+
 // Canonical Event values for the variants frequently used in traces
 var (
 	Poll               = Event{Type: PollType}
@@ -86,6 +172,7 @@ var (
 	FailByIDWithScheduleToCloseTimeoutFailure       = Event{Type: RespondFailedByIDType, Failure: &Failure{Type: ScheduleToCloseTimeoutFailureType}}
 	FailByIDRetryablyWithUnknownFailure             = Event{Type: RespondFailedByIDType, Failure: &Failure{Type: UnknownFailureType}}
 	RespondCanceled                                 = Event{Type: RespondCanceledType}
+	RespondCanceledByID                             = Event{Type: RespondCanceledByIDType}
 	RequestCancel                                   = Event{Type: RequestCancelType}
 	Terminate                                       = Event{Type: TerminateType}
 	Pause                                           = Event{Type: PauseType}
@@ -102,7 +189,147 @@ var (
 	BackoffElapses                                  = Event{Type: BackoffElapsesType}
 )
 
-// String is a label for an event type.
+// ErrorKind is the user facing error the model expects for a call.
+type ErrorKind int
+
+const (
+	NoError ErrorKind = iota
+	FailedPrecondition
+	NotFound
+	InvalidArgument
+)
+
+// Observed is the internal state the driver reads
+type Observed struct {
+	Status               activitypb.ActivityExecutionStatus
+	Count                int32
+	Stamp                int32
+	ScheduleToCloseStamp int32
+	ResetKeepPaused      bool
+	ResetHeartbeats      bool
+	ResetRestoreOptions  bool
+	FirstAttemptStarted  bool
+	DispatchTimeSet      bool
+}
+
+// Terminal reports whether the activity has reached a terminal state.
+func (s Status) Terminal() bool {
+	switch s {
+	case Completed, Failed, Canceled, Terminated, TimedOut:
+		return true
+	default:
+		return false
+	}
+}
+
+func (d Dispatchability) String() string {
+	switch d {
+	case Dispatchable:
+		return "Dispatchable"
+	case StartDelayPending:
+		return "StartDelayPending"
+	case BackoffPending:
+		return "BackoffPending"
+	default:
+		return "Dispatchability(?)"
+	}
+}
+
+// SameObserved reports whether two states agree on every ReadComponent-readable field that is live in
+// the expected status. It excludes the latent Dispatchability, and additionally drops any field that
+// is not observable-meaningful in the status (see mask), so the oracle never asserts mechanism state
+// where nobody observes it.
+func (s AbstractState) SameObserved(o AbstractState) bool {
+	return s.mask() == o.mask()
+}
+
+// mask zeroes fields that are not observable-meaningful in status s.Status, so the oracle only
+// compares each field where it is live. Dispatchability is always latent (verified by polling).
+func (s AbstractState) mask() AbstractState {
+	s.Dispatchability = Dispatchable
+	if s.Status != ResetRequested {
+		// The pending-reset intent is only meaningful while a reset is deferred.
+		s.ResetKeepPaused, s.ResetHeartbeats, s.ResetRestoreOptions = false, false, false
+	}
+	return s
+}
+
+// Abstract maps an observed internal snapshot onto the model's AbstractState.
+func Abstract(o Observed) AbstractState {
+	return AbstractState{
+		Status:              mapStatus(o.Status),
+		AttemptCount:        o.Count,
+		ResetKeepPaused:     o.ResetKeepPaused,
+		ResetHeartbeats:     o.ResetHeartbeats,
+		ResetRestoreOptions: o.ResetRestoreOptions,
+		FirstAttemptStarted: o.FirstAttemptStarted,
+		DispatchTimeSet:     o.DispatchTimeSet,
+	}
+}
+
+func mapStatus(s activitypb.ActivityExecutionStatus) Status {
+	switch s {
+	case activitypb.ACTIVITY_EXECUTION_STATUS_UNSPECIFIED:
+		return Unspecified
+	case activitypb.ACTIVITY_EXECUTION_STATUS_SCHEDULED:
+		return Scheduled
+	case activitypb.ACTIVITY_EXECUTION_STATUS_STARTED:
+		return Started
+	case activitypb.ACTIVITY_EXECUTION_STATUS_CANCEL_REQUESTED:
+		return CancelRequested
+	case activitypb.ACTIVITY_EXECUTION_STATUS_COMPLETED:
+		return Completed
+	case activitypb.ACTIVITY_EXECUTION_STATUS_FAILED:
+		return Failed
+	case activitypb.ACTIVITY_EXECUTION_STATUS_CANCELED:
+		return Canceled
+	case activitypb.ACTIVITY_EXECUTION_STATUS_TERMINATED:
+		return Terminated
+	case activitypb.ACTIVITY_EXECUTION_STATUS_TIMED_OUT:
+		return TimedOut
+	case activitypb.ACTIVITY_EXECUTION_STATUS_PAUSED:
+		return Paused
+	case activitypb.ACTIVITY_EXECUTION_STATUS_PAUSE_REQUESTED:
+		return PauseRequested
+	case activitypb.ACTIVITY_EXECUTION_STATUS_RESET_REQUESTED:
+		return ResetRequested
+	default:
+		return Unspecified
+	}
+}
+
+func (s Status) String() string {
+	switch s {
+	case Unspecified:
+		return "Unspecified"
+	case Scheduled:
+		return "Scheduled"
+	case Started:
+		return "Started"
+	case CancelRequested:
+		return "CancelRequested"
+	case Completed:
+		return "Completed"
+	case Failed:
+		return "Failed"
+	case Canceled:
+		return "Canceled"
+	case Terminated:
+		return "Terminated"
+	case TimedOut:
+		return "TimedOut"
+	case Paused:
+		return "Paused"
+	case PauseRequested:
+		return "PauseRequested"
+	case ResetRequested:
+		return "ResetRequested"
+	default:
+		return "Status(?)"
+	}
+}
+
+// String is a stable label for an event type, for logs and failure reports.
 func (t EventType) String() string {
 	switch t {
 	case PollType:
@@ -119,6 +346,8 @@ func (t EventType) String() string {
 		return "RespondFailedByID"
 	case RespondCanceledType:
 		return "RespondCanceled"
+	case RespondCanceledByIDType:
+		return "RespondCanceledByID"
 	case RequestCancelType:
 		return "RequestCancel"
 	case TerminateType:
@@ -148,20 +377,37 @@ func (t EventType) String() string {
 	}
 }
 
-// String is a label for an event; it includes flags that affect its outcome.
+// String names an event and appends the flags that affect its outcome.
 func (e Event) String() string {
+	var flags []string
+	add := func(cond bool, name string) {
+		if cond {
+			flags = append(flags, name)
+		}
+	}
 	switch e.Type {
 	case RespondFailedType, RespondFailedByIDType:
 		if e.Failure == nil {
-			return fmt.Sprintf("%s[failureOmitted,heartbeatDetails=%v]", e.Type.String(), e.HasHeartbeatDetails)
+			flags = append(flags, "omitted")
+		} else {
+			flags = append(flags, e.Failure.Type.String())
+			if e.Failure.Type == ApplicationFailureType || e.Failure.Type == ServerFailureType {
+				flags = append(flags, fmt.Sprintf("retryable=%v", e.Failure.Retryable))
+			}
 		}
-		if e.Failure.Type == ApplicationFailureType || e.Failure.Type == ServerFailureType {
-			return fmt.Sprintf("%s[retryable=%v,heartbeatDetails=%v,failureType=%d]", e.Type.String(), e.Failure.Retryable, e.HasHeartbeatDetails, e.Failure.Type)
-		}
-		return fmt.Sprintf("%s[heartbeatDetails=%v,failureType=%d]", e.Type.String(), e.HasHeartbeatDetails, e.Failure.Type)
+		add(e.HasHeartbeatDetails, "heartbeatDetails")
 	case ResetType:
-		return fmt.Sprintf("%s[keepPaused=%v,resetHeartbeat=%v]", e.Type.String(), e.KeepPaused, e.ResetHeartbeat)
-	default:
+		add(e.KeepPaused, "keepPaused")
+		add(e.ResetHeartbeat, "resetHeartbeat")
+		add(e.RestoreOriginal, "restoreOriginal")
+	case PauseType, TerminateType, RequestCancelType:
+		add(e.SameRequestID, "sameRequestID")
+	case UpdateOptionsType:
+		add(e.SetsStartDelay, "setsStartDelay")
+		add(e.RestoreOriginal, "restoreOriginal")
+	}
+	if len(flags) == 0 {
 		return e.Type.String()
 	}
+	return fmt.Sprintf("%s[%s]", e.Type, strings.Join(flags, ","))
 }
