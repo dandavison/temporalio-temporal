@@ -301,9 +301,10 @@ func (s *activityParityTestSuite) TestTerminalRetryState() {
 			name: "AttemptTimeoutRetryPreventedByScheduleToClose",
 			cfg: activityConfig{
 				RetryInterval:   activityLongDuration,
+				StartToClose:    activityShortTimeout,
 				ScheduleToClose: time.Hour,
 			},
-			trace: []model.Event{model.Poll, model.StartToCloseElapses},
+			trace: []model.Event{model.Poll},
 			expected: activityTerminalOutcome{
 				status:     enumspb.ACTIVITY_EXECUTION_STATUS_TIMED_OUT,
 				retryState: enumspb.RETRY_STATE_TIMEOUT,
