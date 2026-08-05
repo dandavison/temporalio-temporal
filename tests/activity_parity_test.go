@@ -1138,6 +1138,54 @@ func (s *activityParityTestSuite) TestTerminalRetryState() {
 	}
 }
 
+// TestPendingResetIsInertUntilTheAttemptEnds holds the claims about a reset that a worker's attempt is
+// holding back which are true of both surfaces, and so have no entry in the WFA/SAA parity survey: while
+// the attempt runs the pending reset is invisible and dispatches nothing, and it does not stand between
+// the activity and its schedule-to-close deadline or a cancellation.
+func (s *activityParityTestSuite) TestPendingResetIsInertUntilTheAttemptEnds() {
+	env := newActivityParityEnv(s.T())
+	cfg := activityConfig{MaxAttempts: 10, RetryInterval: activityLongDuration}
+
+	// The attempt keeps its identity, no second task is dispatched, and the worker learns of the reset
+	// only by heartbeating.
+	s.T().Run("WhileTheAttemptRuns", func(t *testing.T) {
+		parityDrive(t, env, cfg, []model.Event{model.Poll, model.Reset},
+			func(t *testing.T, a parityActivity) {
+				require.Equal(t, activityInfo{RunState: enumspb.PENDING_ACTIVITY_STATE_STARTED, Attempt: 1},
+					a.activityInfo(t), "a deferred reset must not disturb the attempt it will supersede")
+				require.Nil(t, a.pollForTask(t, activityDriverTimeout),
+					"the reset attempt must not be dispatched while a worker still owns the attempt it supersedes")
+				a.driveEvent(t, model.Heartbeat)
+				require.Equal(t, model.HeartbeatFlags{ActivityReset: true}, a.heartbeatFlags(),
+					"a heartbeat during a pending reset must tell the worker its attempt has been superseded")
+			})
+	})
+
+	// The schedule-to-close deadline is the user's absolute bound on the activity, and a pending reset
+	// does not extend it.
+	s.T().Run("ScheduleToCloseDeadlinePasses", func(t *testing.T) {
+		parityDrive(t, env, cfg, []model.Event{model.Poll, model.Reset, model.ScheduleToCloseElapses},
+			func(t *testing.T, a parityActivity) {
+				require.Equal(t, activityTerminalProjection{
+					Status:      enumspb.ACTIVITY_EXECUTION_STATUS_TIMED_OUT,
+					FailureType: enumspb.TIMEOUT_TYPE_SCHEDULE_TO_CLOSE.String(),
+					RetryState:  enumspb.RETRY_STATE_TIMEOUT,
+				}, a.terminal(t))
+			})
+	})
+
+	// Cancellation supersedes the pending reset: the worker's acknowledgement closes the activity rather
+	// than starting it over.
+	s.T().Run("CancellationIsAcknowledged", func(t *testing.T) {
+		parityDrive(t, env, cfg,
+			[]model.Event{model.Poll, model.Reset, model.RequestCancel, model.RespondCanceled},
+			func(t *testing.T, a parityActivity) {
+				require.Equal(t, activityTerminalProjection{Status: enumspb.ACTIVITY_EXECUTION_STATUS_CANCELED},
+					a.terminal(t))
+			})
+	})
+}
+
 // TestResetSubstitutesForUnpauseFlags asks whether Reset covers what the unpause reset_attempts flag
 // covered. An activity is paused part-way through its retry budget and then reset rather than
 // unpaused; it must come back on attempt 1, dispatchable, with no retry backoff left to wait out.
