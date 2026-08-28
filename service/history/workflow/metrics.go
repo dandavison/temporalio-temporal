@@ -336,7 +336,7 @@ func ActivityMetricsHandler(
 ) metrics.Handler {
 	namespaceName := mutableState.GetNamespaceEntry().Name().String()
 	taskQueue := activityInfo.GetTaskQueue()
-	return metrics.GetPerActivityScope(
+	return metrics.GetPerTaskQueueFamilyScope(
 		shardContext.GetMetricsHandler(),
 		namespaceName,
 		tqid.UnsafeTaskQueueFamily(namespaceName, taskQueue),
@@ -345,9 +345,9 @@ func ActivityMetricsHandler(
 			taskQueue,
 			enumspb.TASK_QUEUE_TYPE_ACTIVITY,
 		),
-		operation,
-		activityInfo.GetActivityType().GetName(),
-		mutableState.GetWorkflowType().GetName(),
-		mutableState.GetEffectiveVersioningBehavior(),
+		metrics.OperationTag(operation),
+		metrics.ActivityTypeTag(activityInfo.GetActivityType().GetName()),
+		metrics.VersioningBehaviorTag(mutableState.GetEffectiveVersioningBehavior()),
+		metrics.WorkflowTypeTag(mutableState.GetWorkflowType().GetName()),
 	)
 }
