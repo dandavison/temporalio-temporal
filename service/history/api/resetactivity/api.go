@@ -20,7 +20,7 @@ func Invoke(
 	workflowConsistencyChecker api.WorkflowConsistencyChecker,
 ) (resp *historyservice.ResetActivityResponse, retError error) {
 	request := req.GetFrontendRequest()
-	var activityMetrics []workflow.ActivityMetricsInfo
+	var resetActivities []metrics.Handler
 
 	workflowKey := definition.NewWorkflowKey(
 		req.NamespaceId,
@@ -72,7 +72,8 @@ func Invoke(
 				); err != nil {
 					return nil, err
 				}
-				activityMetrics = append(activityMetrics, workflow.NewActivityMetricsInfo(mutableState, activityInfo))
+				resetActivities = append(resetActivities, workflow.ActivityMetricsHandler(
+					shardContext, mutableState, activityInfo, metrics.ActivityResetScope))
 			}
 			return &api.UpdateWorkflowAction{
 				Noop:               false,
@@ -88,8 +89,8 @@ func Invoke(
 		return nil, err
 	}
 
-	for _, info := range activityMetrics {
-		metrics.ActivityReset.With(info.MetricsHandler(shardContext, metrics.ActivityResetScope)).Record(1)
+	for _, handler := range resetActivities {
+		metrics.ActivityReset.With(handler).Record(1)
 	}
 
 	return &historyservice.ResetActivityResponse{}, nil

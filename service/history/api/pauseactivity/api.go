@@ -21,7 +21,7 @@ func Invoke(
 	shardContext historyi.ShardContext,
 	workflowConsistencyChecker api.WorkflowConsistencyChecker,
 ) (resp *historyservice.PauseActivityResponse, retError error) {
-	var activityMetrics []workflow.ActivityMetricsInfo
+	var pausedActivities []metrics.Handler
 
 	err := api.GetAndUpdateWorkflowWithNew(
 		ctx,
@@ -77,7 +77,8 @@ func Invoke(
 					return nil, err
 				}
 				if !wasPaused {
-					activityMetrics = append(activityMetrics, workflow.NewActivityMetricsInfo(mutableState, activityInfo))
+					pausedActivities = append(pausedActivities, workflow.ActivityMetricsHandler(
+						shardContext, mutableState, activityInfo, metrics.ActivityPausedScope))
 				}
 			}
 			return &api.UpdateWorkflowAction{
@@ -94,8 +95,8 @@ func Invoke(
 		return nil, err
 	}
 
-	for _, info := range activityMetrics {
-		metrics.ActivityPause.With(info.MetricsHandler(shardContext, metrics.ActivityPausedScope)).Record(1)
+	for _, handler := range pausedActivities {
+		metrics.ActivityPause.With(handler).Record(1)
 	}
 
 	return &historyservice.PauseActivityResponse{}, nil

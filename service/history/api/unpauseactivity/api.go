@@ -21,7 +21,7 @@ func Invoke(
 	workflowConsistencyChecker api.WorkflowConsistencyChecker,
 ) (resp *historyservice.UnpauseActivityResponse, retError error) {
 	var response *historyservice.UnpauseActivityResponse
-	var activityMetrics []workflow.ActivityMetricsInfo
+	var unpausedActivities []metrics.Handler
 
 	err := api.GetAndUpdateWorkflowWithNew(
 		ctx,
@@ -34,7 +34,7 @@ func Invoke(
 		func(workflowLease api.WorkflowLease) (*api.UpdateWorkflowAction, error) {
 			mutableState := workflowLease.GetMutableState()
 			var err error
-			response, activityMetrics, err = processUnpauseActivityRequest(shardContext, mutableState, request)
+			response, unpausedActivities, err = processUnpauseActivityRequest(shardContext, mutableState, request)
 			if err != nil {
 				return nil, err
 			}
@@ -52,8 +52,8 @@ func Invoke(
 		return nil, err
 	}
 
-	for _, info := range activityMetrics {
-		metrics.ActivityUnpause.With(info.MetricsHandler(shardContext, metrics.ActivityUnpausedScope)).Record(1)
+	for _, handler := range unpausedActivities {
+		metrics.ActivityUnpause.With(handler).Record(1)
 	}
 
 	frontendReq := request.GetFrontendRequest()
@@ -73,7 +73,7 @@ func processUnpauseActivityRequest(
 	shardContext historyi.ShardContext,
 	mutableState historyi.MutableState,
 	request *historyservice.UnpauseActivityRequest,
-) (*historyservice.UnpauseActivityResponse, []workflow.ActivityMetricsInfo, error) {
+) (*historyservice.UnpauseActivityResponse, []metrics.Handler, error) {
 
 	if !mutableState.IsWorkflowExecutionRunning() {
 		return nil, nil, consts.ErrWorkflowCompleted
@@ -100,7 +100,7 @@ func processUnpauseActivityRequest(
 		return nil, nil, consts.ErrActivityNotFound
 	}
 
-	var activityMetrics []workflow.ActivityMetricsInfo
+	var unpausedActivities []metrics.Handler
 	for _, activityId := range activityIDs {
 
 		ai, activityFound := mutableState.GetActivityByActivityID(activityId)
@@ -121,8 +121,9 @@ func processUnpauseActivityRequest(
 			frontendRequest.GetJitter().AsDuration()); err != nil {
 			return nil, nil, err
 		}
-		activityMetrics = append(activityMetrics, workflow.NewActivityMetricsInfo(mutableState, ai))
+		unpausedActivities = append(unpausedActivities, workflow.ActivityMetricsHandler(
+			shardContext, mutableState, ai, metrics.ActivityUnpausedScope))
 	}
 
-	return &historyservice.UnpauseActivityResponse{}, activityMetrics, nil
+	return &historyservice.UnpauseActivityResponse{}, unpausedActivities, nil
 }

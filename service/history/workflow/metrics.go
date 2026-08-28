@@ -326,46 +326,28 @@ func RecordActivityCompletionMetrics(
 	}
 }
 
-// ActivityMetricsInfo captures activity metric tags until the mutation commits.
-type ActivityMetricsInfo struct {
-	namespaceName      string
-	taskQueue          string
-	activityType       string
-	workflowType       string
-	versioningBehavior enumspb.VersioningBehavior
-}
-
-// NewActivityMetricsInfo captures activity metric tags from mutable state.
-func NewActivityMetricsInfo(
+// ActivityMetricsHandler returns a handler tagged for an activity in mutable state. Callers that
+// mutate an activity build it under the workflow lock and record with it once the mutation commits.
+func ActivityMetricsHandler(
+	shardContext historyi.ShardContext,
 	mutableState historyi.MutableState,
 	activityInfo *persistencespb.ActivityInfo,
-) ActivityMetricsInfo {
-	return ActivityMetricsInfo{
-		namespaceName:      mutableState.GetNamespaceEntry().Name().String(),
-		taskQueue:          activityInfo.GetTaskQueue(),
-		activityType:       activityInfo.GetActivityType().GetName(),
-		workflowType:       mutableState.GetWorkflowType().GetName(),
-		versioningBehavior: mutableState.GetEffectiveVersioningBehavior(),
-	}
-}
-
-// MetricsHandler returns a metrics handler with the captured activity tags.
-func (i ActivityMetricsInfo) MetricsHandler(
-	shardContext historyi.ShardContext,
 	operation string,
 ) metrics.Handler {
+	namespaceName := mutableState.GetNamespaceEntry().Name().String()
+	taskQueue := activityInfo.GetTaskQueue()
 	return metrics.GetPerActivityScope(
 		shardContext.GetMetricsHandler(),
-		i.namespaceName,
-		tqid.UnsafeTaskQueueFamily(i.namespaceName, i.taskQueue),
+		namespaceName,
+		tqid.UnsafeTaskQueueFamily(namespaceName, taskQueue),
 		shardContext.GetConfig().BreakdownMetricsByTaskQueue(
-			i.namespaceName,
-			i.taskQueue,
+			namespaceName,
+			taskQueue,
 			enumspb.TASK_QUEUE_TYPE_ACTIVITY,
 		),
 		operation,
-		i.activityType,
-		i.workflowType,
-		i.versioningBehavior,
+		activityInfo.GetActivityType().GetName(),
+		mutableState.GetWorkflowType().GetName(),
+		mutableState.GetEffectiveVersioningBehavior(),
 	)
 }

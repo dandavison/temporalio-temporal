@@ -51,7 +51,7 @@ func Invoke(
 	)
 
 	var response *historyservice.UpdateActivityOptionsResponse
-	var activityMetrics []workflow.ActivityMetricsInfo
+	var updatedActivityHandlers []metrics.Handler
 
 	err := api.GetAndUpdateWorkflowWithNew(
 		ctx,
@@ -80,7 +80,8 @@ func Invoke(
 				return nil, err
 			}
 			for _, activityInfo := range updatedActivities {
-				activityMetrics = append(activityMetrics, workflow.NewActivityMetricsInfo(mutableState, activityInfo))
+				updatedActivityHandlers = append(updatedActivityHandlers, workflow.ActivityMetricsHandler(
+					shardContext, mutableState, activityInfo, metrics.ActivityUpdateOptionsScope))
 			}
 			return &api.UpdateWorkflowAction{
 				Noop:               false,
@@ -96,8 +97,8 @@ func Invoke(
 		return nil, err
 	}
 
-	for _, info := range activityMetrics {
-		metrics.ActivityUpdateOptions.With(info.MetricsHandler(shardContext, metrics.ActivityUpdateOptionsScope)).Record(1)
+	for _, handler := range updatedActivityHandlers {
+		metrics.ActivityUpdateOptions.With(handler).Record(1)
 	}
 
 	logger := shardContext.GetLogger()
