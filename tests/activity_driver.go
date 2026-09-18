@@ -359,6 +359,9 @@ type drivenActivity interface {
 	awaitDispatchDelay(testing.TB, model.Event)
 	timeoutInfo(require.TestingT) activityTimeoutInfo
 	observedState(require.TestingT) activityState
+	// reportsTerminalStatus is whether observedState carries the status a closed activity closed
+	// with, which only the standalone surface retains.
+	reportsTerminalStatus() bool
 	rpc(testing.TB, model.Event) error
 }
 
@@ -384,13 +387,15 @@ func driveActivityEvent(t testing.TB, a drivenActivity, e model.Event, m *activi
 	requireStateMatches(t, a, e, from, m.state)
 }
 
-// activityState is the state a driver observes, reduced to what both implementations report: the run
-// state and attempt number while the activity is open, and closedness once it is not. A terminal
-// status itself is reported differently by each, so terminalOutcome checks that.
+// activityState is the state a driver observes: the run state and attempt number while the activity
+// is open, and once it is not, its terminal status where the driver can report one. A closed
+// workflow activity leaves its workflow's pending set, taking its status with it, so that driver
+// reports closedness alone and leaves terminalStatus unspecified.
 type activityState struct {
-	closed   bool
-	runState enumspb.PendingActivityState
-	attempt  int32
+	closed         bool
+	runState       enumspb.PendingActivityState
+	attempt        int32
+	terminalStatus enumspb.ActivityExecutionStatus
 }
 
 // requireStateMatches compares the state the server reports with the state model.Transition says the
@@ -399,13 +404,35 @@ type activityState struct {
 func requireStateMatches(t testing.TB, a drivenActivity, e model.Event, from model.Status, s model.AbstractState) {
 	t.Helper()
 	want := activityState{closed: s.Status.Terminal()}
-	if !want.closed {
+	if want.closed {
+		if a.reportsTerminalStatus() {
+			want.terminalStatus = expectedTerminalStatus(s)
+		}
+	} else {
 		want.runState, want.attempt = expectedRunState(s), s.AttemptCount
 	}
 	await.Require(a.testContext(), t, func(t *await.T) {
 		t.Require().Equal(want, a.observedState(t),
 			"after %s from %v, the state the server reports disagrees with the model", e, from)
 	}, activityDriverTimeout, activityDriverPollInterval)
+}
+
+// expectedTerminalStatus is the status a closed activity is reported in.
+func expectedTerminalStatus(s model.AbstractState) enumspb.ActivityExecutionStatus {
+	switch s.Status {
+	case model.Completed:
+		return enumspb.ACTIVITY_EXECUTION_STATUS_COMPLETED
+	case model.Failed:
+		return enumspb.ACTIVITY_EXECUTION_STATUS_FAILED
+	case model.Canceled:
+		return enumspb.ACTIVITY_EXECUTION_STATUS_CANCELED
+	case model.Terminated:
+		return enumspb.ACTIVITY_EXECUTION_STATUS_TERMINATED
+	case model.TimedOut:
+		return enumspb.ACTIVITY_EXECUTION_STATUS_TIMED_OUT
+	default:
+		panic("no terminal status is reported for status " + s.Status.String())
+	}
 }
 
 // expectedRunState is the PendingActivityState an open activity is reported in. The model does not

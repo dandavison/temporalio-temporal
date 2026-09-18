@@ -263,6 +263,11 @@ func (a *wfaHandle) activityInfoIfInProgress(t require.TestingT) (activityInfo, 
 
 // observedState is the activity's state as its entry in the workflow's pending set reports it. An
 // activity that has left that set has closed.
+// A closed workflow activity leaves its workflow's pending set, so nothing is reported about it,
+// let alone the status it closed with. Tests that need it read it from the workflow result, via
+// terminalOutcome.
+func (a *wfaHandle) reportsTerminalStatus() bool { return false }
+
 func (a *wfaHandle) observedState(t require.TestingT) activityState {
 	pendingActivity := a.pendingActivityInfo(t)
 	if pendingActivity == nil {

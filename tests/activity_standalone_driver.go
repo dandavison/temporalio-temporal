@@ -223,9 +223,12 @@ func (a *saaHandle) observedState(t require.TestingT) activityState {
 	case enumspb.ACTIVITY_EXECUTION_STATUS_RUNNING, enumspb.ACTIVITY_EXECUTION_STATUS_PAUSED:
 		return activityState{runState: info.GetRunState(), attempt: info.GetAttempt()}
 	default:
-		return activityState{closed: true}
+		return activityState{closed: true, terminalStatus: info.GetStatus()}
 	}
 }
+
+// A standalone activity is retained after it closes and keeps reporting the status it closed with.
+func (a *saaHandle) reportsTerminalStatus() bool { return true }
 
 func saaActivityInfo(i *activitypb.ActivityExecutionInfo) activityInfo {
 	return activityInfo{
