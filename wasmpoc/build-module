@@ -1,5 +1,6 @@
 #!/bin/sh
-# Builds the local-server wasm module and its precompiled form for the wasmtime host in host/.
+# Builds the local-server wasm module and its precompiled form for the wasmtime host in
+# dandavison/temporalio-sdk-core:local-workflow-progress (local-server-host/).
 # The precompiled module's features must match the host's wasmtime build (runtime only, no GC,
 # threads, exceptions or component model), and its wasmtime version must match exactly.
 set -eu

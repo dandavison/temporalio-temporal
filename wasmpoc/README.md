@@ -12,8 +12,18 @@ refactoring of the real server, listed below. Nothing outside `wasmpoc/` is chan
 ```sh
 go test ./wasmpoc/localserver/
 ./wasmpoc/build-module /tmp
-(cd wasmpoc/host && cargo run --release -- /tmp/local-server.cwasm)
 ```
+
+The Rust host is `local-server-host/` on branch `local-workflow-progress` of
+[dandavison/temporalio-sdk-core](https://github.com/dandavison/temporalio-sdk-core/tree/local-workflow-progress/local-server-host):
+
+```sh
+(cd local-server-host && cargo run --release -- /tmp/local-server.cwasm)
+```
+
+The Go test and the host both play the worker with hand-built requests and check histories I
+wrote by hand. They check the module and its ABI, not that the histories satisfy a real SDK
+worker.
 
 `build-module` produces `local-server.wasm` (a reactor module, see `cmd/chasmwasm`) and
 `local-server.cwasm` (precompiled by wasmtime 48 with the feature set of the host's runtime-only
