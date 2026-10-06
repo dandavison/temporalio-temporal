@@ -141,7 +141,7 @@ func TestWorkflowWithActivityAndTimer(t *testing.T) {
 	}
 }
 
-func pollWorkflowTask(t *testing.T, s *Server) *workflowservice.PollWorkflowTaskQueueResponse {
+func pollWorkflowTask(t testing.TB, s *Server) *workflowservice.PollWorkflowTaskQueueResponse {
 	t.Helper()
 	response, err := s.PollWorkflowTaskQueue(context.Background(), &workflowservice.PollWorkflowTaskQueueRequest{
 		Namespace: testNamespace,
@@ -153,7 +153,7 @@ func pollWorkflowTask(t *testing.T, s *Server) *workflowservice.PollWorkflowTask
 	return response
 }
 
-func completeWorkflowTask(t *testing.T, s *Server, wft *workflowservice.PollWorkflowTaskQueueResponse, commands ...*commandpb.Command) {
+func completeWorkflowTask(t testing.TB, s *Server, wft *workflowservice.PollWorkflowTaskQueueResponse, commands ...*commandpb.Command) {
 	t.Helper()
 	_, err := s.RespondWorkflowTaskCompleted(context.Background(), &workflowservice.RespondWorkflowTaskCompletedRequest{
 		Namespace: testNamespace,
