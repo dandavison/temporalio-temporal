@@ -107,6 +107,10 @@ func (w *Workflow) CompleteWorkflowTask(
 			ScheduledEventId: w.WorkflowTaskScheduledEventId,
 			StartedEventId:   w.WorkflowTaskStartedEventId,
 			Identity:         request.GetIdentity(),
+			BinaryChecksum:   request.GetBinaryChecksum(),
+			WorkerVersion:    request.GetWorkerVersionStamp(),
+			SdkMetadata:      request.GetSdkMetadata(),
+			MeteringMetadata: request.GetMeteringMetadata(),
 		}},
 	})
 	w.LastCompletedWorkflowTaskStartedEventId = w.WorkflowTaskStartedEventId

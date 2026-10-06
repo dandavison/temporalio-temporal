@@ -20,7 +20,7 @@ import (
 	"go.temporal.io/server/wasmpoc/localserver"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/protobuf/proto"
-	"google.golang.org/protobuf/types/known/emptypb"
+	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
 func main() {}
@@ -29,6 +29,15 @@ var (
 	server  *localserver.Server
 	buffers = map[uint32][]byte{}
 	methods = map[string]func(context.Context, []byte) (proto.Message, error){
+		"GetSystemInfo": method(func(ctx context.Context, r *workflowservice.GetSystemInfoRequest) (proto.Message, error) {
+			return server.GetSystemInfo(ctx, r)
+		}),
+		"DescribeNamespace": method(func(ctx context.Context, r *workflowservice.DescribeNamespaceRequest) (proto.Message, error) {
+			return server.DescribeNamespace(ctx, r)
+		}),
+		"ShutdownWorker": method(func(ctx context.Context, r *workflowservice.ShutdownWorkerRequest) (proto.Message, error) {
+			return server.ShutdownWorker(ctx, r)
+		}),
 		"StartWorkflowExecution": method(func(ctx context.Context, r *workflowservice.StartWorkflowExecutionRequest) (proto.Message, error) {
 			return server.StartWorkflowExecution(ctx, r)
 		}),
@@ -79,9 +88,19 @@ func initServer(unixNanos int64) uint32 {
 	return 0
 }
 
+// temporal_advance_time sets the clock, runs the tasks that are due, and responds with the time at
+// which the next task is due (absent if none is pending).
+//
 //go:wasmexport temporal_advance_time
 func advanceTime(unixNanos int64) uint64 {
-	return respond(&emptypb.Empty{}, server.AdvanceTime(context.Background(), time.Unix(0, unixNanos)))
+	if err := server.AdvanceTime(context.Background(), time.Unix(0, unixNanos)); err != nil {
+		return respond(nil, err)
+	}
+	deadline, ok := server.NextDeadline()
+	if !ok {
+		return respond(&timestamppb.Timestamp{}, nil)
+	}
+	return respond(timestamppb.New(deadline), nil)
 }
 
 //go:wasmexport temporal_call

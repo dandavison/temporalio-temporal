@@ -5,11 +5,13 @@ package localserver
 
 import (
 	"context"
+	"slices"
 	"time"
 
 	commonpb "go.temporal.io/api/common/v1"
 	enumspb "go.temporal.io/api/enums/v1"
 	historypb "go.temporal.io/api/history/v1"
+	namespacepb "go.temporal.io/api/namespace/v1"
 	"go.temporal.io/api/serviceerror"
 	tokenspb "go.temporal.io/server/api/token/v1"
 	"go.temporal.io/server/wasmpoc/api/workflowservice/v1"
@@ -79,6 +81,44 @@ func (s *Server) StartWorkflowExecution(
 	return &workflowservice.StartWorkflowExecutionResponse{RunId: result.ExecutionKey.RunID, Started: result.Created}, nil
 }
 
+// NextDeadline returns the time at which the next task is due, if any.
+func (s *Server) NextDeadline() (time.Time, bool) {
+	return s.engine.nextDeadline()
+}
+
+func (s *Server) GetSystemInfo(
+	context.Context,
+	*workflowservice.GetSystemInfoRequest,
+) (*workflowservice.GetSystemInfoResponse, error) {
+	return &workflowservice.GetSystemInfoResponse{
+		Capabilities: &workflowservice.GetSystemInfoResponse_Capabilities{SdkMetadata: true},
+	}, nil
+}
+
+// DescribeNamespace describes any namespace as registered: the local server has no namespace
+// registry.
+func (s *Server) DescribeNamespace(
+	_ context.Context,
+	request *workflowservice.DescribeNamespaceRequest,
+) (*workflowservice.DescribeNamespaceResponse, error) {
+	return &workflowservice.DescribeNamespaceResponse{
+		NamespaceInfo: &namespacepb.NamespaceInfo{
+			Name:  request.GetNamespace(),
+			Id:    request.GetNamespace(),
+			State: enumspb.NAMESPACE_STATE_REGISTERED,
+		},
+	}, nil
+}
+
+func (s *Server) ShutdownWorker(
+	context.Context,
+	*workflowservice.ShutdownWorkerRequest,
+) (*workflowservice.ShutdownWorkerResponse, error) {
+	return &workflowservice.ShutdownWorkerResponse{}, nil
+}
+
+// GetWorkflowExecutionHistory returns the whole history, or with the close-event filter only the
+// close event, which is absent while the workflow is running. It does not wait for new events.
 func (s *Server) GetWorkflowExecutionHistory(
 	ctx context.Context,
 	request *workflowservice.GetWorkflowExecutionHistoryRequest,
@@ -93,6 +133,9 @@ func (s *Server) GetWorkflowExecutionHistory(
 	}, struct{}{})
 	if err != nil {
 		return nil, err
+	}
+	if request.GetHistoryEventFilterType() == enumspb.HISTORY_EVENT_FILTER_TYPE_CLOSE_EVENT {
+		events = slices.DeleteFunc(events, func(e *historypb.HistoryEvent) bool { return !isCloseEvent(e) })
 	}
 	return &workflowservice.GetWorkflowExecutionHistoryResponse{History: &historypb.History{Events: events}}, nil
 }
@@ -220,6 +263,15 @@ func (s *Server) AddActivityTask(_ context.Context, request *activity.DispatchRe
 func (s *Server) AddWorkflowTask(_ context.Context, taskQueue string, ref chasm.ComponentRef, stamp int32) error {
 	s.workflowTasks[taskQueue] = append(s.workflowTasks[taskQueue], queuedWorkflowTask{ref: ref, stamp: stamp})
 	return nil
+}
+
+func isCloseEvent(event *historypb.HistoryEvent) bool {
+	switch event.GetEventType() {
+	case enumspb.EVENT_TYPE_WORKFLOW_EXECUTION_COMPLETED, enumspb.EVENT_TYPE_WORKFLOW_EXECUTION_FAILED:
+		return true
+	default:
+		return false
+	}
 }
 
 func (s *Server) decodeToken(serialized []byte) (*tokenspb.Task, []byte, error) {
