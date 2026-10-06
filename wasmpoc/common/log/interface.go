@@ -3,7 +3,7 @@
 package log
 
 import (
-	"go.temporal.io/server/common/log/tag"
+	"go.temporal.io/server/wasmpoc/common/log/tag"
 )
 
 type (

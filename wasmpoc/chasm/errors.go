@@ -5,7 +5,7 @@ import (
 	"strings"
 
 	"go.temporal.io/api/serviceerror"
-	"go.temporal.io/server/common/log/tag"
+	"go.temporal.io/server/wasmpoc/common/log/tag"
 )
 
 // ErrRequestIDAlreadyUsed is returned by UpdateComponent when the request ID supplied via
