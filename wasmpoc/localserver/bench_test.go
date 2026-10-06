@@ -28,7 +28,7 @@ func BenchmarkAgentLoop(b *testing.B) {
 	}
 }
 
-func runAgentLoop(b *testing.B, s *Server, workflowID string, steps int) {
+func runAgentLoop(b testing.TB, s *Server, workflowID string, steps int) {
 	ctx := context.Background()
 	advance := func() { require.NoError(b, s.AdvanceTime(ctx, s.engine.now)) }
 	advance()

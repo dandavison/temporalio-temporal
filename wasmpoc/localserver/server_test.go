@@ -11,6 +11,7 @@ import (
 	commonpb "go.temporal.io/api/common/v1"
 	enumspb "go.temporal.io/api/enums/v1"
 	historypb "go.temporal.io/api/history/v1"
+	"go.temporal.io/api/serviceerror"
 	taskqueuepb "go.temporal.io/api/taskqueue/v1"
 	"go.temporal.io/server/wasmpoc/api/workflowservice/v1"
 	"google.golang.org/protobuf/types/known/durationpb"
@@ -178,4 +179,25 @@ func payloads(s string) *commonpb.Payloads {
 		Metadata: map[string][]byte{"encoding": []byte("json/plain")},
 		Data:     fmt.Appendf(nil, "%q", s),
 	}}}
+}
+
+func TestDeleteClosedWorkflow(t *testing.T) {
+	ctx := context.Background()
+	s, err := New(time.Date(2026, 10, 5, 0, 0, 0, 0, time.UTC), func() string { return "run-1" })
+	require.NoError(t, err)
+	runAgentLoop(t, s, "wf", 1)
+
+	_, err = s.DeleteWorkflowExecution(ctx, &workflowservice.DeleteWorkflowExecutionRequest{
+		Namespace:         testNamespace,
+		WorkflowExecution: &commonpb.WorkflowExecution{WorkflowId: "wf"},
+	})
+	require.NoError(t, err)
+
+	_, err = s.GetWorkflowExecutionHistory(ctx, &workflowservice.GetWorkflowExecutionHistoryRequest{
+		Namespace: testNamespace,
+		Execution: &commonpb.WorkflowExecution{WorkflowId: "wf", RunId: "run-1"},
+	})
+	var notFound *serviceerror.NotFound
+	require.ErrorAs(t, err, &notFound)
+	require.Empty(t, s.engine.executions)
 }
