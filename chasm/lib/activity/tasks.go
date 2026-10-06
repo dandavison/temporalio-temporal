@@ -3,14 +3,14 @@ package activity
 import (
 	"context"
 
+	commonpb "go.temporal.io/api/common/v1"
 	enumspb "go.temporal.io/api/enums/v1"
-	"go.temporal.io/server/api/matchingservice/v1"
+	taskqueuepb "go.temporal.io/api/taskqueue/v1"
 	"go.temporal.io/server/chasm"
 	"go.temporal.io/server/chasm/lib/activity/gen/activitypb/v1"
 	"go.temporal.io/server/common/metrics"
-	"go.temporal.io/server/common/resource"
 	"go.temporal.io/server/common/util"
-	"go.uber.org/fx"
+	"google.golang.org/protobuf/types/known/durationpb"
 )
 
 // DispatchTaskHook wraps a validated activity dispatch on the active cluster before it is sent to
@@ -25,11 +25,25 @@ type DispatchTaskHook func(
 	dispatch func(context.Context) error,
 ) error
 
-type activityDispatchTaskHandlerOptions struct {
-	fx.In
+// MatchingClient adds activity tasks to task queues.
+type MatchingClient interface {
+	AddActivityTask(ctx context.Context, request *DispatchRequest) error
+}
 
-	MatchingClient   resource.MatchingClient
-	DispatchTaskHook DispatchTaskHook `optional:"true"`
+// DispatchRequest is a request to add a task for the activity's current attempt to its task
+// queue.
+type DispatchRequest struct {
+	NamespaceID            string
+	ScheduleToStartTimeout *durationpb.Duration
+	TaskQueue              *taskqueuepb.TaskQueue
+	Priority               *commonpb.Priority
+	ComponentRef           []byte
+	Stamp                  int32
+}
+
+type activityDispatchTaskHandlerOptions struct {
+	MatchingClient   MatchingClient
+	DispatchTaskHook DispatchTaskHook
 }
 
 type activityDispatchTaskHandler struct {
@@ -80,16 +94,12 @@ func (h *activityDispatchTaskHandler) Execute(
 			activityRef.NamespaceID,
 			task,
 			func(ctx context.Context) error {
-				_, err := h.opts.MatchingClient.AddActivityTask(ctx, request)
-
-				return err
+				return h.opts.MatchingClient.AddActivityTask(ctx, request)
 			},
 		)
 	}
 
-	_, err = h.opts.MatchingClient.AddActivityTask(ctx, request)
-
-	return err
+	return h.opts.MatchingClient.AddActivityTask(ctx, request)
 }
 
 // Discard spills the task to matching instead of silently discarding it on standby clusters when the activity
@@ -105,19 +115,17 @@ func (h *activityDispatchTaskHandler) Discard(
 		return err
 	}
 
-	_, err = h.opts.MatchingClient.AddActivityTask(ctx, request)
-
-	return err
+	return h.opts.MatchingClient.AddActivityTask(ctx, request)
 }
 
 func (h *activityDispatchTaskHandler) createMatchingRequest(
 	ctx context.Context,
 	activityRef chasm.ComponentRef,
-) (*matchingservice.AddActivityTaskRequest, error) {
+) (*DispatchRequest, error) {
 	return chasm.ReadComponent(
 		ctx,
 		activityRef,
-		(*Activity).createAddActivityTaskRequest,
+		(*Activity).createDispatchRequest,
 		activityRef.NamespaceID,
 	)
 }
