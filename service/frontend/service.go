@@ -7,11 +7,12 @@ import (
 	"sync"
 	"time"
 
+	"go.temporal.io/server/chasm/lib/callback/callbackserver"
+
 	"go.temporal.io/api/operatorservice/v1"
 	"go.temporal.io/api/workflowservice/v1"
 	"go.temporal.io/server/api/adminservice/v1"
 	"go.temporal.io/server/chasm/lib/activity"
-	chasmcallback "go.temporal.io/server/chasm/lib/callback"
 	chasmnexus "go.temporal.io/server/chasm/lib/nexusoperation"
 	chasmworkflow "go.temporal.io/server/chasm/lib/workflow"
 	"go.temporal.io/server/common/callbacks"
@@ -437,7 +438,7 @@ func NewConfig(
 		LinkMaxSize:        dynamicconfig.FrontendLinkMaxSize.Get(dc),
 		MaxLinksPerRequest: dynamicconfig.FrontendMaxLinksPerRequest.Get(dc),
 
-		CallbackEndpointConfigs:      chasmcallback.AllowedAddresses.Get(dc),
+		CallbackEndpointConfigs:      callbackserver.AllowedAddresses.Get(dc),
 		WorkflowEnabledCallbackKinds: chasmworkflow.EnabledCallbackKinds.Get(dc),
 
 		AdminEnableListHistoryTasks: dynamicconfig.AdminEnableListHistoryTasks.Get(dc),

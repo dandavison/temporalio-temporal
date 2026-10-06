@@ -10,6 +10,8 @@ import (
 	"testing"
 	"time"
 
+	"go.temporal.io/server/chasm/lib/callback/callbackserver"
+
 	"github.com/nexus-rpc/sdk-go/nexus"
 	"go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp"
 	"go.opentelemetry.io/otel/codes"
@@ -25,7 +27,6 @@ import (
 	"go.temporal.io/sdk/temporalnexus"
 	"go.temporal.io/sdk/worker"
 	"go.temporal.io/sdk/workflow"
-	"go.temporal.io/server/chasm/lib/callback"
 	"go.temporal.io/server/chasm/lib/nexusoperation"
 	"go.temporal.io/server/common/dynamicconfig"
 	"go.temporal.io/server/common/nexus/nexusrpc"
@@ -69,7 +70,7 @@ func (s *NexusOTELSuite) newTestEnv(exporter sdktrace.SpanExporter) *NexusTestEn
 		testcore.WithDynamicConfig(dynamicconfig.EnableCHASMCallbacks, true),
 		testcore.WithDynamicConfig(nexusoperation.Enabled, true),
 		testcore.WithDynamicConfig(
-			callback.AllowedAddresses,
+			callbackserver.AllowedAddresses,
 			[]any{map[string]any{"Pattern": "*", "AllowInsecure": true}},
 		),
 	)

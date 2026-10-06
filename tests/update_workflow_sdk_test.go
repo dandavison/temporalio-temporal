@@ -6,6 +6,8 @@ import (
 	"testing"
 	"time"
 
+	"go.temporal.io/server/chasm/lib/callback/callbackserver"
+
 	"github.com/google/uuid"
 	"github.com/nexus-rpc/sdk-go/nexus"
 	commonpb "go.temporal.io/api/common/v1"
@@ -17,7 +19,6 @@ import (
 	"go.temporal.io/sdk/temporal"
 	"go.temporal.io/sdk/worker"
 	"go.temporal.io/sdk/workflow"
-	"go.temporal.io/server/chasm/lib/callback"
 	"go.temporal.io/server/common/dynamicconfig"
 	"go.temporal.io/server/common/testing/parallelsuite"
 	"go.temporal.io/server/tests/testcore"
@@ -396,7 +397,7 @@ func (s *UpdateWorkflowSdkSuite) TestUpdateSameRequestIDDeduplicatesCallbacks() 
 		testcore.WithDynamicConfig(dynamicconfig.EnableCHASMCallbacks, true),
 		testcore.WithDynamicConfig(dynamicconfig.EnableWorkflowUpdateCallbacks, true),
 		testcore.WithDynamicConfig(
-			callback.AllowedAddresses,
+			callbackserver.AllowedAddresses,
 			[]any{map[string]any{"Pattern": "localhost:9999", "AllowInsecure": true}},
 		),
 	)
@@ -514,7 +515,7 @@ func (s *UpdateWorkflowSdkSuite) TestUpdateCallbackCloseWhenWorkflowCloses() {
 		testcore.WithDynamicConfig(dynamicconfig.EnableCHASMCallbacks, true),
 		testcore.WithDynamicConfig(dynamicconfig.EnableWorkflowUpdateCallbacks, true),
 		testcore.WithDynamicConfig(
-			callback.AllowedAddresses,
+			callbackserver.AllowedAddresses,
 			[]any{map[string]any{"Pattern": "*", "AllowInsecure": true}},
 		),
 	)

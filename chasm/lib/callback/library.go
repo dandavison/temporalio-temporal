@@ -2,8 +2,6 @@ package callback
 
 import (
 	"go.temporal.io/server/chasm"
-	"go.uber.org/fx"
-	"google.golang.org/grpc"
 )
 
 // InvocationTaskGroup is the outbound queue task group that callback invocation tasks are
@@ -30,38 +28,33 @@ func callbackContextFromChasm(ctx chasm.Context) *callbackContext {
 	return ctx.Value(ctxKeyCallbackContext).(*callbackContext)
 }
 
-type (
-	Library struct {
-		chasm.UnimplementedLibrary
+// Library is the CHASM library for callbacks.
+type Library struct {
+	chasm.UnimplementedLibrary
 
-		InvocationTaskHandler *invocationTaskHandler
-		BackoffTaskHandler    *backoffTaskHandler
+	invocationTaskHandler *invocationTaskHandler
+	backoffTaskHandler    *backoffTaskHandler
 
-		destinationBlocked DestinationBlockedFn
-	}
-)
+	destinationBlocked DestinationBlockedFn
+}
 
-// NewNilLibrary creates a Library with all nil handlers. Useful for
+// NewNilLibrary creates a Library that cannot execute invocation tasks. Useful for
 // registration-only contexts like tdbg where no task execution is needed.
 func NewNilLibrary() *Library {
 	return &Library{}
 }
 
-type libraryParams struct {
-	fx.In
-
-	InvocationTaskHandler *invocationTaskHandler
-	BackoffTaskHandler    *backoffTaskHandler
-	// Only the history service runs the outbound queue, so only it provides this. Elsewhere it is
-	// absent and callbacks are simply never reported as blocked.
-	DestinationBlocked DestinationBlockedFn `optional:"true"`
-}
-
-func newLibrary(params libraryParams) *Library {
+// NewLibrary returns the callback library. invocationTaskExecutor delivers callbacks.
+// destinationBlocked reports whether deliveries to a destination are being held back; nil means
+// they never are.
+func NewLibrary(
+	invocationTaskExecutor InvocationTaskExecutor,
+	destinationBlocked DestinationBlockedFn,
+) *Library {
 	return &Library{
-		InvocationTaskHandler: params.InvocationTaskHandler,
-		BackoffTaskHandler:    params.BackoffTaskHandler,
-		destinationBlocked:    params.DestinationBlocked,
+		invocationTaskHandler: &invocationTaskHandler{executor: invocationTaskExecutor},
+		backoffTaskHandler:    &backoffTaskHandler{},
+		destinationBlocked:    destinationBlocked,
 	}
 }
 
@@ -92,15 +85,12 @@ func (l *Library) Tasks() []*chasm.RegistrableTask {
 	return []*chasm.RegistrableTask{
 		chasm.NewRegistrableSideEffectTask(
 			"invoke",
-			l.InvocationTaskHandler,
+			l.invocationTaskHandler,
 			chasm.WithTaskGroup(InvocationTaskGroup),
 		),
 		chasm.NewRegistrablePureTask(
 			"backoff",
-			l.BackoffTaskHandler,
+			l.backoffTaskHandler,
 		),
 	}
-}
-
-func (l *Library) RegisterServices(server *grpc.Server) {
 }

@@ -9,6 +9,8 @@ import (
 	"testing"
 	"time"
 
+	"go.temporal.io/server/chasm/lib/callback/callbackserver"
+
 	"github.com/google/uuid"
 	"github.com/nexus-rpc/sdk-go/nexus"
 	"github.com/stretchr/testify/require"
@@ -21,7 +23,6 @@ import (
 	"go.temporal.io/api/workflowservice/v1"
 	"go.temporal.io/sdk/workflow"
 	"go.temporal.io/server/chasm"
-	"go.temporal.io/server/chasm/lib/callback"
 	"go.temporal.io/server/common/dynamicconfig"
 	commonnexus "go.temporal.io/server/common/nexus"
 	"go.temporal.io/server/common/rpc/httpfaults"
@@ -54,7 +55,7 @@ func TestCallbacksSuiteCHASM(t *testing.T) {
 func (s *CallbacksSuite) newTestEnv(opts ...testcore.TestOption) *testcore.TestEnv {
 	env := testcore.NewEnv(s.T(), opts...)
 	env.OverrideDynamicConfig(
-		callback.AllowedAddresses,
+		callbackserver.AllowedAddresses,
 		[]any{map[string]any{"Pattern": "*", "AllowInsecure": true}},
 	)
 	return env
@@ -62,7 +63,7 @@ func (s *CallbacksSuite) newTestEnv(opts ...testcore.TestOption) *testcore.TestE
 
 func (s *CallbacksSuite) TestHTTPFaultInjection_NexusCallbackRetriesAfterResponseFault(opts []testcore.TestOption) {
 	testOpts := append([]testcore.TestOption{}, opts...)
-	testOpts = append(testOpts, testcore.WithDynamicConfig(callback.RetryPolicyInitialInterval, 50*time.Millisecond))
+	testOpts = append(testOpts, testcore.WithDynamicConfig(callbackserver.RetryPolicyInitialInterval, 50*time.Millisecond))
 	env := s.newTestEnv(testOpts...)
 	ctx := s.Context()
 
@@ -135,7 +136,7 @@ func (s *CallbacksSuite) TestScheduledCallbackTokenMigration_LegacyWriteEnvelope
 	testOpts = append(
 		testOpts,
 		testcore.WithDynamicConfig(dynamicconfig.EnableCHASMCallbacks, true),
-		testcore.WithDynamicConfig(callback.EncodeInternalTokenWithEnvelope, false),
+		testcore.WithDynamicConfig(callbackserver.EncodeInternalTokenWithEnvelope, false),
 	)
 	env := newScheduleEnv(s.T(), testOpts...)
 
@@ -205,7 +206,7 @@ func (s *CallbacksSuite) TestScheduledCallbackTokenMigration_LegacyWriteEnvelope
 	s.NoError(decErr)
 	s.Empty(reqID, "gate OFF must write a legacy token with no embedded request ID")
 
-	env.OverrideDynamicConfig(callback.EncodeInternalTokenWithEnvelope, true)
+	env.OverrideDynamicConfig(callbackserver.EncodeInternalTokenWithEnvelope, true)
 
 	_, err = env.FrontendClient().SignalWorkflowExecution(ctx, &workflowservice.SignalWorkflowExecutionRequest{
 		Namespace:         env.Namespace().String(),
@@ -281,9 +282,9 @@ func (s *CallbacksSuite) TestWorkflowCallbacks_InvalidArgument(opts []testcore.T
 			env.OverrideDynamicConfig(dynamicconfig.FrontendCallbackURLMaxLength, 50)
 			env.OverrideDynamicConfig(dynamicconfig.FrontendCallbackHeaderMaxSize, 6)
 			env.OverrideDynamicConfig(dynamicconfig.MaxCallbacksPerWorkflow, 2)
-			env.OverrideDynamicConfig(callback.MaxPerExecution, 2)
+			env.OverrideDynamicConfig(callbackserver.MaxPerExecution, 2)
 			env.OverrideDynamicConfig(
-				callback.AllowedAddresses,
+				callbackserver.AllowedAddresses,
 				[]any{map[string]any{"Pattern": "some-ignored-address", "AllowInsecure": true}, map[string]any{"Pattern": "some-secure-address", "AllowInsecure": false}},
 			)
 

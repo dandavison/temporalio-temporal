@@ -1,4 +1,4 @@
-package callback
+package callbackserver
 
 import (
 	"context"
@@ -54,7 +54,7 @@ func (c invocableInternal) WrapError(result invocationResult, err error) error {
 func (c invocableInternal) Invoke(
 	ctx context.Context,
 	ns *namespace.Namespace,
-	h *invocationTaskHandler,
+	h *invocationTaskExecutor,
 	task *callbackspb.InvocationTask,
 	taskAttr chasm.TaskAttributes,
 ) invocationResult {

@@ -14,6 +14,8 @@ import (
 	"testing"
 	"time"
 
+	"go.temporal.io/server/chasm/lib/callback/callbackserver"
+
 	"github.com/google/uuid"
 	"github.com/nexus-rpc/sdk-go/nexus"
 	"github.com/stretchr/testify/assert"
@@ -38,7 +40,6 @@ import (
 	tokenspb "go.temporal.io/server/api/token/v1"
 	"go.temporal.io/server/chasm"
 	"go.temporal.io/server/chasm/lib/activity"
-	chasmcallback "go.temporal.io/server/chasm/lib/callback"
 	chasmnexus "go.temporal.io/server/chasm/lib/nexusoperation"
 	"go.temporal.io/server/common"
 	"go.temporal.io/server/common/authorization"
@@ -815,7 +816,7 @@ func (s *NexusWorkflowTestSuite) TestNexusOperationStartsStandaloneActivityBidir
 func requireNexusCompletionSource(t *testing.T, capture *testcore.NamespaceMetricCapture, want string) {
 	t.Helper()
 	require.EventuallyWithT(t, func(c *assert.CollectT) {
-		recordings := capture.Metric(chasmcallback.RequestCounter.Name())
+		recordings := capture.Metric(callbackserver.RequestCounter.Name())
 		require.NotEmpty(c, recordings, "no callback_outbound_requests recorded")
 		for _, rec := range recordings {
 			if rec.Tags["nexus_completion_source"] == want {

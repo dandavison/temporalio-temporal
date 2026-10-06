@@ -6,6 +6,8 @@ import (
 	"testing"
 	"time"
 
+	"go.temporal.io/server/chasm/lib/callback/callbackserver"
+
 	"github.com/google/uuid"
 	"github.com/nexus-rpc/sdk-go/nexus"
 	"github.com/stretchr/testify/require"
@@ -16,7 +18,6 @@ import (
 	nexusoperationpb "go.temporal.io/api/nexusoperation/v1"
 	"go.temporal.io/api/serviceerror"
 	"go.temporal.io/api/workflowservice/v1"
-	"go.temporal.io/server/chasm/lib/callback"
 	"go.temporal.io/server/chasm/lib/nexusoperation"
 	"go.temporal.io/server/common/callbacks"
 	"go.temporal.io/server/common/dynamicconfig"
@@ -52,7 +53,7 @@ func (s *NexusStandaloneCallbacksTestSuite) newTestEnv(enableCallbacks bool) *Ne
 	)
 	if enableCallbacks {
 		env.OverrideDynamicConfig(
-			callback.AllowedAddresses,
+			callbackserver.AllowedAddresses,
 			[]any{map[string]any{"Pattern": "*", "AllowInsecure": true}},
 		)
 	}

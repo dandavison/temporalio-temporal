@@ -1,7 +1,7 @@
 package activity
 
 import (
-	"go.temporal.io/server/chasm/lib/callback"
+	"go.temporal.io/server/chasm/lib/callback/callbackserver"
 	"go.temporal.io/server/common"
 	"go.temporal.io/server/common/callbacks"
 	"go.temporal.io/server/common/dynamicconfig"
@@ -90,7 +90,7 @@ func ConfigProvider(dc *dynamicconfig.Collection) *Config {
 		LongPollTimeout:                           LongPollTimeout.Get(dc),
 		MaxIDLengthLimit:                          dynamicconfig.MaxIDLengthLimit.Get(dc),
 		StartDelayEnabled:                         StartDelayEnabled.Get(dc),
-		MaxCallbacksPerExecution:                  callback.MaxPerExecution.Get(dc),
+		MaxCallbacksPerExecution:                  callbackserver.MaxPerExecution.Get(dc),
 		MutableStateActivityFailureSizeLimitError: dynamicconfig.MutableStateActivityFailureSizeLimitError.Get(dc),
 		MaxUserMetadataDetailsSize:                dynamicconfig.MaxUserMetadataDetailsSize.Get(dc),
 		MaxUserMetadataSummarySize:                dynamicconfig.MaxUserMetadataSummarySize.Get(dc),

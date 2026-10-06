@@ -7,6 +7,8 @@ import (
 	"testing"
 	"time"
 
+	"go.temporal.io/server/chasm/lib/callback/callbackserver"
+
 	"github.com/google/uuid"
 	"github.com/nexus-rpc/sdk-go/nexus"
 	"github.com/stretchr/testify/require"
@@ -23,7 +25,6 @@ import (
 	"go.temporal.io/api/workflowservice/v1"
 	"go.temporal.io/sdk/temporal"
 	"go.temporal.io/server/chasm/lib/activity"
-	"go.temporal.io/server/chasm/lib/callback"
 	"go.temporal.io/server/common"
 	"go.temporal.io/server/common/callbacks"
 	"go.temporal.io/server/common/dynamicconfig"
@@ -278,7 +279,7 @@ func (s *standaloneActivityTestSuite) TestIDConflictPolicy() {
 
 		t.Run("OnConflictOptions", func(t *testing.T) {
 			env.OverrideDynamicConfig(
-				callback.AllowedAddresses,
+				callbackserver.AllowedAddresses,
 				[]any{map[string]any{"Pattern": "*", "AllowInsecure": true}},
 			)
 
@@ -10100,7 +10101,7 @@ func (s *standaloneActivityTestSuite) TestCallbacks() {
 	t := s.T()
 
 	env.OverrideDynamicConfig(
-		callback.AllowedAddresses,
+		callbackserver.AllowedAddresses,
 		[]any{map[string]any{"Pattern": "*", "AllowInsecure": true}},
 	)
 
@@ -10197,7 +10198,7 @@ func (s *standaloneActivityTestSuite) TestCallbacks() {
 	t.Run("ExceedsMaxCallbacksLimit", func(t *testing.T) {
 		maxCallbacks := 1
 		env.OverrideDynamicConfig(
-			callback.MaxPerExecution,
+			callbackserver.MaxPerExecution,
 			maxCallbacks,
 		)
 

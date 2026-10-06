@@ -3,8 +3,9 @@ package scheduler
 import (
 	"time"
 
+	"go.temporal.io/server/chasm/lib/callback/callbackserver"
+
 	"go.temporal.io/server/chasm"
-	"go.temporal.io/server/chasm/lib/callback"
 	"go.temporal.io/server/common/backoff"
 	"go.temporal.io/server/common/dynamicconfig"
 )
@@ -103,7 +104,7 @@ func ConfigProvider(dc *dynamicconfig.Collection) *Config {
 	return &Config{
 		Tweakables:                      CurrentTweakables.Get(dc),
 		ServiceCallTimeout:              ServiceCallTimeout.Get(dc),
-		EncodeInternalTokenWithEnvelope: callback.EncodeInternalTokenWithEnvelope.Get(dc),
+		EncodeInternalTokenWithEnvelope: callbackserver.EncodeInternalTokenWithEnvelope.Get(dc),
 		RetryPolicy: func() backoff.RetryPolicy {
 			return backoff.NewExponentialRetryPolicy(
 				RetryPolicyInitialInterval.Get(dc)(),

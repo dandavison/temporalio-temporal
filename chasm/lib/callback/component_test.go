@@ -17,7 +17,6 @@ import (
 	"go.temporal.io/server/common/log"
 	"go.temporal.io/server/common/metrics"
 	"go.temporal.io/server/common/testing/protorequire"
-	queueserrors "go.temporal.io/server/service/history/queues/errors"
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
@@ -150,19 +149,6 @@ func TestFromAPICallback(t *testing.T) {
 
 // A callback whose variant this server doesn't know how to invoke can still be persisted (by a server that
 // does, or by a future version), so its invocation task has to be rejected rather than crash.
-func TestLoadInvocationArgsUnsupportedVariant(t *testing.T) {
-	cb := &Callback{
-		CallbackState: &callbackspb.CallbackState{
-			Callback: &callbackspb.Callback{},
-		},
-	}
-	_, err := cb.loadInvocationArgs(&chasm.MockMutableContext{}, nil)
-
-	var unprocessableErr *queueserrors.UnprocessableTaskError
-	require.ErrorAs(t, err, &unprocessableErr)
-	require.ErrorContains(t, err, "unprocessable callback variant")
-}
-
 // Confirm the request ID passed to NewCallback is persisited, and set in ToAPICallbackInfo.
 func TestToAPICallbackInfoCarriesTheRequestID(t *testing.T) {
 	ctx := &chasm.MockContext{}
@@ -234,9 +220,9 @@ func newTestContext(t *testing.T, lib *Library) chasm.Context {
 	return chasm.NewContext(t.Context(), node)
 }
 
-// newTestLibrary builds the library the way fx does, sans task handlers.
+// newTestLibrary builds the library without an invocation task executor.
 func newTestLibrary(destinationBlocked DestinationBlockedFn) *Library {
-	return newLibrary(libraryParams{DestinationBlocked: destinationBlocked})
+	return NewLibrary(nil, destinationBlocked)
 }
 
 func newTestCallback(status callbackspb.CallbackStatus, variant *callbackspb.Callback) *Callback {

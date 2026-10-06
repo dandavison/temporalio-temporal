@@ -10,6 +10,8 @@ import (
 	"testing"
 	"time"
 
+	"go.temporal.io/server/chasm/lib/callback/callbackserver"
+
 	"github.com/google/uuid"
 	"github.com/stretchr/testify/require"
 	commandpb "go.temporal.io/api/command/v1"
@@ -20,7 +22,6 @@ import (
 	updatepb "go.temporal.io/api/update/v1"
 	workflowpb "go.temporal.io/api/workflow/v1"
 	"go.temporal.io/api/workflowservice/v1"
-	"go.temporal.io/server/chasm/lib/callback"
 	"go.temporal.io/server/common/dynamicconfig"
 	"go.temporal.io/server/common/failure"
 	"go.temporal.io/server/common/headers"
@@ -280,7 +281,7 @@ func (s *WorkflowTestSuite) TestStartWorkflowExecution_UseExisting_OnConflictOpt
 	for _, tc := range testCases {
 		s.Run(tc.name, func(s *WorkflowTestSuite) {
 			opts := []testcore.TestOption{
-				testcore.WithDynamicConfig(callback.AllowedAddresses, allowedAddresses),
+				testcore.WithDynamicConfig(callbackserver.AllowedAddresses, allowedAddresses),
 			}
 			if tc.MaxCallbacksPerWorkflow > 0 {
 				// Set both the legacy (HSM) and CHASM callback limits so the limit is
@@ -290,7 +291,7 @@ func (s *WorkflowTestSuite) TestStartWorkflowExecution_UseExisting_OnConflictOpt
 					tc.MaxCallbacksPerWorkflow,
 				))
 				opts = append(opts, testcore.WithDynamicConfig(
-					callback.MaxPerExecution,
+					callbackserver.MaxPerExecution,
 					tc.MaxCallbacksPerWorkflow,
 				))
 			}
