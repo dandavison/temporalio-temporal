@@ -14,7 +14,6 @@ import (
 
 	commonpb "go.temporal.io/api/common/v1"
 	enumspb "go.temporal.io/api/enums/v1"
-	historypb "go.temporal.io/api/history/v1"
 	sdkpb "go.temporal.io/api/sdk/v1"
 	"go.temporal.io/api/serviceerror"
 	enumsspb "go.temporal.io/server/api/enums/v1"
@@ -25,11 +24,8 @@ import (
 	"go.temporal.io/server/common/log/tag"
 	"go.temporal.io/server/common/metrics"
 	"go.temporal.io/server/common/namespace"
-	"go.temporal.io/server/common/nexus/nexusrpc"
-	"go.temporal.io/server/common/persistence/serialization"
 	"go.temporal.io/server/common/persistence/transitionhistory"
 	"go.temporal.io/server/common/softassert"
-	"go.temporal.io/server/service/history/tasks"
 	"golang.org/x/exp/maps"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/timestamppb"
@@ -215,26 +211,13 @@ type (
 		NextTransitionCount() int64
 		CurrentVersionedTransition() *persistencespb.VersionedTransition
 		GetWorkflowKey() definition.WorkflowKey
-		AddTasks(...tasks.Task)
-		AddHistoryEvent(t enumspb.EventType, setAttributes func(*historypb.HistoryEvent)) *historypb.HistoryEvent
-		GenerateEventLoadToken(event *historypb.HistoryEvent) ([]byte, error)
-		LoadHistoryEvent(ctx context.Context, token []byte) (*historypb.HistoryEvent, error)
-		HasAnyBufferedEvent(filter func(*historypb.HistoryEvent) bool) bool
+		AddTasks(...PhysicalTask)
 		DeleteCHASMPureTasks(maxScheduledTime time.Time)
 		UpdateWorkflowStateStatus(
 			state enumsspb.WorkflowExecutionState,
 			status enumspb.WorkflowExecutionStatus,
 		) (bool, error)
 		IsWorkflow() bool
-		GetNexusCompletion(
-			ctx context.Context,
-			requestID string,
-		) (nexusrpc.CompleteOperationOptions, error)
-		GetNexusUpdateCompletion(
-			ctx context.Context,
-			updateID string,
-			requestID string,
-		) (nexusrpc.CompleteOperationOptions, error)
 		EndpointRegistry() EndpointRegistry
 		Now() time.Time
 		SetTimeSkippingConfig(config *commonpb.TimeSkippingConfig)
@@ -1366,8 +1349,6 @@ func (n *Node) deserializeComponentNode(
 			} else if field.val.IsNil() {
 				field.val.Set(reflect.MakeMap(field.typ))
 			}
-		case fieldKindMutableState:
-			field.val.Set(reflect.ValueOf(NewMSPointer(n.backend)))
 		case fieldKindParentPtr:
 			parentPtrV := reflect.New(field.typ).Elem()
 			parentPtrV.FieldByName(parentPtrInternalFieldName).Set(reflect.ValueOf(parentPtrInternal{
@@ -1422,7 +1403,7 @@ func unmarshalProto(
 		}
 	}
 
-	if err := serialization.Decode(dataBlob, value.Interface().(proto.Message)); err != nil {
+	if err := decodeChasmBlob(dataBlob, value.Interface().(proto.Message)); err != nil {
 		return reflect.Value{}, err
 	}
 
@@ -2336,8 +2317,7 @@ func (n *Node) closeTransactionGeneratePhysicalSideEffectTask(
 	nodePath []string,
 	archetypeID ArchetypeID,
 ) {
-	n.backend.AddTasks(&tasks.ChasmTask{
-		WorkflowKey:         n.backend.GetWorkflowKey(),
+	n.backend.AddTasks(&PhysicalSideEffectTask{
 		VisibilityTimestamp: sideEffectTask.ScheduledTime.AsTime(),
 		Destination:         sideEffectTask.Destination,
 		Category:            taskCategory(sideEffectTask),
@@ -2361,7 +2341,7 @@ func (n *Node) closeTransactionGeneratePhysicalPureTask(
 	archetypeID ArchetypeID,
 ) error {
 	if firstPureTask == nil {
-		n.backend.DeleteCHASMPureTasks(tasks.MaximumKey.FireTime)
+		n.backend.DeleteCHASMPureTasks(maximumPureTaskFireTime)
 		return nil
 	}
 
@@ -2372,8 +2352,7 @@ func (n *Node) closeTransactionGeneratePhysicalPureTask(
 		return nil
 	}
 
-	n.backend.AddTasks(&tasks.ChasmTaskPure{
-		WorkflowKey:         n.backend.GetWorkflowKey(),
+	n.backend.AddTasks(&PhysicalPureTask{
 		VisibilityTimestamp: firstPureTaskScheduledTime,
 		ArchetypeID:         archetypeID,
 	})
@@ -3393,20 +3372,20 @@ func (n *Node) carryOverTaskStatus(
 
 func taskCategory(
 	task *persistencespb.ChasmComponentAttributes_Task,
-) tasks.Category {
+) TaskCategory {
 	if task.TypeId == visibilityTaskTypeID {
-		return tasks.CategoryVisibility
+		return TaskCategoryVisibility
 	}
 
 	if task.Destination != "" {
-		return tasks.CategoryOutbound
+		return TaskCategoryOutbound
 	}
 
 	if task.ScheduledTime == nil ||
 		task.ScheduledTime.AsTime().Equal(TaskScheduledTimeImmediate) {
-		return tasks.CategoryTransfer
+		return TaskCategoryTransfer
 	}
-	return tasks.CategoryTimer
+	return TaskCategoryTimer
 }
 
 func (n *Node) deserializeTaskWithCache(
@@ -3659,7 +3638,7 @@ func (n *Node) ExecutePureTask(
 // If an error is returned both booleans are false.
 func (n *Node) ValidateSideEffectTask(
 	ctx context.Context,
-	chasmTask *tasks.ChasmTask,
+	chasmTask *PhysicalSideEffectTask,
 ) (isTaskInTree bool, isValidByComponent bool, retErr error) {
 
 	taskInfo := chasmTask.Info
@@ -3755,7 +3734,7 @@ func (n *Node) ValidateSideEffectTask(
 		validateCtx,
 		TaskInvocation{
 			TaskAttributes: TaskAttributes{
-				ScheduledTime: chasmTask.GetVisibilityTime(),
+				ScheduledTime: chasmTask.VisibilityTimestamp,
 				Destination:   chasmTask.Destination,
 			},
 			Attempt: chasmTask.Attempt,
@@ -3775,7 +3754,7 @@ func (n *Node) ValidateSideEffectTask(
 func (n *Node) ExecuteSideEffectTask(
 	ctx context.Context,
 	executionKey ExecutionKey,
-	chasmTask *tasks.ChasmTask,
+	chasmTask *PhysicalSideEffectTask,
 	validate func(NodeBackend, Context, Component) error,
 ) error {
 	rt, err := n.lookupSideEffectTask(ctx, "ExecuteSideEffectTask", chasmTask)
@@ -3791,7 +3770,7 @@ func (n *Node) ExecuteSideEffectTask(
 func (n *Node) ExecuteSideEffectDiscardTask(
 	ctx context.Context,
 	executionKey ExecutionKey,
-	chasmTask *tasks.ChasmTask,
+	chasmTask *PhysicalSideEffectTask,
 	validate func(NodeBackend, Context, Component) error,
 ) error {
 	rt, err := n.lookupSideEffectTask(ctx, "ExecuteSideEffectDiscardTask", chasmTask)
@@ -3804,7 +3783,7 @@ func (n *Node) ExecuteSideEffectDiscardTask(
 func (n *Node) lookupSideEffectTask(
 	ctx context.Context,
 	callerName string,
-	chasmTask *tasks.ChasmTask,
+	chasmTask *PhysicalSideEffectTask,
 ) (*RegistrableTask, error) {
 	if engineFromContext(ctx) == nil {
 		return nil, serviceerror.NewInternal("no CHASM engine set on context")
@@ -3831,7 +3810,7 @@ func (n *Node) invokeSideEffectTaskFn(
 	ctx context.Context,
 	registrableTask *RegistrableTask,
 	executionKey ExecutionKey,
-	chasmTask *tasks.ChasmTask,
+	chasmTask *PhysicalSideEffectTask,
 	validate func(NodeBackend, Context, Component) error,
 	taskFn func(context.Context, ComponentRef, TaskAttributes, any) error,
 ) (retErr error) {
@@ -3859,7 +3838,7 @@ func (n *Node) invokeSideEffectTaskFn(
 	taskValue := chasmTask.DeserializedTask
 
 	taskAttributes := TaskAttributes{
-		ScheduledTime: chasmTask.GetVisibilityTime(),
+		ScheduledTime: chasmTask.VisibilityTimestamp,
 		Destination:   chasmTask.Destination,
 	}
 
@@ -3944,12 +3923,6 @@ func makeValidationFn(
 	}
 }
 
-// encodeChasmBlob encodes CHASM data and task payloads through the env-aware
-// serializer while preserving deterministic proto3 bytes for byte comparisons.
-func encodeChasmBlob(m proto.Message) (*commonpb.DataBlob, error) {
-	return serialization.Encode(m, serialization.WithDeterministicProto3)
-}
-
 func (n *Node) closeTransactionHandleTimeSkipping(immutableContext Context) error {
 	// Replication does not mark the subtree dirty. Re-stamp timers only when the
 	// replicated accumulated skip changed.
@@ -4014,7 +3987,7 @@ func (n *Node) regenerateTimerTasksForTimeSkipping() error {
 		}
 
 		for _, sideEffectTask := range componentAttr.GetSideEffectTasks() {
-			if taskCategory(sideEffectTask) != tasks.CategoryTimer {
+			if taskCategory(sideEffectTask) != TaskCategoryTimer {
 				continue
 			}
 			sideEffectTask.PhysicalTaskStatus = physicalTaskStatusNone
@@ -4061,7 +4034,7 @@ func (n *Node) defaultFindNextTargetTime() *TimeSkippingTransition {
 			componentAttr.GetSideEffectTasks(),
 		} {
 			for _, task := range taskList {
-				if taskCategory(task) != tasks.CategoryTimer {
+				if taskCategory(task) != TaskCategoryTimer {
 					continue
 				}
 				scheduledTime := task.GetScheduledTime().AsTime()

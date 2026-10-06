@@ -4,10 +4,7 @@ import (
 	"fmt"
 	"slices"
 
-	"go.opentelemetry.io/otel/attribute"
-	"go.opentelemetry.io/otel/trace"
 	"go.temporal.io/api/serviceerror"
-	"go.temporal.io/server/common/telemetry"
 )
 
 // ErrInvalidTransition is returned from [Transition.Apply] on an invalid state transition.
@@ -51,21 +48,6 @@ func (t Transition[S, SM, E]) Possible(sm SM) bool {
 // (source) state.
 func (t Transition[S, SM, E]) Apply(sm SM, ctx MutableContext, event E) (retErr error) {
 	prevState := sm.StateMachineState()
-
-	// Defer to always emit the transition telemetry event.
-	if telemetry.DebugMode() {
-		defer func() {
-			attrs := []attribute.KeyValue{
-				attribute.String("chasm.transition.source", fmt.Sprintf("%v", prevState)),
-				attribute.String("chasm.transition.destination", fmt.Sprintf("%v", t.Destination)),
-			}
-			if retErr != nil {
-				attrs = append(attrs, attribute.String("chasm.transition.error", retErr.Error()))
-			}
-			span := trace.SpanFromContext(ctx.goContext())
-			span.AddEvent("chasm.transition", trace.WithAttributes(attrs...))
-		}()
-	}
 
 	if !t.Possible(sm) {
 		return fmt.Errorf("%w from %v", ErrInvalidTransition, prevState)

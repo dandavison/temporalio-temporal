@@ -1,23 +1,10 @@
-//go:generate mockgen -package $GOPACKAGE -source $GOFILE -destination library_mock.go
-
 package chasm
-
-import (
-	"github.com/nexus-rpc/sdk-go/nexus"
-	"google.golang.org/grpc"
-)
 
 type (
 	Library interface {
 		Name() string
 		Components() []*RegistrableComponent
 		Tasks() []*RegistrableTask
-		RegisterServices(server *grpc.Server)
-		// NexusServices returns a list of nexus.Service instances to register with the __temporal_system Nexus endpoint.
-		NexusServices() []*nexus.Service
-		// NexusServiceProcessors returns a list of NexusServiceProcessor instances to register with the __temporal_system
-		// Nexus endpoint.
-		NexusServiceProcessors() []*NexusServiceProcessor
 
 		mustEmbedUnimplementedLibrary()
 	}
@@ -34,18 +21,6 @@ func (UnimplementedLibrary) Components() []*RegistrableComponent {
 }
 
 func (UnimplementedLibrary) Tasks() []*RegistrableTask {
-	return nil
-}
-
-// RegisterServices Registers the gRPC calls to the handlers of the library.
-func (UnimplementedLibrary) RegisterServices(_ *grpc.Server) {
-}
-
-func (UnimplementedLibrary) NexusServices() []*nexus.Service {
-	return nil
-}
-
-func (UnimplementedLibrary) NexusServiceProcessors() []*NexusServiceProcessor {
 	return nil
 }
 
