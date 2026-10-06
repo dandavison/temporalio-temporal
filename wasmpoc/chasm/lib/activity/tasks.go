@@ -3,12 +3,14 @@ package activity
 import (
 	"context"
 
+	commonpb "go.temporal.io/api/common/v1"
 	enumspb "go.temporal.io/api/enums/v1"
+	taskqueuepb "go.temporal.io/api/taskqueue/v1"
 	"go.temporal.io/server/common/util"
-	"go.temporal.io/server/wasmpoc/api/matchingservice/v1"
 	"go.temporal.io/server/wasmpoc/chasm"
 	"go.temporal.io/server/wasmpoc/chasm/lib/activity/gen/activitypb/v1"
 	"go.temporal.io/server/wasmpoc/common/metrics"
+	"google.golang.org/protobuf/types/known/durationpb"
 )
 
 // DispatchTaskHook wraps a validated activity dispatch on the active cluster before it is sent to
@@ -23,10 +25,20 @@ type DispatchTaskHook func(
 	dispatch func(context.Context) error,
 ) error
 
-// MatchingClient is the one Matching RPC the dispatch task needs. The server passes its Matching
-// client; a local engine passes its own task queue.
+// MatchingClient receives activity tasks to dispatch. The server adapts its Matching client; a local
+// engine passes its own task queue.
 type MatchingClient interface {
-	AddActivityTask(ctx context.Context, request *matchingservice.AddActivityTaskRequest) error
+	AddActivityTask(ctx context.Context, request *DispatchRequest) error
+}
+
+// DispatchRequest is an activity attempt to hand to a worker.
+type DispatchRequest struct {
+	NamespaceID            string
+	ScheduleToStartTimeout *durationpb.Duration
+	TaskQueue              *taskqueuepb.TaskQueue
+	Priority               *commonpb.Priority
+	ComponentRef           []byte
+	Stamp                  int32
 }
 
 type activityDispatchTaskHandlerOptions struct {
@@ -109,11 +121,11 @@ func (h *activityDispatchTaskHandler) Discard(
 func (h *activityDispatchTaskHandler) createMatchingRequest(
 	ctx context.Context,
 	activityRef chasm.ComponentRef,
-) (*matchingservice.AddActivityTaskRequest, error) {
+) (*DispatchRequest, error) {
 	return chasm.ReadComponent(
 		ctx,
 		activityRef,
-		(*Activity).createAddActivityTaskRequest,
+		(*Activity).createDispatchRequest,
 		activityRef.NamespaceID,
 	)
 }

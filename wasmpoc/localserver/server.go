@@ -12,8 +12,6 @@ import (
 	historypb "go.temporal.io/api/history/v1"
 	"go.temporal.io/api/serviceerror"
 	tokenspb "go.temporal.io/server/api/token/v1"
-	"go.temporal.io/server/wasmpoc/api/historyservice/v1"
-	"go.temporal.io/server/wasmpoc/api/matchingservice/v1"
 	"go.temporal.io/server/wasmpoc/api/workflowservice/v1"
 	"go.temporal.io/server/wasmpoc/chasm"
 	"go.temporal.io/server/wasmpoc/chasm/lib/activity"
@@ -24,7 +22,7 @@ import (
 type Server struct {
 	engine        *engine
 	workflowTasks map[string][]queuedWorkflowTask
-	activityTasks map[string][]*matchingservice.AddActivityTaskRequest
+	activityTasks map[string][]*activity.DispatchRequest
 	newRunID      func() string
 }
 
@@ -36,7 +34,7 @@ type queuedWorkflowTask struct {
 func New(now time.Time, newRunID func() string) (*Server, error) {
 	s := &Server{
 		workflowTasks: map[string][]queuedWorkflowTask{},
-		activityTasks: map[string][]*matchingservice.AddActivityTaskRequest{},
+		activityTasks: map[string][]*activity.DispatchRequest{},
 		newRunID:      newRunID,
 	}
 	registry := chasm.NewRegistry(log.NewNoopLogger())
@@ -164,10 +162,9 @@ func (s *Server) PollActivityTaskQueue(
 	for len(s.activityTasks[taskQueue]) > 0 {
 		task := s.activityTasks[taskQueue][0]
 		s.activityTasks[taskQueue] = s.activityTasks[taskQueue][1:]
-		response, _, err := chasm.UpdateComponent(s.ctx(ctx), task.GetComponentRef(), startActivityTask, &historyservice.RecordActivityTaskStartedRequest{
-			NamespaceId: task.GetNamespaceId(),
-			Stamp:       task.GetStamp(),
-			RequestId:   s.newRunID(),
+		response, _, err := chasm.UpdateComponent(s.ctx(ctx), task.ComponentRef, startActivityTask, &activity.StartRequest{
+			RequestID:   s.newRunID(),
+			Stamp:       task.Stamp,
 			PollRequest: request,
 		})
 		if _, obsolete := err.(*serviceerror.NotFound); obsolete {
@@ -186,10 +183,9 @@ func (s *Server) RespondActivityTaskCompleted(
 	if err != nil {
 		return nil, err
 	}
-	_, _, err = chasm.UpdateComponent(s.ctx(ctx), ref, (*activity.Activity).HandleCompleted, activity.RespondCompletedEvent{
-		Request: &historyservice.RespondActivityTaskCompletedRequest{NamespaceId: token.GetNamespaceId(), CompleteRequest: request},
-		Token:   token,
-	})
+	_, _, err = chasm.UpdateComponent(s.ctx(ctx), ref, func(a *activity.Activity, ctx chasm.MutableContext, event activity.RespondCompletedEvent) (struct{}, error) {
+		return struct{}{}, a.HandleCompleted(ctx, event)
+	}, activity.RespondCompletedEvent{NamespaceID: token.GetNamespaceId(), Token: token, Request: request})
 	if err != nil {
 		return nil, err
 	}
@@ -204,10 +200,9 @@ func (s *Server) RespondActivityTaskFailed(
 	if err != nil {
 		return nil, err
 	}
-	_, _, err = chasm.UpdateComponent(s.ctx(ctx), ref, (*activity.Activity).HandleFailed, activity.RespondFailedEvent{
-		Request: &historyservice.RespondActivityTaskFailedRequest{NamespaceId: token.GetNamespaceId(), FailedRequest: request},
-		Token:   token,
-	})
+	_, _, err = chasm.UpdateComponent(s.ctx(ctx), ref, func(a *activity.Activity, ctx chasm.MutableContext, event activity.RespondFailedEvent) (struct{}, error) {
+		return struct{}{}, a.HandleFailed(ctx, event)
+	}, activity.RespondFailedEvent{NamespaceID: token.GetNamespaceId(), Token: token, Request: request})
 	if err != nil {
 		return nil, err
 	}
@@ -215,8 +210,8 @@ func (s *Server) RespondActivityTaskFailed(
 }
 
 // AddActivityTask implements activity.MatchingClient.
-func (s *Server) AddActivityTask(_ context.Context, request *matchingservice.AddActivityTaskRequest) error {
-	taskQueue := request.GetTaskQueue().GetName()
+func (s *Server) AddActivityTask(_ context.Context, request *activity.DispatchRequest) error {
+	taskQueue := request.TaskQueue.GetName()
 	s.activityTasks[taskQueue] = append(s.activityTasks[taskQueue], request)
 	return nil
 }
@@ -238,7 +233,7 @@ func (s *Server) decodeToken(serialized []byte) (*tokenspb.Task, []byte, error) 
 func startActivityTask(
 	a *activity.Activity,
 	ctx chasm.MutableContext,
-	request *historyservice.RecordActivityTaskStartedRequest,
+	request *activity.StartRequest,
 ) (*workflowservice.PollActivityTaskQueueResponse, error) {
 	started, err := a.HandleStarted(ctx, request)
 	if err != nil {
@@ -263,7 +258,7 @@ func startActivityTask(
 		WorkflowId:           key.BusinessID,
 		RunId:                key.RunID,
 		ScheduledEventId:     scheduledEvent.GetEventId(),
-		Attempt:              started.GetAttempt(),
+		Attempt:              started.Attempt,
 		ActivityId:           scheduled.GetActivityId(),
 		ActivityType:         scheduled.GetActivityType().GetName(),
 		ComponentRef:         ref,
@@ -281,15 +276,15 @@ func startActivityTask(
 		ActivityId:                  scheduled.GetActivityId(),
 		Header:                      scheduled.GetHeader(),
 		Input:                       scheduled.GetInput(),
-		HeartbeatDetails:            started.GetHeartbeatDetails(),
+		HeartbeatDetails:            started.HeartbeatDetails,
 		ScheduledTime:               scheduledEvent.GetEventTime(),
-		CurrentAttemptScheduledTime: started.GetCurrentAttemptScheduledTime(),
-		StartedTime:                 started.GetStartedTime(),
-		Attempt:                     started.GetAttempt(),
+		CurrentAttemptScheduledTime: started.CurrentAttemptScheduledTime,
+		StartedTime:                 started.StartedTime,
+		Attempt:                     started.Attempt,
 		ScheduleToCloseTimeout:      scheduled.GetScheduleToCloseTimeout(),
 		StartToCloseTimeout:         scheduled.GetStartToCloseTimeout(),
 		HeartbeatTimeout:            scheduled.GetHeartbeatTimeout(),
-		RetryPolicy:                 started.GetRetryPolicy(),
-		Priority:                    started.GetPriority(),
+		RetryPolicy:                 started.RetryPolicy,
+		Priority:                    started.Priority,
 	}, nil
 }
