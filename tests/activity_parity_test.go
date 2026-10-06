@@ -13,7 +13,7 @@ import (
 	failurepb "go.temporal.io/api/failure/v1"
 	"go.temporal.io/api/serviceerror"
 	"go.temporal.io/sdk/temporal"
-	"go.temporal.io/server/chasm/lib/activity"
+	"go.temporal.io/server/chasm/lib/activity/activityserver"
 	"go.temporal.io/server/chasm/lib/activity/model"
 	"go.temporal.io/server/common/dynamicconfig"
 	"go.temporal.io/server/common/primitives"
@@ -40,8 +40,8 @@ func newActivityParityEnv(t *testing.T) *testcore.TestEnv {
 	}
 	cluster := env.GetTestCluster()
 	cluster.OverrideDynamicConfig(t, dynamicconfig.EnableChasm, nsValues(true))
-	cluster.OverrideDynamicConfig(t, activity.Enabled, nsValues(true))
-	cluster.OverrideDynamicConfig(t, activity.EnableStandaloneActivityOperatorCommands, nsValues(true))
+	cluster.OverrideDynamicConfig(t, activityserver.Enabled, nsValues(true))
+	cluster.OverrideDynamicConfig(t, activityserver.EnableStandaloneActivityOperatorCommands, nsValues(true))
 	return env
 }
 

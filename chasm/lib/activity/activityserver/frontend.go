@@ -1,4 +1,4 @@
-package activity
+package activityserver
 
 import (
 	"context"
@@ -10,6 +10,7 @@ import (
 	"go.temporal.io/api/serviceerror"
 	"go.temporal.io/api/workflowservice/v1"
 	"go.temporal.io/server/chasm"
+	"go.temporal.io/server/chasm/lib/activity"
 	"go.temporal.io/server/chasm/lib/activity/gen/activitypb/v1"
 	"go.temporal.io/server/common"
 	"go.temporal.io/server/common/callbacks"
@@ -188,7 +189,7 @@ func (h *frontendHandler) ListActivityExecutions(
 		pageSize = maxPageSize
 	}
 
-	resp, err := chasm.ListExecutions[*Activity, *emptypb.Empty](ctx, &chasm.ListExecutionsRequest{
+	resp, err := chasm.ListExecutions[*activity.Activity, *emptypb.Empty](ctx, &chasm.ListExecutionsRequest{
 		NamespaceName: req.GetNamespace(),
 		PageSize:      int(pageSize),
 		NextPageToken: req.GetNextPageToken(),
@@ -200,9 +201,9 @@ func (h *frontendHandler) ListActivityExecutions(
 
 	executions := make([]*apiactivitypb.ActivityExecutionListInfo, 0, len(resp.Executions))
 	for _, exec := range resp.Executions {
-		activityType, _ := chasm.SearchAttributeValue(exec.ChasmSearchAttributes, TypeSearchAttribute)
+		activityType, _ := chasm.SearchAttributeValue(exec.ChasmSearchAttributes, activity.TypeSearchAttribute)
 		taskQueue, _ := chasm.SearchAttributeValue(exec.ChasmSearchAttributes, chasm.SearchAttributeTaskQueue)
-		statusStr, _ := chasm.SearchAttributeValue(exec.ChasmSearchAttributes, StatusSearchAttribute)
+		statusStr, _ := chasm.SearchAttributeValue(exec.ChasmSearchAttributes, activity.StatusSearchAttribute)
 		status, _ := enumspb.ActivityExecutionStatusFromString(statusStr)
 
 		info := &apiactivitypb.ActivityExecutionListInfo{
@@ -243,7 +244,7 @@ func (h *frontendHandler) CountActivityExecutions(
 		return nil, ErrStandaloneActivityDisabled
 	}
 
-	resp, err := chasm.CountExecutions[*Activity](ctx, &chasm.CountExecutionsRequest{
+	resp, err := chasm.CountExecutions[*activity.Activity](ctx, &chasm.CountExecutionsRequest{
 		NamespaceName: req.GetNamespace(),
 		Query:         req.GetQuery(),
 	})
@@ -380,7 +381,7 @@ func (h *frontendHandler) validateAndPopulateStartRequest(
 		req.RetryPolicy = &commonpb.RetryPolicy{}
 	}
 
-	if err := validateStartDelay(req.GetStartDelay()); err != nil {
+	if err := activity.ValidateStartDelay(req.GetStartDelay()); err != nil {
 		return nil, err
 	}
 	if req.GetStartDelay().AsDuration() > 0 && !h.config.StartDelayEnabled(req.GetNamespace()) {
@@ -389,7 +390,7 @@ func (h *frontendHandler) validateAndPopulateStartRequest(
 	// TODO(saa): when eager start is supported, deny it if start delay > 0 (same as workflow behavior).
 
 	opts := activityOptionsFromStartRequest(req)
-	err := ValidateAndNormalizeStandaloneActivity(
+	err := activity.ValidateAndNormalizeStandaloneActivity(
 		req.ActivityId,
 		activityType,
 		h.config.DefaultActivityRetryPolicy,

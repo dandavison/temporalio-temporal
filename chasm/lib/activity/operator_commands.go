@@ -11,13 +11,13 @@ import (
 	"go.temporal.io/api/workflowservice/v1"
 	"go.temporal.io/server/chasm"
 	"go.temporal.io/server/chasm/lib/activity/gen/activitypb/v1"
-	"go.temporal.io/server/common"
 	"go.temporal.io/server/common/activityoptions"
 	"go.temporal.io/server/common/backoff"
 	"go.temporal.io/server/common/metrics"
 	"go.temporal.io/server/common/payload"
 	"go.temporal.io/server/common/retrypolicy"
 	"go.temporal.io/server/common/util"
+	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/durationpb"
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
@@ -65,7 +65,7 @@ func (a *Activity) UpdateActivityExecutionOptions(
 	_, hasStartDelayInMask := updateFields["startDelay"]
 	if hasStartDelayInMask {
 		newDelay := frontendReq.GetActivityOptions().GetStartDelay()
-		if err := validateStartDelay(newDelay); err != nil {
+		if err := ValidateStartDelay(newDelay); err != nil {
 			return nil, err
 		}
 		if newDelay.AsDuration() > 0 {
@@ -86,17 +86,17 @@ func (a *Activity) UpdateActivityExecutionOptions(
 
 	if frontendReq.GetRestoreOriginal() {
 		ogOptions := a.GetOriginalOptions()
-		a.TaskQueue = common.CloneProto(ogOptions.GetTaskQueue())
-		a.ScheduleToCloseTimeout = common.CloneProto(ogOptions.GetScheduleToCloseTimeout())
-		a.ScheduleToStartTimeout = common.CloneProto(ogOptions.GetScheduleToStartTimeout())
-		a.StartToCloseTimeout = common.CloneProto(ogOptions.GetStartToCloseTimeout())
-		a.HeartbeatTimeout = common.CloneProto(ogOptions.GetHeartbeatTimeout())
-		a.RetryPolicy = common.CloneProto(ogOptions.GetRetryPolicy())
-		a.Priority = common.CloneProto(ogOptions.GetPriority())
+		a.TaskQueue = proto.CloneOf(ogOptions.GetTaskQueue())
+		a.ScheduleToCloseTimeout = proto.CloneOf(ogOptions.GetScheduleToCloseTimeout())
+		a.ScheduleToStartTimeout = proto.CloneOf(ogOptions.GetScheduleToStartTimeout())
+		a.StartToCloseTimeout = proto.CloneOf(ogOptions.GetStartToCloseTimeout())
+		a.HeartbeatTimeout = proto.CloneOf(ogOptions.GetHeartbeatTimeout())
+		a.RetryPolicy = proto.CloneOf(ogOptions.GetRetryPolicy())
+		a.Priority = proto.CloneOf(ogOptions.GetPriority())
 		// start_delay only governs the first dispatch. Once the first attempt has started, restoring
 		// the original value would shift ScheduleToClose without affecting dispatch timing.
 		if a.GetFirstAttemptStartedTime() == nil {
-			a.StartDelay = common.CloneProto(ogOptions.GetStartDelay())
+			a.StartDelay = proto.CloneOf(ogOptions.GetStartDelay())
 		}
 	} else {
 		if err := a.mergeActivityOptions(frontendReq); err != nil {
@@ -193,17 +193,17 @@ func (a *Activity) mergeActivityOptions(
 
 	// Build an ActivityOptions view of the current Activity state so we can use the shared merge function.
 	ao := &apiactivitypb.ActivityOptions{
-		TaskQueue:              common.CloneProto(a.TaskQueue),
-		ScheduleToCloseTimeout: common.CloneProto(a.ScheduleToCloseTimeout),
-		ScheduleToStartTimeout: common.CloneProto(a.ScheduleToStartTimeout),
-		StartToCloseTimeout:    common.CloneProto(a.StartToCloseTimeout),
-		HeartbeatTimeout:       common.CloneProto(a.HeartbeatTimeout),
-		Priority:               common.CloneProto(a.Priority),
-		RetryPolicy:            common.CloneProto(a.RetryPolicy),
-		StartDelay:             common.CloneProto(a.StartDelay),
+		TaskQueue:              proto.CloneOf(a.TaskQueue),
+		ScheduleToCloseTimeout: proto.CloneOf(a.ScheduleToCloseTimeout),
+		ScheduleToStartTimeout: proto.CloneOf(a.ScheduleToStartTimeout),
+		StartToCloseTimeout:    proto.CloneOf(a.StartToCloseTimeout),
+		HeartbeatTimeout:       proto.CloneOf(a.HeartbeatTimeout),
+		Priority:               proto.CloneOf(a.Priority),
+		RetryPolicy:            proto.CloneOf(a.RetryPolicy),
+		StartDelay:             proto.CloneOf(a.StartDelay),
 	}
 
-	if err := activityoptions.MergeActivityOptions(ao, common.CloneProto(req.GetActivityOptions()), updateFields); err != nil {
+	if err := activityoptions.MergeActivityOptions(ao, proto.CloneOf(req.GetActivityOptions()), updateFields); err != nil {
 		return err
 	}
 
@@ -233,7 +233,7 @@ func (a *Activity) mergeActivityOptions(
 	return nil
 }
 
-func (a *Activity) handleCancellationRequested(ctx chasm.MutableContext, request *activitypb.RequestCancelActivityExecutionRequest) (
+func (a *Activity) HandleCancellationRequested(ctx chasm.MutableContext, request *activitypb.RequestCancelActivityExecutionRequest) (
 	*activitypb.RequestCancelActivityExecutionResponse, error,
 ) {
 	req := request.GetFrontendRequest()
@@ -285,7 +285,7 @@ func (a *Activity) handleCancellationRequested(ctx chasm.MutableContext, request
 	return &activitypb.RequestCancelActivityExecutionResponse{}, nil
 }
 
-func (a *Activity) handlePauseRequested(ctx chasm.MutableContext, req *activitypb.PauseActivityExecutionRequest) (
+func (a *Activity) HandlePauseRequested(ctx chasm.MutableContext, req *activitypb.PauseActivityExecutionRequest) (
 	*activitypb.PauseActivityExecutionResponse, error,
 ) {
 	// Deduplicate a replay of a request that already paused this activity, even if the
@@ -321,7 +321,7 @@ func (a *Activity) handlePauseRequested(ctx chasm.MutableContext, req *activityp
 	return &activitypb.PauseActivityExecutionResponse{}, nil
 }
 
-func (a *Activity) handleUnpauseRequested(ctx chasm.MutableContext, req *activitypb.UnpauseActivityExecutionRequest) (
+func (a *Activity) HandleUnpauseRequested(ctx chasm.MutableContext, req *activitypb.UnpauseActivityExecutionRequest) (
 	_ *activitypb.UnpauseActivityExecutionResponse, retErr error,
 ) {
 	frontendReq := req.GetFrontendRequest()
@@ -407,7 +407,7 @@ func (a *Activity) clearHeartbeatDetails(ctx chasm.MutableContext) {
 	}
 }
 
-// handleReset handles the activity execution reset.
+// HandleReset handles the activity execution reset.
 //
 // For SCHEDULED and PAUSED activities (no worker running): re-dispatches at attempt 1. Any pending
 // retry backoff is discarded (reset clears CurrentRetryInterval), but a pending start_delay is
@@ -425,7 +425,7 @@ func (a *Activity) clearHeartbeatDetails(ctx chasm.MutableContext) {
 // takes effect on the new attempt 1.
 //
 // For CANCEL_REQUESTED activities: rejected with FailedPrecondition; cancel takes precedence.
-func (a *Activity) handleReset(
+func (a *Activity) HandleReset(
 	ctx chasm.MutableContext,
 	req *activitypb.ResetActivityExecutionRequest,
 ) (_ *activitypb.ResetActivityExecutionResponse, retErr error) {
@@ -584,15 +584,15 @@ func (a *Activity) applyDeferredHeartbeatClear(ctx chasm.MutableContext) {
 // only if the activity has never started.
 func (a *Activity) restoreOriginalOptions(ctx chasm.MutableContext) {
 	og := a.GetOriginalOptions()
-	a.TaskQueue = common.CloneProto(og.GetTaskQueue())
-	a.ScheduleToCloseTimeout = common.CloneProto(og.GetScheduleToCloseTimeout())
-	a.ScheduleToStartTimeout = common.CloneProto(og.GetScheduleToStartTimeout())
-	a.StartToCloseTimeout = common.CloneProto(og.GetStartToCloseTimeout())
-	a.HeartbeatTimeout = common.CloneProto(og.GetHeartbeatTimeout())
-	a.RetryPolicy = common.CloneProto(og.GetRetryPolicy())
-	a.Priority = common.CloneProto(og.GetPriority())
+	a.TaskQueue = proto.CloneOf(og.GetTaskQueue())
+	a.ScheduleToCloseTimeout = proto.CloneOf(og.GetScheduleToCloseTimeout())
+	a.ScheduleToStartTimeout = proto.CloneOf(og.GetScheduleToStartTimeout())
+	a.StartToCloseTimeout = proto.CloneOf(og.GetStartToCloseTimeout())
+	a.HeartbeatTimeout = proto.CloneOf(og.GetHeartbeatTimeout())
+	a.RetryPolicy = proto.CloneOf(og.GetRetryPolicy())
+	a.Priority = proto.CloneOf(og.GetPriority())
 	if a.GetFirstAttemptStartedTime() == nil {
-		a.StartDelay = common.CloneProto(og.GetStartDelay())
+		a.StartDelay = proto.CloneOf(og.GetStartDelay())
 	}
 	a.reissueScheduleToClose(ctx)
 }

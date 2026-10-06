@@ -8,7 +8,7 @@ import (
 	"github.com/sony/gobreaker"
 	"go.temporal.io/server/api/historyservice/v1"
 	"go.temporal.io/server/chasm"
-	"go.temporal.io/server/chasm/lib/activity"
+	"go.temporal.io/server/chasm/lib/activity/activityserver"
 	"go.temporal.io/server/chasm/lib/callback"
 	"go.temporal.io/server/chasm/lib/callback/callbackserver"
 	chasmnexus "go.temporal.io/server/chasm/lib/nexusoperation"
@@ -128,7 +128,7 @@ var Module = fx.Options(
 	callbacks.Module,
 	hsmnexusoperations.Module,
 	fx.Invoke(hsmnexusworkflow.RegisterCommandHandlers),
-	activity.HistoryModule,
+	activityserver.HistoryModule,
 	scheduler.Module,
 	callbackserver.Module,
 	chasmnexus.Module,
@@ -226,7 +226,7 @@ func HandlerProvider(args NewHandlerArgs, lc fx.Lifecycle) (*Handler, error) {
 	// Build the Nexus handler in OnStart rather than here so that it runs after all
 	// fx.Invoke functions have completed. If we built it eagerly, the dependency chain
 	//
-	//   activity.HistoryModule (fx.Invoke)
+	//   activityserver.HistoryModule (fx.Invoke)
 	//     → *library → *handler → historyservice.HistoryServiceServer
 	//       → HistoryServiceServerProvider → HandlerProvider (this function)
 	//

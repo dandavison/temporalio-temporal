@@ -8,7 +8,7 @@ import (
 	otellog "go.opentelemetry.io/otel/log"
 	"go.temporal.io/server/api/adminservice/v1"
 	"go.temporal.io/server/chasm"
-	"go.temporal.io/server/chasm/lib/activity"
+	"go.temporal.io/server/chasm/lib/activity/activityserver"
 	"go.temporal.io/server/chasm/lib/callback/callbackserver"
 	chasmnexus "go.temporal.io/server/chasm/lib/nexusoperation"
 	"go.temporal.io/server/chasm/lib/nexusoperation/gen/nexusoperationpb/v1/nexusoperationpbclient"
@@ -157,7 +157,7 @@ var Module = fx.Options(
 	chasmscheduler.Module,
 	chasmworkflow.Module,
 	callbackserver.Module,
-	activity.FrontendModule,
+	activityserver.FrontendModule,
 	fx.Provide(visibility.ChasmVisibilityManagerProvider),
 	fx.Provide(chasm.ChasmVisibilityInterceptorProvider),
 )
@@ -1011,7 +1011,7 @@ func HandlerProvider(
 	membershipMonitor membership.Monitor,
 	healthInterceptor *interceptor.HealthInterceptor,
 	scheduleSpecBuilder *scheduler.SpecBuilder,
-	activityHandler activity.FrontendHandler,
+	activityHandler activityserver.FrontendHandler,
 	callbackValidator callbacks.Validator,
 	nexusOperationHandler chasmnexus.FrontendHandler,
 	registry *chasm.Registry,

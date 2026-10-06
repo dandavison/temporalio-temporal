@@ -3,8 +3,6 @@ package activity
 import (
 	enumspb "go.temporal.io/api/enums/v1"
 	"go.temporal.io/server/chasm"
-	"go.temporal.io/server/chasm/lib/activity/gen/activitypb/v1"
-	"google.golang.org/grpc"
 )
 
 type ctxKeyActivityContextType struct{}
@@ -36,6 +34,14 @@ var (
 type componentOnlyLibrary struct {
 	chasm.UnimplementedLibrary
 	config *Config
+}
+
+// NewComponentOnlyLibrary returns the activity library without task handlers, for processes
+// that only need the component registered, e.g. to serialize component references.
+func NewComponentOnlyLibrary(
+	config *Config,
+) chasm.Library {
+	return newComponentOnlyLibrary(config)
 }
 
 func newComponentOnlyLibrary(
@@ -82,7 +88,6 @@ func NewNilLibrary() chasm.Library {
 type library struct {
 	componentOnlyLibrary
 
-	handler                           *handler
 	activityDispatchTaskHandler       *activityDispatchTaskHandler
 	scheduleToStartTimeoutTaskHandler *scheduleToStartTimeoutTaskHandler
 	scheduleToCloseTimeoutTaskHandler *scheduleToCloseTimeoutTaskHandler
@@ -90,28 +95,24 @@ type library struct {
 	heartbeatTimeoutTaskHandler       *heartbeatTimeoutTaskHandler
 }
 
-func newLibrary(
-	handler *handler,
-	activityDispatchTaskHandler *activityDispatchTaskHandler,
-	scheduleToStartTimeoutTaskHandler *scheduleToStartTimeoutTaskHandler,
-	scheduleToCloseTimeoutTaskHandler *scheduleToCloseTimeoutTaskHandler,
-	startToCloseTimeoutTaskHandler *startToCloseTimeoutTaskHandler,
-	heartbeatTimeoutTaskHandler *heartbeatTimeoutTaskHandler,
+// NewLibrary returns the activity library. Activity tasks are added to task queues with
+// matchingClient; dispatchTaskHook, if not nil, wraps each dispatch (see DispatchTaskHook).
+func NewLibrary(
+	matchingClient MatchingClient,
+	dispatchTaskHook DispatchTaskHook,
 	config *Config,
-) *library {
+) chasm.Library {
 	return &library{
-		componentOnlyLibrary:              *newComponentOnlyLibrary(config),
-		handler:                           handler,
-		activityDispatchTaskHandler:       activityDispatchTaskHandler,
-		scheduleToStartTimeoutTaskHandler: scheduleToStartTimeoutTaskHandler,
-		scheduleToCloseTimeoutTaskHandler: scheduleToCloseTimeoutTaskHandler,
-		startToCloseTimeoutTaskHandler:    startToCloseTimeoutTaskHandler,
-		heartbeatTimeoutTaskHandler:       heartbeatTimeoutTaskHandler,
+		componentOnlyLibrary: *newComponentOnlyLibrary(config),
+		activityDispatchTaskHandler: newActivityDispatchTaskHandler(activityDispatchTaskHandlerOptions{
+			MatchingClient:   matchingClient,
+			DispatchTaskHook: dispatchTaskHook,
+		}),
+		scheduleToStartTimeoutTaskHandler: newScheduleToStartTimeoutTaskHandler(),
+		scheduleToCloseTimeoutTaskHandler: newScheduleToCloseTimeoutTaskHandler(),
+		startToCloseTimeoutTaskHandler:    newStartToCloseTimeoutTaskHandler(),
+		heartbeatTimeoutTaskHandler:       newHeartbeatTimeoutTaskHandler(),
 	}
-}
-
-func (l *library) RegisterServices(server *grpc.Server) {
-	server.RegisterService(&activitypb.ActivityService_ServiceDesc, l.handler)
 }
 
 func (l *library) Tasks() []*chasm.RegistrableTask {

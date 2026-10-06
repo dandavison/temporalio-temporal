@@ -37,7 +37,7 @@ import (
 	persistencespb "go.temporal.io/server/api/persistence/v1"
 	tokenspb "go.temporal.io/server/api/token/v1"
 	"go.temporal.io/server/chasm"
-	"go.temporal.io/server/chasm/lib/activity"
+	"go.temporal.io/server/chasm/lib/activity/activityserver"
 	"go.temporal.io/server/chasm/lib/callback/callbackserver"
 	chasmnexus "go.temporal.io/server/chasm/lib/nexusoperation"
 	"go.temporal.io/server/common"
@@ -707,7 +707,7 @@ func (s *NexusWorkflowTestSuite) TestNexusOperationStartsStandaloneActivityBidir
 	nsValues := []dynamicconfig.ConstrainedValue{
 		{Constraints: dynamicconfig.Constraints{Namespace: env.Namespace().String()}, Value: true},
 	}
-	cluster.OverrideDynamicConfig(s.T(), activity.Enabled, nsValues)
+	cluster.OverrideDynamicConfig(s.T(), activityserver.Enabled, nsValues)
 	ctx := s.Context()
 	taskQueue := testcore.RandomizeStr(s.T().Name())
 
@@ -843,8 +843,8 @@ func (s *NexusWorkflowTestSuite) TestNexusOperationAsyncStandaloneActivityComple
 	nsValues := []dynamicconfig.ConstrainedValue{
 		{Constraints: dynamicconfig.Constraints{Namespace: env.Namespace().String()}, Value: true},
 	}
-	cluster.OverrideDynamicConfig(s.T(), activity.Enabled, nsValues)
-	cluster.OverrideDynamicConfig(s.T(), activity.EnableCallbacks, nsValues)
+	cluster.OverrideDynamicConfig(s.T(), activityserver.Enabled, nsValues)
+	cluster.OverrideDynamicConfig(s.T(), activityserver.EnableCallbacks, nsValues)
 	ctx := s.Context()
 
 	capture := env.StartNamespaceMetricCapture()

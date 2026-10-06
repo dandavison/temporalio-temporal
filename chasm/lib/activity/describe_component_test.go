@@ -127,7 +127,7 @@ func TestDescribeComponent_MatchesLiveDescribe(t *testing.T) {
 	liveReadCtx := chasm.NewContext(context.Background(), liveRoot)
 	liveComponent, err := liveRoot.Component(liveReadCtx, chasm.ComponentRef{})
 	require.NoError(t, err)
-	liveDescribe, err := liveComponent.(*Activity).buildDescribeActivityExecutionResponse(
+	liveDescribe, err := liveComponent.(*Activity).BuildDescribeActivityExecutionResponse(
 		liveReadCtx,
 		&activitypb.DescribeActivityExecutionRequest{
 			FrontendRequest: &workflowservice.DescribeActivityExecutionRequest{

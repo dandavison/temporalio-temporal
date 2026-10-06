@@ -17,6 +17,7 @@ import (
 	taskqueuespb "go.temporal.io/server/api/taskqueue/v1"
 	"go.temporal.io/server/chasm"
 	"go.temporal.io/server/chasm/lib/activity"
+	"go.temporal.io/server/chasm/lib/activity/activityserver"
 	"go.temporal.io/server/chasm/lib/tests"
 	"go.temporal.io/server/common/debug"
 	"go.temporal.io/server/common/dynamicconfig"
@@ -48,7 +49,7 @@ func TestChasmSuite(t *testing.T) {
 func (s *ChasmSuite) SetupSuite() {
 	s.dynamicConfigOverrides = map[dynamicconfig.Key]any{
 		dynamicconfig.EnableChasm.Key():                      true,
-		activity.Enabled.Key():                               true,
+		activityserver.Enabled.Key():                         true,
 		dynamicconfig.ChasmStandbyTaskDiscardDelay.Key():     1 * time.Second,
 		dynamicconfig.TransferProcessorMaxPollInterval.Key(): 1 * time.Second,
 		dynamicconfig.NamespaceMinRetentionGlobal.Key():      1 * time.Second,

@@ -1,4 +1,4 @@
-package activity
+package activityserver
 
 import (
 	"context"
@@ -10,6 +10,7 @@ import (
 	"go.temporal.io/api/workflowservice/v1"
 	"go.temporal.io/server/api/historyservice/v1"
 	"go.temporal.io/server/chasm"
+	"go.temporal.io/server/chasm/lib/activity"
 	"go.temporal.io/server/chasm/lib/activity/gen/activitypb/v1"
 	"go.temporal.io/server/common/contextutil"
 	"go.temporal.io/server/common/log"
@@ -82,24 +83,24 @@ func (h *handler) StartActivityExecution(ctx context.Context, req *activitypb.St
 			NamespaceID: req.GetNamespaceId(),
 			BusinessID:  frontendReq.GetActivityId(),
 		},
-		func(mutableContext chasm.MutableContext, request *workflowservice.StartActivityExecutionRequest) (*Activity, error) {
-			newActivity, err := NewStandaloneActivity(mutableContext, request)
+		func(mutableContext chasm.MutableContext, request *workflowservice.StartActivityExecutionRequest) (*activity.Activity, error) {
+			newActivity, err := activity.NewStandaloneActivity(mutableContext, request)
 			if err != nil {
 				return nil, err
 			}
 
 			if cbs := request.GetCompletionCallbacks(); len(cbs) > 0 {
-				if err := newActivity.addCompletionCallbacks(mutableContext, request.GetRequestId(), cbs, maxCallbacks); err != nil {
+				if err := newActivity.AddCompletionCallbacks(mutableContext, request.GetRequestId(), cbs, maxCallbacks); err != nil {
 					return nil, err
 				}
 			}
 			if len(request.GetLinks()) > 0 {
-				if err := newActivity.attachLinks(mutableContext, request.GetLinks(), request.GetRequestId(), h.linkValidator, frontendReq.GetNamespace()); err != nil {
+				if err := newActivity.AttachLinks(mutableContext, request.GetLinks(), request.GetRequestId(), h.linkValidator, frontendReq.GetNamespace()); err != nil {
 					return nil, err
 				}
 			}
 
-			err = TransitionScheduled.Apply(newActivity, mutableContext, nil)
+			err = activity.TransitionScheduled.Apply(newActivity, mutableContext, nil)
 			if err != nil {
 				return nil, err
 			}
@@ -120,7 +121,7 @@ func (h *handler) StartActivityExecution(ctx context.Context, req *activitypb.St
 	}
 
 	if result.Created {
-		emitPayloadSizeMetric(
+		activity.EmitPayloadSizeMetric(
 			h.metricsHandler.WithTags(
 				metrics.NamespaceTag(frontendReq.GetNamespace()),
 				metrics.OperationTag(metrics.HistoryRecordActivityTaskStartedScope),
@@ -138,18 +139,18 @@ func (h *handler) StartActivityExecution(ctx context.Context, req *activitypb.St
 	attachLinks := onConflict.GetAttachLinks() && len(links) > 0
 	if !result.Created && (attachCallbacks || attachLinks) {
 		requestID := frontendReq.GetRequestId()
-		ref := chasm.NewComponentRef[*Activity](result.ExecutionKey)
+		ref := chasm.NewComponentRef[*activity.Activity](result.ExecutionKey)
 		_, _, err := chasm.UpdateComponent(
 			ctx,
 			ref,
-			func(a *Activity, ctx chasm.MutableContext, _ any) (any, error) {
+			func(a *activity.Activity, ctx chasm.MutableContext, _ any) (any, error) {
 				if attachCallbacks {
-					if err := a.addCompletionCallbacks(ctx, requestID, cbs, maxCallbacks); err != nil {
+					if err := a.AddCompletionCallbacks(ctx, requestID, cbs, maxCallbacks); err != nil {
 						return nil, err
 					}
 				}
 				if attachLinks {
-					if err := a.attachLinks(ctx, links, requestID, h.linkValidator, frontendReq.GetNamespace()); err != nil {
+					if err := a.AttachLinks(ctx, links, requestID, h.linkValidator, frontendReq.GetNamespace()); err != nil {
 						return nil, err
 					}
 				}
@@ -191,7 +192,7 @@ func (h *handler) DescribeActivityExecution(
 	ctx context.Context,
 	req *activitypb.DescribeActivityExecutionRequest,
 ) (response *activitypb.DescribeActivityExecutionResponse, err error) {
-	ref := chasm.NewComponentRef[*Activity](chasm.ExecutionKey{
+	ref := chasm.NewComponentRef[*activity.Activity](chasm.ExecutionKey{
 		NamespaceID: req.GetNamespaceId(),
 		BusinessID:  req.GetFrontendRequest().GetActivityId(),
 		RunID:       req.GetFrontendRequest().GetRunId(),
@@ -199,7 +200,7 @@ func (h *handler) DescribeActivityExecution(
 
 	token := req.GetFrontendRequest().GetLongPollToken()
 	if len(token) == 0 {
-		return chasm.ReadComponent(ctx, ref, (*Activity).buildDescribeActivityExecutionResponse, req)
+		return chasm.ReadComponent(ctx, ref, (*activity.Activity).BuildDescribeActivityExecutionResponse, req)
 	}
 
 	// Below, we send an empty non-error response on context deadline expiry. Here we compute a
@@ -215,7 +216,7 @@ func (h *handler) DescribeActivityExecution(
 	defer cancel()
 
 	response, _, err = chasm.PollComponent(ctx, ref, func(
-		a *Activity,
+		a *activity.Activity,
 		ctx chasm.Context,
 		req *activitypb.DescribeActivityExecutionRequest,
 	) (*activitypb.DescribeActivityExecutionResponse, bool, error) {
@@ -230,7 +231,7 @@ func (h *handler) DescribeActivityExecution(
 			return nil, false, err
 		}
 		if changed {
-			response, err := a.buildDescribeActivityExecutionResponse(ctx, req)
+			response, err := a.BuildDescribeActivityExecutionResponse(ctx, req)
 			return response, true, err
 		}
 		return nil, false, nil
@@ -254,7 +255,7 @@ func (h *handler) PollActivityExecution(
 	ctx context.Context,
 	req *activitypb.PollActivityExecutionRequest,
 ) (response *activitypb.PollActivityExecutionResponse, err error) {
-	ref := chasm.NewComponentRef[*Activity](chasm.ExecutionKey{
+	ref := chasm.NewComponentRef[*activity.Activity](chasm.ExecutionKey{
 		NamespaceID: req.GetNamespaceId(),
 		BusinessID:  req.GetFrontendRequest().GetActivityId(),
 		RunID:       req.GetFrontendRequest().GetRunId(),
@@ -273,12 +274,12 @@ func (h *handler) PollActivityExecution(
 	defer cancel()
 
 	response, _, err = chasm.PollComponent(ctx, ref, func(
-		a *Activity,
+		a *activity.Activity,
 		ctx chasm.Context,
 		req *activitypb.PollActivityExecutionRequest,
 	) (*activitypb.PollActivityExecutionResponse, bool, error) {
 		if a.LifecycleState(ctx) != chasm.LifecycleStateRunning {
-			response := a.buildPollActivityExecutionResponse(ctx)
+			response := a.BuildPollActivityExecutionResponse(ctx)
 			return response, true, nil
 		}
 		return nil, false, nil
@@ -306,7 +307,7 @@ func (h *handler) DeleteActivityExecution(
 		RunID:       frontendReq.GetRunId(),
 	}
 
-	if err := chasm.DeleteExecution[*Activity](ctx, key, chasm.DeleteExecutionRequest{
+	if err := chasm.DeleteExecution[*activity.Activity](ctx, key, chasm.DeleteExecutionRequest{
 		TerminateComponentRequest: chasm.TerminateComponentRequest{
 			Reason: "Delete activity execution",
 		},
@@ -324,7 +325,7 @@ func (h *handler) TerminateActivityExecution(
 ) (*activitypb.TerminateActivityExecutionResponse, error) {
 	frontendReq := req.GetFrontendRequest()
 
-	ref := chasm.NewComponentRef[*Activity](chasm.ExecutionKey{
+	ref := chasm.NewComponentRef[*activity.Activity](chasm.ExecutionKey{
 		NamespaceID: req.GetNamespaceId(),
 		BusinessID:  frontendReq.GetActivityId(),
 		RunID:       frontendReq.GetRunId(),
@@ -333,7 +334,7 @@ func (h *handler) TerminateActivityExecution(
 	_, _, err := chasm.UpdateComponent(
 		ctx,
 		ref,
-		(*Activity).Terminate,
+		(*activity.Activity).Terminate,
 		chasm.TerminateComponentRequest{
 			Reason:    frontendReq.GetReason(),
 			Identity:  frontendReq.GetIdentity(),
@@ -355,7 +356,7 @@ func (h *handler) RequestCancelActivityExecution(
 ) (response *activitypb.RequestCancelActivityExecutionResponse, err error) {
 	frontendReq := req.GetFrontendRequest()
 
-	ref := chasm.NewComponentRef[*Activity](chasm.ExecutionKey{
+	ref := chasm.NewComponentRef[*activity.Activity](chasm.ExecutionKey{
 		NamespaceID: req.GetNamespaceId(),
 		BusinessID:  frontendReq.GetActivityId(),
 		RunID:       frontendReq.GetRunId(),
@@ -364,7 +365,7 @@ func (h *handler) RequestCancelActivityExecution(
 	response, _, err = chasm.UpdateComponent(
 		ctx,
 		ref,
-		(*Activity).handleCancellationRequested,
+		(*activity.Activity).HandleCancellationRequested,
 		req,
 	)
 	if err != nil {
@@ -397,13 +398,13 @@ func (h *handler) PauseActivityExecution(ctx context.Context, req *activitypb.Pa
 		return &activitypb.PauseActivityExecutionResponse{}, nil
 	}
 
-	ref := chasm.NewComponentRef[*Activity](chasm.ExecutionKey{
+	ref := chasm.NewComponentRef[*activity.Activity](chasm.ExecutionKey{
 		NamespaceID: req.GetNamespaceId(),
 		BusinessID:  frontendReq.GetActivityId(),
 		RunID:       frontendReq.GetRunId(),
 	})
 
-	_, _, err := chasm.UpdateComponent(ctx, ref, (*Activity).handlePauseRequested, req)
+	_, _, err := chasm.UpdateComponent(ctx, ref, (*activity.Activity).HandlePauseRequested, req)
 	if err != nil {
 		return nil, err
 	}
@@ -433,13 +434,13 @@ func (h *handler) UnpauseActivityExecution(ctx context.Context, req *activitypb.
 		return &activitypb.UnpauseActivityExecutionResponse{}, nil
 	}
 
-	ref := chasm.NewComponentRef[*Activity](chasm.ExecutionKey{
+	ref := chasm.NewComponentRef[*activity.Activity](chasm.ExecutionKey{
 		NamespaceID: req.GetNamespaceId(),
 		BusinessID:  frontendReq.GetActivityId(),
 		RunID:       frontendReq.GetRunId(),
 	})
 
-	_, _, err := chasm.UpdateComponent(ctx, ref, (*Activity).handleUnpauseRequested, req)
+	_, _, err := chasm.UpdateComponent(ctx, ref, (*activity.Activity).HandleUnpauseRequested, req)
 	if err != nil {
 		return nil, err
 	}
@@ -471,7 +472,7 @@ func (h *handler) ResetActivityExecution(ctx context.Context, req *activitypb.Re
 		}
 		return &activitypb.ResetActivityExecutionResponse{}, nil
 	}
-	ref := chasm.NewComponentRef[*Activity](chasm.ExecutionKey{
+	ref := chasm.NewComponentRef[*activity.Activity](chasm.ExecutionKey{
 		NamespaceID: req.GetNamespaceId(),
 		BusinessID:  frontendReq.GetActivityId(),
 		RunID:       frontendReq.GetRunId(),
@@ -480,7 +481,7 @@ func (h *handler) ResetActivityExecution(ctx context.Context, req *activitypb.Re
 	_, _, err := chasm.UpdateComponent(
 		ctx,
 		ref,
-		(*Activity).handleReset,
+		(*activity.Activity).HandleReset,
 		req,
 	)
 	if err != nil {
@@ -518,7 +519,7 @@ func (h *handler) UpdateActivityExecutionOptions(ctx context.Context, req *activ
 		}, nil
 	}
 
-	ref := chasm.NewComponentRef[*Activity](chasm.ExecutionKey{
+	ref := chasm.NewComponentRef[*activity.Activity](chasm.ExecutionKey{
 		NamespaceID: req.GetNamespaceId(),
 		BusinessID:  req.GetFrontendRequest().GetActivityId(),
 		RunID:       req.GetFrontendRequest().GetRunId(),
@@ -526,7 +527,7 @@ func (h *handler) UpdateActivityExecutionOptions(ctx context.Context, req *activ
 	response, _, err := chasm.UpdateComponent(
 		ctx,
 		ref,
-		(*Activity).UpdateActivityExecutionOptions,
+		(*activity.Activity).UpdateActivityExecutionOptions,
 		req,
 	)
 	if err != nil {

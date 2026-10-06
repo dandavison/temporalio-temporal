@@ -14,7 +14,7 @@ import (
 	enumspb "go.temporal.io/api/enums/v1"
 	"go.temporal.io/api/serviceerror"
 	"go.temporal.io/api/workflowservice/v1"
-	"go.temporal.io/server/chasm/lib/activity"
+	"go.temporal.io/server/chasm/lib/activity/activityserver"
 	"go.temporal.io/server/common/dynamicconfig"
 	"go.temporal.io/server/common/testing/parallelsuite"
 	"go.temporal.io/server/common/testing/protorequire"
@@ -57,9 +57,9 @@ func newStandaloneActivityBatchEnvWithBatchOperations(t *testing.T, enabled bool
 	}
 	cluster := env.GetTestCluster()
 	cluster.OverrideDynamicConfig(t, dynamicconfig.EnableChasm, nsValues(true))
-	cluster.OverrideDynamicConfig(t, activity.Enabled, nsValues(true))
-	cluster.OverrideDynamicConfig(t, activity.EnableCallbacks, nsValues(true))
-	cluster.OverrideDynamicConfig(t, activity.EnableStandaloneActivityOperatorCommands, nsValues(true))
+	cluster.OverrideDynamicConfig(t, activityserver.Enabled, nsValues(true))
+	cluster.OverrideDynamicConfig(t, activityserver.EnableCallbacks, nsValues(true))
+	cluster.OverrideDynamicConfig(t, activityserver.EnableStandaloneActivityOperatorCommands, nsValues(true))
 	cluster.OverrideDynamicConfig(t, dynamicconfig.FrontendEnableBatchOperationsForStandaloneActivities, nsValues(enabled))
 	return env
 }

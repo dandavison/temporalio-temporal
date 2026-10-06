@@ -18,6 +18,7 @@ import (
 	"go.temporal.io/server/chasm"
 	"go.temporal.io/server/chasm/lib/activity/gen/activitypb/v1"
 	"go.temporal.io/server/common/dynamicconfig"
+	commonlinks "go.temporal.io/server/common/links"
 	"go.temporal.io/server/common/metrics"
 	"go.temporal.io/server/common/metrics/metricstest"
 	"go.temporal.io/server/common/namespace"
@@ -974,7 +975,8 @@ func TestAttachLinks_SameRequestIDIsNoOp(t *testing.T) {
 			},
 		},
 	}
-	validator := newLinkValidator(
+	validator := commonlinks.NewValidator(
+		"an activity",
 		func(string) int { return 100 },
 		func(string) int { return 100 },
 		func(string) int { return 4000 },
@@ -985,12 +987,12 @@ func TestAttachLinks_SameRequestIDIsNoOp(t *testing.T) {
 
 	// First call records the request's links verbatim (no intra-batch dedup, matching
 	// the workflow start path).
-	require.NoError(t, activity.attachLinks(ctx, []*commonpb.Link{linkA, linkA}, "req-1", validator, "ns"))
+	require.NoError(t, activity.AttachLinks(ctx, []*commonpb.Link{linkA, linkA}, "req-1", validator, "ns"))
 	stored["req-1"] = ctx.LinksByRequest[activity]["req-1"]
 	require.Equal(t, []*commonpb.Link{linkA, linkA}, stored["req-1"])
 
 	// Retry with the same requestID (even with different links) is a no-op.
-	require.NoError(t, activity.attachLinks(ctx, []*commonpb.Link{linkB}, "req-1", validator, "ns"))
+	require.NoError(t, activity.AttachLinks(ctx, []*commonpb.Link{linkB}, "req-1", validator, "ns"))
 	require.Equal(t, []*commonpb.Link{linkA, linkA}, ctx.LinksByRequest[activity]["req-1"])
 }
 
@@ -1009,7 +1011,8 @@ func TestAttachLinks_RejectsClosedActivity(t *testing.T) {
 			},
 		},
 	}
-	validator := newLinkValidator(
+	validator := commonlinks.NewValidator(
+		"an activity",
 		func(string) int { return 100 },
 		func(string) int { return 100 },
 		func(string) int { return 4000 },
@@ -1018,7 +1021,7 @@ func TestAttachLinks_RejectsClosedActivity(t *testing.T) {
 		ActivityState: &activitypb.ActivityState{Status: activitypb.ACTIVITY_EXECUTION_STATUS_COMPLETED},
 	}
 
-	err := activity.attachLinks(ctx, []*commonpb.Link{link}, "req-new", validator, "ns")
+	err := activity.AttachLinks(ctx, []*commonpb.Link{link}, "req-new", validator, "ns")
 	require.ErrorAs(t, err, new(*serviceerror.FailedPrecondition))
 }
 
@@ -1039,7 +1042,8 @@ func TestAttachLinks_IdempotentAfterClose(t *testing.T) {
 			},
 		},
 	}
-	validator := newLinkValidator(
+	validator := commonlinks.NewValidator(
+		"an activity",
 		func(string) int { return 100 },
 		func(string) int { return 100 },
 		func(string) int { return 4000 },
@@ -1048,7 +1052,7 @@ func TestAttachLinks_IdempotentAfterClose(t *testing.T) {
 		ActivityState: &activitypb.ActivityState{Status: activitypb.ACTIVITY_EXECUTION_STATUS_COMPLETED},
 	}
 
-	require.NoError(t, activity.attachLinks(ctx, []*commonpb.Link{link}, "req-1", validator, "ns"))
+	require.NoError(t, activity.AttachLinks(ctx, []*commonpb.Link{link}, "req-1", validator, "ns"))
 }
 
 // TestAttachLinks_RejectsWhenComponentCapExceeded verifies that an attach
@@ -1078,7 +1082,8 @@ func TestAttachLinks_RejectsWhenComponentCapExceeded(t *testing.T) {
 		},
 	}
 	// per-component cap = 1; activity already has 1 link, so any additional must fail.
-	validator := newLinkValidator(
+	validator := commonlinks.NewValidator(
+		"an activity",
 		func(string) int { return 100 },
 		func(string) int { return 1 },
 		func(string) int { return 4000 },
@@ -1087,7 +1092,7 @@ func TestAttachLinks_RejectsWhenComponentCapExceeded(t *testing.T) {
 		ActivityState: &activitypb.ActivityState{Status: activitypb.ACTIVITY_EXECUTION_STATUS_SCHEDULED},
 	}
 
-	err := activity.attachLinks(ctx, []*commonpb.Link{newLink}, "req-new", validator, "ns")
+	err := activity.AttachLinks(ctx, []*commonpb.Link{newLink}, "req-new", validator, "ns")
 	require.ErrorAs(t, err, new(*serviceerror.FailedPrecondition))
 }
 

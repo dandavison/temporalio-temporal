@@ -22,7 +22,7 @@ import (
 	taskqueuepb "go.temporal.io/api/taskqueue/v1"
 	"go.temporal.io/api/workflowservice/v1"
 	"go.temporal.io/sdk/temporal"
-	"go.temporal.io/server/chasm/lib/activity"
+	"go.temporal.io/server/chasm/lib/activity/activityserver"
 	"go.temporal.io/server/chasm/lib/callback/callbackserver"
 	"go.temporal.io/server/common"
 	"go.temporal.io/server/common/callbacks"
@@ -118,9 +118,9 @@ func (s *standaloneActivityTestSuite) newTestEnv(opts ...testcore.TestOption) *s
 	}
 	cluster := env.GetTestCluster()
 	cluster.OverrideDynamicConfig(s.T(), dynamicconfig.EnableChasm, nsValues(true))
-	cluster.OverrideDynamicConfig(s.T(), activity.Enabled, nsValues(true))
-	cluster.OverrideDynamicConfig(s.T(), activity.EnableCallbacks, nsValues(true))
-	cluster.OverrideDynamicConfig(s.T(), activity.EnableStandaloneActivityOperatorCommands, nsValues(true))
+	cluster.OverrideDynamicConfig(s.T(), activityserver.Enabled, nsValues(true))
+	cluster.OverrideDynamicConfig(s.T(), activityserver.EnableCallbacks, nsValues(true))
+	cluster.OverrideDynamicConfig(s.T(), activityserver.EnableStandaloneActivityOperatorCommands, nsValues(true))
 	return env
 }
 
@@ -4359,13 +4359,13 @@ func (s *standaloneActivityTestSuite) TestDescribeActivityExecution() {
 		// result with at least buffer remaining before the caller deadline.
 		t.Run("CallerDeadlineNotExceeded", func(t *testing.T) {
 			// CallerTimeout - LongPollBuffer is far in the future
-			cleanup1 := env.OverrideDynamicConfig(activity.LongPollBuffer, 1*time.Second)
+			cleanup1 := env.OverrideDynamicConfig(activityserver.LongPollBuffer, 1*time.Second)
 			defer cleanup1()
 			ctx, cancel := context.WithTimeout(ctx, 9999*time.Millisecond)
 			defer cancel()
 
 			// DescribeActivityExecution will return when this long poll timeout expires.
-			cleanup2 := env.OverrideDynamicConfig(activity.LongPollTimeout, 10*time.Millisecond)
+			cleanup2 := env.OverrideDynamicConfig(activityserver.LongPollTimeout, 10*time.Millisecond)
 			defer cleanup2()
 
 			describeResp, err = env.FrontendClient().DescribeActivityExecution(ctx, &workflowservice.DescribeActivityExecutionRequest{
@@ -4388,10 +4388,10 @@ func (s *standaloneActivityTestSuite) TestDescribeActivityExecution() {
 			// will have a 30s deadline that was applied by one of the upstream server layers, so we
 			// still must use a buffer < 30s.
 			ctx := context.Background()
-			cleanup1 := env.OverrideDynamicConfig(activity.LongPollBuffer, 29*time.Second)
+			cleanup1 := env.OverrideDynamicConfig(activityserver.LongPollBuffer, 29*time.Second)
 			defer cleanup1()
 			// DescribeActivityExecution will return when this long poll timeout expires.
-			cleanup2 := env.OverrideDynamicConfig(activity.LongPollTimeout, 10*time.Millisecond)
+			cleanup2 := env.OverrideDynamicConfig(activityserver.LongPollTimeout, 10*time.Millisecond)
 			defer cleanup2()
 
 			_, err = env.FrontendClient().DescribeActivityExecution(ctx, &workflowservice.DescribeActivityExecutionRequest{
@@ -10658,7 +10658,7 @@ func (s *standaloneActivityTestSuite) TestCallbacks() {
 	// Verify that a NexusHandler-variant callback links in both directions: the handler is handed a link
 	// to the callback, and the links the handler returns are recorded on the callback.
 	t.Run("NexusHandlerCallbackLinks", func(t *testing.T) {
-		env.OverrideDynamicConfig(activity.EnabledCallbackKinds, []callbacks.Kind{callbacks.KindNexus, callbacks.KindNexusHandler})
+		env.OverrideDynamicConfig(activityserver.EnabledCallbackKinds, []callbacks.Kind{callbacks.KindNexus, callbacks.KindNexusHandler})
 
 		activityID := testcore.RandomizeStr(t.Name())
 		taskQueue := testcore.RandomizeStr(t.Name())
@@ -10758,7 +10758,7 @@ func (s *standaloneActivityTestSuite) TestCallbacksDisabled() {
 	nsValues := []dynamicconfig.ConstrainedValue{
 		{Constraints: dynamicconfig.Constraints{Namespace: env.Namespace().String()}, Value: false},
 	}
-	env.GetTestCluster().OverrideDynamicConfig(t, activity.EnableCallbacks, nsValues)
+	env.GetTestCluster().OverrideDynamicConfig(t, activityserver.EnableCallbacks, nsValues)
 
 	cb := []*commonpb.Callback{{
 		Variant: &commonpb.Callback_Nexus_{Nexus: &commonpb.Callback_Nexus{Url: "http://localhost/cb"}},
