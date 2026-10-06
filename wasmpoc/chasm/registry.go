@@ -7,7 +7,7 @@ import (
 	"regexp"
 	"strings"
 
-	"go.temporal.io/server/common/log"
+	"go.temporal.io/server/wasmpoc/common/log"
 )
 
 var (

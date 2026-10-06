@@ -5,7 +5,7 @@ package chasm
 import (
 	"context"
 
-	"go.temporal.io/server/common/log"
+	"go.temporal.io/server/wasmpoc/common/log"
 )
 
 // NoValue is a sentinel type representing no value.

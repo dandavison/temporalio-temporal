@@ -46,3 +46,6 @@ type PhysicalPureTask struct {
 
 func (*PhysicalSideEffectTask) isPhysicalTask() {}
 func (*PhysicalPureTask) isPhysicalTask()       {}
+
+// scheduledTaskMinPrecision matches common.ScheduledTaskMinPrecision in the server.
+const scheduledTaskMinPrecision = time.Millisecond

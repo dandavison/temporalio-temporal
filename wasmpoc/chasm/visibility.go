@@ -10,8 +10,8 @@ import (
 	enumspb "go.temporal.io/api/enums/v1"
 	"go.temporal.io/api/serviceerror"
 	persistencespb "go.temporal.io/server/api/persistence/v1"
-	"go.temporal.io/server/common/payload"
-	"go.temporal.io/server/common/searchattribute/sadefs"
+	"go.temporal.io/server/wasmpoc/common/payload"
+	"go.temporal.io/server/wasmpoc/common/searchattribute/sadefs"
 	"google.golang.org/protobuf/proto"
 )
 

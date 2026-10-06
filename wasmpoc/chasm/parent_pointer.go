@@ -5,7 +5,7 @@ import (
 	"reflect"
 
 	"go.temporal.io/api/serviceerror"
-	"go.temporal.io/server/common/softassert"
+	"go.temporal.io/server/wasmpoc/common/softassert"
 )
 
 const (

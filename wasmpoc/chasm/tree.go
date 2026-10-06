@@ -18,14 +18,14 @@ import (
 	"go.temporal.io/api/serviceerror"
 	enumsspb "go.temporal.io/server/api/enums/v1"
 	persistencespb "go.temporal.io/server/api/persistence/v1"
-	"go.temporal.io/server/common"
 	"go.temporal.io/server/common/definition"
-	"go.temporal.io/server/common/log"
 	"go.temporal.io/server/common/log/tag"
-	"go.temporal.io/server/common/metrics"
-	"go.temporal.io/server/common/namespace"
-	"go.temporal.io/server/common/persistence/transitionhistory"
-	"go.temporal.io/server/common/softassert"
+	"go.temporal.io/server/wasmpoc/common/log"
+	"go.temporal.io/server/wasmpoc/common/metrics"
+	"go.temporal.io/server/wasmpoc/common/namespace"
+	"go.temporal.io/server/wasmpoc/common/persistence/transitionhistory"
+	"go.temporal.io/server/wasmpoc/common/protoutil"
+	"go.temporal.io/server/wasmpoc/common/softassert"
 	"golang.org/x/exp/maps"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/timestamppb"
@@ -1946,7 +1946,7 @@ func (n *Node) closeTransactionSerializeNodes() error {
 		// LastUpdateVersionedTransition means the node is brand new and must be written.
 		// prevData captures the pre-serialize blob pointer; serialize() allocates a new
 		// blob, leaving prevData pointing at the original for comparison.
-		prevVersionedTransition := common.CloneProto(
+		prevVersionedTransition := protoutil.CloneProto(
 			node.serializedNode.GetMetadata().GetLastUpdateVersionedTransition(),
 		)
 		skipIfClean := skipPersistenceIfClean &&
@@ -3198,8 +3198,8 @@ func isComponentTaskExpired(
 		return false
 	}
 
-	scheduledTime := task.ScheduledTime.AsTime().Truncate(common.ScheduledTaskMinPrecision)
-	referenceTime = referenceTime.Truncate(common.ScheduledTaskMinPrecision)
+	scheduledTime := task.ScheduledTime.AsTime().Truncate(scheduledTaskMinPrecision)
+	referenceTime = referenceTime.Truncate(scheduledTaskMinPrecision)
 
 	return !scheduledTime.After(referenceTime)
 }

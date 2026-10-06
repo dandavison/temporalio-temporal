@@ -1,6 +1,6 @@
 package chasm
 
-import "go.temporal.io/server/common/metrics"
+import "go.temporal.io/server/wasmpoc/common/metrics"
 
 const (
 	ExecutionForceTerminationReasonDeleteExecution              metrics.ReasonString = "delete_execution"

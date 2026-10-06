@@ -7,7 +7,7 @@ import (
 
 	"github.com/dgryski/go-farm"
 	enumspb "go.temporal.io/api/enums/v1"
-	"go.temporal.io/server/common/searchattribute/sadefs"
+	"go.temporal.io/server/wasmpoc/common/searchattribute/sadefs"
 )
 
 type (
