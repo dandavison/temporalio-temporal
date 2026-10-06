@@ -11,9 +11,9 @@ import (
 	"go.temporal.io/api/workflowservice/v1"
 	"go.temporal.io/server/chasm"
 	"go.temporal.io/server/chasm/lib/activity/gen/activitypb/v1"
-	"go.temporal.io/server/common"
 	"go.temporal.io/server/common/headers"
 	"go.temporal.io/server/common/metrics"
+	"go.temporal.io/server/common/primitives"
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
@@ -599,7 +599,7 @@ func (a *Activity) applyTimedOut(ctx chasm.MutableContext, event timeoutEvent) e
 			err = a.recordScheduleToStartOrCloseTimeoutFailure(
 				ctx,
 				timeoutType,
-				fmt.Sprintf(common.FailureReasonActivityTimeout, timeoutType.String()),
+				fmt.Sprintf(primitives.FailureReasonActivityTimeout, timeoutType.String()),
 				priorAttemptFailure,
 			)
 		case enumspb.TIMEOUT_TYPE_START_TO_CLOSE:
@@ -626,7 +626,7 @@ func (a *Activity) applyTimedOut(ctx chasm.MutableContext, event timeoutEvent) e
 			if err := a.recordScheduleToStartOrCloseTimeoutFailure(
 				ctx,
 				enumspb.TIMEOUT_TYPE_SCHEDULE_TO_CLOSE,
-				common.FailureReasonActivityRetryScheduleToCloseTimeout,
+				primitives.FailureReasonActivityRetryScheduleToCloseTimeout,
 				priorAttemptFailure,
 			); err != nil {
 				return err

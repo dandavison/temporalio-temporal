@@ -23,6 +23,7 @@ import (
 	"go.temporal.io/server/common/log/tag"
 	"go.temporal.io/server/common/metrics"
 	"go.temporal.io/server/common/namespace"
+	"go.temporal.io/server/common/primitives"
 	"go.temporal.io/server/common/primitives/timestamp"
 	serviceerrors "go.temporal.io/server/common/serviceerror"
 	"google.golang.org/grpc/codes"
@@ -92,14 +93,8 @@ const (
 
 	contextExpireThreshold = 10 * time.Millisecond
 
-	// FailureReasonActivityTimeout is failureReason for when an activity times out, with %v as the timeout type.
-	FailureReasonActivityTimeout = "activity %v timeout"
-	// FailureReasonActivityRetryScheduleToCloseTimeout is failureReason for when an activity retry cannot be scheduled before its schedule-to-close timeout.
-	FailureReasonActivityRetryScheduleToCloseTimeout = "Not enough time to schedule next retry before activity ScheduleToClose timeout, giving up retrying"
 	// FailureReasonCompleteResultExceedsLimit is failureReason for complete result exceeds limit
 	FailureReasonCompleteResultExceedsLimit = "Complete result exceeds size limit."
-	// FailureReasonFailureDetailsExceedsLimit is failureReason for failure details exceeds limit
-	FailureReasonFailureExceedsLimit = "Failure exceeds size limit."
 	// FailureReasonCancelDetailsExceedsLimit is failureReason for cancel details exceeds limit
 	FailureReasonCancelDetailsExceedsLimit = "Cancel details exceed size limit."
 	// FailureReasonHeartbeatExceedsLimit is failureReason for heartbeat exceeds limit
@@ -111,8 +106,6 @@ const (
 )
 
 var (
-	// ErrBlobSizeExceedsLimit is error for event blob size exceeds limit
-	ErrBlobSizeExceedsLimit = serviceerror.NewInvalidArgument("Blob data size exceeds limit.")
 	// ErrMemoSizeExceedsLimit is error for memo size exceeds limit
 	ErrMemoSizeExceedsLimit = serviceerror.NewInvalidArgument("Memo size exceeds limit.")
 	// ErrContextTimeoutTooShort is error for setting a very short context timeout when calling a long poll API
@@ -604,7 +597,7 @@ func CheckEventBlobSizeLimit(
 
 		if actualSize > errorLimit {
 			metrics.BlobSizeError.With(metricsHandler).Record(1, metrics.OperationTag(operation))
-			return ErrBlobSizeExceedsLimit
+			return primitives.ErrBlobSizeExceedsLimit
 		}
 	}
 	return nil
@@ -667,31 +660,6 @@ func GetPayloadsMapSize(data map[string]*commonpb.Payloads) int {
 // CloneProto is a generic typed version of proto.Clone from proto.
 func CloneProto[T proto.Message](v T) T {
 	return proto.Clone(v).(T)
-}
-
-func CloneProtoMap[K comparable, T proto.Message](src map[K]T) map[K]T {
-	if src == nil {
-		return nil
-	}
-
-	result := make(map[K]T, len(src))
-	for k, v := range src {
-		result[k] = CloneProto(v)
-	}
-	return result
-}
-
-// CloneProtoSlice returns a new slice containing a clone of each individual proto.
-func CloneProtoSlice[T proto.Message](src []T) []T {
-	if src == nil {
-		return nil
-	}
-
-	result := make([]T, len(src))
-	for i, v := range src {
-		result[i] = CloneProto(v)
-	}
-	return result
 }
 
 // DiscardUnknownProto discards unknown fields in a proto message.

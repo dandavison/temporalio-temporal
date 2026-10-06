@@ -4,7 +4,7 @@ import (
 	"context"
 
 	persistencespb "go.temporal.io/server/api/persistence/v1"
-	"go.temporal.io/server/common"
+	"go.temporal.io/server/common/util"
 	"go.uber.org/mock/gomock"
 	"google.golang.org/protobuf/proto"
 )
@@ -68,7 +68,7 @@ func (s *nodeSuite) TestSkipPersistenceIfClean_LoadedUnmodified() {
 	s.NoError(err)
 	s.Contains(firstMutation.UpdatedNodes, "", "new node must be in UpdatedNodes")
 
-	persistedNodes := common.CloneProtoMap(firstMutation.UpdatedNodes)
+	persistedNodes := util.CloneProtoMap(firstMutation.UpdatedNodes)
 	originalTransition := proto.Clone(
 		persistedNodes[""].GetMetadata().GetLastUpdateVersionedTransition(),
 	).(*persistencespb.VersionedTransition)
@@ -102,7 +102,7 @@ func (s *nodeSuite) TestSkipPersistenceIfClean_LoadedModified() {
 
 	firstMutation, err := rootNode.CloseTransaction()
 	s.NoError(err)
-	persistedNodes := common.CloneProtoMap(firstMutation.UpdatedNodes)
+	persistedNodes := util.CloneProtoMap(firstMutation.UpdatedNodes)
 
 	s.nodeBackend.HandleNextTransitionCount = func() int64 { return 2 }
 	s.nodeBackend.HandleGetCurrentVersion = func() int64 { return 1 }
@@ -135,7 +135,7 @@ func (s *nodeSuite) TestSkipPersistenceIfClean_WithNewTask() {
 
 	firstMutation, err := rootNode.CloseTransaction()
 	s.NoError(err)
-	persistedNodes := common.CloneProtoMap(firstMutation.UpdatedNodes)
+	persistedNodes := util.CloneProtoMap(firstMutation.UpdatedNodes)
 
 	s.nodeBackend.HandleNextTransitionCount = func() int64 { return 2 }
 	s.nodeBackend.HandleGetCurrentVersion = func() int64 { return 1 }
@@ -190,7 +190,7 @@ func (s *nodeSuite) TestSkipPersistenceIfClean_DynamicConfig() {
 
 	firstMutation, err := rootNode.CloseTransaction()
 	s.NoError(err)
-	persistedNodes := common.CloneProtoMap(firstMutation.UpdatedNodes)
+	persistedNodes := util.CloneProtoMap(firstMutation.UpdatedNodes)
 
 	enabled := false
 	nextTransitionCount := int64(2)

@@ -23,12 +23,12 @@ import (
 	"go.temporal.io/api/workflowservice/v1"
 	persistencespb "go.temporal.io/server/api/persistence/v1"
 	"go.temporal.io/server/chasm/lib/nexusoperation"
-	"go.temporal.io/server/common"
 	"go.temporal.io/server/common/dynamicconfig"
 	commonnexus "go.temporal.io/server/common/nexus"
 	"go.temporal.io/server/common/nexus/nexusrpc"
 	"go.temporal.io/server/common/nexus/nexustest"
 	"go.temporal.io/server/common/payload"
+	"go.temporal.io/server/common/primitives"
 	"go.temporal.io/server/common/searchattribute/sadefs"
 	"go.temporal.io/server/common/testing/parallelsuite"
 	"go.temporal.io/server/common/testing/protorequire"
@@ -475,7 +475,7 @@ func (s *NexusStandaloneTestSuite) TestDescribeStandaloneNexusOperation() {
 			{
 				name: "LongPollBufferForcesResponse",
 				setup: func(env *NexusTestEnv) {
-					env.OverrideDynamicConfig(nexusoperation.LongPollBuffer, common.DefaultLongPollTimeout-time.Second)
+					env.OverrideDynamicConfig(nexusoperation.LongPollBuffer, primitives.DefaultLongPollTimeout-time.Second)
 				},
 				callerCtx: func(env *NexusTestEnv) (context.Context, context.CancelFunc) {
 					return s.Context(), func() {}

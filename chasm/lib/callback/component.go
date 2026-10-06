@@ -10,8 +10,8 @@ import (
 	"go.temporal.io/api/serviceerror"
 	"go.temporal.io/server/chasm"
 	callbackspb "go.temporal.io/server/chasm/lib/callback/gen/callbackpb/v1"
-	"go.temporal.io/server/common"
 	"go.temporal.io/server/common/nexus/nexusrpc"
+	"go.temporal.io/server/common/util"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
@@ -83,7 +83,7 @@ func (c *Callback) ToAPICallback() (*commonpb.Callback, error) {
 	res := &commonpb.Callback{
 		// NOTE: We intentionally do not include links that were added at runtime,
 		// e.g. when the callback was invoked. Those are included in ToAPICallbackInfo.
-		Links: common.CloneProtoSlice(chasmCB.GetLinks()),
+		Links: util.CloneProtoSlice(chasmCB.GetLinks()),
 	}
 
 	switch variant := chasmCB.GetVariant().(type) {
@@ -162,7 +162,7 @@ func (c *Callback) ToAPICallbackInfo(ctx chasm.Context) (*callbackpb.CallbackInf
 	// Merge the static links that were part of the callback's creation (apiCb.Links) with
 	// any new links picked up as part of the callback's execution.
 	newLinks := ctx.Links(c)
-	apiCb.Links = common.CloneProtoSlice(append(apiCb.Links, newLinks...))
+	apiCb.Links = util.CloneProtoSlice(append(apiCb.Links, newLinks...))
 	apiState, blockedReason, err := c.APIState(ctx)
 	if err != nil {
 		return nil, err
@@ -185,7 +185,7 @@ func (c *Callback) ToAPICallbackInfo(ctx chasm.Context) (*callbackpb.CallbackInf
 // FromAPICallback converts an API callback into a CHASM callback proto.
 func FromAPICallback(cb *commonpb.Callback) (*callbackspb.Callback, error) {
 	res := &callbackspb.Callback{
-		Links: common.CloneProtoSlice(cb.GetLinks()),
+		Links: util.CloneProtoSlice(cb.GetLinks()),
 	}
 
 	switch variant := cb.GetVariant().(type) {

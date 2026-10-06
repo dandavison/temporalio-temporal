@@ -5,8 +5,35 @@ import (
 
 	"golang.org/x/text/cases"
 	"golang.org/x/text/language"
+	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/fieldmaskpb"
 )
+
+// CloneProtoMap returns a new map containing a clone of each individual proto.
+func CloneProtoMap[K comparable, T proto.Message](src map[K]T) map[K]T {
+	if src == nil {
+		return nil
+	}
+
+	result := make(map[K]T, len(src))
+	for k, v := range src {
+		result[k] = proto.CloneOf(v)
+	}
+	return result
+}
+
+// CloneProtoSlice returns a new slice containing a clone of each individual proto.
+func CloneProtoSlice[T proto.Message](src []T) []T {
+	if src == nil {
+		return nil
+	}
+
+	result := make([]T, len(src))
+	for i, v := range src {
+		result[i] = proto.CloneOf(v)
+	}
+	return result
+}
 
 func ConvertPathToCamel(input string) []string {
 	var pathParts []string
