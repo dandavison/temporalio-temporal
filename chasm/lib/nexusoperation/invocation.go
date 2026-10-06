@@ -18,6 +18,7 @@ import (
 	"go.temporal.io/server/common/log/tag"
 	"go.temporal.io/server/common/namespace"
 	commonnexus "go.temporal.io/server/common/nexus"
+	"go.temporal.io/server/common/nexus/nexusconv"
 	"go.temporal.io/server/common/nexus/nexusrpc"
 	"go.temporal.io/server/common/resource"
 )
@@ -246,7 +247,7 @@ func (i *invocationSystem) Start(
 		if v.Failure.GetCanceledFailureInfo() != nil {
 			state = nexus.OperationStateCanceled
 		}
-		nexusFailure, convErr := commonnexus.TemporalFailureToNexusFailureInPlace(v.Failure)
+		nexusFailure, convErr := nexusconv.TemporalFailureToNexusFailureInPlace(v.Failure)
 		if convErr != nil {
 			i.logger.Error("failed to convert temporal failure to nexus failure", tag.Error(convErr), tag.RequestID(args.requestID))
 			he := nexus.NewHandlerErrorf(nexus.HandlerErrorTypeInternal, "internal error (request ID: %s)", args.requestID)

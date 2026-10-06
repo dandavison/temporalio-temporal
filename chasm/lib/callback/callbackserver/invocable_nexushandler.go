@@ -20,6 +20,7 @@ import (
 	"go.temporal.io/server/common/metrics"
 	"go.temporal.io/server/common/namespace"
 	commonnexus "go.temporal.io/server/common/nexus"
+	"go.temporal.io/server/common/nexus/nexusconv"
 	"go.temporal.io/server/common/nexus/nexusrpc"
 	"go.temporal.io/server/common/payload"
 	queueserrors "go.temporal.io/server/service/history/queues/errors"
@@ -59,7 +60,7 @@ func (n invocableNexusHandler) buildOnCompleteRequest() (*notificationservice.On
 	}
 
 	if n.completion.Error != nil {
-		failure, err := commonnexus.OperationErrorToTemporalFailure(n.completion.Error)
+		failure, err := nexusconv.OperationErrorToTemporalFailure(n.completion.Error)
 		if err != nil {
 			return nil, err
 		}
@@ -204,7 +205,7 @@ func (n invocableNexusHandler) dispatch(
 		// The task never reached a worker, so this is a problem between history and matching.
 		// Every other dispatch error is internal to Temporal and not something the namespace's users can
 		// fix, so only a reference ID to the logged error is surfaced to them.
-		handlerErr := commonnexus.ConvertGRPCError(rpcErr, false)
+		handlerErr := nexusconv.ConvertGRPCError(rpcErr, false)
 		retryable := isRetryableCallError(handlerErr)
 		logger = log.With(logger, tag.Bool("retryable", retryable))
 		userFacingErr := logInternalError(logger, "NexusHandler callback dispatch failed", rpcErr)

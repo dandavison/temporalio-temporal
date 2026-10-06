@@ -17,6 +17,7 @@ import (
 	"go.temporal.io/server/common/metrics"
 	"go.temporal.io/server/common/namespace"
 	commonnexus "go.temporal.io/server/common/nexus"
+	"go.temporal.io/server/common/nexus/nexusconv"
 	"go.temporal.io/server/common/nexus/nexusrpc"
 	"go.temporal.io/server/common/persistence"
 	"go.temporal.io/server/common/resource"
@@ -173,7 +174,7 @@ func clientProviderFactory(
 			httpCaller = func(r *http.Request) (*http.Response, error) {
 				resp, callErr := httpClient.Do(r)
 				// nexusrpc.HTTPClient does not return the raw HTTP response, so copy the failure-source header into the call context.
-				commonnexus.SetFailureSourceOnContext(ctx, resp)
+				nexusconv.SetFailureSourceOnContext(ctx, resp)
 				return resp, callErr
 			}
 		}

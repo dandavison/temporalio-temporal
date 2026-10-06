@@ -4,6 +4,8 @@ import (
 	"errors"
 	"fmt"
 
+	"go.temporal.io/server/common/nexus/nexusconv"
+
 	"github.com/nexus-rpc/sdk-go/nexus"
 	apiactivitypb "go.temporal.io/api/activity/v1" //nolint:importas
 	commonpb "go.temporal.io/api/common/v1"
@@ -20,7 +22,6 @@ import (
 	"go.temporal.io/server/common"
 	"go.temporal.io/server/common/contextutil"
 	"go.temporal.io/server/common/metrics"
-	commonnexus "go.temporal.io/server/common/nexus"
 	"go.temporal.io/server/common/nexus/nexusrpc"
 	"go.temporal.io/server/common/retrypolicy"
 	serviceerrors "go.temporal.io/server/common/serviceerror"
@@ -396,7 +397,7 @@ func (a *Activity) GetNexusCompletion(ctx chasm.Context, _ string) (nexusrpc.Com
 	}
 
 	key := ctx.ExecutionKey()
-	backLink := commonnexus.ConvertLinkActivityToNexusLink(&commonpb.Link_Activity{
+	backLink := nexusconv.ConvertLinkActivityToNexusLink(&commonpb.Link_Activity{
 		Namespace:  ctx.NamespaceEntry().Name().String(),
 		ActivityId: key.BusinessID,
 		RunId:      key.RunID,
@@ -428,7 +429,7 @@ func (a *Activity) GetNexusCompletion(ctx chasm.Context, _ string) (nexusrpc.Com
 			message = "operation canceled"
 		}
 
-		nf, err := commonnexus.TemporalFailureToNexusFailure(failure)
+		nf, err := nexusconv.TemporalFailureToNexusFailure(failure)
 		if err != nil {
 			return nexusrpc.CompleteOperationOptions{}, serviceerror.NewInternalf("failed to convert failure: %v", err)
 		}

@@ -12,6 +12,8 @@ import (
 	"sync/atomic"
 	"time"
 
+	"go.temporal.io/server/common/nexus/nexusconv"
+
 	"github.com/google/uuid"
 	"github.com/nexus-rpc/sdk-go/nexus"
 	"go.opentelemetry.io/otel/trace"
@@ -2164,7 +2166,7 @@ func (h *Handler) CompleteNexusOperation(ctx context.Context, request *historyse
 	}
 	var opErr *nexus.OperationError
 	if request.State != string(nexus.OperationStateSucceeded) {
-		failure := commonnexus.ProtoFailureToNexusFailure(request.GetFailure())
+		failure := nexusconv.ProtoFailureToNexusFailure(request.GetFailure())
 		recvdErr, err := nexusrpc.DefaultFailureConverter().FailureToError(failure)
 		if err != nil {
 			return nil, serviceerror.NewInvalidArgument("unable to convert failure to error")
@@ -2592,7 +2594,7 @@ func (h *Handler) StartNexusOperation(
 			if convErr != nil {
 				return nil, convErr
 			}
-			temporalFailure, convErr := commonnexus.NexusFailureToTemporalFailure(nexusFailure)
+			temporalFailure, convErr := nexusconv.NexusFailureToTemporalFailure(nexusFailure)
 			if convErr != nil {
 				return nil, convErr
 			}

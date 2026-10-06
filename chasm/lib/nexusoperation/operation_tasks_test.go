@@ -29,6 +29,7 @@ import (
 	"go.temporal.io/server/common/metrics/metricstest"
 	"go.temporal.io/server/common/namespace"
 	commonnexus "go.temporal.io/server/common/nexus"
+	"go.temporal.io/server/common/nexus/nexusconv"
 	"go.temporal.io/server/common/nexus/nexusrpc"
 	"go.temporal.io/server/common/nexus/nexustest"
 	"go.temporal.io/server/common/payloads"
@@ -218,7 +219,7 @@ func TestInvocationTaskHandler_HTTP(t *testing.T) {
 			},
 		},
 	}
-	handlerNexusLink := commonnexus.ConvertLinkWorkflowEventToNexusLink(handlerLink)
+	handlerNexusLink := nexusconv.ConvertLinkWorkflowEventToNexusLink(handlerLink)
 
 	cases := []struct {
 		name                  string
@@ -239,7 +240,7 @@ func TestInvocationTaskHandler_HTTP(t *testing.T) {
 				if len(options.Links) != 1 {
 					return nil, nexus.NewHandlerErrorf(nexus.HandlerErrorTypeBadRequest, "expected 1 link, got %d", len(options.Links))
 				}
-				link, err := commonnexus.ConvertNexusLinkToLinkWorkflowEvent(options.Links[0])
+				link, err := nexusconv.ConvertNexusLinkToLinkWorkflowEvent(options.Links[0])
 				if err != nil {
 					return nil, nexus.NewHandlerErrorf(nexus.HandlerErrorTypeBadRequest, "failed to convert link: %v", err)
 				}
@@ -533,7 +534,7 @@ func TestInvocationTaskHandler_HTTP(t *testing.T) {
 				})
 			}
 
-			callerLink := commonnexus.ConvertLinkWorkflowEventToNexusLink(&commonpb.Link_WorkflowEvent{
+			callerLink := nexusconv.ConvertLinkWorkflowEventToNexusLink(&commonpb.Link_WorkflowEvent{
 				Namespace:  "ns-name",
 				WorkflowId: "wf-id",
 				RunId:      "run-id",
@@ -1006,7 +1007,7 @@ func TestInvocationTaskHandler_SystemEndpoint(t *testing.T) {
 								AsyncSuccess: &nexuspb.StartOperationResponse_Async{
 									OperationToken: "system-op-token",
 									Links: commonnexus.ConvertLinksToProto([]nexus.Link{
-										commonnexus.ConvertLinkWorkflowEventToNexusLink(handlerLink),
+										nexusconv.ConvertLinkWorkflowEventToNexusLink(handlerLink),
 									}),
 								},
 							},
@@ -1188,7 +1189,7 @@ func TestInvocationTaskHandler_SystemEndpoint(t *testing.T) {
 				input = mustToPayload(t, "test")
 			}
 
-			callerLink := commonnexus.ConvertLinkWorkflowEventToNexusLink(&commonpb.Link_WorkflowEvent{
+			callerLink := nexusconv.ConvertLinkWorkflowEventToNexusLink(&commonpb.Link_WorkflowEvent{
 				Namespace:  "ns-name",
 				WorkflowId: "wf-id",
 				RunId:      "run-id",

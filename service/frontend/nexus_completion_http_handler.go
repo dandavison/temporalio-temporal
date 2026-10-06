@@ -27,6 +27,7 @@ import (
 	"go.temporal.io/server/common/metrics"
 	"go.temporal.io/server/common/namespace"
 	commonnexus "go.temporal.io/server/common/nexus"
+	"go.temporal.io/server/common/nexus/nexusconv"
 	"go.temporal.io/server/common/nexus/nexusrpc"
 	"go.temporal.io/server/common/resource"
 	"go.temporal.io/server/common/rpc"
@@ -152,7 +153,7 @@ func (h *nexusCompletionHandler) CompleteOperation(ctx context.Context, r *nexus
 		if _, ok := errors.AsType[*serviceerror.NamespaceNotFound](err); ok {
 			return nexus.NewHandlerErrorf(nexus.HandlerErrorTypeNotFound, "namespace %q not found", targetNamespaceID)
 		}
-		return commonnexus.ConvertGRPCError(err, false)
+		return nexusconv.ConvertGRPCError(err, false)
 	}
 	logger := log.With(
 		h.Logger,
@@ -241,9 +242,9 @@ func (h *nexusCompletionHandler) CompleteOperation(ctx context.Context, r *nexus
 		return nexus.NewHandlerErrorf(nexus.HandlerErrorTypeUnavailable, "cluster inactive")
 	}
 	if _, ok := errors.AsType[*serviceerror.NotFound](err); ok {
-		return commonnexus.ConvertGRPCError(err, true)
+		return nexusconv.ConvertGRPCError(err, true)
 	}
-	return commonnexus.ConvertGRPCError(err, false)
+	return nexusconv.ConvertGRPCError(err, false)
 }
 
 // completeOperation dispatches the completion to the framework named by its
@@ -333,7 +334,7 @@ func (h *nexusCompletionHandler) completeHSMOperation(
 	switch req.State { // nolint:exhaustive
 	case nexus.OperationStateFailed, nexus.OperationStateCanceled:
 		hr.Outcome = &historyservice.CompleteNexusOperationRequest_Failure{
-			Failure: commonnexus.NexusFailureToProtoFailure(*req.Error.OriginalFailure),
+			Failure: nexusconv.NexusFailureToProtoFailure(*req.Error.OriginalFailure),
 		}
 	case nexus.OperationStateSucceeded:
 		hr.Outcome = &historyservice.CompleteNexusOperationRequest_Success{
@@ -377,14 +378,14 @@ func (h *nexusCompletionHandler) completeChasmOperation(
 		// Unwrap it so the caller sees the handler's original error (message, type, details, and
 		// canceled/terminated info) rather than the generic wrapper.
 		nexusFailure := nexusrpc.UnwrapFailure(req.Error.OriginalFailure)
-		failure, err := commonnexus.NexusFailureToTemporalFailure(*nexusFailure)
+		failure, err := nexusconv.NexusFailureToTemporalFailure(*nexusFailure)
 		if err != nil {
 			logger.Error("cannot convert nexus failure from completion request", tag.Error(err))
 			return nexus.NewHandlerErrorf(nexus.HandlerErrorTypeBadRequest, "invalid failure content")
 		}
 		// A canceled completion must carry CanceledFailureInfo so that it is recorded as canceled instead of failed.
 		if req.State == nexus.OperationStateCanceled {
-			failure = commonnexus.CoerceToCanceledFailure(failure)
+			failure = nexusconv.CoerceToCanceledFailure(failure)
 		}
 		hr.Outcome = &historyservice.CompleteNexusOperationChasmRequest_Failure{
 			Failure: failure,
@@ -607,16 +608,16 @@ func (c *requestContext) interceptRequest(ctx context.Context, request *nexusrpc
 		// Otherwise, expose the underlying error.
 		if permissionDeniedError, ok := errors.AsType[*serviceerror.PermissionDenied](err); ok {
 			c.outcomeTag = metrics.OutcomeTag("unauthorized")
-			return commonnexus.AdaptAuthorizeError(permissionDeniedError)
+			return nexusconv.AdaptAuthorizeError(permissionDeniedError)
 		}
 		c.outcomeTag = metrics.OutcomeTag("internal_auth_error")
 		c.logger.Error("Authorization internal error with processing nexus callback", tag.Error(err))
-		return commonnexus.ConvertGRPCError(err, false)
+		return nexusconv.ConvertGRPCError(err, false)
 	}
 
 	if err := c.NamespaceValidationInterceptor.ValidateState(c.namespace, nexusCompletionAPIName, c.businessID); err != nil {
 		c.outcomeTag = metrics.OutcomeTag("invalid_namespace_state")
-		return commonnexus.ConvertGRPCError(err, false)
+		return nexusconv.ConvertGRPCError(err, false)
 	}
 
 	// Redirect if current cluster is passive for this namespace.
@@ -651,7 +652,7 @@ func (c *requestContext) interceptRequest(ctx context.Context, request *nexusrpc
 	c.cleanupFunctions = append(c.cleanupFunctions, func(error) { cleanup() })
 	if err != nil {
 		c.outcomeTag = metrics.OutcomeTag("namespace_concurrency_limited")
-		return commonnexus.ConvertGRPCError(err, false)
+		return nexusconv.ConvertGRPCError(err, false)
 	}
 
 	if err := c.NamespaceRateLimitInterceptor.Allow(
@@ -661,17 +662,17 @@ func (c *requestContext) interceptRequest(ctx context.Context, request *nexusrpc
 		request.HTTPRequest.Header,
 	); err != nil {
 		c.outcomeTag = metrics.OutcomeTag("namespace_rate_limited")
-		return commonnexus.ConvertGRPCError(err, true)
+		return nexusconv.ConvertGRPCError(err, true)
 	}
 
 	if err := c.RateLimitInterceptor.Allow(nexusCompletionAPIName, request.HTTPRequest.Header); err != nil {
 		c.outcomeTag = metrics.OutcomeTag("global_rate_limited")
-		return commonnexus.ConvertGRPCError(err, true)
+		return nexusconv.ConvertGRPCError(err, true)
 	}
 
 	if err := c.clientVersionChecker.ClientSupported(ctx); err != nil {
 		c.outcomeTag = metrics.OutcomeTag("unsupported_client")
-		return commonnexus.ConvertGRPCError(err, true)
+		return nexusconv.ConvertGRPCError(err, true)
 	}
 
 	return nil

@@ -32,6 +32,7 @@ import (
 	"go.temporal.io/server/common/metrics"
 	"go.temporal.io/server/common/namespace"
 	commonnexus "go.temporal.io/server/common/nexus"
+	"go.temporal.io/server/common/nexus/nexusconv"
 	"go.temporal.io/server/common/nexus/nexusrpc"
 	"go.temporal.io/server/common/rpc/interceptor"
 	"google.golang.org/grpc/metadata"
@@ -186,17 +187,17 @@ func (c *operationContext) interceptRequest(
 		// Otherwise, expose the underlying error.
 		if permissionDeniedError, ok := errors.AsType[*serviceerror.PermissionDenied](err); ok {
 			c.metricsHandler = c.metricsHandler.WithTags(metrics.OutcomeTag("unauthorized"))
-			return commonnexus.AdaptAuthorizeError(permissionDeniedError)
+			return nexusconv.AdaptAuthorizeError(permissionDeniedError)
 		}
 		c.metricsHandler = c.metricsHandler.WithTags(metrics.OutcomeTag("internal_auth_error"))
 		c.logger.Error("Authorization internal error with processing nexus request", tag.Error(err))
-		return commonnexus.ConvertGRPCError(err, false)
+		return nexusconv.ConvertGRPCError(err, false)
 	}
 
 	// Nexus requests are not tied to a business ID, hence the empty string.
 	if err := c.namespaceValidationInterceptor.ValidateState(c.namespace, c.apiName, namespace.EmptyBusinessID); err != nil {
 		c.metricsHandler = c.metricsHandler.WithTags(metrics.OutcomeTag("invalid_namespace_state"))
-		return commonnexus.ConvertGRPCError(err, false)
+		return nexusconv.ConvertGRPCError(err, false)
 	}
 
 	//nolint:forbidigo // Nexus requests are not tied to a business ID by design (see line 184)
@@ -221,7 +222,7 @@ func (c *operationContext) interceptRequest(
 
 	c.cleanupFunctions = append(c.cleanupFunctions, func(respHeaders map[string]string, retErr error) {
 		if retErr != nil {
-			if source, ok := respHeaders[commonnexus.FailureSourceHeaderName]; ok && source != commonnexus.FailureSourceWorker {
+			if source, ok := respHeaders[nexusconv.FailureSourceHeaderName]; ok && source != nexusconv.FailureSourceWorker {
 				c.requestErrorHandler.HandleError(
 					request,
 					"",
@@ -243,7 +244,7 @@ func (c *operationContext) interceptRequest(
 	c.cleanupFunctions = append(c.cleanupFunctions, func(map[string]string, error) { cleanup() })
 	if err != nil {
 		c.metricsHandler = c.metricsHandler.WithTags(metrics.OutcomeTag("namespace_concurrency_limited"))
-		return commonnexus.ConvertGRPCError(err, false)
+		return nexusconv.ConvertGRPCError(err, false)
 	}
 
 	if err := c.namespaceRateLimitInterceptor.Allow(
@@ -253,17 +254,17 @@ func (c *operationContext) interceptRequest(
 		header,
 	); err != nil {
 		c.metricsHandler = c.metricsHandler.WithTags(metrics.OutcomeTag("namespace_rate_limited"))
-		return commonnexus.ConvertGRPCError(err, true)
+		return nexusconv.ConvertGRPCError(err, true)
 	}
 
 	if err := c.rateLimitInterceptor.Allow(c.apiName, header); err != nil {
 		c.metricsHandler = c.metricsHandler.WithTags(metrics.OutcomeTag("global_rate_limited"))
-		return commonnexus.ConvertGRPCError(err, true)
+		return nexusconv.ConvertGRPCError(err, true)
 	}
 
 	if err := c.clientVersionChecker.ClientSupported(ctx); err != nil {
 		c.metricsHandler = c.metricsHandler.WithTags(metrics.OutcomeTag("unsupported_client"))
-		converted := commonnexus.ConvertGRPCError(err, true)
+		converted := nexusconv.ConvertGRPCError(err, true)
 		return converted
 	}
 
@@ -406,7 +407,7 @@ func (h *nexusHandler) getOperationContext(ctx context.Context, method string) (
 		if _, ok := errors.AsType[*serviceerror.NamespaceNotFound](err); ok {
 			return nil, nexus.NewHandlerErrorf(nexus.HandlerErrorTypeNotFound, "namespace not found: %q", nc.namespaceName)
 		}
-		return nil, commonnexus.ConvertGRPCError(err, false)
+		return nil, nexusconv.ConvertGRPCError(err, false)
 	}
 	oc.forwardingEnabledForNamespace = h.forwardingEnabledForNamespace
 	oc.logger = log.With(h.logger, tag.Operation(method), tag.WorkflowNamespace(nc.namespaceName))
@@ -481,7 +482,7 @@ func (h *nexusHandler) StartOperation(
 	if err != nil {
 		oc.metricsHandler = oc.metricsHandler.WithTags(metrics.OutcomeTag("matching_timeout"))
 		oc.logger.Error("received error from matching service", tag.Error(err))
-		return nil, commonnexus.ConvertGRPCError(err, false)
+		return nil, nexusconv.ConvertGRPCError(err, false)
 	}
 	// Convert to standard Nexus SDK response.
 	result, handlerLinks, err := oc.handleStartOperationResponse(response, operation)
@@ -599,7 +600,7 @@ func (h *nexusHandler) CancelOperation(ctx context.Context, service, operation, 
 	if err != nil {
 		oc.metricsHandler = oc.metricsHandler.WithTags(metrics.OutcomeTag("matching_timeout"))
 		oc.logger.Error("received error from matching service", tag.Error(err))
-		return commonnexus.ConvertGRPCError(err, false)
+		return nexusconv.ConvertGRPCError(err, false)
 	}
 	// Convert to standard Nexus SDK response.
 	return oc.handleCancelOperationResponse(response, operation)
@@ -702,7 +703,7 @@ func (h *nexusHandler) nexusClientForActiveCluster(oc *operationContext, service
 func (nc *nexusContext) setFailureSource(source string) {
 	nc.responseHeadersMutex.Lock()
 	defer nc.responseHeadersMutex.Unlock()
-	nc.responseHeaders[commonnexus.FailureSourceHeaderName] = source
+	nc.responseHeaders[nexusconv.FailureSourceHeaderName] = source
 }
 
 type forwardingHttpHeaderWrapper struct {
@@ -724,7 +725,7 @@ func (f *forwardingHttpHeaderWrapper) Do(req *http.Request) (*http.Response, err
 		return nil, err
 	}
 
-	if failureSource := response.Header.Get(commonnexus.FailureSourceHeaderName); failureSource != "" {
+	if failureSource := response.Header.Get(nexusconv.FailureSourceHeaderName); failureSource != "" {
 		f.nc.setFailureSource(failureSource)
 	}
 

@@ -30,6 +30,7 @@ import (
 	"go.temporal.io/server/common/metrics"
 	"go.temporal.io/server/common/namespace"
 	commonnexus "go.temporal.io/server/common/nexus"
+	"go.temporal.io/server/common/nexus/nexusconv"
 	"go.temporal.io/server/common/nexus/nexusrpc"
 	"go.temporal.io/server/common/resource"
 	"go.temporal.io/server/service/history/consts"
@@ -256,7 +257,7 @@ func (e taskExecutor) executeInvocationTask(ctx context.Context, env hsm.Environ
 	callCtx, cancel := context.WithTimeout(ctx, callTimeout)
 	defer cancel()
 	// Set this value on the parent context so that our custom HTTP caller can mutate it since we cannot access response headers directly.
-	callCtx = context.WithValue(callCtx, commonnexus.FailureSourceContextKey, &atomic.Value{})
+	callCtx = context.WithValue(callCtx, nexusconv.FailureSourceContextKey, &atomic.Value{})
 
 	options := nexus.StartOperationOptions{
 		Header:      header,
@@ -391,7 +392,7 @@ func (e taskExecutor) loadOperationArgs(
 		attrs := event.GetNexusOperationScheduledEventAttributes()
 		args.payload = attrs.GetInput()
 		args.header = maps.Clone(attrs.GetNexusHeader())
-		args.nexusLink = commonnexus.ConvertLinkWorkflowEventToNexusLink(&commonpb.Link_WorkflowEvent{
+		args.nexusLink = nexusconv.ConvertLinkWorkflowEventToNexusLink(&commonpb.Link_WorkflowEvent{
 			Namespace:  ns.Name().String(),
 			WorkflowId: ref.WorkflowKey.WorkflowID,
 			RunId:      ref.WorkflowKey.RunID,
@@ -727,7 +728,7 @@ func (e taskExecutor) executeCancelationTask(ctx context.Context, env hsm.Enviro
 	defer cancel()
 
 	// Set this value on the parent context so that our custom HTTP caller can mutate it since we cannot access response headers directly.
-	callCtx = context.WithValue(callCtx, commonnexus.FailureSourceContextKey, &atomic.Value{})
+	callCtx = context.WithValue(callCtx, nexusconv.FailureSourceContextKey, &atomic.Value{})
 
 	traceCtx := invocationTraceContext{
 		operationTag:      "CancelOperation",
@@ -1055,7 +1056,7 @@ func (e taskExecutor) logCallFailure(traceCtx invocationTraceContext, callErr er
 	}
 	tags := append(traceCtx.tags(), tag.Error(callErr))
 	_, isTimeoutBelowMin := errors.AsType[*operationTimeoutBelowMinError](callErr)
-	if failureSource == commonnexus.FailureSourceWorker || isTimeoutBelowMin {
+	if failureSource == nexusconv.FailureSourceWorker || isTimeoutBelowMin {
 		e.Logger.Debug("Nexus request failed", tags...)
 	} else {
 		e.Logger.Error("Nexus request failed", tags...)
@@ -1108,7 +1109,7 @@ func callErrToFailure(callErr error, retryable bool) (*failurepb.Failure, error)
 				return nil, err
 			}
 		}
-		f, err := commonnexus.NexusFailureToTemporalFailure(nf)
+		f, err := nexusconv.NexusFailureToTemporalFailure(nf)
 		if err != nil {
 			return nil, err
 		}
@@ -1127,7 +1128,7 @@ func callErrToFailure(callErr error, retryable bool) (*failurepb.Failure, error)
 }
 
 func failureSourceFromContext(ctx context.Context) string {
-	ctxVal := ctx.Value(commonnexus.FailureSourceContextKey)
+	ctxVal := ctx.Value(nexusconv.FailureSourceContextKey)
 	if ctxVal == nil {
 		return ""
 	}
@@ -1200,7 +1201,7 @@ func (e taskExecutor) startOnHistoryService(
 		if v.Failure.GetCanceledFailureInfo() != nil {
 			state = nexus.OperationStateCanceled
 		}
-		nexusFailure, convErr := commonnexus.TemporalFailureToNexusFailureInPlace(v.Failure)
+		nexusFailure, convErr := nexusconv.TemporalFailureToNexusFailureInPlace(v.Failure)
 		if convErr != nil {
 			e.Logger.Error("failed to convert temporal failure to nexus failure", tag.Error(convErr), tag.RequestID(args.requestID))
 			he := nexus.NewHandlerErrorf(nexus.HandlerErrorTypeInternal, "internal error (request ID: %s)", args.requestID)

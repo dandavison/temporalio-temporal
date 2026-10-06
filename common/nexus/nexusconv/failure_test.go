@@ -1,4 +1,4 @@
-package nexus
+package nexusconv
 
 import (
 	"testing"
@@ -8,6 +8,7 @@ import (
 	commonpb "go.temporal.io/api/common/v1"
 	enumspb "go.temporal.io/api/enums/v1"
 	failurepb "go.temporal.io/api/failure/v1"
+	"go.temporal.io/sdk/converter"
 	"go.temporal.io/sdk/temporal"
 	"go.temporal.io/server/common/nexus/nexusrpc"
 	"go.temporal.io/server/common/testing/protorequire"
@@ -364,4 +365,11 @@ func TestFromOperationCanceledError(t *testing.T) {
 		},
 	}
 	protorequire.ProtoEqual(t, expected, converted)
+}
+
+func mustToPayload(t *testing.T, v any) *commonpb.Payload {
+	conv := converter.GetDefaultDataConverter()
+	payload, err := conv.ToPayload(v)
+	require.NoError(t, err)
+	return payload
 }

@@ -1,4 +1,4 @@
-package nexus
+package nexusconv
 
 import (
 	"context"
@@ -14,8 +14,8 @@ import (
 	failurepb "go.temporal.io/api/failure/v1"
 	nexuspb "go.temporal.io/api/nexus/v1"
 	"go.temporal.io/api/serviceerror"
-	"go.temporal.io/server/common"
 	"go.temporal.io/server/common/nexus/nexusrpc"
+	"go.temporal.io/server/common/util"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/protobuf/encoding/protojson"
 	"google.golang.org/protobuf/proto"
@@ -197,7 +197,7 @@ func CoerceToCanceledFailure(failure *failurepb.Failure) *failurepb.Failure {
 	}
 	canceled := &failurepb.Failure{}
 	if failure != nil {
-		canceled = common.CloneProto(failure)
+		canceled = proto.CloneOf(failure)
 	}
 	canceled.FailureInfo = &failurepb.Failure_CanceledFailureInfo{
 		CanceledFailureInfo: &failurepb.CanceledFailureInfo{},
@@ -345,7 +345,7 @@ func nexusFailureMetadataToApplicationFailureInfo(failure nexus.Failure) (*failu
 // and
 // https://github.com/grpc-ecosystem/grpc-gateway/blob/a7cf811e6ffabeaddcfb4ff65602c12671ff326e/runtime/errors.go#L56.
 func ConvertGRPCError(err error, exposeDetails bool) error {
-	st, ok := common.GetRPCStatus(err)
+	st, ok := util.GetRPCStatus(err)
 	if !ok {
 		// The Nexus SDK will translate this into an internal server error and will not expose the error details.
 		return err

@@ -3,9 +3,8 @@ package scheduler
 import (
 	"time"
 
-	"go.temporal.io/server/chasm/lib/callback/callbackserver"
-
 	"go.temporal.io/server/chasm"
+	"go.temporal.io/server/chasm/lib/callback/callbackserver"
 	"go.temporal.io/server/common/backoff"
 	"go.temporal.io/server/common/dynamicconfig"
 )

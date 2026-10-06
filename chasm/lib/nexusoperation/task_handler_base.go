@@ -18,6 +18,7 @@ import (
 	"go.temporal.io/server/common/metrics"
 	"go.temporal.io/server/common/namespace"
 	commonnexus "go.temporal.io/server/common/nexus"
+	"go.temporal.io/server/common/nexus/nexusconv"
 	"go.temporal.io/server/common/nexus/nexusrpc"
 	"go.temporal.io/server/common/resource"
 	"go.uber.org/fx"
@@ -146,7 +147,7 @@ func (b *nexusTaskHandlerBase) lookupEndpoint(ctx context.Context, namespaceID n
 // setupCallContext creates a context with a timeout and attaches the failure source tracking value.
 func (b *nexusTaskHandlerBase) setupCallContext(ctx context.Context, timeout time.Duration) (context.Context, context.CancelFunc) {
 	callCtx, cancel := context.WithTimeout(ctx, timeout)
-	callCtx = context.WithValue(callCtx, commonnexus.FailureSourceContextKey, &atomic.Value{})
+	callCtx = context.WithValue(callCtx, nexusconv.FailureSourceContextKey, &atomic.Value{})
 	return callCtx, cancel
 }
 
@@ -182,7 +183,7 @@ func (b *nexusTaskHandlerBase) logCallFailure(traceCtx invocationTraceContext, c
 	}
 	tags := append(traceCtx.tags(), tag.Error(callErr))
 	_, isTimeoutBelowMin := errors.AsType[*operationTimeoutBelowMinError](callErr)
-	if failureSource == commonnexus.FailureSourceWorker || isTimeoutBelowMin {
+	if failureSource == nexusconv.FailureSourceWorker || isTimeoutBelowMin {
 		b.logger.Debug("Nexus request failed", tags...)
 	} else {
 		b.logger.Error("Nexus request failed", tags...)

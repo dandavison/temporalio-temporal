@@ -5,7 +5,7 @@ import (
 	"go.temporal.io/server/chasm"
 	"go.temporal.io/server/chasm/lib/callback"
 	"go.temporal.io/server/chasm/lib/workflow/gen/workflowpb/v1"
-	commonnexus "go.temporal.io/server/common/nexus"
+	"go.temporal.io/server/common/nexus/nexusconv"
 	"go.temporal.io/server/common/nexus/nexusrpc"
 )
 
@@ -45,7 +45,7 @@ func (u *WorkflowUpdate) GetNexusCompletion(
 	// If the update was rejected, return the rejection failure directly instead
 	// of looking up a completion event that doesn't exist.
 	if rf := u.GetRejectionFailure(); rf != nil {
-		f, err := commonnexus.TemporalFailureToNexusFailure(rf)
+		f, err := nexusconv.TemporalFailureToNexusFailure(rf)
 		if err != nil {
 			return nexusrpc.CompleteOperationOptions{}, err
 		}

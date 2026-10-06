@@ -21,6 +21,7 @@ import (
 	"go.temporal.io/server/common/metrics"
 	"go.temporal.io/server/common/namespace"
 	commonnexus "go.temporal.io/server/common/nexus"
+	"go.temporal.io/server/common/nexus/nexusconv"
 	"go.temporal.io/server/common/nexus/nexusrpc"
 	queueserrors "go.temporal.io/server/service/history/queues/errors"
 	"go.uber.org/fx"
@@ -148,7 +149,7 @@ func (h *operationInvocationTaskHandler) Execute(
 	defer cancel()
 	// Set this value on the parent context so that our custom HTTP caller can mutate it since we cannot
 	// access response headers directly.
-	callCtx = context.WithValue(callCtx, commonnexus.FailureSourceContextKey, &atomic.Value{})
+	callCtx = context.WithValue(callCtx, nexusconv.FailureSourceContextKey, &atomic.Value{})
 
 	options := nexus.StartOperationOptions{
 		Header:      header,

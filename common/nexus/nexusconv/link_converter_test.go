@@ -1,4 +1,4 @@
-package nexus_test
+package nexusconv_test
 
 import (
 	"net/url"
@@ -10,7 +10,7 @@ import (
 	"github.com/stretchr/testify/require"
 	commonpb "go.temporal.io/api/common/v1"
 	enumspb "go.temporal.io/api/enums/v1"
-	commonnexus "go.temporal.io/server/common/nexus"
+	"go.temporal.io/server/common/nexus/nexusconv"
 	"go.temporal.io/server/common/testing/protorequire"
 	"google.golang.org/protobuf/testing/protocmp"
 )
@@ -22,7 +22,7 @@ func TestConvertLinkNexusOperationToNexusLink(t *testing.T) {
 		RunId:       "run-id",
 	}
 
-	output := commonnexus.ConvertLinkNexusOperationToNexusLink(input)
+	output := nexusconv.ConvertLinkNexusOperationToNexusLink(input)
 	require.Equal(t, nexus.Link{
 		URL: &url.URL{
 			Scheme:  "temporal",
@@ -41,7 +41,7 @@ func TestConvertLinkActivityToNexusLink(t *testing.T) {
 		RunId:      "run-id",
 	}
 
-	output := commonnexus.ConvertLinkActivityToNexusLink(input)
+	output := nexusconv.ConvertLinkActivityToNexusLink(input)
 	require.Equal(t, nexus.Link{
 		URL: &url.URL{
 			Scheme:  "temporal",
@@ -79,7 +79,7 @@ func TestConvertNexusLinkToLinkActivity(t *testing.T) {
 		},
 		{
 			name: "round-trip with escaped path",
-			input: commonnexus.ConvertLinkActivityToNexusLink(&commonpb.Link_Activity{
+			input: nexusconv.ConvertLinkActivityToNexusLink(&commonpb.Link_Activity{
 				Namespace:  "ns/with/slash",
 				ActivityId: "act id with space",
 				RunId:      "run-id",
@@ -118,7 +118,7 @@ func TestConvertNexusLinkToLinkActivity(t *testing.T) {
 
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			out, err := commonnexus.ConvertNexusLinkToLinkActivity(tc.input)
+			out, err := nexusconv.ConvertNexusLinkToLinkActivity(tc.input)
 			if tc.errMsg != "" {
 				require.ErrorContains(t, err, tc.errMsg)
 				return
@@ -308,7 +308,7 @@ func TestConvertLinkWorkflowEventToNexusLink(t *testing.T) {
 
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			output := commonnexus.ConvertLinkWorkflowEventToNexusLink(tc.input)
+			output := nexusconv.ConvertLinkWorkflowEventToNexusLink(tc.input)
 			require.Equal(t, tc.output, output)
 			require.Equal(t, tc.outputURL, output.URL.String())
 		})
@@ -597,7 +597,7 @@ func TestConvertNexusLinkToLinkWorkflowEvent(t *testing.T) {
 
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			output, err := commonnexus.ConvertNexusLinkToLinkWorkflowEvent(tc.input)
+			output, err := nexusconv.ConvertNexusLinkToLinkWorkflowEvent(tc.input)
 			if tc.errMsg != "" {
 				require.ErrorContains(t, err, tc.errMsg)
 			} else {
@@ -695,12 +695,12 @@ func TestConvertLinkCallback_RoundTrip(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 
-			link, err := commonnexus.ConvertLinkCallbackToNexusLink(tc.input)
+			link, err := nexusconv.ConvertLinkCallbackToNexusLink(tc.input)
 			require.NoError(t, err)
 			require.Equal(t, "temporal.api.common.v1.Link.Callback", link.Type)
 			require.Equal(t, tc.wantURL, link.URL.String())
 
-			output, err := commonnexus.ConvertNexusLinkToLinkCallback(link)
+			output, err := nexusconv.ConvertNexusLinkToLinkCallback(link)
 			require.NoError(t, err)
 			protorequire.ProtoEqual(t, tc.input, output)
 		})
@@ -708,7 +708,7 @@ func TestConvertLinkCallback_RoundTrip(t *testing.T) {
 }
 
 func TestConvertLinkCallbackToNexusLink_UnsupportedExecutionType(t *testing.T) {
-	_, err := commonnexus.ConvertLinkCallbackToNexusLink(&commonpb.Link_Callback{
+	_, err := nexusconv.ConvertLinkCallbackToNexusLink(&commonpb.Link_Callback{
 		Namespace: "ns",
 		Execution: &commonpb.Execution{
 			Type:       enumspb.EXECUTION_TYPE_UNSPECIFIED,
@@ -764,7 +764,7 @@ func TestConvertNexusLinkToLinkCallback_Invalid(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 
-			_, err := commonnexus.ConvertNexusLinkToLinkCallback(tc.link)
+			_, err := nexusconv.ConvertNexusLinkToLinkCallback(tc.link)
 			require.ErrorContains(t, err, tc.wantError)
 		})
 	}
