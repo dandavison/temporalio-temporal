@@ -19,6 +19,7 @@ import (
 	"go.temporal.io/server/common/namespace"
 	"go.temporal.io/server/common/persistence/transitionhistory"
 	"go.temporal.io/server/common/persistence/versionhistory"
+	"go.temporal.io/server/common/primitives"
 	serviceerrors "go.temporal.io/server/common/serviceerror"
 	"go.temporal.io/server/service/history/events"
 	historyi "go.temporal.io/server/service/history/interfaces"
@@ -188,7 +189,7 @@ func GetOrPollWorkflowMutableState(
 
 		// Send back response just before caller context would time out.
 		longPollInterval := shardContext.GetConfig().LongPollExpirationInterval(namespaceRegistry.Name().String())
-		longPollCtx, cancel := contextutil.WithDeadlineBuffer(ctx, longPollInterval, common.DefaultLongPollBuffer)
+		longPollCtx, cancel := contextutil.WithDeadlineBuffer(ctx, longPollInterval, primitives.DefaultLongPollBuffer)
 		defer cancel()
 
 		for {

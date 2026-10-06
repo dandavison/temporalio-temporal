@@ -31,12 +31,6 @@ const (
 )
 
 const (
-	// DefaultLongPollTimeout is the default context timeout for a long poll request.
-	DefaultLongPollTimeout = time.Second * 60
-	// DefaultLongPollBuffer is the buffer used to adjust a long poll request timeout.
-	// Specifically, long poll requests are timed out at a time which leaves at least the buffer's duration
-	// remaining before the caller's deadline, if permitted by the caller's deadline.
-	DefaultLongPollBuffer = time.Second
 	// MinLongPollTimeout is the minimum context timeout for a long poll request, below which
 	// the request won't be processed.
 	MinLongPollTimeout = time.Second * 2

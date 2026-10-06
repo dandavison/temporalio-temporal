@@ -9,10 +9,10 @@ import (
 	sdkpb "go.temporal.io/api/sdk/v1"
 	"go.temporal.io/api/serviceerror"
 	"go.temporal.io/api/workflowservice/v1"
-	"go.temporal.io/server/common"
 	"go.temporal.io/server/common/dynamicconfig"
 	"go.temporal.io/server/common/log"
 	"go.temporal.io/server/common/log/tag"
+	"go.temporal.io/server/common/primitives"
 	"go.temporal.io/server/common/primitives/timestamp"
 	"go.temporal.io/server/common/priorities"
 	"go.temporal.io/server/common/retrypolicy"
@@ -80,7 +80,7 @@ func validateBlobSize(
 	}
 
 	if blobSize > sizeErrorLimit {
-		return common.ErrBlobSizeExceedsLimit
+		return primitives.ErrBlobSizeExceedsLimit
 	}
 
 	return nil
