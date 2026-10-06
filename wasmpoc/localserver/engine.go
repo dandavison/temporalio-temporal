@@ -235,6 +235,22 @@ func (e *engine) runSideEffectTasks(ctx context.Context, x *execution) error {
 	}
 }
 
+func (e *engine) deleteClosedExecution(key chasm.ExecutionKey) error {
+	x, err := e.execution(chasm.ComponentRef{ExecutionKey: key})
+	if err != nil {
+		return err
+	}
+	if x.backend.isRunning() {
+		return serviceerror.NewFailedPrecondition("deleting a running workflow is not supported")
+	}
+	delete(e.executions, x.key)
+	current := [2]string{x.key.NamespaceID, x.key.BusinessID}
+	if e.current[current] == x {
+		delete(e.current, current)
+	}
+	return nil
+}
+
 func (e *engine) execution(ref chasm.ComponentRef) (*execution, error) {
 	if ref.RunID == "" {
 		if x, ok := e.current[[2]string{ref.NamespaceID, ref.BusinessID}]; ok {

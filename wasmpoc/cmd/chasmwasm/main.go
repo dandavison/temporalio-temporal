@@ -41,6 +41,9 @@ var (
 		"StartWorkflowExecution": method(func(ctx context.Context, r *workflowservice.StartWorkflowExecutionRequest) (proto.Message, error) {
 			return server.StartWorkflowExecution(ctx, r)
 		}),
+		"DeleteWorkflowExecution": method(func(ctx context.Context, r *workflowservice.DeleteWorkflowExecutionRequest) (proto.Message, error) {
+			return server.DeleteWorkflowExecution(ctx, r)
+		}),
 		"GetWorkflowExecutionHistory": method(func(ctx context.Context, r *workflowservice.GetWorkflowExecutionHistoryRequest) (proto.Message, error) {
 			return server.GetWorkflowExecutionHistory(ctx, r)
 		}),

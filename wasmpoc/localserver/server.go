@@ -142,6 +142,23 @@ func (s *Server) ShutdownWorker(
 	return &workflowservice.ShutdownWorkerResponse{}, nil
 }
 
+// DeleteWorkflowExecution removes a closed workflow. Unlike the server, it does not terminate a
+// running workflow first.
+func (s *Server) DeleteWorkflowExecution(
+	ctx context.Context,
+	request *workflowservice.DeleteWorkflowExecutionRequest,
+) (*workflowservice.DeleteWorkflowExecutionResponse, error) {
+	key := chasm.ExecutionKey{
+		NamespaceID: request.GetNamespace(),
+		BusinessID:  request.GetWorkflowExecution().GetWorkflowId(),
+		RunID:       request.GetWorkflowExecution().GetRunId(),
+	}
+	if err := s.engine.deleteClosedExecution(key); err != nil {
+		return nil, err
+	}
+	return &workflowservice.DeleteWorkflowExecutionResponse{}, nil
+}
+
 // GetWorkflowExecutionHistory returns the whole history, or with the close-event filter only the
 // close event, which is absent while the workflow is running. It does not wait for new events.
 func (s *Server) GetWorkflowExecutionHistory(
