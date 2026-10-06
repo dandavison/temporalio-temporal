@@ -1,0 +1,12 @@
+#!/bin/sh
+# Builds the local-server wasm module and its precompiled form for the wasmtime host in host/.
+# The precompiled module's features must match the host's wasmtime build (runtime only, no GC,
+# threads, exceptions or component model), and its wasmtime version must match exactly.
+set -eu
+cd "$(dirname "$0")/.."
+out=${1:-/tmp}
+GOOS=wasip1 GOARCH=wasm go build -buildmode=c-shared -ldflags="-s -w" -trimpath -o "$out/local-server.wasm" ./wasmpoc/cmd/chasmwasm
+wasmtime compile \
+  -W gc=n,gc-support=n,concurrency-support=n,threads=n,shared-everything-threads=n,component-model=n,exceptions=n,stack-switching=n \
+  "$out/local-server.wasm" -o "$out/local-server.cwasm"
+ls -l "$out/local-server.wasm" "$out/local-server.cwasm"

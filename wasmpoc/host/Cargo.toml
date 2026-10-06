@@ -1,0 +1,13 @@
+[package]
+name = "local-server-host"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+anyhow = "1"
+prost = "0.14"
+prost-types = { version = "0.7", package = "prost-wkt-types" }
+wasmtime = { version = "48", default-features = false, features = ["runtime", "std", "anyhow"] }
+wasmtime-wasi = "48"
+temporalio-protos = { path = "/Users/dan/worktrees/sdk-core/local-workflow-progress/sdk-core/crates/protos" }
+libc = "0.2"
