@@ -4,21 +4,22 @@ import (
 	"errors"
 
 	apiactivitypb "go.temporal.io/api/activity/v1" //nolint:importas
+	commandpb "go.temporal.io/api/command/v1"
 	commonpb "go.temporal.io/api/common/v1"
 	enumspb "go.temporal.io/api/enums/v1"
 	historypb "go.temporal.io/api/history/v1"
 	sdkpb "go.temporal.io/api/sdk/v1"
 	"go.temporal.io/api/serviceerror"
-	"go.temporal.io/server/wasmpoc/api/workflowservice/v1"
-	"go.temporal.io/server/wasmpoc/api/historyservice/v1"
 	tokenspb "go.temporal.io/server/api/token/v1"
 	"go.temporal.io/server/common/contextutil"
 	"go.temporal.io/server/common/retrypolicy"
-	serviceerrors "go.temporal.io/server/wasmpoc/common/serviceerror"
+	"go.temporal.io/server/wasmpoc/api/historyservice/v1"
+	"go.temporal.io/server/wasmpoc/api/workflowservice/v1"
 	"go.temporal.io/server/wasmpoc/chasm"
 	"go.temporal.io/server/wasmpoc/chasm/lib/activity/gen/activitypb/v1"
 	"go.temporal.io/server/wasmpoc/common/metrics"
 	"go.temporal.io/server/wasmpoc/common/protoutil"
+	serviceerrors "go.temporal.io/server/wasmpoc/common/serviceerror"
 	"go.temporal.io/server/wasmpoc/service/history/consts"
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
@@ -42,8 +43,8 @@ var (
 var _ chasm.VisibilitySearchAttributesProvider = (*Activity)(nil)
 
 type ActivityStore interface {
-	// RecordCompleted applies the provided function to record activity completion
-	RecordCompleted(ctx chasm.MutableContext, applyFn func(ctx chasm.MutableContext) error) error
+	// RecordCompleted applies the provided function to record completion of activity a.
+	RecordCompleted(ctx chasm.MutableContext, a *Activity, applyFn func(ctx chasm.MutableContext) error) error
 }
 
 // Activity component represents an activity execution persistence object and can be either standalone activity or one
@@ -208,11 +209,32 @@ func NewStandaloneActivity(
 	return activity, nil
 }
 
+// NewEmbeddedActivity creates an activity scheduled by a workflow command. The workflow is the
+// activity's ActivityStore, reached through the Store parent pointer.
 func NewEmbeddedActivity(
 	ctx chasm.MutableContext,
-	state *activitypb.ActivityState,
-	parent ActivityStore,
-) {
+	attrs *commandpb.ScheduleActivityTaskCommandAttributes,
+) *Activity {
+	activity := &Activity{
+		ActivityState: &activitypb.ActivityState{
+			ActivityType:           attrs.GetActivityType(),
+			TaskQueue:              attrs.GetTaskQueue(),
+			ScheduleToCloseTimeout: attrs.GetScheduleToCloseTimeout(),
+			ScheduleToStartTimeout: attrs.GetScheduleToStartTimeout(),
+			StartToCloseTimeout:    attrs.GetStartToCloseTimeout(),
+			HeartbeatTimeout:       attrs.GetHeartbeatTimeout(),
+			RetryPolicy:            attrs.GetRetryPolicy(),
+			Priority:               attrs.GetPriority(),
+		},
+		LastAttempt: chasm.NewDataField(ctx, &activitypb.ActivityAttemptState{}),
+		RequestData: chasm.NewDataField(ctx, &activitypb.ActivityRequestData{
+			Input:  attrs.GetInput(),
+			Header: attrs.GetHeader(),
+		}),
+		Outcome: chasm.NewDataField(ctx, &activitypb.ActivityOutcome{}),
+	}
+	activity.ScheduleTime = timestamppb.New(ctx.Now(activity))
+	return activity
 }
 
 // HandleStarted updates the activity on recording activity task started and populates the response.
@@ -283,7 +305,7 @@ func (a *Activity) GenerateRecordActivityTaskStartedResponse(
 }
 
 // RecordCompleted applies the provided function to record activity completion.
-func (a *Activity) RecordCompleted(ctx chasm.MutableContext, applyFn func(ctx chasm.MutableContext) error) error {
+func (a *Activity) RecordCompleted(ctx chasm.MutableContext, _ *Activity, applyFn func(ctx chasm.MutableContext) error) error {
 	return applyFn(ctx)
 }
 

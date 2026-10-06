@@ -153,31 +153,10 @@ func (a *Activity) buildActivityExecutionInfo(
 	return info
 }
 
-// outcome retrieves the activity outcome (result or failure) if the activity has completed.
-// Returns nil if the activity has not completed.
-func (a *Activity) outcome(ctx chasm.Context) *apiactivitypb.ActivityExecutionOutcome {
-	if !a.LifecycleState(ctx).IsClosed() {
-		return nil
-	}
-	activityOutcome := a.Outcome.Get(ctx)
-	if successful := activityOutcome.GetSuccessful(); successful != nil {
-		return &apiactivitypb.ActivityExecutionOutcome{
-			Value: &apiactivitypb.ActivityExecutionOutcome_Result{Result: successful.GetOutput()},
-		}
-	}
-	if failure := a.terminalFailure(ctx); failure != nil {
-		return &apiactivitypb.ActivityExecutionOutcome{
-			Value:      &apiactivitypb.ActivityExecutionOutcome_Failure{Failure: failure},
-			RetryState: activityOutcome.GetRetryState(),
-		}
-	}
-	return nil
-}
-
-// terminalFailure returns the failure for a closed activity. The failure may be stored in Outcome.Failed
+// TerminalFailure returns the failure for a closed activity. The failure may be stored in Outcome.Failed
 // (terminated, canceled, timed out) or in LastAttempt.LastFailureDetails (failed after exhausting retries).
 // Returns nil if no failure is found.
-func (a *Activity) terminalFailure(ctx chasm.Context) *failurepb.Failure {
+func (a *Activity) TerminalFailure(ctx chasm.Context) *failurepb.Failure {
 	if f := a.Outcome.Get(ctx).GetFailed(); f != nil {
 		return f.GetFailure()
 	}

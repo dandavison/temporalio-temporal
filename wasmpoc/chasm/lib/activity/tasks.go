@@ -4,8 +4,8 @@ import (
 	"context"
 
 	enumspb "go.temporal.io/api/enums/v1"
-	"go.temporal.io/server/wasmpoc/api/matchingservice/v1"
 	"go.temporal.io/server/common/util"
+	"go.temporal.io/server/wasmpoc/api/matchingservice/v1"
 	"go.temporal.io/server/wasmpoc/chasm"
 	"go.temporal.io/server/wasmpoc/chasm/lib/activity/gen/activitypb/v1"
 	"go.temporal.io/server/wasmpoc/common/metrics"
