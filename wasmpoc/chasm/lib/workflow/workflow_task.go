@@ -6,10 +6,12 @@ import (
 	commonpb "go.temporal.io/api/common/v1"
 	deploymentpb "go.temporal.io/api/deployment/v1"
 	enumspb "go.temporal.io/api/enums/v1"
+	failurepb "go.temporal.io/api/failure/v1"
 	historypb "go.temporal.io/api/history/v1"
 	"go.temporal.io/api/serviceerror"
 	taskqueuepb "go.temporal.io/api/taskqueue/v1"
 	tokenspb "go.temporal.io/server/api/token/v1"
+	"go.temporal.io/server/common/failure"
 	"go.temporal.io/server/wasmpoc/api/workflowservice/v1"
 	"go.temporal.io/server/wasmpoc/chasm"
 	"go.temporal.io/server/wasmpoc/chasm/lib/workflow/gen/workflowpb/v1"
@@ -66,6 +68,11 @@ func (w *Workflow) StartWorkflowTask(
 		}},
 	})
 	w.WorkflowTaskStartedEventId = startedEvent.EventId
+	if request.GetTaskQueue().GetName() != w.workflowTaskQueue().GetName() {
+		// As in the server: the task was moved to the normal queue because the sticky worker is
+		// unavailable, so the worker that polled it has no cached state.
+		w.StickyTaskQueue = ""
+	}
 
 	ref, err := ctx.Ref(w)
 	if err != nil {
@@ -121,7 +128,8 @@ func (w *Workflow) CompleteWorkflowTask(
 	}
 	if len(w.BufferedEvents.Get(ctx).GetEvents()) > 0 && closesWorkflow(request.GetCommands()) {
 		// As in the server: the workflow must see the buffered events before it may close.
-		return w.failWorkflowTask(ctx, enumspb.WORKFLOW_TASK_FAILED_CAUSE_UNHANDLED_COMMAND, request.GetIdentity())
+		cause := enumspb.WORKFLOW_TASK_FAILED_CAUSE_UNHANDLED_COMMAND
+		return w.failWorkflowTask(ctx, cause, failure.NewServerFailure(cause.String(), false), request.GetIdentity())
 	}
 	completedEvent := w.appendEvent(ctx, &historypb.HistoryEvent{
 		EventType: enumspb.EVENT_TYPE_WORKFLOW_TASK_COMPLETED,
@@ -159,20 +167,26 @@ func (w *Workflow) FailWorkflowTask(
 	if err := w.validateWorkflowTaskToken(token); err != nil {
 		return err
 	}
-	return w.failWorkflowTask(ctx, request.GetCause(), request.GetIdentity())
+	return w.failWorkflowTask(ctx, request.GetCause(), request.GetFailure(), request.GetIdentity())
 }
 
 // failWorkflowTask adds a WorkflowTaskFailed event and schedules the next attempt. The server does
 // not write events for attempts after the first (transient workflow tasks); this does. As in the
 // server, a workflow task that failed on a sticky queue is retried on the normal queue without
 // counting as an attempt.
-func (w *Workflow) failWorkflowTask(ctx chasm.MutableContext, cause enumspb.WorkflowTaskFailedCause, identity string) error {
+func (w *Workflow) failWorkflowTask(
+	ctx chasm.MutableContext,
+	cause enumspb.WorkflowTaskFailedCause,
+	failure *failurepb.Failure,
+	identity string,
+) error {
 	w.appendEvent(ctx, &historypb.HistoryEvent{
 		EventType: enumspb.EVENT_TYPE_WORKFLOW_TASK_FAILED,
 		Attributes: &historypb.HistoryEvent_WorkflowTaskFailedEventAttributes{WorkflowTaskFailedEventAttributes: &historypb.WorkflowTaskFailedEventAttributes{
 			ScheduledEventId: w.WorkflowTaskScheduledEventId,
 			StartedEventId:   w.WorkflowTaskStartedEventId,
 			Cause:            cause,
+			Failure:          failure,
 			Identity:         identity,
 		}},
 	})
@@ -222,8 +236,8 @@ func (h *workflowTaskDispatchTaskHandler) Execute(
 	_ chasm.TaskAttributes,
 	task *workflowpb.WorkflowTaskDispatchTask,
 ) error {
-	taskQueue, err := chasm.ReadComponent(ctx, ref, func(w *Workflow, _ chasm.Context, _ struct{}) (string, error) {
-		return w.workflowTaskQueue().GetName(), nil
+	taskQueue, err := chasm.ReadComponent(ctx, ref, func(w *Workflow, _ chasm.Context, _ struct{}) (*taskqueuepb.TaskQueue, error) {
+		return w.workflowTaskQueue(), nil
 	}, struct{}{})
 	if err != nil {
 		return err

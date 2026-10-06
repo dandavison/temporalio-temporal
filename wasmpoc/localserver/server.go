@@ -13,6 +13,7 @@ import (
 	historypb "go.temporal.io/api/history/v1"
 	namespacepb "go.temporal.io/api/namespace/v1"
 	"go.temporal.io/api/serviceerror"
+	taskqueuepb "go.temporal.io/api/taskqueue/v1"
 	tokenspb "go.temporal.io/server/api/token/v1"
 	"go.temporal.io/server/common/tqid"
 	"go.temporal.io/server/wasmpoc/api/workflowservice/v1"
@@ -26,10 +27,12 @@ import (
 const maxIDLengthLimit = 1000
 
 type Server struct {
-	engine        *engine
-	workflowTasks map[string][]queuedWorkflowTask
-	activityTasks map[string][]*activity.DispatchRequest
-	newRunID      func() string
+	engine *engine
+	// shutDownStickyQueues are the sticky queues of workers that have shut down.
+	shutDownStickyQueues map[string]bool
+	workflowTasks        map[string][]queuedWorkflowTask
+	activityTasks        map[string][]*activity.DispatchRequest
+	newRunID             func() string
 }
 
 type queuedWorkflowTask struct {
@@ -39,9 +42,10 @@ type queuedWorkflowTask struct {
 
 func New(now time.Time, newRunID func() string) (*Server, error) {
 	s := &Server{
-		workflowTasks: map[string][]queuedWorkflowTask{},
-		activityTasks: map[string][]*activity.DispatchRequest{},
-		newRunID:      newRunID,
+		workflowTasks:        map[string][]queuedWorkflowTask{},
+		activityTasks:        map[string][]*activity.DispatchRequest{},
+		shutDownStickyQueues: map[string]bool{},
+		newRunID:             newRunID,
 	}
 	registry := chasm.NewRegistry(log.NewNoopLogger())
 	for _, lib := range []chasm.Library{
@@ -124,10 +128,17 @@ func (s *Server) DescribeNamespace(
 	}, nil
 }
 
+// ShutdownWorker records that the worker's sticky queue has no poller, so that workflow tasks for
+// it go to the normal queue, as the server does when matching reports the sticky worker
+// unavailable. Tasks already on the sticky queue stay there: the local server does not implement
+// the sticky schedule-to-start timeout that would move them.
 func (s *Server) ShutdownWorker(
-	context.Context,
-	*workflowservice.ShutdownWorkerRequest,
+	_ context.Context,
+	request *workflowservice.ShutdownWorkerRequest,
 ) (*workflowservice.ShutdownWorkerResponse, error) {
+	if request.GetStickyTaskQueue() != "" {
+		s.shutDownStickyQueues[request.GetStickyTaskQueue()] = true
+	}
 	return &workflowservice.ShutdownWorkerResponse{}, nil
 }
 
@@ -274,8 +285,12 @@ func (s *Server) AddActivityTask(_ context.Context, request *activity.DispatchRe
 }
 
 // AddWorkflowTask implements workflow.MatchingClient.
-func (s *Server) AddWorkflowTask(_ context.Context, taskQueue string, ref chasm.ComponentRef, stamp int32) error {
-	s.workflowTasks[taskQueue] = append(s.workflowTasks[taskQueue], queuedWorkflowTask{ref: ref, stamp: stamp})
+func (s *Server) AddWorkflowTask(_ context.Context, taskQueue *taskqueuepb.TaskQueue, ref chasm.ComponentRef, stamp int32) error {
+	name := taskQueue.GetName()
+	if s.shutDownStickyQueues[name] {
+		name = taskQueue.GetNormalName()
+	}
+	s.workflowTasks[name] = append(s.workflowTasks[name], queuedWorkflowTask{ref: ref, stamp: stamp})
 	return nil
 }
 

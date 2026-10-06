@@ -3,6 +3,8 @@ package workflow
 import (
 	"context"
 
+	taskqueuepb "go.temporal.io/api/taskqueue/v1"
+
 	enumspb "go.temporal.io/api/enums/v1"
 	"go.temporal.io/server/wasmpoc/chasm"
 )
@@ -16,9 +18,9 @@ var (
 	ArchetypeID = chasm.GenerateTypeID(Archetype)
 )
 
-// MatchingClient receives scheduled workflow tasks. A local engine passes its own task queue.
+// MatchingClient receives scheduled workflow tasks.
 type MatchingClient interface {
-	AddWorkflowTask(ctx context.Context, taskQueue string, ref chasm.ComponentRef, stamp int32) error
+	AddWorkflowTask(ctx context.Context, taskQueue *taskqueuepb.TaskQueue, ref chasm.ComponentRef, stamp int32) error
 }
 
 type library struct {
