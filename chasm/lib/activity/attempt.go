@@ -160,16 +160,9 @@ func (a *Activity) recordScheduleToStartOrCloseTimeoutFailure(
 	message string,
 	cause *failurepb.Failure,
 ) error {
-	failure := &failurepb.Failure{
-		Message: message,
-		Cause:   cause,
-		FailureInfo: &failurepb.Failure_TimeoutFailureInfo{
-			TimeoutFailureInfo: &failurepb.TimeoutFailureInfo{
-				TimeoutType:          timeoutType,
-				LastHeartbeatDetails: a.lastHeartbeatDetails(ctx),
-			},
-		},
-	}
+	failure := commonfailure.NewTimeoutFailure(message, timeoutType)
+	failure.Cause = cause
+	failure.GetTimeoutFailureInfo().LastHeartbeatDetails = a.lastHeartbeatDetails(ctx)
 
 	a.Outcome.Get(ctx).Variant = &activitypb.ActivityOutcome_Failed_{
 		Failed: &activitypb.ActivityOutcome_Failed{
@@ -425,23 +418,13 @@ func (a *Activity) scheduleToCloseDeadline() time.Time {
 }
 
 func createStartToCloseTimeoutFailure() *failurepb.Failure {
-	return &failurepb.Failure{
-		Message: fmt.Sprintf(primitives.FailureReasonActivityTimeout, enumspb.TIMEOUT_TYPE_START_TO_CLOSE.String()),
-		FailureInfo: &failurepb.Failure_TimeoutFailureInfo{
-			TimeoutFailureInfo: &failurepb.TimeoutFailureInfo{
-				TimeoutType: enumspb.TIMEOUT_TYPE_START_TO_CLOSE,
-			},
-		},
-	}
+	return commonfailure.NewTimeoutFailure(
+		fmt.Sprintf(primitives.FailureReasonActivityTimeout, enumspb.TIMEOUT_TYPE_START_TO_CLOSE.String()),
+		enumspb.TIMEOUT_TYPE_START_TO_CLOSE)
 }
 
 func createHeartbeatTimeoutFailure() *failurepb.Failure {
-	return &failurepb.Failure{
-		Message: fmt.Sprintf(primitives.FailureReasonActivityTimeout, enumspb.TIMEOUT_TYPE_HEARTBEAT.String()),
-		FailureInfo: &failurepb.Failure_TimeoutFailureInfo{
-			TimeoutFailureInfo: &failurepb.TimeoutFailureInfo{
-				TimeoutType: enumspb.TIMEOUT_TYPE_HEARTBEAT,
-			},
-		},
-	}
+	return commonfailure.NewTimeoutFailure(
+		fmt.Sprintf(primitives.FailureReasonActivityTimeout, enumspb.TIMEOUT_TYPE_HEARTBEAT.String()),
+		enumspb.TIMEOUT_TYPE_HEARTBEAT)
 }
