@@ -14,7 +14,7 @@ import (
 	"go.temporal.io/server/chasm/lib/nexusoperation"
 	nexusoperationpb "go.temporal.io/server/chasm/lib/nexusoperation/gen/nexusoperationpb/v1"
 	chasmworkflowpb "go.temporal.io/server/chasm/lib/workflow/gen/workflowpb/v1"
-	commonnexus "go.temporal.io/server/common/nexus"
+	"go.temporal.io/server/common/nexus/nexusconv"
 	"go.temporal.io/server/common/nexus/nexusrpc"
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
@@ -246,7 +246,7 @@ func (w *Workflow) NexusOperationInvocationData(
 	execKey := ctx.ExecutionKey()
 	nsEntry := ctx.NamespaceEntry()
 
-	nexusLink := commonnexus.ConvertLinkWorkflowEventToNexusLink(&commonpb.Link_WorkflowEvent{
+	nexusLink := nexusconv.ConvertLinkWorkflowEventToNexusLink(&commonpb.Link_WorkflowEvent{
 		Namespace:  nsEntry.Name().String(),
 		WorkflowId: execKey.BusinessID,
 		RunId:      execKey.RunID,

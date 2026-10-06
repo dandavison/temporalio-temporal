@@ -16,6 +16,7 @@ import (
 	"go.temporal.io/sdk/workflow"
 	"go.temporal.io/server/common/log"
 	commonnexus "go.temporal.io/server/common/nexus"
+	"go.temporal.io/server/common/nexus/nexusconv"
 	"go.temporal.io/server/common/nexus/nexustest"
 	"go.temporal.io/server/common/testing/protorequire"
 	"go.temporal.io/server/tests/testcore"
@@ -74,7 +75,7 @@ func (s *NexusWorkflowTestSuite) TestNexusOperationBackedBySignal(chasmEnabled b
 			if workflowEventLink == nil {
 				return nil, nexus.NewHandlerErrorf(nexus.HandlerErrorTypeInternal, "signal response did not contain a workflow event link")
 			}
-			nexus.AddHandlerLinks(ctx, commonnexus.ConvertLinkWorkflowEventToNexusLink(workflowEventLink))
+			nexus.AddHandlerLinks(ctx, nexusconv.ConvertLinkWorkflowEventToNexusLink(workflowEventLink))
 			return &nexus.HandlerStartOperationResultSync[any]{Value: workflowEventLink.GetRunId()}, nil
 		},
 	}
@@ -150,7 +151,7 @@ func (s *NexusWorkflowTestSuite) TestNexusOperationBackedBySignalWithStart(chasm
 			if workflowEventLink == nil {
 				return nil, nexus.NewHandlerErrorf(nexus.HandlerErrorTypeInternal, "signal with start response did not contain a workflow event link")
 			}
-			nexus.AddHandlerLinks(ctx, commonnexus.ConvertLinkWorkflowEventToNexusLink(workflowEventLink))
+			nexus.AddHandlerLinks(ctx, nexusconv.ConvertLinkWorkflowEventToNexusLink(workflowEventLink))
 			return &nexus.HandlerStartOperationResultSync[any]{Value: resp.GetRunId()}, nil
 		},
 	}

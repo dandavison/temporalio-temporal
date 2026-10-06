@@ -69,3 +69,8 @@ func CloneProtoMap[K comparable, T proto.Message](src map[K]T) map[K]T {
 func CloneProtoSlice[T proto.Message](src []T) []T {
 	return util.CloneProtoSlice(src)
 }
+
+// GetRPCStatus remains here so that code outside this repository that uses it keeps building.
+//
+// Deprecated: use util.GetRPCStatus.
+var GetRPCStatus = util.GetRPCStatus

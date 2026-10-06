@@ -7,6 +7,7 @@ import (
 	nexuspb "go.temporal.io/api/nexus/v1"
 	"go.temporal.io/server/api/matchingservice/v1"
 	"go.temporal.io/server/common/metrics"
+	"go.temporal.io/server/common/nexus/nexusconv"
 )
 
 // DispatchOutcome names the arm of matching's DispatchNexusTaskResponse that came back from a
@@ -233,7 +234,7 @@ func deprecatedOperationErrorToFailure(opErr *nexuspb.UnsuccessfulOperationError
 // a Temporal failurepb.Failure.
 func convertNexusFailureToTemporalFailure(nexusFailure *nexuspb.Failure) *failurepb.Failure {
 	//nolint:staticcheck // Deprecated function still in use for backward compatibility.
-	converted, err := NexusFailureToTemporalFailure(ProtoFailureToNexusFailure(nexusFailure))
+	converted, err := nexusconv.NexusFailureToTemporalFailure(nexusconv.ProtoFailureToNexusFailure(nexusFailure))
 	// A failure that cannot be re-encoded falls back to its message. We know the operation failed,
 	// we just don't recognize the format of the data in its cause/details.
 	if err != nil {

@@ -42,6 +42,7 @@ import (
 	"go.temporal.io/server/common/metrics"
 	"go.temporal.io/server/common/namespace"
 	commonnexus "go.temporal.io/server/common/nexus"
+	"go.temporal.io/server/common/nexus/nexusconv"
 	"go.temporal.io/server/common/nexus/nexusrpc"
 	"go.temporal.io/server/common/payloads"
 	"go.temporal.io/server/common/persistence"
@@ -2191,7 +2192,7 @@ func (h *Handler) CompleteNexusOperation(ctx context.Context, request *historyse
 	}
 	var opErr *nexus.OperationError
 	if request.State != string(nexus.OperationStateSucceeded) {
-		failure := commonnexus.ProtoFailureToNexusFailure(request.GetFailure())
+		failure := nexusconv.ProtoFailureToNexusFailure(request.GetFailure())
 		recvdErr, err := nexusrpc.DefaultFailureConverter().FailureToError(failure)
 		if err != nil {
 			return nil, serviceerror.NewInvalidArgument("unable to convert failure to error")
@@ -2619,7 +2620,7 @@ func (h *Handler) StartNexusOperation(
 			if convErr != nil {
 				return nil, convErr
 			}
-			temporalFailure, convErr := commonnexus.NexusFailureToTemporalFailure(nexusFailure)
+			temporalFailure, convErr := nexusconv.NexusFailureToTemporalFailure(nexusFailure)
 			if convErr != nil {
 				return nil, convErr
 			}

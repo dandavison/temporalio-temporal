@@ -51,7 +51,7 @@ import (
 	"go.temporal.io/server/common/log/tag"
 	"go.temporal.io/server/common/metrics"
 	"go.temporal.io/server/common/namespace"
-	commonnexus "go.temporal.io/server/common/nexus"
+	"go.temporal.io/server/common/nexus/nexusconv"
 	"go.temporal.io/server/common/nexus/nexusrpc"
 	"go.temporal.io/server/common/payload"
 	"go.temporal.io/server/common/persistence"
@@ -826,7 +826,7 @@ func (ms *MutableStateImpl) GetNexusUpdateCompletion(
 			},
 		}
 	}
-	startLink := commonnexus.ConvertLinkWorkflowEventToNexusLink(link)
+	startLink := nexusconv.ConvertLinkWorkflowEventToNexusLink(link)
 
 	startTime := ms.executionState.GetStartTime().AsTime()
 	links := []nexus.Link{startLink}
@@ -866,7 +866,7 @@ func nexusCompleteOperationFailure(
 	startTime, closeTime time.Time,
 	links []nexus.Link,
 ) (nexusrpc.CompleteOperationOptions, error) {
-	nexusFailure, err := commonnexus.TemporalFailureToNexusFailure(f)
+	nexusFailure, err := nexusconv.TemporalFailureToNexusFailure(f)
 	if err != nil {
 		return nexusrpc.CompleteOperationOptions{}, err
 	}
@@ -925,7 +925,7 @@ func (ms *MutableStateImpl) GetNexusCompletion(
 			},
 		}
 	}
-	startLink := commonnexus.ConvertLinkWorkflowEventToNexusLink(link)
+	startLink := nexusconv.ConvertLinkWorkflowEventToNexusLink(link)
 
 	startTime := ms.executionState.GetStartTime().AsTime()
 	closeTime := ce.GetEventTime().AsTime()

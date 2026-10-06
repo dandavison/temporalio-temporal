@@ -12,7 +12,7 @@ import (
 	nexuspb "go.temporal.io/api/nexus/v1"
 	"go.temporal.io/server/api/matchingservice/v1"
 	"go.temporal.io/server/common/metrics/metricstest"
-	commonnexus "go.temporal.io/server/common/nexus"
+	"go.temporal.io/server/common/nexus/nexusconv"
 )
 
 // These tests pin down how the frontend turns matching's DispatchNexusTaskResponse into the result the
@@ -35,7 +35,7 @@ func outcomeTagOf(t *testing.T, oc *operationContext) string {
 }
 
 func failureSourceOf(oc *operationContext) string {
-	return oc.responseHeaders[commonnexus.FailureSourceHeaderName]
+	return oc.responseHeaders[nexusconv.FailureSourceHeaderName]
 }
 
 func testOperationContext() *operationContext {
@@ -192,7 +192,7 @@ func TestHandleStartOperationResponse_HandlerFailure(t *testing.T) {
 			require.Equal(t, tc.wantRetryable, handlerErr.Retryable())
 			require.NoError(t, handlerErr.Cause, "no cause on the wire means no cause on the error")
 			require.Equal(t, "handler_error:BAD_REQUEST", outcomeTagOf(t, oc))
-			require.Equal(t, commonnexus.FailureSourceWorker, failureSourceOf(oc))
+			require.Equal(t, nexusconv.FailureSourceWorker, failureSourceOf(oc))
 		})
 	}
 }
@@ -256,7 +256,7 @@ func TestHandleStartOperationResponse_WorkerFailure_NotAHandlerError(t *testing.
 	require.NotErrorAs(t, err, &handlerErr, "not reported as a handler error today")
 	// There is no handler error type to report, so the tag bounds to UNKNOWN.
 	require.Equal(t, "handler_error:UNKNOWN", outcomeTagOf(t, oc))
-	require.Equal(t, commonnexus.FailureSourceWorker, failureSourceOf(oc))
+	require.Equal(t, nexusconv.FailureSourceWorker, failureSourceOf(oc))
 }
 
 func TestHandleStartOperationResponse_DeprecatedHandlerError(t *testing.T) {
@@ -283,7 +283,7 @@ func TestHandleStartOperationResponse_DeprecatedHandlerError(t *testing.T) {
 	require.True(t, ok, "expected a Nexus FailureError cause, got %T", handlerErr.Cause)
 	require.Equal(t, "slow down", deprecatedCause.Failure.Message)
 	require.Equal(t, "handler_error:RESOURCE_EXHAUSTED", outcomeTagOf(t, oc))
-	require.Equal(t, commonnexus.FailureSourceWorker, failureSourceOf(oc))
+	require.Equal(t, nexusconv.FailureSourceWorker, failureSourceOf(oc))
 }
 
 func TestHandleStartOperationResponse_RequestTimeout(t *testing.T) {
@@ -302,7 +302,7 @@ func TestHandleStartOperationResponse_RequestTimeout(t *testing.T) {
 	require.Equal(t, nexus.HandlerErrorTypeUpstreamTimeout, handlerErr.Type)
 	require.Equal(t, "upstream timeout", handlerErr.Message)
 	require.Equal(t, "handler_timeout", outcomeTagOf(t, oc))
-	require.Equal(t, commonnexus.FailureSourceWorker, failureSourceOf(oc))
+	require.Equal(t, nexusconv.FailureSourceWorker, failureSourceOf(oc))
 }
 
 func TestHandleStartOperationResponse_OperationFailure(t *testing.T) {
@@ -352,7 +352,7 @@ func TestHandleStartOperationResponse_OperationFailure(t *testing.T) {
 			require.Equal(t, "true", opErr.OriginalFailure.Metadata["unwrap-error"])
 			require.NotNil(t, opErr.OriginalFailure.Cause)
 			require.Equal(t, "failure", outcomeTagOf(t, oc))
-			require.Equal(t, commonnexus.FailureSourceWorker, failureSourceOf(oc))
+			require.Equal(t, nexusconv.FailureSourceWorker, failureSourceOf(oc))
 		})
 	}
 }
@@ -387,7 +387,7 @@ func TestHandleStartOperationResponse_OperationFailure_UnconvertibleFailureIsInt
 	require.NotErrorAs(t, err, &opErr, "an unreadable failure is not a legitimate operation error")
 	// The outcome was still classified as an operation failure, so the tag and header stand.
 	require.Equal(t, "failure", outcomeTagOf(t, oc))
-	require.Equal(t, commonnexus.FailureSourceWorker, failureSourceOf(oc))
+	require.Equal(t, nexusconv.FailureSourceWorker, failureSourceOf(oc))
 }
 
 // The cause is converted before the handler error wrapping it, so an unconvertible cause fails the
@@ -416,7 +416,7 @@ func TestHandleStartOperationResponse_HandlerFailure_UnconvertibleCauseIsInterna
 	require.Equal(t, nexus.HandlerErrorTypeInternal, handlerErr.Type,
 		"the worker's own BAD_REQUEST must not survive a failed conversion")
 	require.Equal(t, "handler_error:BAD_REQUEST", outcomeTagOf(t, oc))
-	require.Equal(t, commonnexus.FailureSourceWorker, failureSourceOf(oc))
+	require.Equal(t, nexusconv.FailureSourceWorker, failureSourceOf(oc))
 }
 
 // The conversion arm is shared with the start path, but cancel returns a bare error, where a dropped
@@ -460,7 +460,7 @@ func TestHandleStartOperationResponse_DeprecatedOperationError(t *testing.T) {
 	require.NotNil(t, opErr.OriginalFailure)
 	require.Equal(t, "true", opErr.OriginalFailure.Metadata["unwrap-error"])
 	require.Equal(t, "operation_error", outcomeTagOf(t, oc))
-	require.Equal(t, commonnexus.FailureSourceWorker, failureSourceOf(oc))
+	require.Equal(t, nexusconv.FailureSourceWorker, failureSourceOf(oc))
 }
 
 // The deprecated operation error carries the worker's failure in the Nexus encoding, and reports the
@@ -493,7 +493,7 @@ func TestHandleStartOperationResponse_DeprecatedOperationErrorReEncodesWorkerFai
 
 	// Decoding the wire failure the way a Temporal caller does recovers the wrapper the current format
 	// sends for a failed operation, with the worker's failure whole underneath it.
-	tFailure, convErr := commonnexus.NexusFailureToTemporalFailure(cause.Failure)
+	tFailure, convErr := nexusconv.NexusFailureToTemporalFailure(cause.Failure)
 	require.NoError(t, convErr)
 	require.Equal(t, "OperationError", tFailure.GetApplicationFailureInfo().GetType())
 	details := tFailure.GetCause().GetApplicationFailureInfo().GetDetails().GetPayloads()
@@ -546,7 +546,7 @@ func TestHandleStartOperationResponse_UnrecognizedOutcomes(t *testing.T) {
 			require.Equal(t, nexus.HandlerErrorTypeInternal, handlerErr.Type)
 			require.Equal(t, "empty outcome", handlerErr.Message)
 			require.Equal(t, "handler_error:EMPTY_OUTCOME", outcomeTagOf(t, oc))
-			require.Equal(t, commonnexus.FailureSourceWorker, failureSourceOf(oc))
+			require.Equal(t, nexusconv.FailureSourceWorker, failureSourceOf(oc))
 		})
 	}
 }
@@ -608,7 +608,7 @@ func TestHandleCancelOperationResponse_HandlerFailure(t *testing.T) {
 	require.Equal(t, nexus.HandlerErrorTypeNotFound, handlerErr.Type)
 	require.Equal(t, "cannot cancel", handlerErr.Message)
 	require.Equal(t, "handler_error:NOT_FOUND", outcomeTagOf(t, oc))
-	require.Equal(t, commonnexus.FailureSourceWorker, failureSourceOf(oc))
+	require.Equal(t, nexusconv.FailureSourceWorker, failureSourceOf(oc))
 }
 
 func TestHandleCancelOperationResponse_DeprecatedHandlerError(t *testing.T) {
@@ -628,7 +628,7 @@ func TestHandleCancelOperationResponse_DeprecatedHandlerError(t *testing.T) {
 	require.ErrorAs(t, err, &handlerErr)
 	require.Equal(t, nexus.HandlerErrorTypeNotImplemented, handlerErr.Type)
 	require.Equal(t, "handler_error:NOT_IMPLEMENTED", outcomeTagOf(t, oc))
-	require.Equal(t, commonnexus.FailureSourceWorker, failureSourceOf(oc))
+	require.Equal(t, nexusconv.FailureSourceWorker, failureSourceOf(oc))
 }
 
 func TestHandleCancelOperationResponse_RequestTimeout(t *testing.T) {
@@ -645,7 +645,7 @@ func TestHandleCancelOperationResponse_RequestTimeout(t *testing.T) {
 	require.Equal(t, nexus.HandlerErrorTypeUpstreamTimeout, handlerErr.Type)
 	require.Equal(t, "upstream timeout", handlerErr.Message)
 	require.Equal(t, "handler_timeout", outcomeTagOf(t, oc))
-	require.Equal(t, commonnexus.FailureSourceWorker, failureSourceOf(oc))
+	require.Equal(t, nexusconv.FailureSourceWorker, failureSourceOf(oc))
 }
 
 func TestHandleCancelOperationResponse_UnrecognizedOutcome(t *testing.T) {
@@ -656,7 +656,7 @@ func TestHandleCancelOperationResponse_UnrecognizedOutcome(t *testing.T) {
 	require.Equal(t, nexus.HandlerErrorTypeInternal, handlerErr.Type)
 	require.Equal(t, "empty outcome", handlerErr.Message)
 	require.Equal(t, "handler_error:EMPTY_OUTCOME", outcomeTagOf(t, oc))
-	require.Equal(t, commonnexus.FailureSourceWorker, failureSourceOf(oc))
+	require.Equal(t, nexusconv.FailureSourceWorker, failureSourceOf(oc))
 }
 
 // The details blob of a converted handler failure has to stay parseable by the Nexus failure

@@ -6,8 +6,6 @@ import (
 	"testing"
 	"time"
 
-	"go.temporal.io/server/chasm/lib/callback/callbackserver"
-
 	"github.com/google/uuid"
 	"github.com/nexus-rpc/sdk-go/nexus"
 	commonpb "go.temporal.io/api/common/v1"
@@ -19,6 +17,7 @@ import (
 	"go.temporal.io/sdk/temporal"
 	"go.temporal.io/sdk/worker"
 	"go.temporal.io/sdk/workflow"
+	"go.temporal.io/server/chasm/lib/callback/callbackserver"
 	"go.temporal.io/server/common/dynamicconfig"
 	"go.temporal.io/server/common/testing/parallelsuite"
 	"go.temporal.io/server/tests/testcore"

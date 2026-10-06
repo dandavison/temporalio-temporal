@@ -7,8 +7,6 @@ import (
 	"testing"
 	"time"
 
-	"go.temporal.io/server/chasm/lib/callback/callbackserver"
-
 	"github.com/google/uuid"
 	"github.com/nexus-rpc/sdk-go/nexus"
 	"github.com/stretchr/testify/require"
@@ -25,12 +23,14 @@ import (
 	"go.temporal.io/api/workflowservice/v1"
 	"go.temporal.io/sdk/temporal"
 	"go.temporal.io/server/chasm/lib/activity/activityserver"
+	"go.temporal.io/server/chasm/lib/callback/callbackserver"
 	"go.temporal.io/server/common"
 	"go.temporal.io/server/common/callbacks"
 	"go.temporal.io/server/common/dynamicconfig"
 	"go.temporal.io/server/common/headers"
 	"go.temporal.io/server/common/log"
 	commonnexus "go.temporal.io/server/common/nexus"
+	"go.temporal.io/server/common/nexus/nexusconv"
 	"go.temporal.io/server/common/payload"
 	"go.temporal.io/server/common/payloads"
 	"go.temporal.io/server/common/primitives"
@@ -10339,7 +10339,7 @@ func (s *standaloneActivityTestSuite) TestCallbacks() {
 			require.False(t, completion.CloseTime.IsZero())
 			var failureErr *nexus.FailureError
 			require.ErrorAs(t, completion.Error.Cause, &failureErr)
-			tFailure, convErr := commonnexus.NexusFailureToTemporalFailure(failureErr.Failure)
+			tFailure, convErr := nexusconv.NexusFailureToTemporalFailure(failureErr.Failure)
 			require.NoError(t, convErr)
 			sdkErr := temporal.GetDefaultFailureConverter().FailureToError(tFailure)
 			var appErr *temporal.ApplicationError
@@ -10411,7 +10411,7 @@ func (s *standaloneActivityTestSuite) TestCallbacks() {
 			require.False(t, completion.CloseTime.IsZero())
 			var failureErr *nexus.FailureError
 			require.ErrorAs(t, completion.Error.Cause, &failureErr)
-			tFailure, convErr := commonnexus.NexusFailureToTemporalFailure(failureErr.Failure)
+			tFailure, convErr := nexusconv.NexusFailureToTemporalFailure(failureErr.Failure)
 			require.NoError(t, convErr)
 			sdkErr := temporal.GetDefaultFailureConverter().FailureToError(tFailure)
 			var termErr *temporal.TerminatedError
@@ -10486,7 +10486,7 @@ func (s *standaloneActivityTestSuite) TestCallbacks() {
 			require.False(t, completion.CloseTime.IsZero())
 			var failureErr *nexus.FailureError
 			require.ErrorAs(t, completion.Error.Cause, &failureErr)
-			tFailure, convErr := commonnexus.NexusFailureToTemporalFailure(failureErr.Failure)
+			tFailure, convErr := nexusconv.NexusFailureToTemporalFailure(failureErr.Failure)
 			require.NoError(t, convErr)
 			sdkErr := temporal.GetDefaultFailureConverter().FailureToError(tFailure)
 			var canceledErr *temporal.CanceledError
@@ -10541,7 +10541,7 @@ func (s *standaloneActivityTestSuite) TestCallbacks() {
 			require.Equal(t, nexus.OperationStateFailed, completion.State)
 			var failureErr *nexus.FailureError
 			require.ErrorAs(t, completion.Error.Cause, &failureErr)
-			tFailure, convErr := commonnexus.NexusFailureToTemporalFailure(failureErr.Failure)
+			tFailure, convErr := nexusconv.NexusFailureToTemporalFailure(failureErr.Failure)
 			require.NoError(t, convErr)
 			sdkErr := temporal.GetDefaultFailureConverter().FailureToError(tFailure)
 			var timeoutErr *temporal.TimeoutError
@@ -10686,7 +10686,7 @@ func (s *standaloneActivityTestSuite) TestCallbacks() {
 			inboundLinks <- res.GetRequest().GetStartOperation().GetLinks()
 			return &nexusTaskResponse{
 				StartResult: &nexus.HandlerStartOperationResultAsync{OperationToken: "nh-callback-op-token"},
-				Links:       []nexus.Link{commonnexus.ConvertLinkWorkflowEventToNexusLink(handlerReturnLink)},
+				Links:       []nexus.Link{nexusconv.ConvertLinkWorkflowEventToNexusLink(handlerReturnLink)},
 			}, nil
 		})
 
@@ -10729,7 +10729,7 @@ func (s *standaloneActivityTestSuite) TestCallbacks() {
 
 		gotLinks := await.Rcv(t, inboundLinks)
 		require.Len(t, gotLinks, 1)
-		gotCallbackLink, err := commonnexus.ConvertNexusLinkToLinkCallback(commonnexus.ConvertLinksFromProto(gotLinks)[0])
+		gotCallbackLink, err := nexusconv.ConvertNexusLinkToLinkCallback(commonnexus.ConvertLinksFromProto(gotLinks)[0])
 		require.NoError(t, err)
 		protorequire.ProtoEqual(t, &commonpb.Link_Callback{
 			Namespace: env.Namespace().String(),

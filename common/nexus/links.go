@@ -6,6 +6,7 @@ import (
 	"go.temporal.io/api/temporalnexus"
 	"go.temporal.io/server/common/log"
 	"go.temporal.io/server/common/log/tag"
+	"go.temporal.io/server/common/nexus/nexusconv"
 )
 
 // ConvertNexusLinksToProtoLinks converts a slice of Nexus SDK links into Temporal proto links,
@@ -29,7 +30,7 @@ func ConvertNexusLinksToProtoLinks(nexusLinks []nexus.Link, logger log.Logger) [
 		}
 		switch nexusLink.Type {
 		case string((&commonpb.Link_WorkflowEvent{}).ProtoReflect().Descriptor().FullName()):
-			link, err := ConvertNexusLinkToLinkWorkflowEvent(nexusLink)
+			link, err := nexusconv.ConvertNexusLinkToLinkWorkflowEvent(nexusLink)
 			if err != nil {
 				logLinkConversionError(nexusLink, err)
 				continue
@@ -38,7 +39,7 @@ func ConvertNexusLinksToProtoLinks(nexusLinks []nexus.Link, logger log.Logger) [
 				Variant: &commonpb.Link_WorkflowEvent_{WorkflowEvent: link},
 			})
 		case string((&commonpb.Link_Activity{}).ProtoReflect().Descriptor().FullName()):
-			link, err := ConvertNexusLinkToLinkActivity(nexusLink)
+			link, err := nexusconv.ConvertNexusLinkToLinkActivity(nexusLink)
 			if err != nil {
 				logLinkConversionError(nexusLink, err)
 				continue
@@ -47,7 +48,7 @@ func ConvertNexusLinksToProtoLinks(nexusLinks []nexus.Link, logger log.Logger) [
 				Variant: &commonpb.Link_Activity_{Activity: link},
 			})
 		case string((&commonpb.Link_Callback{}).ProtoReflect().Descriptor().FullName()):
-			link, err := ConvertNexusLinkToLinkCallback(nexusLink)
+			link, err := nexusconv.ConvertNexusLinkToLinkCallback(nexusLink)
 			if err != nil {
 				logLinkConversionError(nexusLink, err)
 				continue

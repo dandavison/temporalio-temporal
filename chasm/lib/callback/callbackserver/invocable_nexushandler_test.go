@@ -7,8 +7,6 @@ import (
 	"testing"
 	"time"
 
-	chasmcallback "go.temporal.io/server/chasm/lib/callback"
-
 	"github.com/nexus-rpc/sdk-go/nexus"
 	"github.com/stretchr/testify/require"
 	commonpb "go.temporal.io/api/common/v1"
@@ -20,6 +18,7 @@ import (
 	"go.temporal.io/server/api/matchingservice/v1"
 	"go.temporal.io/server/api/matchingservicemock/v1"
 	"go.temporal.io/server/chasm"
+	chasmcallback "go.temporal.io/server/chasm/lib/callback"
 	callbackspb "go.temporal.io/server/chasm/lib/callback/gen/callbackpb/v1"
 	"go.temporal.io/server/common/backoff"
 	"go.temporal.io/server/common/dynamicconfig"
@@ -27,6 +26,7 @@ import (
 	"go.temporal.io/server/common/metrics"
 	"go.temporal.io/server/common/namespace"
 	commonnexus "go.temporal.io/server/common/nexus"
+	"go.temporal.io/server/common/nexus/nexusconv"
 	"go.temporal.io/server/common/nexus/nexusrpc"
 	"go.temporal.io/server/common/payload"
 	test "go.temporal.io/server/common/testing"
@@ -129,7 +129,7 @@ func wrappedOperationError(
 ) *nexus.OperationError {
 	t.Helper()
 
-	nexusFailure, err := commonnexus.TemporalFailureToNexusFailure(cause)
+	nexusFailure, err := nexusconv.TemporalFailureToNexusFailure(cause)
 	require.NoError(t, err)
 
 	opErr := &nexus.OperationError{
@@ -759,7 +759,7 @@ func handlerWorkflowLink() (*commonpb.Link, *nexuspb.Link) {
 			WorkflowEvent: workflowEvent,
 		},
 	}
-	nexusLink := commonnexus.ConvertLinkWorkflowEventToNexusLink(workflowEvent)
+	nexusLink := nexusconv.ConvertLinkWorkflowEventToNexusLink(workflowEvent)
 	nexuspbLink := commonnexus.ConvertLinksToProto([]nexus.Link{nexusLink})[0]
 
 	return commonLink, nexuspbLink

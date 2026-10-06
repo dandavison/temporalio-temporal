@@ -12,6 +12,7 @@ import (
 	"go.temporal.io/server/common/log/tag"
 	"go.temporal.io/server/common/namespace"
 	commonnexus "go.temporal.io/server/common/nexus"
+	"go.temporal.io/server/common/nexus/nexusconv"
 )
 
 // Legacy header key used to identify callbacks that originate from and target the same cluster.
@@ -56,7 +57,7 @@ func routeSystemCallbackRequest(
 			if _, ok := errors.AsType[*serviceerror.NamespaceNotFound](err); ok {
 				return nil, nexus.NewHandlerErrorf(nexus.HandlerErrorTypeNotFound, "namespace %q not found", namespaceID)
 			}
-			return nil, commonnexus.ConvertGRPCError(err, false)
+			return nil, nexusconv.ConvertGRPCError(err, false)
 		}
 		clusterName := ns.ActiveClusterName(namespace.RoutingKey{ID: businessID})
 		if clusterMetadata.GetCurrentClusterName() == clusterName {
