@@ -4,8 +4,6 @@ import (
 	"errors"
 	"fmt"
 
-	"go.temporal.io/server/common/nexus/nexusconv"
-
 	"github.com/nexus-rpc/sdk-go/nexus"
 	apiactivitypb "go.temporal.io/api/activity/v1" //nolint:importas
 	commonpb "go.temporal.io/api/common/v1"
@@ -14,7 +12,7 @@ import (
 	sdkpb "go.temporal.io/api/sdk/v1"
 	"go.temporal.io/api/serviceerror"
 	"go.temporal.io/api/workflowservice/v1"
-	"go.temporal.io/server/api/historyservice/v1"
+	taskqueuespb "go.temporal.io/server/api/taskqueue/v1"
 	tokenspb "go.temporal.io/server/api/token/v1"
 	"go.temporal.io/server/chasm"
 	"go.temporal.io/server/chasm/lib/activity/gen/activitypb/v1"
@@ -22,6 +20,7 @@ import (
 	"go.temporal.io/server/common"
 	"go.temporal.io/server/common/contextutil"
 	"go.temporal.io/server/common/metrics"
+	"go.temporal.io/server/common/nexus/nexusconv"
 	"go.temporal.io/server/common/nexus/nexusrpc"
 	"go.temporal.io/server/common/retrypolicy"
 	serviceerrors "go.temporal.io/server/common/serviceerror"
@@ -78,28 +77,50 @@ type Activity struct {
 	Callbacks chasm.Map[string, *callback.Callback]
 }
 
-// WithToken wraps a request with its deserialized task token.
+// WithToken wraps a worker request with the ID of the namespace it was sent to and its
+// deserialized task token.
 type WithToken[R any] struct {
-	Token   *tokenspb.Task
-	Request R
+	NamespaceID string
+	Token       *tokenspb.Task
+	Request     R
 }
 
-// RespondCompletedEvent wraps the RespondActivityTaskCompletedRequest with context-specific data.
-type RespondCompletedEvent struct {
-	Request *historyservice.RespondActivityTaskCompletedRequest
-	Token   *tokenspb.Task
+type (
+	// RespondCompletedEvent is a worker's report that the activity completed.
+	RespondCompletedEvent = WithToken[*workflowservice.RespondActivityTaskCompletedRequest]
+	// RespondFailedEvent is a worker's report that the activity attempt failed.
+	RespondFailedEvent = WithToken[*workflowservice.RespondActivityTaskFailedRequest]
+	// RespondCancelledEvent is a worker's report that the activity was canceled.
+	RespondCancelledEvent = WithToken[*workflowservice.RespondActivityTaskCanceledRequest]
+)
+
+// StartRequest is a request to start the activity's current attempt, made when a worker's poll
+// is matched with the attempt's dispatch task.
+type StartRequest struct {
+	RequestID        string
+	Stamp            int32
+	PollRequest      *workflowservice.PollActivityTaskQueueRequest
+	VersionDirective *taskqueuespb.TaskVersionDirective
 }
 
-// RespondFailedEvent wraps the RespondActivityTaskFailedRequest with context-specific data.
-type RespondFailedEvent struct {
-	Request *historyservice.RespondActivityTaskFailedRequest
-	Token   *tokenspb.Task
+// StartResponse describes the started attempt to the worker that polled it.
+type StartResponse struct {
+	StartedTime                 *timestamppb.Timestamp
+	Attempt                     int32
+	Priority                    *commonpb.Priority
+	RetryPolicy                 *commonpb.RetryPolicy
+	ActivityRunID               string
+	WorkflowNamespace           string
+	HeartbeatDetails            *commonpb.Payloads
+	CurrentAttemptScheduledTime *timestamppb.Timestamp
+	ScheduledEvent              *historypb.HistoryEvent
 }
 
-// RespondCancelledEvent wraps the RespondActivityTaskCanceledRequest with context-specific data.
-type RespondCancelledEvent struct {
-	Request *historyservice.RespondActivityTaskCanceledRequest
-	Token   *tokenspb.Task
+// HeartbeatResponse tells the worker what has been requested of the running attempt.
+type HeartbeatResponse struct {
+	CancelRequested bool
+	ActivityReset   bool
+	ActivityPaused  bool
 }
 
 // errClosed is the error returned by an operator command on a closed activity.
@@ -228,15 +249,13 @@ func NewEmbeddedActivity(
 }
 
 // HandleStarted updates the activity on recording activity task started and populates the response.
-func (a *Activity) HandleStarted(ctx chasm.MutableContext, request *historyservice.RecordActivityTaskStartedRequest) (
-	*historyservice.RecordActivityTaskStartedResponse, error,
-) {
+func (a *Activity) HandleStarted(ctx chasm.MutableContext, request *StartRequest) (*StartResponse, error) {
 	lastAttempt := a.LastAttempt.Get(ctx)
 	// Return the existing response for a matching retry while the attempt is still in progress.
-	if a.hasAttemptInProgress() && request.GetRequestId() == lastAttempt.GetStartRequestId() {
-		return a.GenerateRecordActivityTaskStartedResponse(ctx, request.GetPollRequest().GetNamespace())
+	if a.hasAttemptInProgress() && request.RequestID == lastAttempt.GetStartRequestId() {
+		return a.GenerateRecordActivityTaskStartedResponse(ctx, request.PollRequest.GetNamespace())
 	}
-	if lastAttempt.GetStamp() != request.GetStamp() {
+	if lastAttempt.GetStamp() != request.Stamp {
 		return nil, serviceerrors.NewObsoleteMatchingTask("activity attempt stamp mismatch")
 	}
 	if err := TransitionStarted.Apply(a, ctx, request); err != nil {
@@ -250,26 +269,26 @@ func (a *Activity) HandleStarted(ctx chasm.MutableContext, request *historyservi
 			lastAttempt.GetStartedTime().AsTime().Sub(dispatchTime.AsTime()),
 		)
 	}
-	return a.GenerateRecordActivityTaskStartedResponse(ctx, request.GetPollRequest().GetNamespace())
+	return a.GenerateRecordActivityTaskStartedResponse(ctx, request.PollRequest.GetNamespace())
 }
 
 // GenerateRecordActivityTaskStartedResponse generates the response for HandleStarted.
 func (a *Activity) GenerateRecordActivityTaskStartedResponse(
 	ctx chasm.Context,
 	namespace string,
-) (*historyservice.RecordActivityTaskStartedResponse, error) {
+) (*StartResponse, error) {
 	key := ctx.ExecutionKey()
 	lastHeartbeat, _ := a.LastHeartbeat.TryGet(ctx)
 	requestData := a.RequestData.Get(ctx)
 	attempt := a.LastAttempt.Get(ctx)
 	links := ctx.Links(a)
 
-	return &historyservice.RecordActivityTaskStartedResponse{
+	return &StartResponse{
 		StartedTime:                 attempt.GetStartedTime(),
 		Attempt:                     attempt.GetCount(),
 		Priority:                    a.GetPriority(),
 		RetryPolicy:                 a.GetRetryPolicy(),
-		ActivityRunId:               key.RunID,
+		ActivityRunID:               key.RunID,
 		WorkflowNamespace:           namespace,
 		HeartbeatDetails:            lastHeartbeat.GetDetails(),
 		CurrentAttemptScheduledTime: a.dispatchTimeForAttempt(attempt),
@@ -453,8 +472,8 @@ func (a *Activity) GetNexusCompletion(ctx chasm.Context, _ string) (nexusrpc.Com
 func (a *Activity) HandleCompleted(
 	ctx chasm.MutableContext,
 	event RespondCompletedEvent,
-) (*historyservice.RespondActivityTaskCompletedResponse, error) {
-	if err := a.validateActivityTaskToken(ctx, event.Token, event.Request.GetNamespaceId(), true); err != nil {
+) (chasm.NoValue, error) {
+	if err := a.validateActivityTaskToken(ctx, event.Token, event.NamespaceID, true); err != nil {
 		return nil, err
 	}
 
@@ -469,7 +488,7 @@ func (a *Activity) HandleCompleted(
 		return nil, err
 	}
 
-	return &historyservice.RespondActivityTaskCompletedResponse{}, nil
+	return nil, nil
 }
 
 // HandleFailed updates the activity on activity failure. if the activity is retryable, it will be rescheduled
@@ -477,14 +496,14 @@ func (a *Activity) HandleCompleted(
 func (a *Activity) HandleFailed(
 	ctx chasm.MutableContext,
 	event RespondFailedEvent,
-) (*historyservice.RespondActivityTaskFailedResponse, error) {
-	if err := a.validateActivityTaskToken(ctx, event.Token, event.Request.GetNamespaceId(), false); err != nil {
+) (chasm.NoValue, error) {
+	if err := a.validateActivityTaskToken(ctx, event.Token, event.NamespaceID, false); err != nil {
 		return nil, err
 	}
 
 	baseHandler := a.baseMetricsHandler(ctx, metrics.HistoryRespondActivityTaskFailedScope)
 	enrichedHandler := a.completionMetricsHandler(ctx, metrics.HistoryRespondActivityTaskFailedScope)
-	failedRequest := event.Request.GetFailedRequest()
+	failedRequest := event.Request
 	failure := failedRequest.GetFailure()
 
 	if details := failedRequest.GetLastHeartbeatDetails(); details != nil {
@@ -508,7 +527,7 @@ func (a *Activity) HandleFailed(
 	if retryState == enumspb.RETRY_STATE_IN_PROGRESS {
 		a.emitOnAttemptFailedMetrics(ctx, enrichedHandler)
 
-		return &historyservice.RespondActivityTaskFailedResponse{}, nil
+		return nil, nil
 	}
 
 	if err := TransitionFailed.Apply(a, ctx, failedEvent{
@@ -520,15 +539,15 @@ func (a *Activity) HandleFailed(
 		return nil, err
 	}
 
-	return &historyservice.RespondActivityTaskFailedResponse{}, nil
+	return nil, nil
 }
 
 // HandleCanceled updates the activity on activity canceled.
 func (a *Activity) HandleCanceled(
 	ctx chasm.MutableContext,
 	event RespondCancelledEvent,
-) (*historyservice.RespondActivityTaskCanceledResponse, error) {
-	if err := a.validateActivityTaskToken(ctx, event.Token, event.Request.GetNamespaceId(), false); err != nil {
+) (chasm.NoValue, error) {
+	if err := a.validateActivityTaskToken(ctx, event.Token, event.NamespaceID, false); err != nil {
 		return nil, err
 	}
 	if !TransitionCanceled.Possible(a) {
@@ -538,14 +557,14 @@ func (a *Activity) HandleCanceled(
 	metricsHandler := a.completionMetricsHandler(ctx, metrics.HistoryRespondActivityTaskCanceledScope)
 
 	if err := TransitionCanceled.Apply(a, ctx, cancelEvent{
-		details:        event.Request.GetCancelRequest().GetDetails(),
+		details:        event.Request.GetDetails(),
 		metricsHandler: metricsHandler,
 		fromStatus:     a.GetStatus(),
 	}); err != nil {
 		return nil, err
 	}
 
-	return &historyservice.RespondActivityTaskCanceledResponse{}, nil
+	return nil, nil
 }
 
 // Terminate implements the chasm.RootComponent interface.
@@ -593,13 +612,13 @@ func (a *Activity) lastHeartbeatDetails(ctx chasm.Context) *commonpb.Payloads {
 // RecordHeartbeat records a heartbeat for the activity.
 func (a *Activity) RecordHeartbeat(
 	ctx chasm.MutableContext,
-	input WithToken[*historyservice.RecordActivityTaskHeartbeatRequest],
-) (*historyservice.RecordActivityTaskHeartbeatResponse, error) {
-	err := a.validateActivityTaskToken(ctx, input.Token, input.Request.GetNamespaceId(), false)
+	input WithToken[*workflowservice.RecordActivityTaskHeartbeatRequest],
+) (*HeartbeatResponse, error) {
+	err := a.validateActivityTaskToken(ctx, input.Token, input.NamespaceID, false)
 	if err != nil {
 		return nil, err
 	}
-	details := input.Request.GetHeartbeatRequest().GetDetails()
+	details := input.Request.GetDetails()
 	prevHeartbeat, _ := a.LastHeartbeat.TryGet(ctx)
 	a.LastHeartbeat = chasm.NewDataField(ctx, &activitypb.ActivityHeartbeatState{
 		RecordedTime:        timestamppb.New(ctx.Now(a)),
@@ -619,7 +638,7 @@ func (a *Activity) RecordHeartbeat(
 	}
 	a.emitHeartbeatMetrics(ctx, details)
 
-	response := &historyservice.RecordActivityTaskHeartbeatResponse{}
+	response := &HeartbeatResponse{}
 	switch a.Status {
 	case activitypb.ACTIVITY_EXECUTION_STATUS_CANCEL_REQUESTED:
 		response.CancelRequested = true

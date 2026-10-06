@@ -13,7 +13,6 @@ import (
 	"go.temporal.io/api/serviceerror"
 	taskqueuepb "go.temporal.io/api/taskqueue/v1"
 	"go.temporal.io/api/workflowservice/v1"
-	"go.temporal.io/server/api/historyservice/v1"
 	persistencespb "go.temporal.io/server/api/persistence/v1"
 	tokenspb "go.temporal.io/server/api/token/v1"
 	"go.temporal.io/server/chasm"
@@ -92,7 +91,7 @@ func TestHandleStarted(t *testing.T) {
 		dispatchTime   *timestamppb.Timestamp
 		metricSamples  int
 		metricLatency  time.Duration
-		checkOutcome   func(t *testing.T, response *historyservice.RecordActivityTaskStartedResponse, err error)
+		checkOutcome   func(t *testing.T, response *StartResponse, err error)
 	}{
 		{
 			name:           "successful transition from scheduled",
@@ -102,7 +101,7 @@ func TestHandleStarted(t *testing.T) {
 			requestID:      testRequestID,
 			metricSamples:  1,
 			metricLatency:  30 * time.Second,
-			checkOutcome: func(t *testing.T, response *historyservice.RecordActivityTaskStartedResponse, err error) {
+			checkOutcome: func(t *testing.T, response *StartResponse, err error) {
 				require.Equal(t, int32(1), response.Attempt)
 				require.NoError(t, err)
 			},
@@ -119,7 +118,7 @@ func TestHandleStarted(t *testing.T) {
 			dispatchTime:   timestamppb.New(testTime.Add(-10 * time.Second)),
 			metricSamples:  1,
 			metricLatency:  10 * time.Second,
-			checkOutcome: func(t *testing.T, response *historyservice.RecordActivityTaskStartedResponse, err error) {
+			checkOutcome: func(t *testing.T, response *StartResponse, err error) {
 				require.Equal(t, int32(2), response.Attempt)
 				require.NoError(t, err)
 			},
@@ -131,7 +130,7 @@ func TestHandleStarted(t *testing.T) {
 			requestStamp:   testStamp,
 			startRequestID: testRequestID,
 			requestID:      testRequestID,
-			checkOutcome: func(t *testing.T, response *historyservice.RecordActivityTaskStartedResponse, err error) {
+			checkOutcome: func(t *testing.T, response *StartResponse, err error) {
 				require.Equal(t, int32(1), response.Attempt)
 				require.NoError(t, err)
 			},
@@ -143,7 +142,7 @@ func TestHandleStarted(t *testing.T) {
 			requestStamp:   testStamp,
 			startRequestID: testRequestID,
 			requestID:      testRequestID,
-			checkOutcome: func(t *testing.T, response *historyservice.RecordActivityTaskStartedResponse, err error) {
+			checkOutcome: func(t *testing.T, response *StartResponse, err error) {
 				require.NoError(t, err)
 				require.Equal(t, int32(1), response.Attempt)
 				require.Equal(t, startedTime, response.StartedTime)
@@ -156,7 +155,7 @@ func TestHandleStarted(t *testing.T) {
 			requestStamp:   testStamp,
 			startRequestID: "different-request-id",
 			requestID:      testRequestID,
-			checkOutcome: func(t *testing.T, response *historyservice.RecordActivityTaskStartedResponse, err error) {
+			checkOutcome: func(t *testing.T, response *StartResponse, err error) {
 				require.ErrorAs(t, err, new(*serviceerrors.ObsoleteMatchingTask))
 			},
 		},
@@ -167,7 +166,7 @@ func TestHandleStarted(t *testing.T) {
 			requestStamp:   testStamp,
 			startRequestID: testRequestID,
 			requestID:      testRequestID,
-			checkOutcome: func(t *testing.T, response *historyservice.RecordActivityTaskStartedResponse, err error) {
+			checkOutcome: func(t *testing.T, response *StartResponse, err error) {
 				require.NoError(t, err)
 				require.Equal(t, int32(1), response.Attempt)
 				require.Equal(t, startedTime, response.StartedTime)
@@ -180,7 +179,7 @@ func TestHandleStarted(t *testing.T) {
 			requestStamp:   testStamp,
 			startRequestID: testRequestID,
 			requestID:      testRequestID,
-			checkOutcome: func(t *testing.T, response *historyservice.RecordActivityTaskStartedResponse, err error) {
+			checkOutcome: func(t *testing.T, response *StartResponse, err error) {
 				require.NoError(t, err)
 				require.Equal(t, int32(1), response.Attempt)
 				require.Equal(t, startedTime, response.StartedTime)
@@ -193,7 +192,7 @@ func TestHandleStarted(t *testing.T) {
 			requestStamp:   testStamp,
 			startRequestID: "different-request-id",
 			requestID:      testRequestID,
-			checkOutcome: func(t *testing.T, response *historyservice.RecordActivityTaskStartedResponse, err error) {
+			checkOutcome: func(t *testing.T, response *StartResponse, err error) {
 				require.ErrorAs(t, err, new(*serviceerrors.ObsoleteMatchingTask))
 			},
 		},
@@ -203,7 +202,7 @@ func TestHandleStarted(t *testing.T) {
 			attemptStamp:   testStamp,
 			requestStamp:   testStamp + 1,
 			requestID:      testRequestID,
-			checkOutcome: func(t *testing.T, response *historyservice.RecordActivityTaskStartedResponse, err error) {
+			checkOutcome: func(t *testing.T, response *StartResponse, err error) {
 				require.ErrorAs(t, err, new(*serviceerrors.ObsoleteMatchingTask))
 			},
 		},
@@ -213,7 +212,7 @@ func TestHandleStarted(t *testing.T) {
 			attemptStamp:   testStamp,
 			requestStamp:   testStamp,
 			requestID:      testRequestID,
-			checkOutcome: func(t *testing.T, response *historyservice.RecordActivityTaskStartedResponse, err error) {
+			checkOutcome: func(t *testing.T, response *StartResponse, err error) {
 				require.ErrorAs(t, err, new(*serviceerrors.ObsoleteMatchingTask))
 			},
 		},
@@ -294,9 +293,9 @@ func TestHandleStarted(t *testing.T) {
 			}
 
 			// Create request
-			request := &historyservice.RecordActivityTaskStartedRequest{
+			request := &StartRequest{
 				Stamp:     tc.requestStamp,
-				RequestId: tc.requestID,
+				RequestID: tc.requestID,
 			}
 
 			// Execute HandleStarted
@@ -485,14 +484,12 @@ func TestRecordHeartbeatPauseResetCancelFlags(t *testing.T) {
 				Attempt:      attempt,
 				ComponentRef: componentRef,
 			}
-			req := &historyservice.RecordActivityTaskHeartbeatRequest{
-				NamespaceId:      namespaceID,
-				HeartbeatRequest: &workflowservice.RecordActivityTaskHeartbeatRequest{},
-			}
+			req := &workflowservice.RecordActivityTaskHeartbeatRequest{}
 
-			resp, err := act.RecordHeartbeat(ctx, WithToken[*historyservice.RecordActivityTaskHeartbeatRequest]{
-				Token:   token,
-				Request: req,
+			resp, err := act.RecordHeartbeat(ctx, WithToken[*workflowservice.RecordActivityTaskHeartbeatRequest]{
+				NamespaceID: namespaceID,
+				Token:       token,
+				Request:     req,
 			})
 
 			require.NoError(t, err)
@@ -559,17 +556,15 @@ func TestRecordHeartbeatMetrics(t *testing.T) {
 				},
 				LastAttempt: chasm.NewDataField(ctx, &activitypb.ActivityAttemptState{Count: attempt}),
 			}
-			_, err := act.RecordHeartbeat(ctx, WithToken[*historyservice.RecordActivityTaskHeartbeatRequest]{
+			_, err := act.RecordHeartbeat(ctx, WithToken[*workflowservice.RecordActivityTaskHeartbeatRequest]{
+				NamespaceID: namespaceID,
 				Token: &tokenspb.Task{
 					NamespaceId:  namespaceID,
 					Attempt:      attempt,
 					ComponentRef: componentRef,
 				},
-				Request: &historyservice.RecordActivityTaskHeartbeatRequest{
-					NamespaceId: namespaceID,
-					HeartbeatRequest: &workflowservice.RecordActivityTaskHeartbeatRequest{
-						Details: tc.details,
-					},
+				Request: &workflowservice.RecordActivityTaskHeartbeatRequest{
+					Details: tc.details,
 				},
 			})
 			require.NoError(t, err)
@@ -641,14 +636,12 @@ func TestActivityTaskTokenAttemptStampRejectsTokenFromBeforeAttemptReset(t *test
 		ComponentRef:         componentRef,
 		ActivityAttemptStamp: act.LastAttempt.Get(ctx).GetStamp(),
 	}
-	req := &historyservice.RecordActivityTaskHeartbeatRequest{
-		NamespaceId:      namespaceID,
-		HeartbeatRequest: &workflowservice.RecordActivityTaskHeartbeatRequest{},
-	}
+	req := &workflowservice.RecordActivityTaskHeartbeatRequest{}
 
-	_, err = act.RecordHeartbeat(ctx, WithToken[*historyservice.RecordActivityTaskHeartbeatRequest]{
-		Token:   originalToken,
-		Request: req,
+	_, err = act.RecordHeartbeat(ctx, WithToken[*workflowservice.RecordActivityTaskHeartbeatRequest]{
+		NamespaceID: namespaceID,
+		Token:       originalToken,
+		Request:     req,
 	})
 	require.NoError(t, err)
 
@@ -666,24 +659,25 @@ func TestActivityTaskTokenAttemptStampRejectsTokenFromBeforeAttemptReset(t *test
 	require.Equal(t, originalToken.GetAttempt(), resetToken.GetAttempt())
 	require.NotEqual(t, originalToken.GetActivityAttemptStamp(), resetToken.GetActivityAttemptStamp())
 
-	_, err = act.RecordHeartbeat(ctx, WithToken[*historyservice.RecordActivityTaskHeartbeatRequest]{
-		Token:   originalToken,
-		Request: req,
+	_, err = act.RecordHeartbeat(ctx, WithToken[*workflowservice.RecordActivityTaskHeartbeatRequest]{
+		NamespaceID: namespaceID,
+		Token:       originalToken,
+		Request:     req,
 	})
 	var notFoundErr *serviceerror.NotFound
 	require.ErrorAs(t, err, &notFoundErr)
 
 	_, err = act.HandleCompleted(ctx, RespondCompletedEvent{
-		Token: originalToken,
-		Request: &historyservice.RespondActivityTaskCompletedRequest{
-			NamespaceId: namespaceID,
-		},
+		NamespaceID: namespaceID,
+		Token:       originalToken,
+		Request:     &workflowservice.RespondActivityTaskCompletedRequest{},
 	})
 	require.ErrorAs(t, err, &notFoundErr)
 
-	_, err = act.RecordHeartbeat(ctx, WithToken[*historyservice.RecordActivityTaskHeartbeatRequest]{
-		Token:   resetToken,
-		Request: req,
+	_, err = act.RecordHeartbeat(ctx, WithToken[*workflowservice.RecordActivityTaskHeartbeatRequest]{
+		NamespaceID: namespaceID,
+		Token:       resetToken,
+		Request:     req,
 	})
 	require.NoError(t, err)
 }
@@ -767,14 +761,12 @@ func TestActivityTaskTokenLegacyStampCompatibility(t *testing.T) {
 				ComponentRef:         componentRef,
 				ActivityAttemptStamp: tc.tokenStamp,
 			}
-			req := &historyservice.RecordActivityTaskHeartbeatRequest{
-				NamespaceId:      namespaceID,
-				HeartbeatRequest: &workflowservice.RecordActivityTaskHeartbeatRequest{},
-			}
+			req := &workflowservice.RecordActivityTaskHeartbeatRequest{}
 
-			_, heartbeatErr := act.RecordHeartbeat(ctx, WithToken[*historyservice.RecordActivityTaskHeartbeatRequest]{
-				Token:   token,
-				Request: req,
+			_, heartbeatErr := act.RecordHeartbeat(ctx, WithToken[*workflowservice.RecordActivityTaskHeartbeatRequest]{
+				NamespaceID: namespaceID,
+				Token:       token,
+				Request:     req,
 			})
 			require.NoError(t, heartbeatErr)
 		})

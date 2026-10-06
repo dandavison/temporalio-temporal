@@ -59,7 +59,7 @@ func TestActivityDispatchTaskHook(t *testing.T) {
 
 		hookCalls := 0
 		handler := newActivityDispatchTaskHandler(activityDispatchTaskHandlerOptions{
-			MatchingClient: matchingClient,
+			MatchingClient: matchingServiceAdapter{client: matchingClient},
 			DispatchTaskHook: func(
 				ctx context.Context,
 				namespaceID string,
@@ -120,7 +120,7 @@ func TestActivityDispatchTaskHook(t *testing.T) {
 				)
 
 				handler := newActivityDispatchTaskHandler(activityDispatchTaskHandlerOptions{
-					MatchingClient: matchingservicemock.NewMockMatchingServiceClient(controller),
+					MatchingClient: matchingServiceAdapter{client: matchingservicemock.NewMockMatchingServiceClient(controller)},
 					DispatchTaskHook: func(
 						context.Context,
 						string,
@@ -156,7 +156,7 @@ func TestActivityDispatchTaskHook(t *testing.T) {
 
 		hookCalls := 0
 		handler := newActivityDispatchTaskHandler(activityDispatchTaskHandlerOptions{
-			MatchingClient: matchingservicemock.NewMockMatchingServiceClient(controller),
+			MatchingClient: matchingServiceAdapter{client: matchingservicemock.NewMockMatchingServiceClient(controller)},
 			DispatchTaskHook: func(
 				context.Context,
 				string,
@@ -211,7 +211,7 @@ func TestActivityDispatchTaskHook(t *testing.T) {
 
 		hookCalls := 0
 		handler := newActivityDispatchTaskHandler(activityDispatchTaskHandlerOptions{
-			MatchingClient: matchingClient,
+			MatchingClient: matchingServiceAdapter{client: matchingClient},
 			DispatchTaskHook: func(
 				context.Context,
 				string,

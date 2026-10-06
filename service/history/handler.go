@@ -12,8 +12,6 @@ import (
 	"sync/atomic"
 	"time"
 
-	"go.temporal.io/server/common/nexus/nexusconv"
-
 	"github.com/google/uuid"
 	"github.com/nexus-rpc/sdk-go/nexus"
 	"go.opentelemetry.io/otel/trace"
@@ -21,6 +19,7 @@ import (
 	enumspb "go.temporal.io/api/enums/v1"
 	nexuspb "go.temporal.io/api/nexus/v1"
 	"go.temporal.io/api/serviceerror"
+	"go.temporal.io/api/workflowservice/v1"
 	"go.temporal.io/server/api/historyservice/v1"
 	namespacespb "go.temporal.io/server/api/namespace/v1"
 	persistencespb "go.temporal.io/server/api/persistence/v1"
@@ -43,6 +42,7 @@ import (
 	"go.temporal.io/server/common/metrics"
 	"go.temporal.io/server/common/namespace"
 	commonnexus "go.temporal.io/server/common/nexus"
+	"go.temporal.io/server/common/nexus/nexusconv"
 	"go.temporal.io/server/common/nexus/nexusrpc"
 	"go.temporal.io/server/common/payloads"
 	"go.temporal.io/server/common/persistence"
@@ -294,12 +294,20 @@ func (h *Handler) RecordActivityTaskHeartbeat(ctx context.Context, request *hist
 			ctx,
 			componentRef,
 			(*activity.Activity).RecordHeartbeat,
-			activity.WithToken[*historyservice.RecordActivityTaskHeartbeatRequest]{
-				Token:   taskToken,
-				Request: request,
+			activity.WithToken[*workflowservice.RecordActivityTaskHeartbeatRequest]{
+				NamespaceID: request.GetNamespaceId(),
+				Token:       taskToken,
+				Request:     request.GetHeartbeatRequest(),
 			},
 		)
-		return response, h.convertError(err)
+		if err != nil {
+			return nil, h.convertError(err)
+		}
+		return &historyservice.RecordActivityTaskHeartbeatResponse{
+			CancelRequested: response.CancelRequested,
+			ActivityReset:   response.ActivityReset,
+			ActivityPaused:  response.ActivityPaused,
+		}, nil
 	}
 
 	h.markActivityIDForContextMetadata(ctx, taskToken.GetActivityId(), taskToken.GetWorkflowId())
@@ -335,12 +343,27 @@ func (h *Handler) RecordActivityTaskStarted(ctx context.Context, request *histor
 			ctx,
 			activityRefProto,
 			(*activity.Activity).HandleStarted,
-			request,
+			&activity.StartRequest{
+				RequestID:        request.GetRequestId(),
+				Stamp:            request.GetStamp(),
+				PollRequest:      request.GetPollRequest(),
+				VersionDirective: request.GetVersionDirective(),
+			},
 		)
 		if err != nil {
 			return nil, err
 		}
-		return response, nil
+		return &historyservice.RecordActivityTaskStartedResponse{
+			StartedTime:                 response.StartedTime,
+			Attempt:                     response.Attempt,
+			Priority:                    response.Priority,
+			RetryPolicy:                 response.RetryPolicy,
+			ActivityRunId:               response.ActivityRunID,
+			WorkflowNamespace:           response.WorkflowNamespace,
+			HeartbeatDetails:            response.HeartbeatDetails,
+			CurrentAttemptScheduledTime: response.CurrentAttemptScheduledTime,
+			ScheduledEvent:              response.ScheduledEvent,
+		}, nil
 	}
 
 	// Handle worklow activity (mutable state backed implementation).
@@ -417,19 +440,20 @@ func (h *Handler) RespondActivityTaskCompleted(ctx context.Context, request *his
 
 	// Handle standalone activity if component ref is present in the token.
 	if componentRef := taskToken.GetComponentRef(); len(componentRef) > 0 {
-		response, _, err := chasm.UpdateComponent(
+		_, _, err := chasm.UpdateComponent(
 			ctx,
 			componentRef,
 			(*activity.Activity).HandleCompleted,
 			activity.RespondCompletedEvent{
-				Request: request,
-				Token:   taskToken,
+				NamespaceID: request.GetNamespaceId(),
+				Token:       taskToken,
+				Request:     request.GetCompleteRequest(),
 			},
 		)
 		if err != nil {
 			return nil, err
 		}
-		return response, nil
+		return &historyservice.RespondActivityTaskCompletedResponse{}, nil
 	}
 
 	// Handle worklow activity (mutable state backed implementation).
@@ -468,19 +492,20 @@ func (h *Handler) RespondActivityTaskFailed(ctx context.Context, request *histor
 
 	// Handle standalone activity if component ref is present in the token.
 	if componentRef := taskToken.GetComponentRef(); len(componentRef) > 0 {
-		response, _, err := chasm.UpdateComponent(
+		_, _, err := chasm.UpdateComponent(
 			ctx,
 			componentRef,
 			(*activity.Activity).HandleFailed,
 			activity.RespondFailedEvent{
-				Request: request,
-				Token:   taskToken,
+				NamespaceID: request.GetNamespaceId(),
+				Token:       taskToken,
+				Request:     request.GetFailedRequest(),
 			},
 		)
 		if err != nil {
 			return nil, err
 		}
-		return response, nil
+		return &historyservice.RespondActivityTaskFailedResponse{}, nil
 	}
 
 	// Handle worklow activity (mutable state backed implementation).
@@ -519,19 +544,20 @@ func (h *Handler) RespondActivityTaskCanceled(ctx context.Context, request *hist
 
 	// Handle standalone activity if component ref is present in the token.
 	if componentRef := taskToken.GetComponentRef(); len(componentRef) > 0 {
-		response, _, err := chasm.UpdateComponent(
+		_, _, err := chasm.UpdateComponent(
 			ctx,
 			componentRef,
 			(*activity.Activity).HandleCanceled,
 			activity.RespondCancelledEvent{
-				Request: request,
-				Token:   taskToken,
+				NamespaceID: request.GetNamespaceId(),
+				Token:       taskToken,
+				Request:     request.GetCancelRequest(),
 			},
 		)
 		if err != nil {
 			return nil, err
 		}
-		return response, nil
+		return &historyservice.RespondActivityTaskCanceledResponse{}, nil
 	}
 
 	// Handle worklow activity (mutable state backed implementation).

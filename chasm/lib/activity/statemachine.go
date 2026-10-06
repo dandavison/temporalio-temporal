@@ -9,7 +9,6 @@ import (
 	enumspb "go.temporal.io/api/enums/v1"
 	failurepb "go.temporal.io/api/failure/v1"
 	"go.temporal.io/api/workflowservice/v1"
-	"go.temporal.io/server/api/historyservice/v1"
 	"go.temporal.io/server/chasm"
 	"go.temporal.io/server/chasm/lib/activity/gen/activitypb/v1"
 	"go.temporal.io/server/common/headers"
@@ -43,13 +42,13 @@ type (
 	}
 
 	completeEvent struct {
-		req             *historyservice.RespondActivityTaskCompletedRequest
+		req             *workflowservice.RespondActivityTaskCompletedRequest
 		baseHandler     metrics.Handler
 		enrichedHandler metrics.Handler
 	}
 
 	failedEvent struct {
-		req             *historyservice.RespondActivityTaskFailedRequest
+		req             *workflowservice.RespondActivityTaskFailedRequest
 		retryState      enumspb.RetryState
 		baseHandler     metrics.Handler
 		enrichedHandler metrics.Handler
@@ -120,7 +119,7 @@ var TransitionStarted = chasm.NewTransition(
 		activitypb.ACTIVITY_EXECUTION_STATUS_SCHEDULED,
 	},
 	activitypb.ACTIVITY_EXECUTION_STATUS_STARTED,
-	func(a *Activity, ctx chasm.MutableContext, request *historyservice.RecordActivityTaskStartedRequest) error {
+	func(a *Activity, ctx chasm.MutableContext, request *StartRequest) error {
 		return a.applyStarted(ctx, request)
 	},
 )
@@ -420,19 +419,19 @@ func (a *Activity) applyRescheduled(ctx chasm.MutableContext, event rescheduleEv
 	return nil
 }
 
-func (a *Activity) applyStarted(ctx chasm.MutableContext, request *historyservice.RecordActivityTaskStartedRequest) error {
+func (a *Activity) applyStarted(ctx chasm.MutableContext, request *StartRequest) error {
 	attempt := a.LastAttempt.Get(ctx)
 	attempt.StartedTime = timestamppb.New(ctx.Now(a))
-	attempt.StartedStamp = request.GetStamp()
+	attempt.StartedStamp = request.Stamp
 	// Record the first-ever worker pickup time once and never update on retries or resets.
 	if a.FirstAttemptStartedTime == nil {
 		a.FirstAttemptStartedTime = attempt.GetStartedTime()
 	}
-	attempt.StartRequestId = request.GetRequestId()
-	attempt.LastWorkerIdentity = request.GetPollRequest().GetIdentity()
+	attempt.StartRequestId = request.RequestID
+	attempt.LastWorkerIdentity = request.PollRequest.GetIdentity()
 	attempt.SdkName = ctx.RequestHeader(headers.ClientNameHeaderName)
 	attempt.SdkVersion = ctx.RequestHeader(headers.ClientVersionHeaderName)
-	if versionDirective := request.GetVersionDirective().GetDeploymentVersion(); versionDirective != nil {
+	if versionDirective := request.VersionDirective.GetDeploymentVersion(); versionDirective != nil {
 		attempt.LastDeploymentVersion = &deploymentpb.WorkerDeploymentVersion{
 			BuildId:        versionDirective.GetBuildId(),
 			DeploymentName: versionDirective.GetDeploymentName(),
@@ -464,7 +463,7 @@ func (a *Activity) applyStarted(ctx chasm.MutableContext, request *historyservic
 
 func (a *Activity) applyCompleted(ctx chasm.MutableContext, event completeEvent) error {
 	return a.StoreOrSelf(ctx).RecordCompleted(ctx, func(ctx chasm.MutableContext) error {
-		req := event.req.GetCompleteRequest()
+		req := event.req
 
 		attemptWasStarted := a.hasAttemptInProgress()
 		attempt := a.LastAttempt.Get(ctx)
@@ -496,7 +495,7 @@ func (a *Activity) applyCompleted(ctx chasm.MutableContext, event completeEvent)
 // failure of a single attempt that may still be retried.
 func (a *Activity) applyFailed(ctx chasm.MutableContext, event failedEvent) error {
 	return a.StoreOrSelf(ctx).RecordCompleted(ctx, func(ctx chasm.MutableContext) error {
-		req := event.req.GetFailedRequest()
+		req := event.req
 		a.Outcome.Get(ctx).RetryState = event.retryState
 
 		attempt := a.LastAttempt.Get(ctx)

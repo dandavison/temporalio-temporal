@@ -28,7 +28,6 @@ import (
 
 	enumspb "go.temporal.io/api/enums/v1"
 	failurepb "go.temporal.io/api/failure/v1"
-	"go.temporal.io/server/api/matchingservice/v1"
 	"go.temporal.io/server/chasm"
 	"go.temporal.io/server/chasm/lib/activity/gen/activitypb/v1"
 	"go.temporal.io/server/common/backoff"
@@ -40,7 +39,7 @@ import (
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
-func (a *Activity) createAddActivityTaskRequest(ctx chasm.Context, namespaceID string) (*matchingservice.AddActivityTaskRequest, error) {
+func (a *Activity) createDispatchRequest(ctx chasm.Context, namespaceID string) (*DispatchRequest, error) {
 	// Get latest component ref and unmarshal into proto ref
 	componentRef, err := ctx.Ref(a)
 	if err != nil {
@@ -49,8 +48,8 @@ func (a *Activity) createAddActivityTaskRequest(ctx chasm.Context, namespaceID s
 
 	// Note: No need to set the vector clock here, as the components track version conflicts for read/write
 	// TODO: Need to fill in VersionDirective once we decide how to handle versioning for standalone activities
-	return &matchingservice.AddActivityTaskRequest{
-		NamespaceId:            namespaceID,
+	return &DispatchRequest{
+		NamespaceID:            namespaceID,
 		ScheduleToStartTimeout: a.ScheduleToStartTimeout,
 		TaskQueue:              a.GetTaskQueue(),
 		Priority:               a.GetPriority(),

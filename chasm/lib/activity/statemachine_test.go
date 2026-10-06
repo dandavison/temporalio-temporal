@@ -14,7 +14,6 @@ import (
 	"go.temporal.io/api/workflowservice/v1"
 	"go.temporal.io/sdk/temporal"
 	deploymentspb "go.temporal.io/server/api/deployment/v1"
-	"go.temporal.io/server/api/historyservice/v1"
 	persistencespb "go.temporal.io/server/api/persistence/v1"
 	taskqueuespb "go.temporal.io/server/api/taskqueue/v1"
 	"go.temporal.io/server/chasm"
@@ -438,7 +437,7 @@ func TestTransitionStarted(t *testing.T) {
 		Outcome:     chasm.NewDataField(ctx, outcome),
 	}
 
-	err := TransitionStarted.Apply(activity, ctx, &historyservice.RecordActivityTaskStartedRequest{
+	err := TransitionStarted.Apply(activity, ctx, &StartRequest{
 		PollRequest: &workflowservice.PollActivityTaskQueueRequest{
 			Identity: "test-worker",
 		},
@@ -737,11 +736,9 @@ func TestTransitionCompleted(t *testing.T) {
 	counterPayloadSize.EXPECT().Record(int64(payload.Size())).Times(1)
 	baseHandler.EXPECT().Counter(metrics.ActivityPayloadSize.Name()).Return(counterPayloadSize)
 
-	req := &historyservice.RespondActivityTaskCompletedRequest{
-		CompleteRequest: &workflowservice.RespondActivityTaskCompletedRequest{
-			Result:   payload,
-			Identity: "worker",
-		},
+	req := &workflowservice.RespondActivityTaskCompletedRequest{
+		Result:   payload,
+		Identity: "worker",
 	}
 
 	err := TransitionCompleted.Apply(activity, ctx, completeEvent{
@@ -809,11 +806,9 @@ func TestTransitionCompleted_ForceCompleteWithNoAttempt(t *testing.T) {
 			counterPayloadSize.EXPECT().Record(int64(payload.Size())).Times(1)
 			baseHandler.EXPECT().Counter(metrics.ActivityPayloadSize.Name()).Return(counterPayloadSize)
 
-			req := &historyservice.RespondActivityTaskCompletedRequest{
-				CompleteRequest: &workflowservice.RespondActivityTaskCompletedRequest{
-					Result:   payload,
-					Identity: "worker",
-				},
+			req := &workflowservice.RespondActivityTaskCompletedRequest{
+				Result:   payload,
+				Identity: "worker",
 			}
 
 			err := TransitionCompleted.Apply(activity, ctx, completeEvent{
@@ -879,11 +874,9 @@ func TestTransitionFailed(t *testing.T) {
 	counterPayloadSize.EXPECT().Record(int64(failure.Size())).Times(1)
 	baseHandler.EXPECT().Counter(metrics.ActivityPayloadSize.Name()).Return(counterPayloadSize)
 
-	req := &historyservice.RespondActivityTaskFailedRequest{
-		FailedRequest: &workflowservice.RespondActivityTaskFailedRequest{
-			Failure:  failure,
-			Identity: "worker",
-		},
+	req := &workflowservice.RespondActivityTaskFailedRequest{
+		Failure:  failure,
+		Identity: "worker",
 	}
 
 	err := TransitionFailed.Apply(activity, ctx, failedEvent{

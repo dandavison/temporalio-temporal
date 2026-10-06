@@ -12,7 +12,7 @@ var HistoryModule = fx.Module(
 	fx.Provide(
 		ConfigProvider,
 		linkValidatorProvider,
-		newActivityDispatchTaskHandler,
+		activityDispatchTaskHandlerProvider,
 		newScheduleToStartTimeoutTaskHandler,
 		newScheduleToCloseTimeoutTaskHandler,
 		newStartToCloseTimeoutTaskHandler,
