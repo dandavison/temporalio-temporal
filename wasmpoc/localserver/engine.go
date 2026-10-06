@@ -155,6 +155,9 @@ func (e *engine) NotifyExecution(chasm.ExecutionKey) {}
 func (e *engine) advanceTime(ctx context.Context, now time.Time) error {
 	e.now = now
 	for _, x := range e.executions {
+		if !x.backend.hasDueTask(now) {
+			continue
+		}
 		if err := e.runSideEffectTasks(ctx, x); err != nil {
 			return err
 		}
@@ -276,6 +279,16 @@ type backend struct {
 }
 
 var _ chasm.NodeBackend = (*backend)(nil)
+
+// hasDueTask reports whether a pure or side-effect task is due, so that advancing time does not
+// have to visit every node of every execution.
+func (b *backend) hasDueTask(now time.Time) bool {
+	isDue := func(t time.Time) bool { return !t.After(now) }
+	return slices.ContainsFunc(b.pureTaskTimes, isDue) ||
+		slices.ContainsFunc(b.sideEffectTasks, func(task *chasm.PhysicalSideEffectTask) bool {
+			return isDue(task.VisibilityTimestamp)
+		})
+}
 
 func (b *backend) isRunning() bool {
 	return b.state == enumsspb.WORKFLOW_EXECUTION_STATE_CREATED || b.state == enumsspb.WORKFLOW_EXECUTION_STATE_RUNNING
