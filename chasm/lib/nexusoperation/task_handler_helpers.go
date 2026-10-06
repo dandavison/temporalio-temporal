@@ -19,6 +19,7 @@ import (
 	"go.temporal.io/server/common"
 	"go.temporal.io/server/common/namespace"
 	commonnexus "go.temporal.io/server/common/nexus"
+	"go.temporal.io/server/common/nexus/nexusconv"
 	"go.temporal.io/server/common/nexus/nexusrpc"
 	queueserrors "go.temporal.io/server/service/history/queues/errors"
 )
@@ -64,7 +65,7 @@ func isDestinationDown(err error) bool {
 }
 
 func failureSourceFromContext(ctx context.Context) string {
-	ctxVal := ctx.Value(commonnexus.FailureSourceContextKey)
+	ctxVal := ctx.Value(nexusconv.FailureSourceContextKey)
 	if ctxVal == nil {
 		return ""
 	}
@@ -164,7 +165,7 @@ func callErrorToFailure(callErr error) (*failurepb.Failure, bool, error) {
 				return nil, false, err
 			}
 		}
-		failure, err := commonnexus.NexusFailureToTemporalFailure(nf)
+		failure, err := nexusconv.NexusFailureToTemporalFailure(nf)
 		if err != nil {
 			return nil, false, err
 		}
@@ -259,7 +260,7 @@ func newInvocationResult(
 				return nil, err
 			}
 		}
-		failure, err := commonnexus.NexusFailureToTemporalFailure(nf)
+		failure, err := nexusconv.NexusFailureToTemporalFailure(nf)
 		if err != nil {
 			return nil, err
 		}
@@ -270,12 +271,12 @@ func newInvocationResult(
 	}
 
 	if opErr, ok := errors.AsType[*nexus.OperationError](callErr); ok {
-		failure, err := commonnexus.OperationErrorToTemporalFailure(opErr)
+		failure, err := nexusconv.OperationErrorToTemporalFailure(opErr)
 		if err != nil {
 			return nil, err
 		}
 		if opErr.State == nexus.OperationStateCanceled {
-			failure = commonnexus.CoerceToCanceledFailure(failure)
+			failure = nexusconv.CoerceToCanceledFailure(failure)
 			return invocationResultCancel{failure: failure}, nil
 		}
 		return invocationResultFail{failure: failure}, nil

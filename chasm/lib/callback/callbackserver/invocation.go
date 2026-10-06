@@ -13,6 +13,7 @@ import (
 	"go.temporal.io/server/common/backoff"
 	"go.temporal.io/server/common/log/tag"
 	commonnexus "go.temporal.io/server/common/nexus"
+	"go.temporal.io/server/common/nexus/nexusconv"
 	"go.temporal.io/server/common/softassert"
 	queueserrors "go.temporal.io/server/service/history/queues/errors"
 )
@@ -169,7 +170,7 @@ func buildCallbackLink(ctx chasm.Context, parentComponent chasm.Component, cbReq
 		RunId:      chasmExKey.RunID,
 	}
 
-	link, err := commonnexus.ConvertLinkCallbackToNexusLink(&commonpb.Link_Callback{
+	link, err := nexusconv.ConvertLinkCallbackToNexusLink(&commonpb.Link_Callback{
 		Namespace:     ctx.NamespaceEntry().Name().String(),
 		Execution:     execution,
 		ComponentPath: ctx.Path(parentComponent),

@@ -22,7 +22,7 @@ import (
 	"go.temporal.io/server/common/headers"
 	"go.temporal.io/server/common/metrics"
 	"go.temporal.io/server/common/metrics/metricstest"
-	commonnexus "go.temporal.io/server/common/nexus"
+	"go.temporal.io/server/common/nexus/nexusconv"
 	"go.temporal.io/server/common/nexus/nexusrpc"
 	"go.temporal.io/server/common/testing/parallelsuite"
 	"go.temporal.io/server/service/frontend/configs"
@@ -72,7 +72,7 @@ func (s *NexusApiTestSuite) TestNexusStartOperation_Outcomes(useTemporalFailures
 			},
 		},
 	}
-	callerNexusLink := commonnexus.ConvertLinkWorkflowEventToNexusLink(callerLink)
+	callerNexusLink := nexusconv.ConvertLinkWorkflowEventToNexusLink(callerLink)
 
 	handlerLink := &commonpb.Link_WorkflowEvent{
 		Namespace:  "handler-ns",
@@ -85,7 +85,7 @@ func (s *NexusApiTestSuite) TestNexusStartOperation_Outcomes(useTemporalFailures
 			},
 		},
 	}
-	handlerNexusLink := commonnexus.ConvertLinkWorkflowEventToNexusLink(handlerLink)
+	handlerNexusLink := nexusconv.ConvertLinkWorkflowEventToNexusLink(handlerLink)
 	asyncSuccessEndpoint := testcore.RandomizeStr("test-endpoint")
 
 	operationErrorOutcome := "operation_error"
@@ -180,7 +180,7 @@ func (s *NexusApiTestSuite) TestNexusStartOperation_Outcomes(useTemporalFailures
 
 				var wrapperCause *nexus.FailureError
 				s.ErrorAs(wrapper.Cause, &wrapperCause)
-				wrapperCauseTFailure, err := commonnexus.NexusFailureToTemporalFailure(wrapperCause.Failure)
+				wrapperCauseTFailure, err := nexusconv.NexusFailureToTemporalFailure(wrapperCause.Failure)
 				s.NoError(err)
 				wrapperCauseErr := temporal.GetDefaultFailureConverter().FailureToError(wrapperCauseTFailure)
 

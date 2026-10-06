@@ -2,9 +2,9 @@ package callbackserver
 
 import (
 	"github.com/nexus-rpc/sdk-go/nexus"
-	"go.temporal.io/server/common"
 	"go.temporal.io/server/common/metrics"
 	commonnexus "go.temporal.io/server/common/nexus"
+	"go.temporal.io/server/common/util"
 	"google.golang.org/grpc/codes"
 )
 
@@ -100,7 +100,7 @@ func handlerErrorOutcome(handlerErr *nexus.HandlerError) outcomeTag {
 // Stats()/GRPCStatus(). Otherwise defaults to "error:Unknown".
 func grpcErrorOutcome(err error) outcomeTag {
 	tagSuffix := codes.Unknown.String()
-	if st, ok := common.GetRPCStatus(err); ok {
+	if st, ok := util.GetRPCStatus(err); ok {
 		tagSuffix = st.Code().String()
 	}
 	return outcomeTag("error:" + tagSuffix)

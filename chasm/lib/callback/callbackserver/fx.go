@@ -4,9 +4,8 @@ import (
 	"fmt"
 	"net/http"
 
-	"go.temporal.io/server/chasm/lib/callback"
-
 	"go.temporal.io/server/chasm"
+	"go.temporal.io/server/chasm/lib/callback"
 	"go.temporal.io/server/common"
 	"go.temporal.io/server/common/cluster"
 	"go.temporal.io/server/common/collection"

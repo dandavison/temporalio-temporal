@@ -19,6 +19,7 @@ import (
 	taskqueuepb "go.temporal.io/api/taskqueue/v1"
 	"go.temporal.io/api/workflowservice/v1"
 	cnexus "go.temporal.io/server/common/nexus"
+	"go.temporal.io/server/common/nexus/nexusconv"
 	"go.temporal.io/server/common/nexus/nexusrpc"
 	"go.temporal.io/server/common/nexus/nexustest"
 	"go.temporal.io/server/tests/testcore"
@@ -319,7 +320,7 @@ func (env *NexusTestEnv) respondNexusTaskFailed(ctx context.Context, taskToken [
 		if err != nil {
 			return err
 		}
-		temporalFailure, err := cnexus.NexusFailureToTemporalFailure(nexusFailure)
+		temporalFailure, err := nexusconv.NexusFailureToTemporalFailure(nexusFailure)
 		if err != nil {
 			return err
 		}
@@ -341,7 +342,7 @@ func (env *NexusTestEnv) respondNexusTaskFailed(ctx context.Context, taskToken [
 		if convertErr != nil {
 			return convertErr
 		}
-		protoFailure = cnexus.NexusFailureToProtoFailure(causeFailure)
+		protoFailure = nexusconv.NexusFailureToProtoFailure(causeFailure)
 	} else {
 		protoFailure = &nexuspb.Failure{Message: he.Message}
 	}
@@ -375,7 +376,7 @@ func (env *NexusTestEnv) respondNexusTaskCompletedWithOperationError(ctx context
 		if err != nil {
 			return err
 		}
-		temporalFailure, err := cnexus.NexusFailureToTemporalFailure(nexusFailure)
+		temporalFailure, err := nexusconv.NexusFailureToTemporalFailure(nexusFailure)
 		if err != nil {
 			return err
 		}
@@ -406,7 +407,7 @@ func (env *NexusTestEnv) respondNexusTaskCompletedWithOperationError(ctx context
 		if convertErr != nil {
 			return convertErr
 		}
-		protoFailure = cnexus.NexusFailureToProtoFailure(causeFailure)
+		protoFailure = nexusconv.NexusFailureToProtoFailure(causeFailure)
 	} else {
 		protoFailure = &nexuspb.Failure{Message: opErr.Message}
 	}

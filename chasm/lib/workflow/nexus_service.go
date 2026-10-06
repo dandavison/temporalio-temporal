@@ -11,7 +11,7 @@ import (
 	"go.temporal.io/server/api/historyservice/v1"
 	"go.temporal.io/server/chasm"
 	"go.temporal.io/server/common/namespace"
-	commonnexus "go.temporal.io/server/common/nexus"
+	"go.temporal.io/server/common/nexus/nexusconv"
 	"go.temporal.io/server/common/searchattribute"
 )
 
@@ -47,7 +47,7 @@ func (h *workflowServiceNexusHandler) signalWithStartWorkflowExecution(
 	// Persist the link from the signaling workflow to its target workflow.
 	// The backlink is already taken care of within the historyHandler.
 	signalLink := res.GetSignalLink()
-	link := commonnexus.ConvertLinkWorkflowEventToNexusLink(signalLink.GetWorkflowEvent())
+	link := nexusconv.ConvertLinkWorkflowEventToNexusLink(signalLink.GetWorkflowEvent())
 	nexus.AddHandlerLinks(ctx, link)
 
 	return &workflowservice.SignalWithStartWorkflowExecutionResponse{
@@ -99,7 +99,7 @@ func (o SignalWithStartOperationProcessor) ProcessInput(ctx chasm.NexusOperation
 	}
 	request.Links = make([]*commonpb.Link, len(ctx.Links))
 	for i, link := range ctx.Links {
-		wLink, err := commonnexus.ConvertNexusLinkToLinkWorkflowEvent(link)
+		wLink, err := nexusconv.ConvertNexusLinkToLinkWorkflowEvent(link)
 		if err != nil {
 			return nil, serviceerror.NewInvalidArgumentf("Cannot convert %v link %v: %v", link.Type, link.URL, err)
 		}

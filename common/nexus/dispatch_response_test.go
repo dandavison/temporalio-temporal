@@ -10,6 +10,7 @@ import (
 	nexuspb "go.temporal.io/api/nexus/v1"
 	"go.temporal.io/sdk/temporal"
 	"go.temporal.io/server/api/matchingservice/v1"
+	"go.temporal.io/server/common/nexus/nexusconv"
 )
 
 // DispatchResultToError serves server-internal callers, which branch on *nexus.HandlerError -- a
@@ -120,14 +121,14 @@ func TestDispatchResultToError_CanceledOutcomes(t *testing.T) {
 	})
 
 	t.Run("a canceled failure in the deprecated variant", func(t *testing.T) {
-		nf, err := TemporalFailureToNexusFailure(canceledFailure("operation canceled"))
+		nf, err := nexusconv.TemporalFailureToNexusFailure(canceledFailure("operation canceled"))
 		require.NoError(t, err)
 
 		var canceledErr *temporal.CanceledError
 		require.ErrorAs(t, MatchingDispatchResponseToError(deprecatedOperationErrorResponse(
 			&nexuspb.UnsuccessfulOperationError{
 				OperationState: string(nexus.OperationStateCanceled),
-				Failure:        NexusFailureToProtoFailure(nf),
+				Failure:        nexusconv.NexusFailureToProtoFailure(nf),
 			})), &canceledErr)
 	})
 

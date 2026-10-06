@@ -8,8 +8,6 @@ import (
 	"testing"
 	"time"
 
-	"go.temporal.io/server/chasm/lib/callback/callbackserver"
-
 	"github.com/google/uuid"
 	"github.com/nexus-rpc/sdk-go/nexus"
 	"github.com/stretchr/testify/require"
@@ -24,11 +22,13 @@ import (
 	"go.temporal.io/sdk/temporal"
 	"go.temporal.io/sdk/worker"
 	"go.temporal.io/sdk/workflow"
+	"go.temporal.io/server/chasm/lib/callback/callbackserver"
 	chasmworkflow "go.temporal.io/server/chasm/lib/workflow"
 	"go.temporal.io/server/common"
 	"go.temporal.io/server/common/callbacks"
 	"go.temporal.io/server/common/dynamicconfig"
 	commonnexus "go.temporal.io/server/common/nexus"
+	"go.temporal.io/server/common/nexus/nexusconv"
 	"go.temporal.io/server/common/nexus/nexustest"
 	"go.temporal.io/server/common/testing/await"
 	"go.temporal.io/server/common/testing/parallelsuite"
@@ -1687,7 +1687,7 @@ func (s *NexusWorkflowUpdateTestSuite) TestWorkflowNexusHandlerCallbackLinks() {
 		inboundLinks <- res.GetRequest().GetStartOperation().GetLinks()
 		return &nexusTaskResponse{
 			StartResult: &nexus.HandlerStartOperationResultAsync{OperationToken: "nh-callback-op-token"},
-			Links:       []nexus.Link{commonnexus.ConvertLinkWorkflowEventToNexusLink(handlerReturnLink)},
+			Links:       []nexus.Link{nexusconv.ConvertLinkWorkflowEventToNexusLink(handlerReturnLink)},
 		}, nil
 	})
 
@@ -1723,7 +1723,7 @@ func (s *NexusWorkflowUpdateTestSuite) TestWorkflowNexusHandlerCallbackLinks() {
 
 	gotLinks := s.Rcv(inboundLinks)
 	s.Require().Len(gotLinks, 1)
-	gotCallbackLink, err := commonnexus.ConvertNexusLinkToLinkCallback(commonnexus.ConvertLinksFromProto(gotLinks)[0])
+	gotCallbackLink, err := nexusconv.ConvertNexusLinkToLinkCallback(commonnexus.ConvertLinksFromProto(gotLinks)[0])
 	s.NoError(err)
 	protorequire.ProtoEqual(s.T(), &commonpb.Link_Callback{
 		Namespace: env.Namespace().String(),
@@ -1790,7 +1790,7 @@ func (s *NexusWorkflowUpdateTestSuite) TestWorkflowUpdateNexusHandlerCallbackLin
 		// the resources it (hypothetically) spawned.
 		return &nexusTaskResponse{
 			StartResult: &nexus.HandlerStartOperationResultAsync{OperationToken: "nh-callback-op-token"},
-			Links:       []nexus.Link{commonnexus.ConvertLinkWorkflowEventToNexusLink(handlerReturnLink)},
+			Links:       []nexus.Link{nexusconv.ConvertLinkWorkflowEventToNexusLink(handlerReturnLink)},
 		}, nil
 	})
 
@@ -1835,7 +1835,7 @@ func (s *NexusWorkflowUpdateTestSuite) TestWorkflowUpdateNexusHandlerCallbackLin
 	// component path is what distinguishes it from a callback attached to the workflow itself.
 	gotLinks := s.Rcv(inboundLinks)
 	s.Require().Len(gotLinks, 1)
-	gotCallbackLink, err := commonnexus.ConvertNexusLinkToLinkCallback(commonnexus.ConvertLinksFromProto(gotLinks)[0])
+	gotCallbackLink, err := nexusconv.ConvertNexusLinkToLinkCallback(commonnexus.ConvertLinksFromProto(gotLinks)[0])
 	s.NoError(err)
 
 	wantInboundLink := &commonpb.Link_Callback{

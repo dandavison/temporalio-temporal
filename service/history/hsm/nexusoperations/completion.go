@@ -13,7 +13,7 @@ import (
 	historypb "go.temporal.io/api/history/v1"
 	"go.temporal.io/api/serviceerror"
 	"go.temporal.io/server/common/metrics"
-	commonnexus "go.temporal.io/server/common/nexus"
+	"go.temporal.io/server/common/nexus/nexusconv"
 	"go.temporal.io/server/service/history/hsm"
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
@@ -60,13 +60,13 @@ func handleOperationError(
 
 	if unwrapError && opErr.OriginalFailure.Cause != nil {
 		var err error
-		originalCause, err = commonnexus.NexusFailureToTemporalFailure(*opErr.OriginalFailure.Cause)
+		originalCause, err = nexusconv.NexusFailureToTemporalFailure(*opErr.OriginalFailure.Cause)
 		if err != nil {
 			return serviceerror.NewInvalidArgumentf("Malformed failure: %v", err)
 		}
 	} else {
 		// Transform the OperationError to either ApplicationFailure or CanceledFailure based on the operation error state.
-		originalCause, err = commonnexus.NexusFailureToTemporalFailure(*opErr.OriginalFailure)
+		originalCause, err = nexusconv.NexusFailureToTemporalFailure(*opErr.OriginalFailure)
 		if err != nil {
 			return serviceerror.NewInvalidArgumentf("Malformed failure: %v", err)
 		}
@@ -88,7 +88,7 @@ func handleOperationError(
 
 		return FailedEventDefinition{}.Apply(node.Parent, event)
 	case nexus.OperationStateCanceled:
-		originalCause = commonnexus.CoerceToCanceledFailure(originalCause)
+		originalCause = nexusconv.CoerceToCanceledFailure(originalCause)
 		event := node.AddHistoryEvent(enumspb.EVENT_TYPE_NEXUS_OPERATION_CANCELED, func(e *historypb.HistoryEvent) {
 			// We must assign to this property, linter doesn't like this.
 			// nolint:revive

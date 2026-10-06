@@ -6,8 +6,6 @@ import (
 	"testing"
 	"time"
 
-	"go.temporal.io/server/chasm/lib/callback/callbackserver"
-
 	"github.com/google/uuid"
 	"github.com/nexus-rpc/sdk-go/nexus"
 	"github.com/stretchr/testify/require"
@@ -18,10 +16,12 @@ import (
 	nexusoperationpb "go.temporal.io/api/nexusoperation/v1"
 	"go.temporal.io/api/serviceerror"
 	"go.temporal.io/api/workflowservice/v1"
+	"go.temporal.io/server/chasm/lib/callback/callbackserver"
 	"go.temporal.io/server/chasm/lib/nexusoperation"
 	"go.temporal.io/server/common/callbacks"
 	"go.temporal.io/server/common/dynamicconfig"
 	commonnexus "go.temporal.io/server/common/nexus"
+	"go.temporal.io/server/common/nexus/nexusconv"
 	"go.temporal.io/server/common/nexus/nexustest"
 	"go.temporal.io/server/common/testing/await"
 	"go.temporal.io/server/common/testing/parallelsuite"
@@ -111,7 +111,7 @@ func (s *NexusStandaloneCallbacksTestSuite) TestCompletionCallbacks() {
 			s.JSONEq(`"operation-result"`, string(body))
 			completionBody = body
 			// The completion carries a back-link to the operation that produced it.
-			wantLink := commonnexus.ConvertLinkNexusOperationToNexusLink(&commonpb.Link_NexusOperation{
+			wantLink := nexusconv.ConvertLinkNexusOperationToNexusLink(&commonpb.Link_NexusOperation{
 				Namespace:   env.Namespace().String(),
 				OperationId: operationID,
 				RunId:       startResp.GetRunId(),
@@ -172,7 +172,7 @@ func (s *NexusStandaloneCallbacksTestSuite) TestCompletionCallbacks() {
 			s.Require().ErrorAs(completion.Error.Cause, &failureErr)
 			// The handler's error is wrapped as an OperationError whose cause carries the original
 			// message, which is how a Nexus operation failure round-trips through a completion.
-			tFailure, convErr := commonnexus.NexusFailureToTemporalFailure(failureErr.Failure)
+			tFailure, convErr := nexusconv.NexusFailureToTemporalFailure(failureErr.Failure)
 			s.NoError(convErr)
 			s.Equal("OperationError", tFailure.GetApplicationFailureInfo().GetType())
 			s.Equal("deliberate failure", tFailure.GetCause().GetMessage())
@@ -275,7 +275,7 @@ func (s *NexusStandaloneCallbacksTestSuite) TestCompletionCallbacks() {
 			inboundLinks <- res.GetRequest().GetStartOperation().GetLinks()
 			return &nexusTaskResponse{
 				StartResult: &nexus.HandlerStartOperationResultAsync{OperationToken: "nh-callback-op-token"},
-				Links:       []nexus.Link{commonnexus.ConvertLinkWorkflowEventToNexusLink(handlerReturnLink)},
+				Links:       []nexus.Link{nexusconv.ConvertLinkWorkflowEventToNexusLink(handlerReturnLink)},
 			}, nil
 		})
 
@@ -309,7 +309,7 @@ func (s *NexusStandaloneCallbacksTestSuite) TestCompletionCallbacks() {
 
 		gotLinks := s.Rcv(inboundLinks)
 		s.Require().Len(gotLinks, 1)
-		gotCallbackLink, err := commonnexus.ConvertNexusLinkToLinkCallback(commonnexus.ConvertLinksFromProto(gotLinks)[0])
+		gotCallbackLink, err := nexusconv.ConvertNexusLinkToLinkCallback(commonnexus.ConvertLinksFromProto(gotLinks)[0])
 		s.NoError(err)
 		protorequire.ProtoEqual(s.T(), &commonpb.Link_Callback{
 			Namespace: env.Namespace().String(),

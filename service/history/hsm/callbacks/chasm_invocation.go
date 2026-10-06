@@ -16,6 +16,7 @@ import (
 	"go.temporal.io/server/common/log/tag"
 	"go.temporal.io/server/common/namespace"
 	commonnexus "go.temporal.io/server/common/nexus"
+	"go.temporal.io/server/common/nexus/nexusconv"
 	"go.temporal.io/server/common/nexus/nexusrpc"
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
@@ -116,7 +117,7 @@ func (c chasmInvocation) getHistoryRequest(
 		if failure.Cause != nil {
 			failure = *failure.Cause
 		}
-		apiFailure, err := commonnexus.NexusFailureToTemporalFailure(failure)
+		apiFailure, err := nexusconv.NexusFailureToTemporalFailure(failure)
 		if err != nil {
 			return nil, fmt.Errorf("failed to convert failure type: %w", err)
 		}

@@ -19,6 +19,7 @@ import (
 	"go.temporal.io/server/common/metrics"
 	"go.temporal.io/server/common/namespace"
 	commonnexus "go.temporal.io/server/common/nexus"
+	"go.temporal.io/server/common/nexus/nexusconv"
 	"go.temporal.io/server/common/nexus/nexusrpc"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/timestamppb"
@@ -155,7 +156,7 @@ func (c invocableInternal) getHistoryRequest(
 		}
 	} else {
 		// Convert the nexus.OperationError into a failurepb.Failure.
-		apiFailure, err := commonnexus.OperationErrorToTemporalFailure(c.completion.Error)
+		apiFailure, err := nexusconv.OperationErrorToTemporalFailure(c.completion.Error)
 		if err != nil {
 			return nil, err
 		}

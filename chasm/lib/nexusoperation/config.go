@@ -7,7 +7,6 @@ import (
 	"time"
 
 	"go.temporal.io/server/chasm/lib/callback/callbackserver"
-
 	"go.temporal.io/server/common/backoff"
 	"go.temporal.io/server/common/callbacks"
 	"go.temporal.io/server/common/config"

@@ -31,6 +31,7 @@ import (
 	"go.temporal.io/server/common/metrics"
 	"go.temporal.io/server/common/metrics/metricstest"
 	cnexus "go.temporal.io/server/common/nexus"
+	"go.temporal.io/server/common/nexus/nexusconv"
 	"go.temporal.io/server/common/nexus/nexusrpc"
 	"go.temporal.io/server/common/nexus/nexustest"
 	"go.temporal.io/server/common/payload"
@@ -166,7 +167,7 @@ func (s *NexusRequestForwardingSuite) TestStartOperationForwardedFromStandbyToAc
 				require.ErrorAs(t, operationError.Cause, &wrapperErr)
 				var wrapperErrCause *nexus.FailureError
 				require.ErrorAs(t, wrapperErr.Cause, &wrapperErrCause)
-				tFailure, err := cnexus.NexusFailureToTemporalFailure(wrapperErrCause.Failure)
+				tFailure, err := nexusconv.NexusFailureToTemporalFailure(wrapperErrCause.Failure)
 				require.NoError(t, err)
 				convErr := temporal.GetDefaultFailureConverter().FailureToError(tFailure)
 

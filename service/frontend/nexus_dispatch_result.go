@@ -6,6 +6,7 @@ import (
 	"go.temporal.io/server/api/matchingservice/v1"
 	"go.temporal.io/server/common/log/tag"
 	commonnexus "go.temporal.io/server/common/nexus"
+	"go.temporal.io/server/common/nexus/nexusconv"
 	"go.temporal.io/server/common/nexus/nexusrpc"
 )
 
@@ -105,7 +106,7 @@ func (c *operationContext) convertWorkerFailure(
 	operation string,
 ) (cause error, internalErr error) {
 	// Converting in place is safe here: the failure belongs to a response this request owns.
-	nf, err := commonnexus.TemporalFailureToNexusFailureInPlace(failure)
+	nf, err := nexusconv.TemporalFailureToNexusFailureInPlace(failure)
 	if err != nil {
 		c.logger.Error("error converting Temporal failure to Nexus failure",
 			tag.Error(err), tag.Operation(operation), tag.WorkflowNamespace(c.namespaceName))
@@ -145,6 +146,6 @@ func (c *operationContext) operationError(
 func (c *operationContext) recordDispatchOutcome(result commonnexus.DispatchResult) {
 	c.metricsHandler = c.metricsHandler.WithTags(result.OutcomeTag())
 	if !result.Outcome.Succeeded() {
-		c.setFailureSource(commonnexus.FailureSourceWorker)
+		c.setFailureSource(nexusconv.FailureSourceWorker)
 	}
 }

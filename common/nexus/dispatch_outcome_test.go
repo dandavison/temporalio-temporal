@@ -10,6 +10,7 @@ import (
 	failurepb "go.temporal.io/api/failure/v1"
 	nexuspb "go.temporal.io/api/nexus/v1"
 	"go.temporal.io/server/api/matchingservice/v1"
+	"go.temporal.io/server/common/nexus/nexusconv"
 	"go.temporal.io/server/common/testing/protorequire"
 )
 
@@ -120,7 +121,7 @@ func TestClassifyOperationDispatch(t *testing.T) {
 	links := []*nexuspb.Link{{Url: "http://a.test/l", Type: "t"}}
 	payload := &commonpb.Payload{Data: []byte("xxx")}
 
-	nexusCanceledFailure, err := TemporalFailureToNexusFailure(canceledFailure("canceled within Nexus"))
+	nexusCanceledFailure, err := nexusconv.TemporalFailureToNexusFailure(canceledFailure("canceled within Nexus"))
 	require.NoError(t, err)
 
 	cases := []struct {
@@ -242,7 +243,7 @@ func TestClassifyOperationDispatch(t *testing.T) {
 			Response: deprecatedOperationErrorResponse(
 				&nexuspb.UnsuccessfulOperationError{
 					OperationState: string(nexus.OperationStateFailed),
-					Failure:        NexusFailureToProtoFailure(nexusCanceledFailure),
+					Failure:        nexusconv.NexusFailureToProtoFailure(nexusCanceledFailure),
 				}),
 			Want: DispatchResult{
 				Outcome: DispatchOutcomeOperationFailure,
@@ -274,7 +275,7 @@ func TestClassifyOperationDispatch(t *testing.T) {
 					OperationState: string(nexus.OperationStateFailed),
 					Failure: &nexuspb.Failure{
 						Message:  "unrecognized error message",
-						Metadata: map[string]string{"type": failureTypeString},
+						Metadata: map[string]string{"type": string((&failurepb.Failure{}).ProtoReflect().Descriptor().FullName())},
 						Details:  []byte("clearly not a JSON blob!"),
 					},
 				}),
