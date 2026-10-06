@@ -9,6 +9,8 @@ import (
 	"testing"
 	"time"
 
+	"go.temporal.io/server/chasm/lib/callback/callbackserver"
+
 	"github.com/google/uuid"
 	"github.com/nexus-rpc/sdk-go/nexus"
 	"github.com/stretchr/testify/assert"
@@ -26,7 +28,6 @@ import (
 	"go.temporal.io/sdk/workflow"
 	schedulespb "go.temporal.io/server/api/schedule/v1"
 	"go.temporal.io/server/chasm"
-	"go.temporal.io/server/chasm/lib/callback"
 	chasmscheduler "go.temporal.io/server/chasm/lib/scheduler"
 	schedulerpb "go.temporal.io/server/chasm/lib/scheduler/gen/schedulerpb/v1"
 	"go.temporal.io/server/common/dynamicconfig"
@@ -1767,7 +1768,7 @@ func testScheduleContinuesAfterWorkflowRetryFailure(t *testing.T, newContext con
 	// completions by the request ID carried in the completion callback token (which survives the new
 	// runs created by retries). That requires the envelope token format, which is gated off by default
 	// for safe rollout, so enable it explicitly here.
-	opts := append(scheduleCommonOpts(t), testcore.WithDynamicConfig(callback.EncodeInternalTokenWithEnvelope, true))
+	opts := append(scheduleCommonOpts(t), testcore.WithDynamicConfig(callbackserver.EncodeInternalTokenWithEnvelope, true))
 	s := newScheduleEnv(t, opts...)
 
 	sid := testcore.RandomizeStr("sched-retry-fail")
@@ -1856,7 +1857,7 @@ func testScheduledWorkflowContinueAsNewCompletion(t *testing.T, newContext conte
 	// The scheduler matches the continued-as-new run's completion by the request ID carried in the
 	// completion callback token, which only survives continue-as-new in the envelope token format.
 	// That format is gated off by default for safe rollout, so enable it explicitly here.
-	opts := append(scheduleCommonOpts(t), testcore.WithDynamicConfig(callback.EncodeInternalTokenWithEnvelope, true))
+	opts := append(scheduleCommonOpts(t), testcore.WithDynamicConfig(callbackserver.EncodeInternalTokenWithEnvelope, true))
 	s := newScheduleEnv(t, opts...)
 
 	sid := testcore.RandomizeStr("sched-can-completion")
@@ -2948,7 +2949,7 @@ func testResetWithAdditionalCallback(t *testing.T, newContext contextFactory, en
 	s := newScheduleEnv(t, scheduleCommonOpts(t)...)
 	s.OverrideDynamicConfig(dynamicconfig.EnableCHASMCallbacks, enableCHASMCallbacks)
 	s.OverrideDynamicConfig(
-		callback.AllowedAddresses,
+		callbackserver.AllowedAddresses,
 		[]any{map[string]any{"Pattern": "*", "AllowInsecure": true}},
 	)
 
@@ -3761,11 +3762,11 @@ func requireInternalCallbackDelivered(t *testing.T, capture *testcore.NamespaceM
 	// The event is recorded after the callback's own state transition commits,
 	// which is strictly after the scheduler observed the completion, so poll.
 	await.RequireTruef(t, func() bool {
-		return countMetric(capture, callback.InvocationEventCounter.Name(),
+		return countMetric(capture, callbackserver.InvocationEventCounter.Name(),
 			map[string]string{"outcome": "success", "destination": chasm.NexusCompletionHandlerURL}) >= 1
 	}, awaitTimeout, pollInterval, "a committed callback event should be recorded")
 
-	deliveries := capture.Metric(callback.InternalRequestCounter.Name())
+	deliveries := capture.Metric(callbackserver.InternalRequestCounter.Name())
 	require.NotEmpty(t, deliveries, "internal callback delivery should be counted")
 	for _, delivery := range deliveries {
 		require.NotEqual(t, "unknown", delivery.Tags["outcome"],
@@ -3773,23 +3774,23 @@ func requireInternalCallbackDelivered(t *testing.T, capture *testcore.NamespaceM
 		require.Equal(t, chasm.NexusCompletionHandlerURL, delivery.Tags["destination"])
 	}
 	require.GreaterOrEqual(t,
-		countMetric(capture, callback.InternalRequestCounter.Name(), map[string]string{"outcome": "success"}), 1,
+		countMetric(capture, callbackserver.InternalRequestCounter.Name(), map[string]string{"outcome": "success"}), 1,
 		"a successful internal delivery should be counted")
 
 	// Counter and latency are recorded together on every exit path, so a latency sample
 	// missing against a counted request means a path skipped the deferred record.
 	await.RequireTruef(t, func() bool {
-		return len(capture.Metric(callback.InternalRequestLatencyHistogram.Name())) ==
-			len(capture.Metric(callback.InternalRequestCounter.Name()))
+		return len(capture.Metric(callbackserver.InternalRequestLatencyHistogram.Name())) ==
+			len(capture.Metric(callbackserver.InternalRequestCounter.Name()))
 	}, awaitTimeout, pollInterval, "every counted delivery should also record a latency sample")
 
 	// Attempts are recorded only on a terminal event, where the total is final.
-	attempts := capture.CollectMetric(callback.InvocationAttemptsHistogram.Name(),
+	attempts := capture.CollectMetric(callbackserver.InvocationAttemptsHistogram.Name(),
 		func(rec *metricstest.CapturedRecording) bool { return rec.Tags["outcome"] == "success" })
 	require.NotEmpty(t, attempts, "a terminal event should record an attempt count")
 	require.GreaterOrEqual(t, attempts[0].Value, int64(1))
 
-	require.Zero(t, countMetric(capture, callback.InvocationEventCounter.Name(),
+	require.Zero(t, countMetric(capture, callbackserver.InvocationEventCounter.Name(),
 		map[string]string{"outcome": "nonretryable-error"}), "no callback should have been dropped permanently")
 }
 
@@ -3928,7 +3929,7 @@ func testMigrationCallbackReattachSynthesized(t *testing.T, newContext contextFa
 			require.Equal(t, tc.wantStatus, actions[0].GetStartWorkflowStatus())
 
 			// Nothing was actually attached, so no delivery should have been attempted.
-			require.Empty(t, metricCapture.Metric(callback.InternalRequestCounter.Name()))
+			require.Empty(t, metricCapture.Metric(callbackserver.InternalRequestCounter.Name()))
 		})
 	}
 }

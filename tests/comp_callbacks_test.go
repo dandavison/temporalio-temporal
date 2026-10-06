@@ -4,11 +4,12 @@ import (
 	"testing"
 	"time"
 
+	"go.temporal.io/server/chasm/lib/callback/callbackserver"
+
 	"github.com/stretchr/testify/require"
 	commonpb "go.temporal.io/api/common/v1"
 	enumspb "go.temporal.io/api/enums/v1"
 	"go.temporal.io/server/chasm/lib/activity"
-	"go.temporal.io/server/chasm/lib/callback"
 	"go.temporal.io/server/chasm/lib/nexusoperation"
 	"go.temporal.io/server/chasm/lib/workflow"
 	"go.temporal.io/server/common/callbacks"
@@ -51,10 +52,10 @@ func (s *CompletionCallbacksSuite) newTestEnv() *testcore.TestEnv {
 		testcore.WithDynamicConfig(nexusoperation.Enabled, true),
 		testcore.WithDynamicConfig(nexusoperation.EnabledCallbackKinds, allCallbackKinds),
 		// All Callbacks and Retry policy
-		testcore.WithDynamicConfig(callback.AllowedAddresses,
+		testcore.WithDynamicConfig(callbackserver.AllowedAddresses,
 			[]any{map[string]any{"Pattern": "*", "AllowInsecure": true}}),
-		testcore.WithDynamicConfig(callback.RetryPolicyInitialInterval, 10*time.Millisecond),
-		testcore.WithDynamicConfig(callback.RetryPolicyMaximumInterval, 50*time.Millisecond),
+		testcore.WithDynamicConfig(callbackserver.RetryPolicyInitialInterval, 10*time.Millisecond),
+		testcore.WithDynamicConfig(callbackserver.RetryPolicyMaximumInterval, 50*time.Millisecond),
 		// Circuit breaker. Timeout is how long the breaker stays open before half-opening
 		// (and trying to send a request again). It defaults to 60s which is too long for a
 		// unit test to observe. But 1s is too short, and tests couldn't detect the BLOCKED

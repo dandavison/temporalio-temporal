@@ -5,6 +5,8 @@ import (
 	"testing"
 	"time"
 
+	"go.temporal.io/server/chasm/lib/callback/callbackserver"
+
 	"github.com/google/uuid"
 	"github.com/stretchr/testify/require"
 	commonpb "go.temporal.io/api/common/v1"
@@ -14,7 +16,6 @@ import (
 	workflowpb "go.temporal.io/api/workflow/v1"
 	"go.temporal.io/api/workflowservice/v1"
 	"go.temporal.io/sdk/workflow"
-	"go.temporal.io/server/chasm/lib/callback"
 	"go.temporal.io/server/common/dynamicconfig"
 	"go.temporal.io/server/common/testing/await"
 	"go.temporal.io/server/common/testing/testcontext"
@@ -433,7 +434,7 @@ func testSchedulePauseContinueAsNew(t *testing.T, newContext contextFactory) {
 	// The scheduler matches the continued run's completion by the request ID in
 	// the completion callback token, which only survives continue-as-new in the
 	// envelope token format (gated off by default).
-	opts := append(pauseInteractionOpts(t), testcore.WithDynamicConfig(callback.EncodeInternalTokenWithEnvelope, true))
+	opts := append(pauseInteractionOpts(t), testcore.WithDynamicConfig(callbackserver.EncodeInternalTokenWithEnvelope, true))
 
 	// First run waits for the "go" signal, then continues-as-new; the continued
 	// run completes immediately.

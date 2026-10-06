@@ -1,4 +1,4 @@
-package callback
+package callbackserver
 
 import (
 	"github.com/nexus-rpc/sdk-go/nexus"

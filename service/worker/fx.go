@@ -4,11 +4,12 @@ import (
 	"context"
 	"os"
 
+	"go.temporal.io/server/chasm/lib/callback/callbackserver"
+
 	otellog "go.opentelemetry.io/otel/log"
 	wcicomponent "go.temporal.io/auto-scaled-workers/wci/workercomponent"
 	"go.temporal.io/server/api/adminservice/v1"
 	"go.temporal.io/server/chasm"
-	"go.temporal.io/server/chasm/lib/callback"
 	chasmscheduler "go.temporal.io/server/chasm/lib/scheduler"
 	"go.temporal.io/server/chasm/lib/scheduler/gen/schedulerpb/v1/schedulerpbclient"
 	"go.temporal.io/server/client"
@@ -51,7 +52,7 @@ var Module = fx.Options(
 	resource.Module,
 	deletenamespace.Module,
 	chasmscheduler.Module,
-	callback.Module,
+	callbackserver.Module,
 	scheduler.Module,
 	batcher.Module,
 	workerdeployment.Module,

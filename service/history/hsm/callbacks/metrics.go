@@ -1,10 +1,10 @@
 package callbacks
 
 import (
-	chasmcallbacks "go.temporal.io/server/chasm/lib/callback"
+	"go.temporal.io/server/chasm/lib/callback/callbackserver"
 )
 
 var (
-	RequestCounter          = chasmcallbacks.RequestCounter
-	RequestLatencyHistogram = chasmcallbacks.RequestLatencyHistogram
+	RequestCounter          = callbackserver.RequestCounter
+	RequestLatencyHistogram = callbackserver.RequestLatencyHistogram
 )

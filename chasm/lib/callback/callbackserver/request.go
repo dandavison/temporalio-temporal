@@ -1,4 +1,4 @@
-package callback
+package callbackserver
 
 import (
 	"errors"

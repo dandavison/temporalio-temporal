@@ -1,4 +1,4 @@
-package callback
+package callbackserver
 
 import (
 	"context"
@@ -150,7 +150,7 @@ func (n invocableNexusHandler) buildDispatchRequest(
 func (n invocableNexusHandler) Invoke(
 	ctx context.Context,
 	ns *namespace.Namespace,
-	h *invocationTaskHandler,
+	h *invocationTaskExecutor,
 	task *callbackspb.InvocationTask,
 	taskAttr chasm.TaskAttributes,
 ) invocationResult {
@@ -188,7 +188,7 @@ func (n invocableNexusHandler) dispatch(
 	ctx context.Context,
 	startTime time.Time,
 	logger log.Logger,
-	h *invocationTaskHandler,
+	h *invocationTaskExecutor,
 	ns *namespace.Namespace,
 ) (invocationResult, outcomeTag) {
 	// Build the DispatchNexusTaskRequest for the Matching Service.

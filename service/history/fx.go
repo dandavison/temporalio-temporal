@@ -4,6 +4,8 @@ import (
 	"context"
 	"time"
 
+	"go.temporal.io/server/chasm/lib/callback/callbackserver"
+
 	"github.com/nexus-rpc/sdk-go/nexus"
 	"github.com/sony/gobreaker"
 	"go.temporal.io/server/api/historyservice/v1"
@@ -129,7 +131,7 @@ var Module = fx.Options(
 	fx.Invoke(hsmnexusworkflow.RegisterCommandHandlers),
 	activity.HistoryModule,
 	scheduler.Module,
-	callback.Module,
+	callbackserver.Module,
 	chasmnexus.Module,
 	chasmworkflow.Module,
 	chasmworkflow.HistoryHandlerModule,

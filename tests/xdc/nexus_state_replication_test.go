@@ -12,6 +12,8 @@ import (
 	"testing"
 	"time"
 
+	"go.temporal.io/server/chasm/lib/callback/callbackserver"
+
 	"github.com/google/uuid"
 	"github.com/nexus-rpc/sdk-go/nexus"
 	"github.com/stretchr/testify/assert"
@@ -29,7 +31,6 @@ import (
 	sdkclient "go.temporal.io/sdk/client"
 	"go.temporal.io/server/api/adminservice/v1"
 	"go.temporal.io/server/chasm"
-	"go.temporal.io/server/chasm/lib/callback"
 	chasmnexusoperation "go.temporal.io/server/chasm/lib/nexusoperation"
 	"go.temporal.io/server/common/dynamicconfig"
 	commonnexus "go.temporal.io/server/common/nexus"
@@ -88,7 +89,7 @@ func (s *NexusStateReplicationSuite) SetupSuite() {
 		dynamicconfig.FrontendGlobalNamespaceNamespaceReplicationInducingAPIsRPS.Key(): 1000,
 		dynamicconfig.RefreshNexusEndpointsMinWait.Key():                               1 * time.Millisecond,
 		// tests use external endpoints so we need to allow them
-		callback.AllowedAddresses.Key(): []any{map[string]any{
+		callbackserver.AllowedAddresses.Key(): []any{map[string]any{
 			"Pattern": "*", "AllowInsecure": true,
 		}},
 		// Cap callback retry backoff to avoid long waits after failover.

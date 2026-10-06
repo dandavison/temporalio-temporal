@@ -8,6 +8,8 @@ import (
 	"testing"
 	"time"
 
+	"go.temporal.io/server/chasm/lib/callback/callbackserver"
+
 	"github.com/google/uuid"
 	"github.com/nexus-rpc/sdk-go/nexus"
 	"github.com/stretchr/testify/require"
@@ -22,7 +24,6 @@ import (
 	"go.temporal.io/sdk/temporal"
 	"go.temporal.io/sdk/worker"
 	"go.temporal.io/sdk/workflow"
-	"go.temporal.io/server/chasm/lib/callback"
 	chasmworkflow "go.temporal.io/server/chasm/lib/workflow"
 	"go.temporal.io/server/common"
 	"go.temporal.io/server/common/callbacks"
@@ -159,7 +160,7 @@ func enableUpdateCallbacksOpts() []testcore.TestOption {
 		testcore.WithDynamicConfig(dynamicconfig.EnableCHASMCallbacks, true),
 		testcore.WithDynamicConfig(dynamicconfig.EnableWorkflowUpdateCallbacks, true),
 		testcore.WithDynamicConfig(
-			callback.AllowedAddresses,
+			callbackserver.AllowedAddresses,
 			[]any{map[string]any{"Pattern": "*", "AllowInsecure": true}},
 		),
 	}

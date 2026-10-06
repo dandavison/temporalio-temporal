@@ -1,4 +1,4 @@
-package callback
+package callbackserver
 
 import (
 	"context"
@@ -6,6 +6,8 @@ import (
 	"net/url"
 	"testing"
 	"time"
+
+	chasmcallback "go.temporal.io/server/chasm/lib/callback"
 
 	"github.com/nexus-rpc/sdk-go/nexus"
 	"github.com/stretchr/testify/require"
@@ -44,10 +46,10 @@ const (
 	testNexusHandlerDestination = "nexus-handler://completions-task-queue"
 )
 
-func newNexusHandlerCallback(t *testing.T) *Callback {
+func newNexusHandlerCallback(t *testing.T) *chasmcallback.Callback {
 	t.Helper()
 
-	return &Callback{
+	return &chasmcallback.Callback{
 		CallbackState: &callbackspb.CallbackState{
 			RequestId:        "request-id",
 			RegistrationTime: timestamppb.New(time.Now()),
@@ -141,7 +143,7 @@ func wrappedOperationError(
 
 // requireTerminalFailure asserts the callback permanently failed, recording a non-retryable failure
 // whose message contains want.
-func requireTerminalFailure(t *testing.T, cb *Callback, want string) {
+func requireTerminalFailure(t *testing.T, cb *chasmcallback.Callback, want string) {
 	t.Helper()
 
 	require.Equal(t, callbackspb.CALLBACK_STATUS_FAILED, cb.Status)
@@ -161,14 +163,14 @@ func TestExecuteInvocationTaskNexusHandler_Outcomes(t *testing.T) {
 		// Outcome tag for the aggregate InvocationEventCounter, InvocationAttemptsHistogram which
 		// is just one of outcomeEvent{ Success, RetryableError, NonRetryableError }.
 		expectedEventOutcome coarseOutcomeTag
-		assertOutcome        func(*testing.T, *Callback, error)
+		assertOutcome        func(*testing.T, *chasmcallback.Callback, error)
 	}{
 		{
 			name:                 "sync-success",
 			response:             syncSuccessResponse(),
 			expectedOutcome:      outcomeSuccess,
 			expectedEventOutcome: outcomeEventSuccess,
-			assertOutcome: func(t *testing.T, cb *Callback, err error) {
+			assertOutcome: func(t *testing.T, cb *chasmcallback.Callback, err error) {
 				require.NoError(t, err)
 				require.Equal(t, callbackspb.CALLBACK_STATUS_SUCCEEDED, cb.Status)
 			},
@@ -184,7 +186,7 @@ func TestExecuteInvocationTaskNexusHandler_Outcomes(t *testing.T) {
 			}),
 			expectedOutcome:      outcomeSuccess,
 			expectedEventOutcome: outcomeEventSuccess,
-			assertOutcome: func(t *testing.T, cb *Callback, err error) {
+			assertOutcome: func(t *testing.T, cb *chasmcallback.Callback, err error) {
 				require.NoError(t, err)
 				require.Equal(t, callbackspb.CALLBACK_STATUS_SUCCEEDED, cb.Status)
 			},
@@ -205,7 +207,7 @@ func TestExecuteInvocationTaskNexusHandler_Outcomes(t *testing.T) {
 			}),
 			expectedOutcome:      outcomeFailure,
 			expectedEventOutcome: outcomeEventNonRetryableError,
-			assertOutcome: func(t *testing.T, cb *Callback, err error) {
+			assertOutcome: func(t *testing.T, cb *chasmcallback.Callback, err error) {
 				require.NoError(t, err)
 				requireTerminalFailure(t, cb, "handler rejected the completion")
 			},
@@ -225,7 +227,7 @@ func TestExecuteInvocationTaskNexusHandler_Outcomes(t *testing.T) {
 			}),
 			expectedOutcome:      outcomeLegacyFailure,
 			expectedEventOutcome: outcomeEventNonRetryableError,
-			assertOutcome: func(t *testing.T, cb *Callback, err error) {
+			assertOutcome: func(t *testing.T, cb *chasmcallback.Callback, err error) {
 				require.NoError(t, err)
 				requireTerminalFailure(t, cb, "handler rejected the completion")
 			},
@@ -245,7 +247,7 @@ func TestExecuteInvocationTaskNexusHandler_Outcomes(t *testing.T) {
 			},
 			expectedOutcome:      outcomeTag("handler_error:BAD_REQUEST"),
 			expectedEventOutcome: outcomeEventNonRetryableError,
-			assertOutcome: func(t *testing.T, cb *Callback, err error) {
+			assertOutcome: func(t *testing.T, cb *chasmcallback.Callback, err error) {
 				require.NoError(t, err)
 				requireTerminalFailure(t, cb, "BAD_REQUEST")
 			},
@@ -269,7 +271,7 @@ func TestExecuteInvocationTaskNexusHandler_Outcomes(t *testing.T) {
 			},
 			expectedOutcome:      outcomeTag("handler_error:UNKNOWN"),
 			expectedEventOutcome: outcomeEventNonRetryableError,
-			assertOutcome: func(t *testing.T, cb *Callback, err error) {
+			assertOutcome: func(t *testing.T, cb *chasmcallback.Callback, err error) {
 				require.Equal(t, callbackspb.CALLBACK_STATUS_FAILED, cb.Status)
 				require.Contains(t, cb.LastAttemptFailure.GetMessage(), "worker rejected the task")
 				require.True(t, cb.LastAttemptFailure.GetApplicationFailureInfo().GetNonRetryable())
@@ -280,7 +282,7 @@ func TestExecuteInvocationTaskNexusHandler_Outcomes(t *testing.T) {
 			response:             handlerFailureResponse("INTERNAL"),
 			expectedOutcome:      outcomeTag("handler_error:INTERNAL"),
 			expectedEventOutcome: outcomeEventRetryableError,
-			assertOutcome: func(t *testing.T, cb *Callback, err error) {
+			assertOutcome: func(t *testing.T, cb *chasmcallback.Callback, err error) {
 				// Retryable handler errors will trip the circuit breaker. So we expect this to have
 				// be a DestinationDownError and open the circuit breaker if it persists.
 				var destDown *queueserrors.DestinationDownError
@@ -298,7 +300,7 @@ func TestExecuteInvocationTaskNexusHandler_Outcomes(t *testing.T) {
 			response:             handlerFailureResponse("BAD_REQUEST"),
 			expectedOutcome:      outcomeTag("handler_error:BAD_REQUEST"),
 			expectedEventOutcome: outcomeEventNonRetryableError,
-			assertOutcome: func(t *testing.T, cb *Callback, err error) {
+			assertOutcome: func(t *testing.T, cb *chasmcallback.Callback, err error) {
 				require.NoError(t, err)
 				requireTerminalFailure(t, cb, "BAD_REQUEST")
 			},
@@ -314,7 +316,7 @@ func TestExecuteInvocationTaskNexusHandler_Outcomes(t *testing.T) {
 			},
 			expectedOutcome:      outcomeTag("handler_timeout"),
 			expectedEventOutcome: outcomeEventRetryableError,
-			assertOutcome: func(t *testing.T, cb *Callback, err error) {
+			assertOutcome: func(t *testing.T, cb *chasmcallback.Callback, err error) {
 				var destDownErr *queueserrors.DestinationDownError
 				require.ErrorAs(t, err, &destDownErr)
 				require.Equal(t, callbackspb.CALLBACK_STATUS_BACKING_OFF, cb.Status)
@@ -325,7 +327,7 @@ func TestExecuteInvocationTaskNexusHandler_Outcomes(t *testing.T) {
 			responseErr:          status.Error(codes.Unavailable, "matching unavailable"),
 			expectedOutcome:      outcomeTag("error:Unavailable"),
 			expectedEventOutcome: outcomeEventRetryableError,
-			assertOutcome: func(t *testing.T, cb *Callback, err error) {
+			assertOutcome: func(t *testing.T, cb *chasmcallback.Callback, err error) {
 				var destDownErr *queueserrors.DestinationDownError
 				require.ErrorAs(t, err, &destDownErr)
 				require.Equal(t, callbackspb.CALLBACK_STATUS_BACKING_OFF, cb.Status)
@@ -337,7 +339,7 @@ func TestExecuteInvocationTaskNexusHandler_Outcomes(t *testing.T) {
 			responseErr:          fmt.Errorf("wrapped gRPC error: %w", status.Error(codes.InvalidArgument, "malformed task queue name")),
 			expectedOutcome:      outcomeTag("error:InvalidArgument"),
 			expectedEventOutcome: outcomeEventNonRetryableError,
-			assertOutcome: func(t *testing.T, cb *Callback, err error) {
+			assertOutcome: func(t *testing.T, cb *chasmcallback.Callback, err error) {
 				require.NoError(t, err)
 				requireTerminalFailure(t, cb, "internal error, reference-id:")
 			},
@@ -350,7 +352,7 @@ func TestExecuteInvocationTaskNexusHandler_Outcomes(t *testing.T) {
 				enumspb.RESOURCE_EXHAUSTED_CAUSE_RPS_LIMIT, "namespace rps limit exceeded"),
 			expectedOutcome:      outcomeTag("error:ResourceExhausted"),
 			expectedEventOutcome: outcomeEventRetryableError,
-			assertOutcome: func(t *testing.T, cb *Callback, err error) {
+			assertOutcome: func(t *testing.T, cb *chasmcallback.Callback, err error) {
 				var destDownErr *queueserrors.DestinationDownError
 				require.ErrorAs(t, err, &destDownErr)
 				require.Equal(t, callbackspb.CALLBACK_STATUS_BACKING_OFF, cb.Status)
@@ -363,7 +365,7 @@ func TestExecuteInvocationTaskNexusHandler_Outcomes(t *testing.T) {
 			responseErr:          status.Error(codes.NotFound, "namespace not found"),
 			expectedOutcome:      outcomeTag("error:NotFound"),
 			expectedEventOutcome: outcomeEventNonRetryableError,
-			assertOutcome: func(t *testing.T, cb *Callback, err error) {
+			assertOutcome: func(t *testing.T, cb *chasmcallback.Callback, err error) {
 				require.NoError(t, err)
 				require.NotContains(t, cb.LastAttemptFailure.GetMessage(), "namespace not found")
 				requireTerminalFailure(t, cb, "internal error, reference-id:")
@@ -377,7 +379,7 @@ func TestExecuteInvocationTaskNexusHandler_Outcomes(t *testing.T) {
 			response:             &matchingservice.DispatchNexusTaskResponse{},
 			expectedOutcome:      outcomeTag("handler_error:EMPTY_OUTCOME"),
 			expectedEventOutcome: outcomeEventRetryableError,
-			assertOutcome: func(t *testing.T, cb *Callback, err error) {
+			assertOutcome: func(t *testing.T, cb *chasmcallback.Callback, err error) {
 				var destDownErr *queueserrors.DestinationDownError
 				require.ErrorAs(t, err, &destDownErr)
 				require.Equal(t, callbackspb.CALLBACK_STATUS_BACKING_OFF, cb.Status)
@@ -391,7 +393,7 @@ func TestExecuteInvocationTaskNexusHandler_Outcomes(t *testing.T) {
 			response:             handlerFailureResponse("SOMETHING_MADE_UP"),
 			expectedOutcome:      outcomeTag("handler_error:UNKNOWN"),
 			expectedEventOutcome: outcomeEventRetryableError,
-			assertOutcome: func(t *testing.T, cb *Callback, err error) {
+			assertOutcome: func(t *testing.T, cb *chasmcallback.Callback, err error) {
 				// The error is retryable by spec, so it gets wrapped as a DestinationDown to potentially
 				// open the circuit breaker as applicable.
 				var destDown *queueserrors.DestinationDownError
@@ -461,7 +463,7 @@ func TestExecuteInvocationTaskNexusHandler_Outcomes(t *testing.T) {
 			nsRegistry.EXPECT().GetNamespaceByID(gomock.Any()).Return(ns, nil)
 
 			// Invoke the NexusHandler callback.
-			handler := &invocationTaskHandler{
+			handler := &invocationTaskExecutor{
 				config: &Config{
 					RequestTimeout: dynamicconfig.GetDurationPropertyFnFilteredByDestination(time.Second),
 					RetryPolicy: func() backoff.RetryPolicy {
@@ -484,7 +486,7 @@ func TestExecuteInvocationTaskNexusHandler_Outcomes(t *testing.T) {
 				&callbackspb.InvocationTask{Attempt: 0},
 			)
 
-			readCallbackState(engineCtx, t, callbackRef, func(_ chasm.Context, c *Callback) {
+			readCallbackState(engineCtx, t, callbackRef, func(_ chasm.Context, c *chasmcallback.Callback) {
 				t.Helper()
 				tc.assertOutcome(t, c, executeErr)
 			})
@@ -634,7 +636,7 @@ func TestExecuteInvocationTaskNexusHandler_DispatchedRequest(t *testing.T) {
 			nsRegistry := namespace.NewMockRegistry(ctrl)
 			nsRegistry.EXPECT().GetNamespaceByID(gomock.Any()).Return(ns, nil)
 
-			handler := &invocationTaskHandler{
+			handler := &invocationTaskExecutor{
 				config: &Config{
 					RequestTimeout: dynamicconfig.GetDurationPropertyFnFilteredByDestination(time.Second),
 					RetryPolicy: func() backoff.RetryPolicy {
@@ -719,7 +721,7 @@ func TestInvocableNexusHandlerCannotDispatch(t *testing.T) {
 			ctrl := gomock.NewController(t)
 			defer ctrl.Finish()
 
-			handler := &invocationTaskHandler{
+			handler := &invocationTaskExecutor{
 				config:         &Config{},
 				metricsHandler: metrics.NoopMetricsHandler,
 				logger:         log.NewTestLogger(),
@@ -845,7 +847,7 @@ func TestExecuteInvocationTaskNexusHandler_RecordsHandlerLinks(t *testing.T) {
 			nsRegistry := namespace.NewMockRegistry(ctrl)
 			nsRegistry.EXPECT().GetNamespaceByID(gomock.Any()).Return(ns, nil)
 
-			handler := &invocationTaskHandler{
+			handler := &invocationTaskExecutor{
 				config: &Config{
 					RequestTimeout: dynamicconfig.GetDurationPropertyFnFilteredByDestination(time.Second),
 					RetryPolicy: func() backoff.RetryPolicy {
@@ -873,7 +875,7 @@ func TestExecuteInvocationTaskNexusHandler_RecordsHandlerLinks(t *testing.T) {
 				require.NoError(t, err)
 			}
 
-			readCallbackState(engineCtx, t, callbackRef, func(chasmCtx chasm.Context, c *Callback) {
+			readCallbackState(engineCtx, t, callbackRef, func(chasmCtx chasm.Context, c *chasmcallback.Callback) {
 				t.Helper()
 
 				protorequire.ProtoSliceEqual(t, tc.wantLinks, chasmCtx.Links(c))

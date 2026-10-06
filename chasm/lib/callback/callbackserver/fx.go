@@ -1,8 +1,10 @@
-package callback
+package callbackserver
 
 import (
 	"fmt"
 	"net/http"
+
+	"go.temporal.io/server/chasm/lib/callback"
 
 	"go.temporal.io/server/chasm"
 	"go.temporal.io/server/common"
@@ -19,9 +21,22 @@ import (
 	"go.uber.org/fx"
 )
 
+type libraryParams struct {
+	fx.In
+
+	InvocationTaskExecutor *invocationTaskExecutor
+	// Only the history service runs the outbound queue, so only it provides this. Elsewhere it is
+	// absent and callbacks are simply never reported as blocked.
+	DestinationBlocked callback.DestinationBlockedFn `optional:"true"`
+}
+
+func newLibrary(params libraryParams) *callback.Library {
+	return callback.NewLibrary(params.InvocationTaskExecutor, params.DestinationBlocked)
+}
+
 func register(
 	registry *chasm.Registry,
-	library *Library,
+	library *callback.Library,
 ) error {
 	return registry.Register(library)
 }
@@ -74,8 +89,7 @@ var Module = fx.Module(
 	"chasm.lib.callback",
 	fx.Provide(configProvider),
 	fx.Provide(httpCallerProviderProvider),
-	fx.Provide(newInvocationTaskHandler),
-	fx.Provide(newBackoffTaskHandler),
+	fx.Provide(newInvocationTaskExecutor),
 	fx.Provide(newLibrary),
 	fx.Invoke(register),
 )
