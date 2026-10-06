@@ -754,7 +754,7 @@ func (s *matchingEngineSuite) TestPollWorkflowTaskQueues_NamespaceHandover() {
 	s.NoError(err)
 
 	s.mockHistoryClient.EXPECT().RecordWorkflowTaskStarted(gomock.Any(), gomock.Any(), gomock.Any()).
-		Return(nil, common.ErrNamespaceHandover).Times(1)
+		Return(nil, namespace.ErrNamespaceHandover).Times(1)
 
 	resp, err := s.matchingEngine.PollWorkflowTaskQueue(context.Background(), &matchingservice.PollWorkflowTaskQueueRequest{
 		NamespaceId: namespaceID,
@@ -764,7 +764,7 @@ func (s *matchingEngineSuite) TestPollWorkflowTaskQueues_NamespaceHandover() {
 		},
 	}, metrics.NoopMetricsHandler)
 	s.Nil(resp)
-	s.Equal(common.ErrNamespaceHandover.Error(), err.Error())
+	s.Equal(namespace.ErrNamespaceHandover.Error(), err.Error())
 }
 
 // captureDroppedOnEngine points the engine's root metrics handler at a capture handler
@@ -909,7 +909,7 @@ func (s *matchingEngineSuite) TestPollActivityTaskQueues_DroppedTaskMetric_NoEmi
 		err  error
 	}{
 		{"ResourceExhausted", serviceerror.NewResourceExhausted(enumspb.RESOURCE_EXHAUSTED_CAUSE_RPS_LIMIT, "throttled")},
-		{"NamespaceHandover", common.ErrNamespaceHandover},
+		{"NamespaceHandover", namespace.ErrNamespaceHandover},
 	}
 
 	for _, tc := range cases {
@@ -955,7 +955,7 @@ func (s *matchingEngineSuite) TestPollWorkflowTaskQueues_DroppedTaskMetric_NoEmi
 		err  error
 	}{
 		{"ResourceExhausted", serviceerror.NewResourceExhausted(enumspb.RESOURCE_EXHAUSTED_CAUSE_RPS_LIMIT, "throttled")},
-		{"NamespaceHandover", common.ErrNamespaceHandover},
+		{"NamespaceHandover", namespace.ErrNamespaceHandover},
 	}
 
 	for _, tc := range cases {
@@ -1188,7 +1188,7 @@ func (s *matchingEngineSuite) TestPollActivityTaskQueues_NamespaceHandover() {
 	s.NoError(err)
 
 	s.mockHistoryClient.EXPECT().RecordActivityTaskStarted(gomock.Any(), gomock.Any(), gomock.Any()).
-		Return(nil, common.ErrNamespaceHandover).Times(1)
+		Return(nil, namespace.ErrNamespaceHandover).Times(1)
 	resp, err := s.matchingEngine.PollActivityTaskQueue(context.Background(), &matchingservice.PollActivityTaskQueueRequest{
 		NamespaceId: namespaceID,
 		PollRequest: &workflowservice.PollActivityTaskQueueRequest{
@@ -1197,7 +1197,7 @@ func (s *matchingEngineSuite) TestPollActivityTaskQueues_NamespaceHandover() {
 		},
 	}, metrics.NoopMetricsHandler)
 	s.Nil(resp)
-	s.Equal(common.ErrNamespaceHandover.Error(), err.Error())
+	s.Equal(namespace.ErrNamespaceHandover.Error(), err.Error())
 }
 
 func (s *matchingEngineSuite) TestAddActivityTasks() {
