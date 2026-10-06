@@ -7,25 +7,25 @@ import (
 	"time"
 
 	"go.temporal.io/server/chasm/lib/callback"
-	"go.temporal.io/server/common"
 	"go.temporal.io/server/common/backoff"
 	"go.temporal.io/server/common/callbacks"
 	"go.temporal.io/server/common/config"
 	"go.temporal.io/server/common/dynamicconfig"
 	"go.temporal.io/server/common/headers"
+	"go.temporal.io/server/common/primitives"
 	"go.temporal.io/server/common/rpc/interceptor"
 )
 
 var LongPollTimeout = dynamicconfig.NewNamespaceDurationSetting(
 	"nexusoperation.longPollTimeout",
-	common.DefaultLongPollTimeout,
+	primitives.DefaultLongPollTimeout,
 	`Maximum timeout for nexus operation long-poll requests. Actual wait may be shorter to leave
 longPollBuffer before the caller deadline.`,
 )
 
 var LongPollBuffer = dynamicconfig.NewNamespaceDurationSetting(
 	"nexusoperation.longPollBuffer",
-	common.DefaultLongPollBuffer,
+	primitives.DefaultLongPollBuffer,
 	`A buffer used to adjust the nexus operation long-poll timeouts.
  Specifically, nexus operation long-poll requests are timed out at a time which leaves at least the buffer's duration
  remaining before the caller's deadline, if permitted by the caller's deadline.`,

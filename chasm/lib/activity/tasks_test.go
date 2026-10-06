@@ -14,10 +14,10 @@ import (
 	"go.temporal.io/server/api/matchingservicemock/v1"
 	"go.temporal.io/server/chasm"
 	"go.temporal.io/server/chasm/lib/activity/gen/activitypb/v1"
-	"go.temporal.io/server/common"
 	"go.temporal.io/server/common/dynamicconfig"
 	"go.temporal.io/server/common/metrics"
 	"go.temporal.io/server/common/metrics/metricstest"
+	"go.temporal.io/server/common/primitives"
 	"go.temporal.io/server/common/retrypolicy"
 	"go.uber.org/mock/gomock"
 	"google.golang.org/protobuf/types/known/durationpb"
@@ -359,7 +359,7 @@ func TestTimeoutTaskTerminalFailure(t *testing.T) {
 			scheduleToClose:     2 * time.Second,
 			expectedTimeoutType: enumspb.TIMEOUT_TYPE_SCHEDULE_TO_CLOSE,
 			expectedRetryState:  enumspb.RETRY_STATE_TIMEOUT,
-			expectedMessage:     common.FailureReasonActivityRetryScheduleToCloseTimeout,
+			expectedMessage:     primitives.FailureReasonActivityRetryScheduleToCloseTimeout,
 		},
 		{
 			name:                "heartbeat deadline exhausted",
@@ -367,7 +367,7 @@ func TestTimeoutTaskTerminalFailure(t *testing.T) {
 			scheduleToClose:     2 * time.Second,
 			expectedTimeoutType: enumspb.TIMEOUT_TYPE_SCHEDULE_TO_CLOSE,
 			expectedRetryState:  enumspb.RETRY_STATE_TIMEOUT,
-			expectedMessage:     common.FailureReasonActivityRetryScheduleToCloseTimeout,
+			expectedMessage:     primitives.FailureReasonActivityRetryScheduleToCloseTimeout,
 		},
 		{
 			name:                "start to close maximum attempts reached",

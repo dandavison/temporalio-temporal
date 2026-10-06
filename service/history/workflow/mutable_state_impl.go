@@ -57,6 +57,7 @@ import (
 	"go.temporal.io/server/common/persistence"
 	"go.temporal.io/server/common/persistence/transitionhistory"
 	"go.temporal.io/server/common/persistence/versionhistory"
+	"go.temporal.io/server/common/primitives"
 	"go.temporal.io/server/common/primitives/timestamp"
 	"go.temporal.io/server/common/retrypolicy"
 	"go.temporal.io/server/common/searchattribute/sadefs"
@@ -7258,7 +7259,7 @@ func (ms *MutableStateImpl) truncateRetryableActivityFailure(
 	// nonRetryable is set to false here as only retryable failures are recorded in mutable state.
 	// also when this method is called, the check for isRetryable is already done, so the value
 	// is only for visibility/debugging purpose.
-	serverFailure := failure.NewServerFailure(common.FailureReasonFailureExceedsLimit, false)
+	serverFailure := failure.NewServerFailure(primitives.FailureReasonFailureExceedsLimit, false)
 	serverFailure.Cause = failure.Truncate(activityFailure, sizeLimitError)
 	return serverFailure
 }

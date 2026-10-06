@@ -32,6 +32,7 @@ import (
 	commonnexus "go.temporal.io/server/common/nexus"
 	"go.temporal.io/server/common/payload"
 	"go.temporal.io/server/common/payloads"
+	"go.temporal.io/server/common/primitives"
 	"go.temporal.io/server/common/retrypolicy"
 	"go.temporal.io/server/common/searchattribute/sadefs"
 	"go.temporal.io/server/common/tasktoken"
@@ -6029,7 +6030,7 @@ func (s *standaloneActivityTestSuite) TestHeartbeat() {
 		require.NoError(t, err)
 		failure := pollResp.GetOutcome().GetFailure()
 		require.Equal(t, enumspb.TIMEOUT_TYPE_SCHEDULE_TO_CLOSE, failure.GetTimeoutFailureInfo().GetTimeoutType())
-		require.Equal(t, common.FailureReasonActivityRetryScheduleToCloseTimeout, failure.GetMessage())
+		require.Equal(t, primitives.FailureReasonActivityRetryScheduleToCloseTimeout, failure.GetMessage())
 
 		describeResp, err := env.FrontendClient().DescribeActivityExecution(ctx, &workflowservice.DescribeActivityExecutionRequest{
 			Namespace:          env.Namespace().String(),

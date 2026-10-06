@@ -15,8 +15,8 @@ import (
 	"go.temporal.io/sdk/temporal"
 	"go.temporal.io/server/chasm/lib/activity"
 	"go.temporal.io/server/chasm/lib/activity/model"
-	"go.temporal.io/server/common"
 	"go.temporal.io/server/common/dynamicconfig"
+	"go.temporal.io/server/common/primitives"
 	"go.temporal.io/server/common/retrypolicy"
 	"go.temporal.io/server/common/testing/parallelsuite"
 	"go.temporal.io/server/service/history/consts"
@@ -768,7 +768,7 @@ func (s *activityParityTestSuite) TestRetryableFailureTruncation() {
 	assertTruncated := func(t *testing.T, failure *failurepb.Failure) {
 		t.Helper()
 		require.NotNil(t, failure, "the attempt's failure must be retained for the retry")
-		require.Equal(t, common.FailureReasonFailureExceedsLimit, failure.GetMessage())
+		require.Equal(t, primitives.FailureReasonFailureExceedsLimit, failure.GetMessage())
 		require.NotNil(t, failure.GetServerFailureInfo(),
 			"the wrapper is a server failure")
 		cause := failure.GetCause()

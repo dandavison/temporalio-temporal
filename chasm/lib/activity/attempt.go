@@ -31,9 +31,9 @@ import (
 	"go.temporal.io/server/api/matchingservice/v1"
 	"go.temporal.io/server/chasm"
 	"go.temporal.io/server/chasm/lib/activity/gen/activitypb/v1"
-	"go.temporal.io/server/common"
 	"go.temporal.io/server/common/backoff"
 	commonfailure "go.temporal.io/server/common/failure"
+	"go.temporal.io/server/common/primitives"
 	"go.temporal.io/server/common/retrypolicy"
 	"go.temporal.io/server/common/util"
 	"google.golang.org/protobuf/types/known/durationpb"
@@ -192,7 +192,7 @@ func truncateRetryableFailure(ctx chasm.Context, attemptFailure *failurepb.Failu
 
 	// nonRetryable is set to false here as only failures of attempts that will be retried are
 	// truncated, so the value is only for visibility/debugging purposes.
-	serverFailure := commonfailure.NewServerFailure(common.FailureReasonFailureExceedsLimit, false)
+	serverFailure := commonfailure.NewServerFailure(primitives.FailureReasonFailureExceedsLimit, false)
 	serverFailure.Cause = commonfailure.Truncate(attemptFailure, sizeLimit)
 	return serverFailure
 }
@@ -427,7 +427,7 @@ func (a *Activity) scheduleToCloseDeadline() time.Time {
 
 func createStartToCloseTimeoutFailure() *failurepb.Failure {
 	return &failurepb.Failure{
-		Message: fmt.Sprintf(common.FailureReasonActivityTimeout, enumspb.TIMEOUT_TYPE_START_TO_CLOSE.String()),
+		Message: fmt.Sprintf(primitives.FailureReasonActivityTimeout, enumspb.TIMEOUT_TYPE_START_TO_CLOSE.String()),
 		FailureInfo: &failurepb.Failure_TimeoutFailureInfo{
 			TimeoutFailureInfo: &failurepb.TimeoutFailureInfo{
 				TimeoutType: enumspb.TIMEOUT_TYPE_START_TO_CLOSE,
@@ -438,7 +438,7 @@ func createStartToCloseTimeoutFailure() *failurepb.Failure {
 
 func createHeartbeatTimeoutFailure() *failurepb.Failure {
 	return &failurepb.Failure{
-		Message: fmt.Sprintf(common.FailureReasonActivityTimeout, enumspb.TIMEOUT_TYPE_HEARTBEAT.String()),
+		Message: fmt.Sprintf(primitives.FailureReasonActivityTimeout, enumspb.TIMEOUT_TYPE_HEARTBEAT.String()),
 		FailureInfo: &failurepb.Failure_TimeoutFailureInfo{
 			TimeoutFailureInfo: &failurepb.TimeoutFailureInfo{
 				TimeoutType: enumspb.TIMEOUT_TYPE_HEARTBEAT,

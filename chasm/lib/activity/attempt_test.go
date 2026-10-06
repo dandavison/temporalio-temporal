@@ -10,7 +10,7 @@ import (
 	failurepb "go.temporal.io/api/failure/v1"
 	"go.temporal.io/server/chasm"
 	"go.temporal.io/server/chasm/lib/activity/gen/activitypb/v1"
-	"go.temporal.io/server/common"
+	"go.temporal.io/server/common/primitives"
 	"go.temporal.io/server/common/testing/protorequire"
 	"google.golang.org/protobuf/types/known/durationpb"
 	"google.golang.org/protobuf/types/known/timestamppb"
@@ -213,7 +213,7 @@ func withinLimitActivityFailure(t *testing.T) *failurepb.Failure {
 func TestRecordFailedAttempt_FailureTruncation(t *testing.T) {
 	requireTruncated := func(t *testing.T, sent, retained *failurepb.Failure) {
 		require.LessOrEqual(t, retained.Size(), defaultFailureSizeLimit)
-		require.Equal(t, common.FailureReasonFailureExceedsLimit, retained.GetMessage())
+		require.Equal(t, primitives.FailureReasonFailureExceedsLimit, retained.GetMessage())
 		require.NotNil(t, retained.GetServerFailureInfo())
 		cause := retained.GetCause()
 		require.Equal(t, sent.GetMessage(), cause.GetMessage())

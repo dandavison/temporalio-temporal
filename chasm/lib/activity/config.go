@@ -2,9 +2,9 @@ package activity
 
 import (
 	"go.temporal.io/server/chasm/lib/callback"
-	"go.temporal.io/server/common"
 	"go.temporal.io/server/common/callbacks"
 	"go.temporal.io/server/common/dynamicconfig"
+	"go.temporal.io/server/common/primitives"
 	"go.temporal.io/server/common/retrypolicy"
 )
 
@@ -17,13 +17,13 @@ var (
 
 	LongPollTimeout = dynamicconfig.NewNamespaceDurationSetting(
 		"activity.longPollTimeout",
-		common.DefaultLongPollTimeout,
+		primitives.DefaultLongPollTimeout,
 		`Timeout for activity long-poll requests.`,
 	)
 
 	LongPollBuffer = dynamicconfig.NewNamespaceDurationSetting(
 		"activity.longPollBuffer",
-		common.DefaultLongPollBuffer,
+		primitives.DefaultLongPollBuffer,
 		`A buffer used to adjust the activity long-poll timeouts.
  Specifically, activity long-poll requests are timed out at a time which leaves at least the buffer's duration
  remaining before the caller's deadline, if permitted by the caller's deadline.`,

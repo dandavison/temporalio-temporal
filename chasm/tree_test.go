@@ -32,6 +32,7 @@ import (
 	"go.temporal.io/server/common/testing/protoassert"
 	"go.temporal.io/server/common/testing/protorequire"
 	"go.temporal.io/server/common/testing/testlogger"
+	"go.temporal.io/server/common/util"
 	"go.temporal.io/server/service/history/consts"
 	"go.uber.org/mock/gomock"
 	"google.golang.org/protobuf/proto"
@@ -344,7 +345,7 @@ func (s *nodeSuite) TestCollectionAttributes() {
 			}
 
 			// Save it use in other subtests.
-			persistedNodes = common.CloneProtoMap(mutations.UpdatedNodes)
+			persistedNodes = util.CloneProtoMap(mutations.UpdatedNodes)
 		})
 
 		s.NotNil(persistedNodes)
@@ -511,7 +512,7 @@ func (s *nodeSuite) TestMapDeserializeNilToEmpty() {
 	s.Len(mutations.UpdatedNodes, 1)
 	s.Empty(mutations.DeletedNodes)
 
-	persistedNodes := common.CloneProtoMap(mutations.UpdatedNodes)
+	persistedNodes := util.CloneProtoMap(mutations.UpdatedNodes)
 
 	rootNode2, err := s.newTestTree(persistedNodes)
 	s.NoError(err)
@@ -574,7 +575,7 @@ func (s *nodeSuite) TestPointerAttributes() {
 		)
 
 		// Save for use in other subtests.
-		persistedNodes = common.CloneProtoMap(mutations.UpdatedNodes)
+		persistedNodes = util.CloneProtoMap(mutations.UpdatedNodes)
 	})
 
 	s.NotNil(persistedNodes)
@@ -1198,7 +1199,7 @@ func (s *nodeSuite) TestApplyMutation_InvalidatesHydratedMapAncestors() {
 		mutation, err := root.CloseTransaction()
 		s.NoError(err)
 		s.NotEmpty(mutation.UpdatedNodes)
-		return common.CloneProtoMap(mutation.UpdatedNodes)
+		return util.CloneProtoMap(mutation.UpdatedNodes)
 	}
 
 	mutationFromSource := func(
@@ -1206,7 +1207,7 @@ func (s *nodeSuite) TestApplyMutation_InvalidatesHydratedMapAncestors() {
 		mutate func(Context, *TestComponent),
 	) NodesMutation {
 		s.nodeBackend.HandleNextTransitionCount = func() int64 { return 2 }
-		source, err := s.newTestTree(common.CloneProtoMap(persistedNodes))
+		source, err := s.newTestTree(util.CloneProtoMap(persistedNodes))
 		s.NoError(err)
 		chasmContext := NewMutableContext(context.Background(), source)
 		component, err := source.Component(chasmContext, ComponentRef{})
@@ -1216,7 +1217,7 @@ func (s *nodeSuite) TestApplyMutation_InvalidatesHydratedMapAncestors() {
 		s.NoError(err)
 		s.NotContains(mutation.UpdatedNodes, "", "replicated mutation must not include the hydrated parent component")
 		return NodesMutation{
-			UpdatedNodes: common.CloneProtoMap(mutation.UpdatedNodes),
+			UpdatedNodes: util.CloneProtoMap(mutation.UpdatedNodes),
 			DeletedNodes: maps.Clone(mutation.DeletedNodes),
 		}
 	}
@@ -1228,7 +1229,7 @@ func (s *nodeSuite) TestApplyMutation_InvalidatesHydratedMapAncestors() {
 	) {
 		s.nodeBackend.HandleChasmSkipPersistenceEnabled = func() bool { return false }
 		target, err := NewTreeFromDB(
-			common.CloneProtoMap(persistedNodes),
+			util.CloneProtoMap(persistedNodes),
 			s.registry,
 			s.nodeBackend,
 			s.nodePathEncoder,

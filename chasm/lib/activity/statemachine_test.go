@@ -19,12 +19,12 @@ import (
 	taskqueuespb "go.temporal.io/server/api/taskqueue/v1"
 	"go.temporal.io/server/chasm"
 	"go.temporal.io/server/chasm/lib/activity/gen/activitypb/v1"
-	"go.temporal.io/server/common"
 	"go.temporal.io/server/common/dynamicconfig"
 	"go.temporal.io/server/common/headers"
 	"go.temporal.io/server/common/metrics"
 	"go.temporal.io/server/common/namespace"
 	"go.temporal.io/server/common/payloads"
+	"go.temporal.io/server/common/primitives"
 	"go.temporal.io/server/common/testing/protorequire"
 	"go.uber.org/mock/gomock"
 	"google.golang.org/protobuf/types/known/durationpb"
@@ -604,7 +604,7 @@ func TestTransitionTimedout(t *testing.T) {
 				outcomeFailure := outcome.GetFailed().GetFailure()
 				require.NotNil(t, outcomeFailure)
 				require.Equal(t, tc.timeoutType, outcomeFailure.GetTimeoutFailureInfo().GetTimeoutType())
-				require.Equal(t, fmt.Sprintf(common.FailureReasonActivityTimeout, tc.timeoutType.String()), outcomeFailure.GetMessage())
+				require.Equal(t, fmt.Sprintf(primitives.FailureReasonActivityTimeout, tc.timeoutType.String()), outcomeFailure.GetMessage())
 				// The last heartbeat details must be surfaced on the timeout failure so callers can
 				// inspect the activity's last reported progress.
 				protorequire.ProtoEqual(t, tc.heartbeatDetails, outcomeFailure.GetTimeoutFailureInfo().GetLastHeartbeatDetails())
