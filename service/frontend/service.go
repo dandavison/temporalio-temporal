@@ -12,7 +12,7 @@ import (
 	"go.temporal.io/api/operatorservice/v1"
 	"go.temporal.io/api/workflowservice/v1"
 	"go.temporal.io/server/api/adminservice/v1"
-	"go.temporal.io/server/chasm/lib/activity"
+	"go.temporal.io/server/chasm/lib/activity/activityserver"
 	chasmnexus "go.temporal.io/server/chasm/lib/nexusoperation"
 	chasmworkflow "go.temporal.io/server/chasm/lib/workflow"
 	"go.temporal.io/server/common/callbacks"
@@ -271,7 +271,7 @@ type Config struct {
 	AllowedExperiments dynamicconfig.TypedPropertyFnWithNamespaceFilter[[]string]
 
 	// CHASM archetypes
-	Activity *activity.Config
+	Activity *activityserver.Config
 }
 
 // IsExperimentAllowed checks if an experiment is enabled for a given namespace in the dynamic config.
@@ -466,7 +466,7 @@ func NewConfig(
 		HTTPAllowedHosts:   dynamicconfig.FrontendHTTPAllowedHosts.Get(dc),
 		AllowedExperiments: dynamicconfig.FrontendAllowedExperiments.Get(dc),
 
-		Activity: activity.ConfigProvider(dc),
+		Activity: activityserver.ConfigProvider(dc),
 	}
 }
 

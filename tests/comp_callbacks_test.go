@@ -9,7 +9,7 @@ import (
 	"github.com/stretchr/testify/require"
 	commonpb "go.temporal.io/api/common/v1"
 	enumspb "go.temporal.io/api/enums/v1"
-	"go.temporal.io/server/chasm/lib/activity"
+	"go.temporal.io/server/chasm/lib/activity/activityserver"
 	"go.temporal.io/server/chasm/lib/nexusoperation"
 	"go.temporal.io/server/chasm/lib/workflow"
 	"go.temporal.io/server/common/callbacks"
@@ -45,9 +45,9 @@ func (s *CompletionCallbacksSuite) newTestEnv() *testcore.TestEnv {
 		testcore.WithDynamicConfig(dynamicconfig.EnableChasm, true),
 		testcore.WithDynamicConfig(workflow.EnabledCallbackKinds, allCallbackKinds),
 		// Standalone Activities
-		testcore.WithDynamicConfig(activity.Enabled, true),
-		testcore.WithDynamicConfig(activity.EnableCallbacks, true),
-		testcore.WithDynamicConfig(activity.EnabledCallbackKinds, allCallbackKinds),
+		testcore.WithDynamicConfig(activityserver.Enabled, true),
+		testcore.WithDynamicConfig(activityserver.EnableCallbacks, true),
+		testcore.WithDynamicConfig(activityserver.EnabledCallbackKinds, allCallbackKinds),
 		// Standalone Nexus operations
 		testcore.WithDynamicConfig(nexusoperation.Enabled, true),
 		testcore.WithDynamicConfig(nexusoperation.EnabledCallbackKinds, allCallbackKinds),

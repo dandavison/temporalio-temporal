@@ -17,7 +17,6 @@ import (
 	"go.temporal.io/server/chasm"
 	"go.temporal.io/server/chasm/lib/activity/gen/activitypb/v1"
 	"go.temporal.io/server/chasm/lib/callback"
-	"go.temporal.io/server/common"
 	"go.temporal.io/server/common/contextutil"
 	"go.temporal.io/server/common/metrics"
 	commonnexus "go.temporal.io/server/common/nexus"
@@ -25,6 +24,7 @@ import (
 	"go.temporal.io/server/common/retrypolicy"
 	serviceerrors "go.temporal.io/server/common/serviceerror"
 	"go.temporal.io/server/service/history/consts"
+	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
@@ -205,14 +205,14 @@ func NewStandaloneActivity(
 			Priority:               request.Priority,
 			StartDelay:             request.GetStartDelay(),
 			OriginalOptions: &apiactivitypb.ActivityOptions{
-				TaskQueue:              common.CloneProto(request.GetTaskQueue()),
-				ScheduleToCloseTimeout: common.CloneProto(request.GetScheduleToCloseTimeout()),
-				ScheduleToStartTimeout: common.CloneProto(request.GetScheduleToStartTimeout()),
-				StartToCloseTimeout:    common.CloneProto(request.GetStartToCloseTimeout()),
-				HeartbeatTimeout:       common.CloneProto(request.GetHeartbeatTimeout()),
-				RetryPolicy:            common.CloneProto(request.GetRetryPolicy()),
-				Priority:               common.CloneProto(request.GetPriority()),
-				StartDelay:             common.CloneProto(request.GetStartDelay()),
+				TaskQueue:              proto.CloneOf(request.GetTaskQueue()),
+				ScheduleToCloseTimeout: proto.CloneOf(request.GetScheduleToCloseTimeout()),
+				ScheduleToStartTimeout: proto.CloneOf(request.GetScheduleToStartTimeout()),
+				StartToCloseTimeout:    proto.CloneOf(request.GetStartToCloseTimeout()),
+				HeartbeatTimeout:       proto.CloneOf(request.GetHeartbeatTimeout()),
+				RetryPolicy:            proto.CloneOf(request.GetRetryPolicy()),
+				Priority:               proto.CloneOf(request.GetPriority()),
+				StartDelay:             proto.CloneOf(request.GetStartDelay()),
 			},
 		},
 		LastAttempt: chasm.NewDataField(ctx, &activitypb.ActivityAttemptState{}),
@@ -322,7 +322,7 @@ func (a *Activity) RecordCompleted(ctx chasm.MutableContext, applyFn func(ctx ch
 	return callback.ScheduleStandbyCallbacks(ctx, a.Callbacks)
 }
 
-func (a *Activity) addCompletionCallbacks(
+func (a *Activity) AddCompletionCallbacks(
 	ctx chasm.MutableContext,
 	requestID string,
 	completionCallbacks []*commonpb.Callback,
@@ -375,13 +375,19 @@ func (a *Activity) effectiveUserMetadata(ctx chasm.Context) *sdkpb.UserMetadata 
 	return a.RequestData.Get(ctx).GetUserMetadata() //nolint:staticcheck // deprecated, read-only fallback
 }
 
-// attachLinks records the given links on the activity keyed by requestID. Duplicates
+// LinkValidator validates links attached to an activity.
+type LinkValidator interface {
+	ValidateRequest(namespaceName string, links []*commonpb.Link) error
+	ValidateTotal(namespaceName string, existingCount, addingCount int) error
+}
+
+// AttachLinks records the given links on the activity keyed by requestID. Duplicates
 // within the same batch are skipped. If the requestID has already been used to attach
 // links the call is a no-op, making retries idempotent even after the activity has
 // closed. Returns an error if the activity is closed (and the requestID is new), if
 // the per-component cap would be exceeded, or if the request's per-link size,
 // per-request count, or variant shape is invalid.
-func (a *Activity) attachLinks(ctx chasm.MutableContext, links []*commonpb.Link, requestID string, validator *linkValidator, namespaceName string) error {
+func (a *Activity) AttachLinks(ctx chasm.MutableContext, links []*commonpb.Link, requestID string, validator LinkValidator, namespaceName string) error {
 	if len(links) == 0 {
 		return nil
 	}

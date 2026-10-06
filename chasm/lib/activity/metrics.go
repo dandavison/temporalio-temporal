@@ -82,8 +82,8 @@ func (a *Activity) emitOnAttemptFailedMetrics(ctx chasm.Context, metricsHandler 
 	metrics.ActivityTaskFail.With(metricsHandler).Record(1)
 }
 
-// emitPayloadSizeMetric records the serialized size of a user payload.
-func emitPayloadSizeMetric(metricsHandler metrics.Handler, size int) {
+// EmitPayloadSizeMetric records the serialized size of a user payload.
+func EmitPayloadSizeMetric(metricsHandler metrics.Handler, size int) {
 	if size > 0 {
 		metrics.ActivityPayloadSize.With(metricsHandler).Record(int64(size))
 	}
@@ -93,7 +93,7 @@ func emitPayloadSizeMetric(metricsHandler metrics.Handler, size int) {
 func (a *Activity) emitHeartbeatMetrics(ctx chasm.Context, details *commonpb.Payloads) {
 	metricsHandler := a.baseMetricsHandler(ctx, metrics.HistoryRecordActivityTaskHeartbeatScope)
 	detailsSize := details.Size()
-	emitPayloadSizeMetric(metricsHandler, detailsSize)
+	EmitPayloadSizeMetric(metricsHandler, detailsSize)
 	metrics.ActivityHeartbeatCount.With(metricsHandler).Record(
 		1,
 		metrics.StringTag("has_details", strconv.FormatBool(detailsSize > 0)),
@@ -119,7 +119,7 @@ func (a *Activity) emitOnCompletedMetrics(
 	metrics.ActivityScheduleToCloseLatency.With(enrichedHandler).Record(scheduleToCloseLatency)
 
 	metrics.ActivitySuccess.With(enrichedHandler).Record(1)
-	emitPayloadSizeMetric(baseHandler, result.Size())
+	EmitPayloadSizeMetric(baseHandler, result.Size())
 }
 
 func (a *Activity) emitOnFailedMetrics(
@@ -139,7 +139,7 @@ func (a *Activity) emitOnFailedMetrics(
 
 	metrics.ActivityTaskFail.With(enrichedHandler).Record(1)
 	metrics.ActivityFail.With(enrichedHandler).Record(1)
-	emitPayloadSizeMetric(baseHandler, failure.Size())
+	EmitPayloadSizeMetric(baseHandler, failure.Size())
 }
 
 func (a *Activity) emitOnTerminatedMetrics(

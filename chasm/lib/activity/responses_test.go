@@ -33,7 +33,7 @@ func TestBuildActivityExecutionInfo_IncludeLastDeploymentVersion(t *testing.T) {
 		Visibility:  chasm.NewComponentField(ctx, &chasm.Visibility{}),
 	}
 
-	resp, err := activity.buildDescribeActivityExecutionResponse(ctx, &activitypb.DescribeActivityExecutionRequest{
+	resp, err := activity.BuildDescribeActivityExecutionResponse(ctx, &activitypb.DescribeActivityExecutionRequest{
 		FrontendRequest: &workflowservice.DescribeActivityExecutionRequest{},
 	})
 

@@ -1,11 +1,11 @@
-package activity
+package activityserver
 
 import (
 	"context"
 
 	"go.temporal.io/server/api/matchingservice/v1"
+	"go.temporal.io/server/chasm/lib/activity"
 	"go.temporal.io/server/common/resource"
-	"go.uber.org/fx"
 )
 
 // matchingServiceAdapter adds activity tasks via the matching service.
@@ -13,7 +13,7 @@ type matchingServiceAdapter struct {
 	client resource.MatchingClient
 }
 
-func (c matchingServiceAdapter) AddActivityTask(ctx context.Context, request *DispatchRequest) error {
+func (c matchingServiceAdapter) AddActivityTask(ctx context.Context, request *activity.DispatchRequest) error {
 	_, err := c.client.AddActivityTask(ctx, &matchingservice.AddActivityTaskRequest{
 		NamespaceId:            request.NamespaceID,
 		ScheduleToStartTimeout: request.ScheduleToStartTimeout,
@@ -23,18 +23,4 @@ func (c matchingServiceAdapter) AddActivityTask(ctx context.Context, request *Di
 		Stamp:                  request.Stamp,
 	})
 	return err
-}
-
-type activityDispatchTaskHandlerParams struct {
-	fx.In
-
-	MatchingClient   resource.MatchingClient
-	DispatchTaskHook DispatchTaskHook `optional:"true"`
-}
-
-func activityDispatchTaskHandlerProvider(params activityDispatchTaskHandlerParams) *activityDispatchTaskHandler {
-	return newActivityDispatchTaskHandler(activityDispatchTaskHandlerOptions{
-		MatchingClient:   matchingServiceAdapter{client: params.MatchingClient},
-		DispatchTaskHook: params.DispatchTaskHook,
-	})
 }

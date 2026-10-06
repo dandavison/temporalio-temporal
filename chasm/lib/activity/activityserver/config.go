@@ -1,0 +1,111 @@
+package activityserver
+
+import (
+	"go.temporal.io/server/chasm/lib/activity"
+	"go.temporal.io/server/chasm/lib/callback/callbackserver"
+	"go.temporal.io/server/common"
+	"go.temporal.io/server/common/callbacks"
+	"go.temporal.io/server/common/dynamicconfig"
+	"go.temporal.io/server/common/retrypolicy"
+)
+
+var (
+	Enabled = dynamicconfig.NewNamespaceBoolSetting(
+		"activity.enableStandalone",
+		true,
+		`Toggles standalone activity functionality on the server.`,
+	)
+
+	LongPollTimeout = dynamicconfig.NewNamespaceDurationSetting(
+		"activity.longPollTimeout",
+		common.DefaultLongPollTimeout,
+		`Timeout for activity long-poll requests.`,
+	)
+
+	LongPollBuffer = dynamicconfig.NewNamespaceDurationSetting(
+		"activity.longPollBuffer",
+		common.DefaultLongPollBuffer,
+		`A buffer used to adjust the activity long-poll timeouts.
+ Specifically, activity long-poll requests are timed out at a time which leaves at least the buffer's duration
+ remaining before the caller's deadline, if permitted by the caller's deadline.`,
+	)
+
+	StartDelayEnabled = dynamicconfig.NewNamespaceBoolSetting(
+		"activity.startDelayEnabled",
+		true,
+		`Allows non-zero start_delay on StartActivityExecution requests.`,
+	)
+
+	EnableCallbacks = dynamicconfig.NewNamespaceBoolSetting(
+		"activity.enableCallbacks",
+		false,
+		`Allows attaching completion callbacks to standalone activity executions.`,
+	)
+
+	EnabledCallbackKinds = dynamicconfig.NewNamespaceTypedSettingWithConverter(
+		"activity.enabledCallbackKinds",
+		callbacks.ConvertEnabledKinds,
+		[]callbacks.Kind{callbacks.KindNexus},
+		`The list of completion callback kinds that may be attached to a standalone activity execution.
+Only consulted when activity.enableCallbacks is set.`,
+	)
+
+	EnableStandaloneActivityOperatorCommands = dynamicconfig.NewNamespaceBoolSetting(
+		"history.enableStandaloneActivityOperatorCommands",
+		false,
+		`Enables reset, pause, unpause, and update options commands for standalone activities.`,
+	)
+)
+
+// Config holds the settings that the activity component and its RPC handlers read.
+type Config struct {
+	activity.Config
+
+	BlobSizeLimitError                       dynamicconfig.IntPropertyFnWithNamespaceFilter
+	BlobSizeLimitWarn                        dynamicconfig.IntPropertyFnWithNamespaceFilter
+	EnableCallbacks                          dynamicconfig.BoolPropertyFnWithNamespaceFilter
+	EnabledCallbackKinds                     dynamicconfig.TypedPropertyFnWithNamespaceFilter[[]callbacks.Kind]
+	Enabled                                  dynamicconfig.BoolPropertyFnWithNamespaceFilter
+	EnableStandaloneActivityOperatorCommands dynamicconfig.BoolPropertyFnWithNamespaceFilter
+	LongPollBuffer                           dynamicconfig.DurationPropertyFnWithNamespaceFilter
+	LongPollTimeout                          dynamicconfig.DurationPropertyFnWithNamespaceFilter
+	MaxIDLengthLimit                         dynamicconfig.IntPropertyFn
+	MaxCallbacksPerExecution                 dynamicconfig.IntPropertyFnWithNamespaceFilter
+	DefaultActivityRetryPolicy               dynamicconfig.TypedPropertyFnWithNamespaceFilter[retrypolicy.DefaultRetrySettings]
+	MaxUserMetadataDetailsSize               dynamicconfig.IntPropertyFnWithNamespaceFilter
+	MaxUserMetadataSummarySize               dynamicconfig.IntPropertyFnWithNamespaceFilter
+	VisibilityMaxPageSize                    dynamicconfig.IntPropertyFnWithNamespaceFilter
+}
+
+func ConfigProvider(dc *dynamicconfig.Collection) *Config {
+	return &Config{
+		Config: activity.Config{
+			BreakdownMetricsByTaskQueue:               dynamicconfig.MetricsBreakdownByTaskQueue.Get(dc),
+			MutableStateActivityFailureSizeLimitError: dynamicconfig.MutableStateActivityFailureSizeLimitError.Get(dc),
+			StartDelayEnabled:                         StartDelayEnabled.Get(dc),
+		},
+		BlobSizeLimitError:                       dynamicconfig.BlobSizeLimitError.Get(dc),
+		BlobSizeLimitWarn:                        dynamicconfig.BlobSizeLimitWarn.Get(dc),
+		DefaultActivityRetryPolicy:               dynamicconfig.DefaultActivityRetryPolicy.Get(dc),
+		EnableCallbacks:                          EnableCallbacks.Get(dc),
+		EnabledCallbackKinds:                     EnabledCallbackKinds.Get(dc),
+		Enabled:                                  Enabled.Get(dc),
+		EnableStandaloneActivityOperatorCommands: EnableStandaloneActivityOperatorCommands.Get(dc),
+		LongPollBuffer:                           LongPollBuffer.Get(dc),
+		LongPollTimeout:                          LongPollTimeout.Get(dc),
+		MaxIDLengthLimit:                         dynamicconfig.MaxIDLengthLimit.Get(dc),
+		MaxCallbacksPerExecution:                 callbackserver.MaxPerExecution.Get(dc),
+		MaxUserMetadataDetailsSize:               dynamicconfig.MaxUserMetadataDetailsSize.Get(dc),
+		MaxUserMetadataSummarySize:               dynamicconfig.MaxUserMetadataSummarySize.Get(dc),
+		VisibilityMaxPageSize:                    dynamicconfig.FrontendVisibilityMaxPageSize.Get(dc),
+	}
+}
+
+// linkValidatorProvider builds the linkValidator from dynamic config.
+func linkValidatorProvider(dc *dynamicconfig.Collection) *linkValidator {
+	return newLinkValidator(
+		dynamicconfig.FrontendMaxLinksPerRequest.Get(dc),
+		dynamicconfig.MaxLinksPerComponent.Get(dc),
+		dynamicconfig.FrontendLinkMaxSize.Get(dc),
+	)
+}

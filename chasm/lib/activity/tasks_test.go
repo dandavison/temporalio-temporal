@@ -11,7 +11,6 @@ import (
 	enumspb "go.temporal.io/api/enums/v1"
 	"go.temporal.io/api/serviceerror"
 	taskqueuepb "go.temporal.io/api/taskqueue/v1"
-	"go.temporal.io/server/api/matchingservicemock/v1"
 	"go.temporal.io/server/chasm"
 	"go.temporal.io/server/chasm/lib/activity/gen/activitypb/v1"
 	"go.temporal.io/server/common"
@@ -28,7 +27,7 @@ func TestActivityDispatchTaskHook(t *testing.T) {
 	t.Run("wraps active dispatch", func(t *testing.T) {
 		controller := gomock.NewController(t)
 		engine := chasm.NewMockEngine(controller)
-		matchingClient := matchingservicemock.NewMockMatchingServiceClient(controller)
+		matchingClient := newFakeMatchingClient(t, 1)
 		activityRef := chasm.NewComponentRef[*Activity](chasm.ExecutionKey{NamespaceID: "namespace-id"})
 		task := &activitypb.ActivityDispatchTask{DispatchReason: activitypb.DISPATCH_REASON_RETRY}
 		chasmCtx := &chasm.MockMutableContext{
@@ -55,11 +54,10 @@ func TestActivityDispatchTaskHook(t *testing.T) {
 				return readFn(chasmCtx, activity)
 			},
 		)
-		matchingClient.EXPECT().AddActivityTask(gomock.Any(), gomock.Any()).Return(nil, nil)
 
 		hookCalls := 0
 		handler := newActivityDispatchTaskHandler(activityDispatchTaskHandlerOptions{
-			MatchingClient: matchingServiceAdapter{client: matchingClient},
+			MatchingClient: matchingClient,
 			DispatchTaskHook: func(
 				ctx context.Context,
 				namespaceID string,
@@ -120,7 +118,7 @@ func TestActivityDispatchTaskHook(t *testing.T) {
 				)
 
 				handler := newActivityDispatchTaskHandler(activityDispatchTaskHandlerOptions{
-					MatchingClient: matchingServiceAdapter{client: matchingservicemock.NewMockMatchingServiceClient(controller)},
+					MatchingClient: newFakeMatchingClient(t, 0),
 					DispatchTaskHook: func(
 						context.Context,
 						string,
@@ -156,7 +154,7 @@ func TestActivityDispatchTaskHook(t *testing.T) {
 
 		hookCalls := 0
 		handler := newActivityDispatchTaskHandler(activityDispatchTaskHandlerOptions{
-			MatchingClient: matchingServiceAdapter{client: matchingservicemock.NewMockMatchingServiceClient(controller)},
+			MatchingClient: newFakeMatchingClient(t, 0),
 			DispatchTaskHook: func(
 				context.Context,
 				string,
@@ -181,7 +179,7 @@ func TestActivityDispatchTaskHook(t *testing.T) {
 	t.Run("bypassed on standby discard", func(t *testing.T) {
 		controller := gomock.NewController(t)
 		engine := chasm.NewMockEngine(controller)
-		matchingClient := matchingservicemock.NewMockMatchingServiceClient(controller)
+		matchingClient := newFakeMatchingClient(t, 1)
 		activityRef := chasm.NewComponentRef[*Activity](chasm.ExecutionKey{NamespaceID: "namespace-id"})
 		chasmCtx := &chasm.MockMutableContext{
 			MockContext: chasm.MockContext{
@@ -207,11 +205,10 @@ func TestActivityDispatchTaskHook(t *testing.T) {
 				return readFn(chasmCtx, activity)
 			},
 		)
-		matchingClient.EXPECT().AddActivityTask(gomock.Any(), gomock.Any()).Return(nil, nil)
 
 		hookCalls := 0
 		handler := newActivityDispatchTaskHandler(activityDispatchTaskHandlerOptions{
-			MatchingClient: matchingServiceAdapter{client: matchingClient},
+			MatchingClient: matchingClient,
 			DispatchTaskHook: func(
 				context.Context,
 				string,
@@ -500,4 +497,22 @@ func TestTimeoutTaskTerminalFailure(t *testing.T) {
 			}
 		})
 	}
+}
+
+// fakeMatchingClient fails the test unless AddActivityTask is called the expected number of times.
+type fakeMatchingClient struct {
+	calls int
+}
+
+func newFakeMatchingClient(t *testing.T, expectedCalls int) *fakeMatchingClient {
+	c := &fakeMatchingClient{}
+	t.Cleanup(func() {
+		require.Equal(t, expectedCalls, c.calls, "AddActivityTask calls")
+	})
+	return c
+}
+
+func (c *fakeMatchingClient) AddActivityTask(context.Context, *DispatchRequest) error {
+	c.calls++
+	return nil
 }

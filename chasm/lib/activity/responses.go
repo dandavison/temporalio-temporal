@@ -154,7 +154,7 @@ func (a *Activity) buildActivityExecutionInfo(
 	return info
 }
 
-func (a *Activity) buildDescribeActivityExecutionResponse(
+func (a *Activity) BuildDescribeActivityExecutionResponse(
 	ctx chasm.Context,
 	req *activitypb.DescribeActivityExecutionRequest,
 ) (*activitypb.DescribeActivityExecutionResponse, error) {
@@ -210,7 +210,7 @@ func (a *Activity) buildDescribeActivityExecutionResponse(
 //   - Info.StateSizeBytes is computed from the record the reader supplied, not the history
 //     service's running total.
 func (a *Activity) DescribeComponent(ctx chasm.Context) (proto.Message, error) {
-	response, err := a.buildDescribeActivityExecutionResponse(ctx, &activitypb.DescribeActivityExecutionRequest{
+	response, err := a.BuildDescribeActivityExecutionResponse(ctx, &activitypb.DescribeActivityExecutionRequest{
 		FrontendRequest: &workflowservice.DescribeActivityExecutionRequest{
 			IncludeInput:            true,
 			IncludeOutcome:          true,
@@ -251,7 +251,7 @@ func (a *Activity) buildCallbackInfos(ctx chasm.Context) ([]*apiactivitypb.Callb
 	return cbInfos, nil
 }
 
-func (a *Activity) buildPollActivityExecutionResponse(
+func (a *Activity) BuildPollActivityExecutionResponse(
 	ctx chasm.Context,
 ) *activitypb.PollActivityExecutionResponse {
 	return &activitypb.PollActivityExecutionResponse{
