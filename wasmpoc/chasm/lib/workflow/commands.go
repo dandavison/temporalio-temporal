@@ -1,13 +1,19 @@
 package workflow
 
 import (
+	activitypb "go.temporal.io/api/activity/v1"
 	commandpb "go.temporal.io/api/command/v1"
+	commonpb "go.temporal.io/api/common/v1"
+	deploymentpb "go.temporal.io/api/deployment/v1"
 	enumspb "go.temporal.io/api/enums/v1"
 	historypb "go.temporal.io/api/history/v1"
 	"go.temporal.io/api/serviceerror"
+	taskqueuepb "go.temporal.io/api/taskqueue/v1"
+	"go.temporal.io/server/common/retrypolicy"
 	"go.temporal.io/server/wasmpoc/chasm"
 	"go.temporal.io/server/wasmpoc/chasm/lib/activity"
 	"go.temporal.io/server/wasmpoc/chasm/lib/workflow/gen/workflowpb/v1"
+	"google.golang.org/protobuf/types/known/durationpb"
 )
 
 func closesWorkflow(commands []*commandpb.Command) bool {
@@ -61,8 +67,8 @@ func (w *Workflow) scheduleActivity(
 	attrs *commandpb.ScheduleActivityTaskCommandAttributes,
 	completedEventID int64,
 ) error {
-	if attrs.GetTaskQueue().GetName() == "" {
-		attrs.TaskQueue = w.Events[1].Get(ctx).GetWorkflowExecutionStartedEventAttributes().GetTaskQueue()
+	if err := normalizeActivityAttributes(attrs, w.Events[1].Get(ctx).GetWorkflowExecutionStartedEventAttributes().GetWorkflowRunTimeout(), w.TaskQueue); err != nil {
+		return err
 	}
 	event := w.appendEvent(ctx, &historypb.HistoryEvent{
 		EventType: enumspb.EVENT_TYPE_ACTIVITY_TASK_SCHEDULED,
@@ -78,6 +84,7 @@ func (w *Workflow) scheduleActivity(
 			HeartbeatTimeout:             attrs.GetHeartbeatTimeout(),
 			WorkflowTaskCompletedEventId: completedEventID,
 			RetryPolicy:                  attrs.GetRetryPolicy(),
+			UseWorkflowBuildId:           attrs.GetUseWorkflowBuildId(),
 			Priority:                     attrs.GetPriority(),
 		}},
 	})
@@ -111,6 +118,8 @@ func (w *Workflow) RecordCompleted(
 				Identity:         attempt.GetLastWorkerIdentity(),
 				RequestId:        attempt.GetStartRequestId(),
 				Attempt:          attempt.GetCount(),
+				LastFailure:      attempt.GetLastFailureDetails().GetFailure(),
+				WorkerVersion:    w.activityStartedStamp(ctx, scheduledEventID),
 			}},
 		})
 	}
@@ -173,4 +182,71 @@ func (w *Workflow) ActivityScheduledEvent(ctx chasm.Context, a *activity.Activit
 		return nil, serviceerror.NewNotFound("activity not found in workflow")
 	}
 	return w.Events[id].Get(ctx), nil
+}
+
+// RecordActivityStarted records the worker version stamp of the worker that started an attempt of
+// an activity.
+func (w *Workflow) RecordActivityStarted(
+	ctx chasm.MutableContext,
+	a *activity.Activity,
+	capabilities *commonpb.WorkerVersionCapabilities,
+	options *deploymentpb.WorkerDeploymentOptions,
+) error {
+	scheduledEventID, ok := w.activityScheduledEventID(ctx, a)
+	if !ok {
+		return serviceerror.NewInternal("activity not found in workflow")
+	}
+	w.ActivityStartedStamps[scheduledEventID] = chasm.NewDataField(ctx, stampFromCapabilities(capabilities, options))
+	return nil
+}
+
+func (w *Workflow) activityStartedStamp(ctx chasm.Context, scheduledEventID int64) *commonpb.WorkerVersionStamp {
+	if field, ok := w.ActivityStartedStamps[scheduledEventID]; ok {
+		return field.Get(ctx)
+	}
+	return nil
+}
+
+// normalizeActivityAttributes fills in defaults as the server does.
+func normalizeActivityAttributes(
+	attrs *commandpb.ScheduleActivityTaskCommandAttributes,
+	runTimeout *durationpb.Duration,
+	workflowTaskQueue string,
+) error {
+	if runTimeout == nil {
+		runTimeout = durationpb.New(0)
+	}
+	if attrs.RetryPolicy == nil {
+		attrs.RetryPolicy = &commonpb.RetryPolicy{}
+	}
+	options := &activitypb.ActivityOptions{
+		TaskQueue:              attrs.TaskQueue,
+		ScheduleToCloseTimeout: attrs.GetScheduleToCloseTimeout(),
+		ScheduleToStartTimeout: attrs.GetScheduleToStartTimeout(),
+		StartToCloseTimeout:    attrs.GetStartToCloseTimeout(),
+		HeartbeatTimeout:       attrs.GetHeartbeatTimeout(),
+		RetryPolicy:            attrs.RetryPolicy,
+	}
+	if attrs.TaskQueue == nil {
+		options.TaskQueue = &taskqueuepb.TaskQueue{}
+	}
+	if err := activity.ValidateAndNormalizeEmbeddedActivity(
+		attrs.GetActivityId(),
+		attrs.GetActivityType().GetName(),
+		retrypolicy.DefaultDefaultRetrySettings,
+		maxIDLengthLimit,
+		options,
+		attrs.GetPriority(),
+		runTimeout,
+		workflowTaskQueue,
+	); err != nil {
+		return err
+	}
+	attrs.TaskQueue = options.TaskQueue
+	attrs.ScheduleToCloseTimeout = options.ScheduleToCloseTimeout
+	attrs.ScheduleToStartTimeout = options.ScheduleToStartTimeout
+	attrs.StartToCloseTimeout = options.StartToCloseTimeout
+	attrs.HeartbeatTimeout = options.HeartbeatTimeout
+	attrs.RetryPolicy = options.RetryPolicy
+	return nil
 }

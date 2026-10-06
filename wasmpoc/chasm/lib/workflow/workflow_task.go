@@ -4,6 +4,7 @@ import (
 	"context"
 
 	commonpb "go.temporal.io/api/common/v1"
+	deploymentpb "go.temporal.io/api/deployment/v1"
 	enumspb "go.temporal.io/api/enums/v1"
 	historypb "go.temporal.io/api/history/v1"
 	"go.temporal.io/api/serviceerror"
@@ -23,7 +24,7 @@ func (w *Workflow) scheduleWorkflowTask(ctx chasm.MutableContext, attempt int32)
 	event := w.appendEvent(ctx, &historypb.HistoryEvent{
 		EventType: enumspb.EVENT_TYPE_WORKFLOW_TASK_SCHEDULED,
 		Attributes: &historypb.HistoryEvent_WorkflowTaskScheduledEventAttributes{WorkflowTaskScheduledEventAttributes: &historypb.WorkflowTaskScheduledEventAttributes{
-			TaskQueue:           &taskqueuepb.TaskQueue{Name: w.TaskQueue, Kind: enumspb.TASK_QUEUE_KIND_NORMAL},
+			TaskQueue:           w.workflowTaskQueue(),
 			StartToCloseTimeout: w.WorkflowTaskTimeout,
 			Attempt:             attempt,
 		}},
@@ -32,6 +33,15 @@ func (w *Workflow) scheduleWorkflowTask(ctx chasm.MutableContext, attempt int32)
 	w.WorkflowTaskAttempt = attempt
 	w.WorkflowTaskStamp++
 	ctx.AddTask(w, chasm.TaskAttributes{}, &workflowpb.WorkflowTaskDispatchTask{Stamp: w.WorkflowTaskStamp})
+}
+
+// workflowTaskQueue is the queue the next workflow task goes to: the sticky queue of the worker
+// that completed the last one, if it asked for that.
+func (w *Workflow) workflowTaskQueue() *taskqueuepb.TaskQueue {
+	if w.StickyTaskQueue != "" {
+		return &taskqueuepb.TaskQueue{Name: w.StickyTaskQueue, Kind: enumspb.TASK_QUEUE_KIND_STICKY, NormalName: w.TaskQueue}
+	}
+	return &taskqueuepb.TaskQueue{Name: w.TaskQueue, Kind: enumspb.TASK_QUEUE_KIND_NORMAL}
 }
 
 // StartWorkflowTask records that a worker polled the scheduled workflow task and returns the poll
@@ -51,6 +61,8 @@ func (w *Workflow) StartWorkflowTask(
 			ScheduledEventId: w.WorkflowTaskScheduledEventId,
 			Identity:         request.GetIdentity(),
 			HistorySizeBytes: w.HistorySizeBytes,
+			//nolint:staticcheck // SA1019: the server records deprecated worker version stamps too.
+			WorkerVersion: stampFromCapabilities(request.GetWorkerVersionCapabilities(), request.GetDeploymentOptions()),
 		}},
 	})
 	w.WorkflowTaskStartedEventId = startedEvent.EventId
@@ -81,11 +93,21 @@ func (w *Workflow) StartWorkflowTask(
 		PreviousStartedEventId:     w.LastCompletedWorkflowTaskStartedEventId,
 		StartedEventId:             w.WorkflowTaskStartedEventId,
 		Attempt:                    w.WorkflowTaskAttempt,
-		History:                    &historypb.History{Events: w.History(ctx)},
+		History:                    &historypb.History{Events: w.workflowTaskHistory(ctx)},
 		WorkflowExecutionTaskQueue: &taskqueuepb.TaskQueue{Name: w.TaskQueue, Kind: enumspb.TASK_QUEUE_KIND_NORMAL},
 		ScheduledTime:              scheduledEvent.GetEventTime(),
 		StartedTime:                startedEvent.GetEventTime(),
 	}, nil
+}
+
+// workflowTaskHistory is the history sent with a workflow task. As in the server, a sticky worker
+// gets only the events after the previous workflow task it started, which it has cached.
+func (w *Workflow) workflowTaskHistory(ctx chasm.Context) []*historypb.HistoryEvent {
+	events := w.History(ctx)
+	if w.StickyTaskQueue == "" {
+		return events
+	}
+	return events[w.LastCompletedWorkflowTaskStartedEventId:]
 }
 
 // CompleteWorkflowTask applies the worker's commands.
@@ -108,12 +130,13 @@ func (w *Workflow) CompleteWorkflowTask(
 			StartedEventId:   w.WorkflowTaskStartedEventId,
 			Identity:         request.GetIdentity(),
 			BinaryChecksum:   request.GetBinaryChecksum(),
-			WorkerVersion:    request.GetWorkerVersionStamp(),
+			WorkerVersion:    completedWorkerVersionStamp(request.GetWorkerVersionStamp()),
 			SdkMetadata:      request.GetSdkMetadata(),
 			MeteringMetadata: request.GetMeteringMetadata(),
 		}},
 	})
 	w.LastCompletedWorkflowTaskStartedEventId = w.WorkflowTaskStartedEventId
+	w.StickyTaskQueue = request.GetStickyAttributes().GetWorkerTaskQueue().GetName()
 	w.clearWorkflowTask()
 
 	for _, command := range request.GetCommands() {
@@ -140,7 +163,9 @@ func (w *Workflow) FailWorkflowTask(
 }
 
 // failWorkflowTask adds a WorkflowTaskFailed event and schedules the next attempt. The server does
-// not write events for attempts after the first (transient workflow tasks); this does.
+// not write events for attempts after the first (transient workflow tasks); this does. As in the
+// server, a workflow task that failed on a sticky queue is retried on the normal queue without
+// counting as an attempt.
 func (w *Workflow) failWorkflowTask(ctx chasm.MutableContext, cause enumspb.WorkflowTaskFailedCause, identity string) error {
 	w.appendEvent(ctx, &historypb.HistoryEvent{
 		EventType: enumspb.EVENT_TYPE_WORKFLOW_TASK_FAILED,
@@ -152,6 +177,10 @@ func (w *Workflow) failWorkflowTask(ctx chasm.MutableContext, cause enumspb.Work
 		}},
 	})
 	attempt := w.WorkflowTaskAttempt + 1
+	if w.StickyTaskQueue != "" {
+		attempt = w.WorkflowTaskAttempt
+		w.StickyTaskQueue = ""
+	}
 	w.clearWorkflowTask()
 	w.flushBufferedEvents(ctx)
 	w.scheduleWorkflowTask(ctx, attempt)
@@ -194,10 +223,38 @@ func (h *workflowTaskDispatchTaskHandler) Execute(
 	task *workflowpb.WorkflowTaskDispatchTask,
 ) error {
 	taskQueue, err := chasm.ReadComponent(ctx, ref, func(w *Workflow, _ chasm.Context, _ struct{}) (string, error) {
-		return w.TaskQueue, nil
+		return w.workflowTaskQueue().GetName(), nil
 	}, struct{}{})
 	if err != nil {
 		return err
 	}
 	return h.matchingClient.AddWorkflowTask(ctx, taskQueue, ref, task.GetStamp())
+}
+
+// stampFromCapabilities is the server's worker_versioning.StampFromCapabilities: the stamp
+// recorded in task started events.
+func stampFromCapabilities(
+	capabilities *commonpb.WorkerVersionCapabilities,
+	options *deploymentpb.WorkerDeploymentOptions,
+) *commonpb.WorkerVersionStamp {
+	if options.GetWorkerVersioningMode() == enumspb.WORKER_VERSIONING_MODE_VERSIONED && options.GetDeploymentName() != "" {
+		return nil
+	}
+	if capabilities.GetUseVersioning() && capabilities.GetDeploymentSeriesName() != "" {
+		return nil
+	}
+	if capabilities.GetBuildId() != "" {
+		return &commonpb.WorkerVersionStamp{UseVersioning: capabilities.GetUseVersioning(), BuildId: capabilities.GetBuildId()}
+	}
+	return nil
+}
+
+// completedWorkerVersionStamp is the stamp the server records in WorkflowTaskCompleted. A
+// versioned stamp is dropped because the local server does not implement build ID based
+// versioning, so no build ID is ever assigned to the workflow.
+func completedWorkerVersionStamp(stamp *commonpb.WorkerVersionStamp) *commonpb.WorkerVersionStamp {
+	if stamp.GetUseVersioning() {
+		return nil
+	}
+	return stamp
 }

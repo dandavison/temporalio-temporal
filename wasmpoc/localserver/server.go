@@ -14,12 +14,16 @@ import (
 	namespacepb "go.temporal.io/api/namespace/v1"
 	"go.temporal.io/api/serviceerror"
 	tokenspb "go.temporal.io/server/api/token/v1"
+	"go.temporal.io/server/common/tqid"
 	"go.temporal.io/server/wasmpoc/api/workflowservice/v1"
 	"go.temporal.io/server/wasmpoc/chasm"
 	"go.temporal.io/server/wasmpoc/chasm/lib/activity"
 	"go.temporal.io/server/wasmpoc/chasm/lib/workflow"
 	"go.temporal.io/server/wasmpoc/common/log"
 )
+
+// maxIDLengthLimit is the server's default limit.maxIDLength.
+const maxIDLengthLimit = 1000
 
 type Server struct {
 	engine        *engine
@@ -69,6 +73,9 @@ func (s *Server) StartWorkflowExecution(
 	ctx context.Context,
 	request *workflowservice.StartWorkflowExecutionRequest,
 ) (*workflowservice.StartWorkflowExecutionResponse, error) {
+	if err := tqid.NormalizeAndValidateUserDefined(request.GetTaskQueue(), "", "", maxIDLengthLimit); err != nil {
+		return nil, err
+	}
 	result, err := chasm.StartExecution(
 		s.ctx(ctx),
 		chasm.ExecutionKey{NamespaceID: request.GetNamespace(), BusinessID: request.GetWorkflowId(), RunID: s.newRunID()},
@@ -91,7 +98,14 @@ func (s *Server) GetSystemInfo(
 	*workflowservice.GetSystemInfoRequest,
 ) (*workflowservice.GetSystemInfoResponse, error) {
 	return &workflowservice.GetSystemInfoResponse{
-		Capabilities: &workflowservice.GetSystemInfoResponse_Capabilities{SdkMetadata: true},
+		Capabilities: &workflowservice.GetSystemInfoResponse_Capabilities{
+			ActivityFailureIncludeHeartbeat: true,
+			EncodedFailureAttributes:        true,
+			// Workers then send worker version stamps, which the server records in history. The
+			// local server records them but does not route tasks by build ID.
+			BuildIdBasedVersioning: true,
+			SdkMetadata:            true,
+		},
 	}, nil
 }
 
@@ -294,6 +308,10 @@ func startActivityTask(
 	w, ok := a.Store.Get(ctx).(*workflow.Workflow)
 	if !ok {
 		return nil, serviceerror.NewInternal("activity is not embedded in a workflow")
+	}
+	//nolint:staticcheck // SA1019: the server records deprecated worker version stamps too.
+	if err := w.RecordActivityStarted(ctx, a, request.PollRequest.GetWorkerVersionCapabilities(), request.PollRequest.GetDeploymentOptions()); err != nil {
+		return nil, err
 	}
 	scheduledEvent, err := w.ActivityScheduledEvent(ctx, a)
 	if err != nil {

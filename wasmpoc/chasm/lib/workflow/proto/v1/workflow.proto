@@ -33,6 +33,9 @@ message WorkflowState {
   int32 workflow_task_stamp = 11;
   // Total serialized size of history events, reported in WorkflowTaskStarted.
   int64 history_size_bytes = 12;
+  // Set while the last completed workflow task asked for its successors on a worker-specific
+  // queue.
+  string sticky_task_queue = 13;
 }
 
 enum TimerStatus {

@@ -7,14 +7,13 @@
 package workflowpb
 
 import (
-	reflect "reflect"
-	sync "sync"
-	unsafe "unsafe"
-
 	protoreflect "google.golang.org/protobuf/reflect/protoreflect"
 	protoimpl "google.golang.org/protobuf/runtime/protoimpl"
 	durationpb "google.golang.org/protobuf/types/known/durationpb"
 	timestamppb "google.golang.org/protobuf/types/known/timestamppb"
+	reflect "reflect"
+	sync "sync"
+	unsafe "unsafe"
 )
 
 const (
@@ -148,8 +147,11 @@ type WorkflowState struct {
 	WorkflowTaskStamp int32 `protobuf:"varint,11,opt,name=workflow_task_stamp,json=workflowTaskStamp,proto3" json:"workflow_task_stamp,omitempty"`
 	// Total serialized size of history events, reported in WorkflowTaskStarted.
 	HistorySizeBytes int64 `protobuf:"varint,12,opt,name=history_size_bytes,json=historySizeBytes,proto3" json:"history_size_bytes,omitempty"`
-	unknownFields    protoimpl.UnknownFields
-	sizeCache        protoimpl.SizeCache
+	// Set while the last completed workflow task asked for its successors on a worker-specific
+	// queue.
+	StickyTaskQueue string `protobuf:"bytes,13,opt,name=sticky_task_queue,json=stickyTaskQueue,proto3" json:"sticky_task_queue,omitempty"`
+	unknownFields   protoimpl.UnknownFields
+	sizeCache       protoimpl.SizeCache
 }
 
 func (x *WorkflowState) Reset() {
@@ -264,6 +266,13 @@ func (x *WorkflowState) GetHistorySizeBytes() int64 {
 		return x.HistorySizeBytes
 	}
 	return 0
+}
+
+func (x *WorkflowState) GetStickyTaskQueue() string {
+	if x != nil {
+		return x.StickyTaskQueue
+	}
+	return ""
 }
 
 type TimerState struct {
@@ -418,7 +427,7 @@ var File_workflow_proto protoreflect.FileDescriptor
 
 const file_workflow_proto_rawDesc = "" +
 	"\n" +
-	"\x0eworkflow.proto\x123temporal.server.wasmpoc.chasm.lib.workflow.proto.v1\x1a\x1egoogle/protobuf/duration.proto\x1a\x1fgoogle/protobuf/timestamp.proto\"\xdc\x05\n" +
+	"\x0eworkflow.proto\x123temporal.server.wasmpoc.chasm.lib.workflow.proto.v1\x1a\x1egoogle/protobuf/duration.proto\x1a\x1fgoogle/protobuf/timestamp.proto\"\x88\x06\n" +
 	"\rWorkflowState\x12[\n" +
 	"\x06status\x18\x01 \x01(\x0e2C.temporal.server.wasmpoc.chasm.lib.workflow.proto.v1.WorkflowStatusR\x06status\x12#\n" +
 	"\rworkflow_type\x18\x02 \x01(\tR\fworkflowType\x12\x1d\n" +
@@ -434,7 +443,8 @@ const file_workflow_proto_rawDesc = "" +
 	"\x15workflow_task_attempt\x18\n" +
 	" \x01(\x05R\x13workflowTaskAttempt\x12.\n" +
 	"\x13workflow_task_stamp\x18\v \x01(\x05R\x11workflowTaskStamp\x12,\n" +
-	"\x12history_size_bytes\x18\f \x01(\x03R\x10historySizeBytes\"\xe4\x01\n" +
+	"\x12history_size_bytes\x18\f \x01(\x03R\x10historySizeBytes\x12*\n" +
+	"\x11sticky_task_queue\x18\r \x01(\tR\x0fstickyTaskQueue\"\xe4\x01\n" +
 	"\n" +
 	"TimerState\x12X\n" +
 	"\x06status\x18\x01 \x01(\x0e2@.temporal.server.wasmpoc.chasm.lib.workflow.proto.v1.TimerStatusR\x06status\x12\x19\n" +

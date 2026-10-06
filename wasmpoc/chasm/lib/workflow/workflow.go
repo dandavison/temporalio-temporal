@@ -5,6 +5,7 @@ package workflow
 import (
 	"slices"
 
+	commonpb "go.temporal.io/api/common/v1"
 	enumspb "go.temporal.io/api/enums/v1"
 	historypb "go.temporal.io/api/history/v1"
 	"go.temporal.io/api/serviceerror"
@@ -17,7 +18,11 @@ import (
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
-const defaultWorkflowTaskTimeout = 10 // seconds
+const (
+	defaultWorkflowTaskTimeout = 10 // seconds
+	// maxIDLengthLimit is the server's default limit.maxIDLength.
+	maxIDLengthLimit = 1000
+)
 
 type Workflow struct {
 	chasm.UnimplementedComponent
@@ -33,6 +38,10 @@ type Workflow struct {
 	Activities chasm.Map[int64, *activity.Activity]
 	// Timers is keyed by timer ID.
 	Timers chasm.Map[string, *Timer]
+	// ActivityStartedStamps holds the worker version stamp of the worker running each activity's
+	// current attempt, keyed by ActivityTaskScheduled event ID. It is recorded in the
+	// ActivityTaskStarted event, which is written when the attempt completes.
+	ActivityStartedStamps chasm.Map[int64, *commonpb.WorkerVersionStamp]
 }
 
 var _ activity.ActivityStore = (*Workflow)(nil)
@@ -54,6 +63,8 @@ func NewWorkflow(ctx chasm.MutableContext, request *workflowservice.StartWorkflo
 		BufferedEvents: chasm.NewDataField(ctx, &historypb.History{}),
 		Activities:     chasm.Map[int64, *activity.Activity]{},
 		Timers:         chasm.Map[string, *Timer]{},
+
+		ActivityStartedStamps: chasm.Map[int64, *commonpb.WorkerVersionStamp]{},
 	}
 	w.StartTime = timestamppb.New(ctx.Now(w))
 	w.appendEvent(ctx, &historypb.HistoryEvent{
@@ -68,9 +79,11 @@ func NewWorkflow(ctx chasm.MutableContext, request *workflowservice.StartWorkflo
 			Identity:                 request.GetIdentity(),
 			Header:                   request.GetHeader(),
 			Attempt:                  1,
+			FirstWorkflowTaskBackoff: durationpb.New(0),
 			OriginalExecutionRunId:   ctx.ExecutionKey().RunID,
 			FirstExecutionRunId:      ctx.ExecutionKey().RunID,
 			WorkflowId:               ctx.ExecutionKey().BusinessID,
+			Priority:                 request.GetPriority(),
 		}},
 	})
 	w.scheduleWorkflowTask(ctx, 1)
