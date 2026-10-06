@@ -1,0 +1,34 @@
+#!/bin/sh
+# Measures the local-server module (wasm, gzip, cwasm, cwasm gzip) and attributes its size by
+# building modules that only import cumulative sets of packages.
+set -eu
+cd "$(dirname "$0")/.."
+out=$(mktemp -d)
+./wasmpoc/build-module "$out" >/dev/null
+echo "module: wasm=$(wc -c <"$out/local-server.wasm") wasm.gz=$(gzip -9 -c "$out/local-server.wasm" | wc -c)" \
+  "cwasm=$(wc -c <"$out/local-server.cwasm") cwasm.gz=$(gzip -9 -c "$out/local-server.cwasm" | wc -c)"
+
+S=go.temporal.io/server
+W=$S/wasmpoc
+trap 'rm -rf wasmpoc/cmd/sizeprobe "$out"' EXIT
+probe() {
+  name=$1
+  shift
+  mkdir -p wasmpoc/cmd/sizeprobe
+  {
+    echo 'package main'
+    echo 'import ('
+    for p in "$@"; do echo "	_ \"$p\""; done
+    echo ')'
+    echo 'func main() {}'
+  } >wasmpoc/cmd/sizeprobe/main.go
+  GOOS=wasip1 GOARCH=wasm go build -ldflags="-s -w" -trimpath -o "$out/probe.wasm" ./wasmpoc/cmd/sizeprobe
+  echo "$(wc -c <"$out/probe.wasm") $name"
+}
+probe "api history + command" go.temporal.io/api/history/v1 go.temporal.io/api/command/v1
+probe "+ workflowservice messages" go.temporal.io/api/history/v1 go.temporal.io/api/command/v1 $W/api/workflowservice/v1
+probe "+ server persistence protos" go.temporal.io/api/history/v1 $W/api/workflowservice/v1 $S/api/persistence/v1
+probe "+ log, metrics" go.temporal.io/api/history/v1 $W/api/workflowservice/v1 $S/api/persistence/v1 $W/common/metrics $W/common/log
+probe "+ chasm" $W/api/workflowservice/v1 $W/chasm
+probe "+ activity" $W/api/workflowservice/v1 $W/chasm $W/chasm/lib/activity
+probe "+ workflow, local server" $W/localserver
