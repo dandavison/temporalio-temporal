@@ -112,6 +112,8 @@ func (t *timerQueueStandbyTaskExecutor) Execute(
 		err = t.executeChasmSideEffectTimerTask(ctx, task)
 	case *tasks.TimeSkippingTimerTask:
 		err = t.executeTimeSkippingTimerTask(ctx, task)
+	case *tasks.LocalExecutionLeaseTimerTask:
+		// Local execution ownership is held only in the active cluster.
 	default:
 		err = queueserrors.NewUnprocessableTaskError("unknown task type")
 	}

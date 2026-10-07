@@ -136,6 +136,8 @@ func serializeTimerTask(
 		timerTask = timerChasmPureTaskToProto(task)
 	case *tasks.TimeSkippingTimerTask:
 		timerTask = timeSkippingTimerTaskToProto(task)
+	case *tasks.LocalExecutionLeaseTimerTask:
+		timerTask = localExecutionLeaseTimerTaskToProto(task)
 	default:
 		return nil, serviceerror.NewInternalf("Unknown timer task type: %v", task)
 	}
@@ -170,6 +172,25 @@ func timeSkippingTimerTaskFromProto(info *persistencespb.TimerTaskInfo) *tasks.T
 		TaskID:              info.TaskId,
 		VersionedTransition: info.VersionedTransition,
 		ArchetypeID:         info.GetChasmTaskInfo().GetArchetypeId(),
+	}
+}
+
+func localExecutionLeaseTimerTaskToProto(task *tasks.LocalExecutionLeaseTimerTask) *persistencespb.TimerTaskInfo {
+	return &persistencespb.TimerTaskInfo{
+		NamespaceId:    task.NamespaceID,
+		WorkflowId:     task.WorkflowID,
+		RunId:          task.RunID,
+		TaskId:         task.TaskID,
+		VisibilityTime: timestamppb.New(task.VisibilityTimestamp),
+		TaskType:       enumsspb.TASK_TYPE_LOCAL_EXECUTION_LEASE_TIMER,
+	}
+}
+
+func localExecutionLeaseTimerTaskFromProto(info *persistencespb.TimerTaskInfo) *tasks.LocalExecutionLeaseTimerTask {
+	return &tasks.LocalExecutionLeaseTimerTask{
+		WorkflowKey:         definition.NewWorkflowKey(info.NamespaceId, info.WorkflowId, info.RunId),
+		VisibilityTimestamp: info.VisibilityTime.AsTime(),
+		TaskID:              info.TaskId,
 	}
 }
 
@@ -237,6 +258,8 @@ func deserializeTimerTask(
 		timer = timerChasmPureTaskFromProto(timerTask)
 	case enumsspb.TASK_TYPE_TIMESKIPPING_TIMER:
 		timer = timeSkippingTimerTaskFromProto(timerTask)
+	case enumsspb.TASK_TYPE_LOCAL_EXECUTION_LEASE_TIMER:
+		timer = localExecutionLeaseTimerTaskFromProto(timerTask)
 	default:
 		return nil, serviceerror.NewInternalf("Unknown timer task type: %v", timerTask.TaskType)
 	}

@@ -12,6 +12,7 @@ import (
 	historypb "go.temporal.io/api/history/v1"
 	"go.temporal.io/api/serviceerror"
 	"go.temporal.io/server/api/adminservice/v1"
+	enumsspb "go.temporal.io/server/api/enums/v1"
 	historyspb "go.temporal.io/server/api/history/v1"
 	"go.temporal.io/server/api/historyservice/v1"
 	persistencespb "go.temporal.io/server/api/persistence/v1"
@@ -167,6 +168,11 @@ func applyAndCommitSync(
 		if err := workflow.NewTaskRefresher(shardContext).Refresh(ctx, mutableState, false); err != nil {
 			return nil, err
 		}
+	} else {
+		mutableState.AddTasks(&tasks.LocalExecutionLeaseTimerTask{
+			WorkflowKey:         mutableState.GetWorkflowKey(),
+			VisibilityTimestamp: leaseExpiration.AsTime(),
+		})
 	}
 
 	workflowContext := workflowLease.GetContext()
@@ -180,7 +186,8 @@ func applyAndCommitSync(
 
 func retainSyncTask(task tasks.Task) bool {
 	category := task.GetCategory()
-	return category == tasks.CategoryReplication || category == tasks.CategoryVisibility
+	return category == tasks.CategoryReplication || category == tasks.CategoryVisibility ||
+		task.GetType() == enumsspb.TASK_TYPE_LOCAL_EXECUTION_LEASE_TIMER
 }
 
 func forkHistoryForSync(

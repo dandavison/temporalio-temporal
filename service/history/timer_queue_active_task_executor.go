@@ -130,6 +130,8 @@ func (t *timerQueueActiveTaskExecutor) Execute(
 		err = t.executeChasmSideEffectTimerTask(ctx, task)
 	case *tasks.TimeSkippingTimerTask:
 		err = t.executeTimeSkippingTimerTask(ctx, task)
+	case *tasks.LocalExecutionLeaseTimerTask:
+		err = t.executeLocalExecutionLeaseTimerTask(ctx, task)
 	default:
 		err = queueserrors.NewUnprocessableTaskError("unknown task type")
 	}
@@ -946,6 +948,45 @@ func (t *timerQueueActiveTaskExecutor) getTimerSequence(
 	mutableState historyi.MutableState,
 ) workflow.TimerSequence {
 	return workflow.NewTimerSequence(mutableState)
+}
+
+// executeLocalExecutionLeaseTimerTask takes a workflow back from a local server whose lease
+// expired: it clears the owner and regenerates the tasks that ownership suppressed.
+func (t *timerQueueActiveTaskExecutor) executeLocalExecutionLeaseTimerTask(
+	ctx context.Context,
+	task *tasks.LocalExecutionLeaseTimerTask,
+) (retError error) {
+	ctx, cancel := context.WithTimeout(ctx, taskTimeout)
+	defer cancel()
+
+	weContext, release, err := getWorkflowExecutionContextForTask(ctx, t.shardContext, t.cache, task)
+	if err != nil {
+		return err
+	}
+	defer func() { release(retError) }()
+
+	mutableState, err := loadMutableStateForTimerTask(ctx, t.shardContext, weContext, task, t.metricsHandler, t.logger)
+	if err != nil {
+		return err
+	}
+	if mutableState == nil || !mutableState.IsWorkflowExecutionRunning() {
+		release(nil)
+		return nil
+	}
+	localExecutionInfo := mutableState.GetExecutionInfo().GetLocalExecutionInfo()
+	if localExecutionInfo.GetState() != persistencespb.LocalExecutionInfo_STATE_OWNED ||
+		t.shardContext.GetTimeSource().Now().Before(localExecutionInfo.GetLeaseExpirationTime().AsTime()) {
+		// Released, or renewed by a later sync, which added its own lease timer.
+		release(nil)
+		return nil
+	}
+	localExecutionInfo.State = persistencespb.LocalExecutionInfo_STATE_UNOWNED
+	localExecutionInfo.FencingEpoch++
+	localExecutionInfo.OwnershipTokenHash = nil
+	if err := workflow.NewTaskRefresher(t.shardContext).Refresh(ctx, mutableState, false); err != nil {
+		return err
+	}
+	return t.updateWorkflowExecution(ctx, weContext, mutableState, false)
 }
 
 // executeTimeSkippingTimerTask fires when the fast-forward is hit. It emits the
