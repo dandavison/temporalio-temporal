@@ -12,6 +12,7 @@ import (
 	chasmcallback "go.temporal.io/server/chasm/lib/callback"
 	chasmnexus "go.temporal.io/server/chasm/lib/nexusoperation"
 	nexusoperationpb "go.temporal.io/server/chasm/lib/nexusoperation/gen/nexusoperationpb/v1"
+	"go.temporal.io/server/chasm/lib/notifier"
 	chasmscheduler "go.temporal.io/server/chasm/lib/scheduler"
 	"go.temporal.io/server/chasm/lib/scheduler/gen/schedulerpb/v1"
 	"go.temporal.io/server/chasm/lib/stream"
@@ -155,6 +156,7 @@ var Module = fx.Options(
 	fx.Provide(schedulerpb.NewSchedulerServiceLayeredClient),
 	fx.Provide(chasmnexus.NewFrontendHandler),
 	chasmnexus.Module,
+	notifier.Module,
 	chasmscheduler.Module,
 	chasmworkflow.Module,
 	chasmcallback.Module,

@@ -11,6 +11,7 @@ import (
 	"go.temporal.io/server/chasm/lib/activity"
 	"go.temporal.io/server/chasm/lib/callback"
 	chasmnexus "go.temporal.io/server/chasm/lib/nexusoperation"
+	"go.temporal.io/server/chasm/lib/notifier"
 	"go.temporal.io/server/chasm/lib/scheduler"
 	"go.temporal.io/server/chasm/lib/stream"
 	chasmtests "go.temporal.io/server/chasm/lib/tests"
@@ -131,6 +132,7 @@ var Module = fx.Options(
 	stream.Module,
 	callback.Module,
 	chasmnexus.Module,
+	notifier.Module,
 	chasmworkflow.Module,
 	chasmworkflow.HistoryHandlerModule,
 )
