@@ -15,6 +15,7 @@ import (
 	commonpb "go.temporal.io/api/common/v1"
 	enumspb "go.temporal.io/api/enums/v1"
 	failurepb "go.temporal.io/api/failure/v1"
+	updatepb "go.temporal.io/api/update/v1"
 	"go.temporal.io/api/workflowservice/v1"
 	"go.temporal.io/server/common/dynamicconfig"
 	"go.temporal.io/server/common/payload"
@@ -225,9 +226,9 @@ func (s *streamTestSuite) TestStaleActivityAttemptIsFencedBeforeSuccessorAppends
 	})
 }
 
-// Every record carries its producer and epoch: an activity's epoch is its attempt, and records of a
-// retried attempt carry a higher epoch than those of the attempt it replaced. Every backend.
-func (s *streamTestSuite) TestRecordsCarryActivityProducerAndAttempt() {
+// Every record carries its producer and epoch: records of a retried activity attempt carry the same
+// producer and a higher epoch than those of the attempt it replaced. Every backend.
+func (s *streamTestSuite) TestRetriedActivityAttemptHasHigherEpoch() {
 	s.forEachBackend(func(f *streamFixture) {
 		ref := f.startOwner(f.tv)
 		f.scheduleRetriedActivity(f.tv)
@@ -239,8 +240,27 @@ func (s *streamTestSuite) TestRecordsCarryActivityProducerAndAttempt() {
 		records := f.readAll(ref, streamBeginning())
 		require.Len(f.t, records, 2)
 		require.Equal(f.t, records[0].Producer.Producer, records[1].Producer.Producer)
-		require.Equal(f.t, int64(1), records[0].Producer.Epoch)
-		require.Equal(f.t, int64(2), records[1].Producer.Epoch)
+		require.Greater(f.t, records[1].Producer.Epoch, records[0].Producer.Epoch)
+	})
+}
+
+// Resetting an activity fences its running attempt, although reset sets the attempt number back to
+// 1: the epoch is the attempt's started stamp, which reset bumps. Native only; on Redis a stale
+// attempt can write until its successor's first append.
+func (s *streamTestSuite) TestActivityResetFencesRunningAttempt() {
+	s.nativeOnly(func(f *streamFixture) {
+		ref := f.startOwner(f.tv)
+		f.scheduleRetriedActivity(f.tv)
+		running := f.pollActivityTask(f.tv)
+		f.append(ref, activityProducer(running), 0, "", "before reset")
+		_, err := f.env.FrontendClient().ResetActivity(f.ctx(), &workflowservice.ResetActivityRequest{
+			Namespace: f.env.Namespace().String(),
+			Execution: &commonpb.WorkflowExecution{WorkflowId: ref.WorkflowID},
+			Activity:  &workflowservice.ResetActivityRequest_Id{Id: f.tv.ActivityID()},
+		})
+		require.NoError(f.t, err)
+		_, err = f.tryAppend(ref, activityProducer(running), 1, "", "after reset")
+		require.ErrorIs(f.t, err, errStreamEpochFenced)
 	})
 }
 
@@ -261,13 +281,94 @@ func (s *streamTestSuite) TestFailedWorkflowTaskRecordsCarryLowerEpoch() {
 		records := f.readAll(ref, streamBeginning())
 		require.Equal(f.t, []string{"failed attempt", "rerun"}, f.dataOf(records))
 		require.Equal(f.t, records[0].Producer.Producer, records[1].Producer.Producer)
+		require.Equal(f.t, records[0].Producer.WorkflowTask, records[1].Producer.WorkflowTask)
 		require.Greater(f.t, records[1].Producer.Epoch, records[0].Producer.Epoch)
 	})
 }
 
-// A workflow's epoch increases across workflow tasks, not only across attempts of one task.
-// Every backend.
-func (s *streamTestSuite) TestWorkflowEpochIncreasesAcrossTasks() {
+// A workflow task's completion records, in the stream, which attempt committed, so readers can
+// discard a failed attempt's records even when the attempt that succeeds appends nothing. Native
+// only: on Redis those records are not withdrawn.
+func (s *streamTestSuite) TestWorkflowTaskCompletionRecordsCommittedAttempt() {
+	s.nativeOnly(func(f *streamFixture) {
+		ref := f.startOwner(f.tv)
+		failed := f.pollWorkflowTask(f.tv)
+		f.append(ref, workflowProducer(failed), 0, "", "failed attempt")
+		f.failWorkflowTask(failed)
+		rerun := f.pollWorkflowTask(f.tv)
+		f.completeWorkflowTask(rerun)
+
+		records := f.readAllWithCommits(ref, streamBeginning())
+		require.Len(f.t, records, 2)
+		commit := records[1].WorkflowTaskCommit
+		require.NotNil(f.t, commit)
+		require.Equal(f.t, records[0].Producer.Producer, commit.Producer)
+		require.Equal(f.t, records[0].Producer.WorkflowTask, commit.WorkflowTask)
+		require.Equal(f.t, int64(rerun.Attempt), commit.Attempt)
+		require.Greater(f.t, commit.Attempt, records[0].Producer.Epoch)
+	})
+}
+
+// A workflow task cannot append once a later task of the same run has appended. Every backend.
+func (s *streamTestSuite) TestStaleWorkflowTaskIsFencedAfterSuccessorAppends() {
+	s.forEachBackend(func(f *streamFixture) {
+		ref := f.startOwner(f.tv)
+		task1 := f.pollWorkflowTask(f.tv)
+		f.append(ref, workflowProducer(task1), 0, "", "task1")
+		f.completeWorkflowTask(task1, f.forceNewWorkflowTask)
+		task2 := f.pollWorkflowTask(f.tv)
+		f.append(ref, workflowProducer(task2), 0, "", "task2")
+
+		_, err := f.tryAppend(ref, workflowProducer(task1), 1, "", "stale")
+		require.ErrorIs(f.t, err, errStreamEpochFenced)
+		require.Equal(f.t, []string{"task1", "task2"}, f.dataOf(f.readAll(ref, streamBeginning())))
+	})
+}
+
+// A failed workflow task attempt cannot append once its rerun has started, even before the rerun
+// appends: the server checks the task identity and attempt against the current workflow task.
+// Native only.
+func (s *streamTestSuite) TestFailedWorkflowTaskAttemptIsFencedBeforeRerunAppends() {
+	s.nativeOnly(func(f *streamFixture) {
+		ref := f.startOwner(f.tv)
+		failed := f.pollWorkflowTask(f.tv)
+		f.append(ref, workflowProducer(failed), 0, "", "failed attempt")
+		f.failWorkflowTask(failed)
+		f.pollWorkflowTask(f.tv)
+
+		_, err := f.tryAppend(ref, workflowProducer(failed), 1, "", "stale")
+		require.ErrorIs(f.t, err, errStreamEpochFenced)
+	})
+}
+
+// Appends from a speculative workflow task (one created for an Update) are rejected. Native only:
+// a Redis backend cannot tell that a task is speculative.
+func (s *streamTestSuite) TestSpeculativeWorkflowTaskAppendIsRejected() {
+	s.nativeOnly(func(f *streamFixture) {
+		ref := f.startOwner(f.tv)
+		f.completeWorkflowTask(f.pollWorkflowTask(f.tv))
+		go func() {
+			// Fails when the test ends, since the update is never accepted.
+			_, _ = f.env.FrontendClient().UpdateWorkflowExecution(f.ctx(), &workflowservice.UpdateWorkflowExecutionRequest{
+				Namespace:         f.env.Namespace().String(),
+				WorkflowExecution: &commonpb.WorkflowExecution{WorkflowId: ref.WorkflowID},
+				WaitPolicy:        &updatepb.WaitPolicy{LifecycleStage: enumspb.UPDATE_WORKFLOW_EXECUTION_LIFECYCLE_STAGE_ACCEPTED},
+				Request: &updatepb.Request{
+					Meta:  &updatepb.Meta{UpdateId: f.tv.UpdateID()},
+					Input: &updatepb.Input{Name: f.tv.HandlerName()},
+				},
+			})
+		}()
+		speculative := f.pollWorkflowTask(f.tv)
+		require.NotEmpty(f.t, speculative.Messages)
+
+		_, err := f.tryAppend(ref, workflowProducer(speculative), 0, "", "x")
+		require.ErrorIs(f.t, err, errStreamSpeculative)
+	})
+}
+
+// A workflow's task identity increases with each completed workflow task. Every backend.
+func (s *streamTestSuite) TestWorkflowTaskIdentityIncreasesAcrossTasks() {
 	s.forEachBackend(func(f *streamFixture) {
 		ref := f.startOwner(f.tv)
 		task1 := f.pollWorkflowTask(f.tv)
@@ -278,7 +379,8 @@ func (s *streamTestSuite) TestWorkflowEpochIncreasesAcrossTasks() {
 
 		records := f.readAll(ref, streamBeginning())
 		require.Equal(f.t, []string{"task1", "task2"}, f.dataOf(records))
-		require.Greater(f.t, records[1].Producer.Epoch, records[0].Producer.Epoch)
+		require.Equal(f.t, records[0].Producer.Producer, records[1].Producer.Producer)
+		require.Greater(f.t, records[1].Producer.WorkflowTask, records[0].Producer.WorkflowTask)
 	})
 }
 
@@ -565,13 +667,15 @@ func (s *streamTestSuite) TestNativeOffsetsAreContiguousAcrossContinueAsNew() {
 		secondRun := f.pollWorkflowTask(f.tv)
 		f.append(ref, workflowProducer(secondRun), 0, "", "run2")
 
-		records := f.readAll(ref, streamBeginning())
-		require.Len(f.t, records, 2)
+		records := f.readAllWithCommits(ref, streamBeginning())
+		require.Equal(f.t, []string{"run1", "run2"}, f.dataOf(records))
 		first, err := f.b.offset(records[0].Cursor)
 		require.NoError(f.t, err)
-		second, err := f.b.offset(records[1].Cursor)
-		require.NoError(f.t, err)
-		require.Equal(f.t, first+1, second)
+		for i, r := range records {
+			offset, err := f.b.offset(r.Cursor)
+			require.NoError(f.t, err)
+			require.Equal(f.t, first+int64(i), offset)
+		}
 	})
 }
 
@@ -644,8 +748,13 @@ func (f *streamFixture) read(ref streamRef, req streamReadRequest) streamReadRes
 	return resp
 }
 
-// readAll reads, without waiting, every record after from.
+// readAll reads, without waiting, every data record after from. It omits workflow task commit
+// markers, which only native writes.
 func (f *streamFixture) readAll(ref streamRef, from streamPosition) []streamRecord {
+	return withoutCommits(f.readAllWithCommits(ref, from))
+}
+
+func (f *streamFixture) readAllWithCommits(ref streamRef, from streamPosition) []streamRecord {
 	var records []streamRecord
 	for {
 		resp := f.read(ref, streamReadRequest{From: from})
@@ -655,6 +764,16 @@ func (f *streamFixture) readAll(ref streamRef, from streamPosition) []streamReco
 		records = append(records, resp.Records...)
 		from = streamAfter(resp.Cursor)
 	}
+}
+
+func withoutCommits(records []streamRecord) []streamRecord {
+	var data []streamRecord
+	for _, r := range records {
+		if r.WorkflowTaskCommit == nil {
+			data = append(data, r)
+		}
+	}
+	return data
 }
 
 type streamReadResult struct {
@@ -686,10 +805,11 @@ func (f *streamFixture) data(r streamRecord) string {
 	return payload.ToString(r.Payload)
 }
 
+// dataOf decodes the data records, omitting workflow task commit markers.
 func (f *streamFixture) dataOf(records []streamRecord) []string {
-	data := make([]string, len(records))
-	for i, r := range records {
-		data[i] = f.data(r)
+	data := []string{}
+	for _, r := range withoutCommits(records) {
+		data = append(data, f.data(r))
 	}
 	return data
 }

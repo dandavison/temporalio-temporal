@@ -39,7 +39,7 @@ type streamRef struct {
 // streamCursor marks the boundary after a record. Its bytes belong to the backend that issued it.
 type streamCursor []byte
 
-// streamProducer says who is appending. The backend derives the stored (producer, epoch) from it:
+// streamProducer says who is appending. The backend derives the stored producer identity from it:
 // for an activity, from the activity task; for a workflow, from the workflow task; for a client,
 // from the ID and epoch the client supplies.
 type streamProducer struct {
@@ -58,17 +58,33 @@ func activityProducer(task *workflowservice.PollActivityTaskQueueResponse) strea
 }
 
 // workflowProducer is a workflow appending sink-style: the worker appends the records at the end of
-// an activation of this workflow task, before responding to it.
+// an activation of this workflow task, before responding to it. Appends from speculative workflow
+// tasks are rejected.
 func workflowProducer(task *workflowservice.PollWorkflowTaskQueueResponse) streamProducer {
 	return streamProducer{WorkflowTask: task}
 }
 
 // streamProducerIdentity is the (producer, epoch, seq) stored with every record. Producer is a
-// backend-chosen stable string; epoch numbers the producer's incarnations.
+// backend-chosen stable string: an activity, a workflow run, or a client's ID.
+//
+// The epoch numbers the producer's incarnations. For an activity it is the started stamp of the
+// attempt, which increases on every retry, reset, pause, unpause and options update. For a client
+// it is what the client supplies. For a workflow it is (WorkflowTask, Epoch): WorkflowTask is the
+// started event ID of the run's last completed workflow task, and Epoch is the attempt of the
+// current one. Records of a workflow are superseded only by a later attempt of the same task.
 type streamProducerIdentity struct {
-	Producer string
-	Epoch    int64
-	Seq      int64
+	Producer     string
+	WorkflowTask int64
+	Epoch        int64
+	Seq          int64
+}
+
+// streamWorkflowTaskCommit records which attempt of a workflow task committed. Native only: the
+// server writes it in the same transaction as the task's completion.
+type streamWorkflowTaskCommit struct {
+	Producer     string
+	WorkflowTask int64
+	Attempt      int64
 }
 
 type streamRecordInput struct {
@@ -136,6 +152,8 @@ type streamRecord struct {
 	Topic    string
 	Payload  *commonpb.Payload
 	Finish   bool
+	// WorkflowTaskCommit, when set, makes this record a commit marker rather than data.
+	WorkflowTaskCommit *streamWorkflowTaskCommit
 }
 
 type streamReadResponse struct {
@@ -155,6 +173,7 @@ var (
 	errStreamSeqConflict    = errors.New("seq already stored with different content")
 	errStreamSeqSuperseded  = errors.New("seq already superseded")
 	errStreamEpochFenced    = errors.New("epoch lower than one already seen for this producer")
+	errStreamSpeculative    = errors.New("appends from speculative workflow tasks are not supported")
 	errStreamNotImplemented = errors.New("stream backend not implemented")
 )
 
