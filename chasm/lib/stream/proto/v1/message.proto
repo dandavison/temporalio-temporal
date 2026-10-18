@@ -7,8 +7,7 @@ option go_package = "go.temporal.io/server/chasm/lib/stream/gen/streampb;streamp
 import "temporal/api/nexusservices/streamservice/v1/request_response.proto";
 
 message StreamState {
-    // The offset the next record gets. Offsets are contiguous from 0.
-    int64 next_offset = 1;
+    reserved 1;
     // Set once the stream is closed.
     temporal.api.nexusservices.streamservice.v1.StreamClose close = 2;
 }

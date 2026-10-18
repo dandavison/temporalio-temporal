@@ -1,0 +1,18 @@
+syntax = "proto3";
+
+package temporal.server.chasm.lib.orderedstore.proto.v1;
+
+option go_package = "go.temporal.io/server/chasm/lib/orderedstore/gen/orderedstorepb;orderedstorepb";
+
+message LogState {
+    // The ID the next appended event gets. Event IDs are contiguous from 0.
+    int64 next_event_id = 1;
+    // The ID the next batch gets. Batch IDs are contiguous from 0.
+    int64 next_batch_id = 2;
+}
+
+// Events appended together, persisted as one row.
+message Batch {
+    int64 first_event_id = 1;
+    repeated bytes events = 2;
+}

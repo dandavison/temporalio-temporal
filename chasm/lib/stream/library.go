@@ -2,6 +2,7 @@ package stream
 
 import (
 	"go.temporal.io/server/chasm"
+	"go.temporal.io/server/chasm/lib/orderedstore"
 )
 
 const (
@@ -31,5 +32,7 @@ func (l *library) Name() string {
 func (l *library) Components() []*chasm.RegistrableComponent {
 	return []*chasm.RegistrableComponent{
 		chasm.NewRegistrableComponent[*Stream](componentName),
+		// The ordered store stub has no library of its own.
+		chasm.NewRegistrableComponent[*orderedstore.Log]("orderedstore_log"),
 	}
 }

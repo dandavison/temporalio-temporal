@@ -8,6 +8,7 @@ import (
 
 	streamservicepb "go.temporal.io/api/nexusservices/streamservice/v1"
 	"go.temporal.io/server/chasm"
+	"go.temporal.io/server/chasm/lib/orderedstore"
 	"go.temporal.io/server/chasm/lib/stream/gen/streampb/v1"
 	"google.golang.org/protobuf/proto"
 )
@@ -23,22 +24,25 @@ const (
 
 const defaultMaxRecords = 1000
 
-// Stream is a log of records embedded in its owner. Offsets are contiguous from 0. It applies
-// dedupe and fencing by (producer, epoch, seq); the owner checks that the producer is who it says
-// it is.
+// Stream is a log of records embedded in its owner. A record's offset is its event ID in the
+// ordered store, so offsets are contiguous from 0, and each append is one batch. It applies dedupe
+// and fencing by (producer, epoch, seq); the owner checks that the producer is who it says it is.
+//
+// Producer state is kept in the component, not in the ordered store, because it is overwritten in
+// place.
 type Stream struct {
 	chasm.UnimplementedComponent
 
 	*streampb.StreamState
 
-	Records   chasm.Map[int64, *streamservicepb.Record]
+	Records   chasm.Field[*orderedstore.Log]
 	Producers chasm.Map[string, *streampb.ProducerState]
 }
 
-func New() *Stream {
+func New(ctx chasm.MutableContext) *Stream {
 	return &Stream{
 		StreamState: &streampb.StreamState{},
-		Records:     make(chasm.Map[int64, *streamservicepb.Record]),
+		Records:     chasm.NewComponentField(ctx, orderedstore.New()),
 		Producers:   make(chasm.Map[string, *streampb.ProducerState]),
 	}
 }
@@ -115,12 +119,16 @@ func (s *Stream) Append(
 	identity := func() *streamservicepb.ProducerIdentity {
 		return &streamservicepb.ProducerIdentity{Producer: p.ID, WorkflowTask: p.WorkflowTask, Epoch: p.Epoch, Seq: seq}
 	}
-	first := s.NextOffset
+	var batch []*streamservicepb.Record
 	for _, r := range records {
-		s.add(ctx, &streamservicepb.Record{Producer: identity(), Topic: r.GetTopic(), Payload: r.GetPayload()})
+		batch = append(batch, &streamservicepb.Record{Producer: identity(), Topic: r.GetTopic(), Payload: r.GetPayload()})
 	}
 	if finish {
-		s.add(ctx, &streamservicepb.Record{Producer: identity(), Finish: true})
+		batch = append(batch, &streamservicepb.Record{Producer: identity(), Finish: true})
+	}
+	first, err := s.add(ctx, batch...)
+	if err != nil {
+		return nil, err
 	}
 	if closing != nil {
 		s.Close = closing
@@ -138,16 +146,17 @@ func (s *Stream) Append(
 
 // RecordCommit records that attempt committed workflow task workflowTask of producer, if any
 // attempt of that task appended.
-func (s *Stream) RecordCommit(ctx chasm.MutableContext, producer string, workflowTask, attempt int64) {
+func (s *Stream) RecordCommit(ctx chasm.MutableContext, producer string, workflowTask, attempt int64) error {
 	field, ok := s.Producers[producer]
 	if !ok || field.Get(ctx).WorkflowTask != workflowTask {
-		return
+		return nil
 	}
-	s.add(ctx, &streamservicepb.Record{WorkflowTaskCommit: &streamservicepb.WorkflowTaskCommit{
+	_, err := s.add(ctx, &streamservicepb.Record{WorkflowTaskCommit: &streamservicepb.WorkflowTaskCommit{
 		Producer:     producer,
 		WorkflowTask: workflowTask,
 		Attempt:      attempt,
 	}})
+	return err
 }
 
 // CloseIfOpen closes the stream unless it is already closed.
@@ -157,9 +166,17 @@ func (s *Stream) CloseIfOpen(c *streamservicepb.StreamClose) {
 	}
 }
 
-func (s *Stream) add(ctx chasm.MutableContext, r *streamservicepb.Record) {
-	s.Records[s.NextOffset] = chasm.NewDataField(ctx, r)
-	s.NextOffset++
+// add appends records to the ordered store as one batch and returns the offset of the first.
+func (s *Stream) add(ctx chasm.MutableContext, records ...*streamservicepb.Record) (int64, error) {
+	events := make([][]byte, len(records))
+	for i, r := range records {
+		b, err := proto.Marshal(r)
+		if err != nil {
+			return 0, err
+		}
+		events[i] = b
+	}
+	return s.Records.Get(ctx).Append(ctx, events...), nil
 }
 
 // OffsetRecord is a record and its offset.
@@ -179,46 +196,64 @@ type ReadResult struct {
 
 // Read returns up to maxRecords records after offset after (-1 for the beginning) that match
 // topics. Workflow task commit markers match every filter.
-func (s *Stream) Read(ctx chasm.Context, after int64, topics []string, maxRecords int) ReadResult {
+func (s *Stream) Read(ctx chasm.Context, after int64, topics []string, maxRecords int) (ReadResult, error) {
 	if maxRecords <= 0 {
 		maxRecords = defaultMaxRecords
 	}
 	result := ReadResult{Position: after}
-	for offset := after + 1; offset < s.NextOffset && len(result.Records) < maxRecords; offset++ {
-		r := s.Records[offset].Get(ctx)
+	err := s.scan(ctx, after+1, func(offset int64, r *streamservicepb.Record) bool {
 		result.Position = offset
 		if matches(r, topics) {
 			result.Records = append(result.Records, OffsetRecord{Offset: offset, Record: r})
 		}
-	}
-	result.Closed = s.Close != nil && result.Position == s.NextOffset-1
-	return result
+		return len(result.Records) < maxRecords
+	})
+	result.Closed = s.Close != nil && result.Position == s.nextOffset(ctx)-1
+	return result, err
 }
 
-// ReadLast returns the last n records that match topics.
-func (s *Stream) ReadLast(ctx chasm.Context, n int, topics []string) ReadResult {
-	result := ReadResult{Position: s.NextOffset - 1}
-	for offset := s.NextOffset - 1; offset >= 0 && len(result.Records) < n; offset-- {
-		if r := s.Records[offset].Get(ctx); matches(r, topics) {
-			result.Records = append(result.Records, OffsetRecord{Offset: offset, Record: r})
-		}
-	}
-	slices.Reverse(result.Records)
-	result.Closed = s.Close != nil
-	return result
-}
-
-// HasNews reports whether a read after offset after would return a record or the close.
-func (s *Stream) HasNews(ctx chasm.Context, after int64, topics []string) bool {
-	if s.Close != nil {
-		return true
-	}
-	for offset := after + 1; offset < s.NextOffset; offset++ {
-		if matches(s.Records[offset].Get(ctx), topics) {
+// ReadLast returns the last n records that match topics. The ordered store reads forwards only, so
+// it reads windows of growing size backwards from the end.
+func (s *Stream) ReadLast(ctx chasm.Context, n int, topics []string) (ReadResult, error) {
+	next := s.nextOffset(ctx)
+	result := ReadResult{Position: next - 1, Closed: s.Close != nil}
+	for end, size := next, int64(n); end > 0 && len(result.Records) < n; size *= 2 {
+		start := max(0, end-size)
+		var window []OffsetRecord
+		err := s.scan(ctx, start, func(offset int64, r *streamservicepb.Record) bool {
+			if offset >= end {
+				return false
+			}
+			if matches(r, topics) {
+				window = append(window, OffsetRecord{Offset: offset, Record: r})
+			}
 			return true
+		})
+		if err != nil {
+			return result, err
 		}
+		result.Records = append(window, result.Records...)
+		end = start
 	}
-	return false
+	result.Records = result.Records[max(0, len(result.Records)-n):]
+	return result, nil
+}
+
+func (s *Stream) nextOffset(ctx chasm.Context) int64 {
+	return s.Records.Get(ctx).NextEventId
+}
+
+// scan calls fn with each record from offset from onwards, until fn returns false.
+func (s *Stream) scan(ctx chasm.Context, from int64, fn func(offset int64, r *streamservicepb.Record) bool) error {
+	var err error
+	s.Records.Get(ctx).Read(ctx, from, func(id int64, event []byte) bool {
+		r := &streamservicepb.Record{}
+		if err = proto.Unmarshal(event, r); err != nil {
+			return false
+		}
+		return fn(id, r)
+	})
+	return err
 }
 
 func matches(r *streamservicepb.Record, topics []string) bool {

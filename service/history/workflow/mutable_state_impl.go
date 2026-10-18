@@ -7473,8 +7473,7 @@ func (ms *MutableStateImpl) recordStreamWorkflowTaskCommit(attempt int32) error 
 	if wf == nil || err != nil {
 		return err
 	}
-	wf.RecordStreamWorkflowTaskCommit(ctx, attempt)
-	return nil
+	return wf.RecordStreamWorkflowTaskCommit(ctx, attempt)
 }
 
 // closeStreamOnEnd closes the workflow's stream with a state taken from the workflow's terminal

@@ -218,10 +218,14 @@ func (w *Workflow) readStream(ctx chasm.Context, args streamReadArgs) (*streamse
 		return resp, nil
 	}
 	var result stream.ReadResult
+	var err error
 	if n := args.req.GetLast(); n > 0 {
-		result = s.ReadLast(ctx, int(n), args.req.GetTopics())
+		result, err = s.ReadLast(ctx, int(n), args.req.GetTopics())
 	} else {
-		result = s.Read(ctx, after, args.req.GetTopics(), int(args.req.GetMaxRecords()))
+		result, err = s.Read(ctx, after, args.req.GetTopics(), int(args.req.GetMaxRecords()))
+	}
+	if err != nil {
+		return nil, err
 	}
 	for _, r := range result.Records {
 		cursor, err := w.streamCursor(r.Offset)
@@ -248,12 +252,12 @@ func (w *Workflow) readStream(ctx chasm.Context, args streamReadArgs) (*streamse
 // RecordStreamWorkflowTaskCommit records, in the stream, that attempt committed the run's current
 // workflow task, if any attempt of that task appended. It is called in the transaction that
 // completes the task.
-func (w *Workflow) RecordStreamWorkflowTaskCommit(ctx chasm.MutableContext, attempt int32) {
+func (w *Workflow) RecordStreamWorkflowTaskCommit(ctx chasm.MutableContext, attempt int32) error {
 	s, ok := w.Stream.TryGet(ctx)
 	if !ok {
-		return
+		return nil
 	}
-	s.RecordCommit(ctx, workflowStreamProducerID(w.GetExecutionState().GetRunId()), w.GetExecutionInfo().GetLastCompletedWorkflowTaskStartedEventId(), int64(attempt))
+	return s.RecordCommit(ctx, workflowStreamProducerID(w.GetExecutionState().GetRunId()), w.GetExecutionInfo().GetLastCompletedWorkflowTaskStartedEventId(), int64(attempt))
 }
 
 // CloseStreamOnOwnerEnd closes the stream, unless it is already closed, in the transaction in
@@ -270,7 +274,7 @@ func (w *Workflow) mutableStream(ctx chasm.MutableContext) *stream.Stream {
 	if s, ok := w.Stream.TryGet(ctx); ok {
 		return s
 	}
-	s := stream.New()
+	s := stream.New(ctx)
 	w.Stream = chasm.NewComponentField(ctx, s)
 	return s
 }

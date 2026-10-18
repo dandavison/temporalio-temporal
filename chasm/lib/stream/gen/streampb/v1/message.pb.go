@@ -25,8 +25,6 @@ const (
 
 type StreamState struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
-	// The offset the next record gets. Offsets are contiguous from 0.
-	NextOffset int64 `protobuf:"varint,1,opt,name=next_offset,json=nextOffset,proto3" json:"next_offset,omitempty"`
 	// Set once the stream is closed.
 	Close         *v1.StreamClose `protobuf:"bytes,2,opt,name=close,proto3" json:"close,omitempty"`
 	unknownFields protoimpl.UnknownFields
@@ -61,13 +59,6 @@ func (x *StreamState) ProtoReflect() protoreflect.Message {
 // Deprecated: Use StreamState.ProtoReflect.Descriptor instead.
 func (*StreamState) Descriptor() ([]byte, []int) {
 	return file_temporal_server_chasm_lib_stream_proto_v1_message_proto_rawDescGZIP(), []int{0}
-}
-
-func (x *StreamState) GetNextOffset() int64 {
-	if x != nil {
-		return x.NextOffset
-	}
-	return 0
 }
 
 func (x *StreamState) GetClose() *v1.StreamClose {
@@ -229,11 +220,9 @@ var File_temporal_server_chasm_lib_stream_proto_v1_message_proto protoreflect.Fi
 
 const file_temporal_server_chasm_lib_stream_proto_v1_message_proto_rawDesc = "" +
 	"\n" +
-	"7temporal/server/chasm/lib/stream/proto/v1/message.proto\x12)temporal.server.chasm.lib.stream.proto.v1\x1aBtemporal/api/nexusservices/streamservice/v1/request_response.proto\"~\n" +
-	"\vStreamState\x12\x1f\n" +
-	"\vnext_offset\x18\x01 \x01(\x03R\n" +
-	"nextOffset\x12N\n" +
-	"\x05close\x18\x02 \x01(\v28.temporal.api.nexusservices.streamservice.v1.StreamCloseR\x05close\"\xb8\x01\n" +
+	"7temporal/server/chasm/lib/stream/proto/v1/message.proto\x12)temporal.server.chasm.lib.stream.proto.v1\x1aBtemporal/api/nexusservices/streamservice/v1/request_response.proto\"c\n" +
+	"\vStreamState\x12N\n" +
+	"\x05close\x18\x02 \x01(\v28.temporal.api.nexusservices.streamservice.v1.StreamCloseR\x05closeJ\x04\b\x01\x10\x02\"\xb8\x01\n" +
 	"\rProducerState\x12#\n" +
 	"\rworkflow_task\x18\x01 \x01(\x03R\fworkflowTask\x12\x14\n" +
 	"\x05epoch\x18\x02 \x01(\x03R\x05epoch\x12\x10\n" +
