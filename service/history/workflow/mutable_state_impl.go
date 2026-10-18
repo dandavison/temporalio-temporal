@@ -5054,10 +5054,8 @@ func (ms *MutableStateImpl) ApplyWorkflowExecutionCompletedEvent(
 	ms.executionInfo.CloseTime = event.GetEventTime()
 	ms.ClearStickyTaskQueue()
 	ms.writeEventToCache(event)
-	if ms.executionInfo.NewExecutionRunId == "" {
-		if err := ms.closeStreamOnEnd(nil); err != nil {
-			return err
-		}
+	if err := ms.closeStreamOnEnd(nil); err != nil {
+		return err
 	}
 	return ms.processCloseCallbacks()
 }
@@ -5105,10 +5103,10 @@ func (ms *MutableStateImpl) ApplyWorkflowExecutionFailedEvent(
 	ms.writeEventToCache(event)
 
 	attrs := event.GetWorkflowExecutionFailedEventAttributes()
+	if err := ms.closeStreamOnEnd(attrs.GetFailure()); err != nil {
+		return err
+	}
 	if attrs.RetryState != enumspb.RETRY_STATE_IN_PROGRESS {
-		if err := ms.closeStreamOnEnd(attrs.GetFailure()); err != nil {
-			return err
-		}
 		return ms.processCloseCallbacks()
 	}
 	// Workflow-level callbacks are inherited by the retry run, but update callbacks
@@ -5157,10 +5155,10 @@ func (ms *MutableStateImpl) ApplyWorkflowExecutionTimedoutEvent(
 	ms.writeEventToCache(event)
 
 	attrs := event.GetWorkflowExecutionTimedOutEventAttributes()
+	if err := ms.closeStreamOnEnd(nil); err != nil {
+		return err
+	}
 	if attrs.RetryState != enumspb.RETRY_STATE_IN_PROGRESS {
-		if err := ms.closeStreamOnEnd(nil); err != nil {
-			return err
-		}
 		return ms.processCloseCallbacks()
 	}
 	// Workflow-level callbacks are inherited by the retry run, but update callbacks
@@ -7495,12 +7493,14 @@ func (ms *MutableStateImpl) deleteClosedActivity(scheduledEventID int64) error {
 }
 
 // closeStreamOnEnd closes the workflow's stream with a state taken from the workflow's terminal
-// status. It is not called at continue-as-new, for a run that is retried, or for a completed cron
-// run: those runs leave their stream open, because moving the stream to the next run is not built,
-// and nothing appends to or reads that stream again. A failed or timed-out cron run that is not
-// retried does close its stream, although the cron chain continues: this is inconsistent with a
-// completed cron run.
+// status, unless the run's chain continues in a new run: a cron run, whatever its outcome, or a run
+// that is retried. Those runs leave their stream open, because moving the stream to the next run is
+// not built, and nothing appends to or reads that stream again. It is not called at
+// continue-as-new, which also leaves the stream open.
 func (ms *MutableStateImpl) closeStreamOnEnd(closeFailure *failurepb.Failure) error {
+	if ms.executionInfo.NewExecutionRunId != "" {
+		return nil
+	}
 	wf, ctx, err := ms.streamWorkflowComponent()
 	if wf == nil || err != nil {
 		return err
