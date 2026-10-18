@@ -8,6 +8,7 @@ import (
 	deploymentpb "go.temporal.io/api/deployment/v1"
 	enumspb "go.temporal.io/api/enums/v1"
 	failurepb "go.temporal.io/api/failure/v1"
+	streamservicepb "go.temporal.io/api/nexusservices/streamservice/v1"
 	"go.temporal.io/api/workflowservice/v1"
 	"go.temporal.io/server/api/historyservice/v1"
 	"go.temporal.io/server/chasm"
@@ -513,6 +514,7 @@ func (a *Activity) applyStarted(ctx chasm.MutableContext, request *historyservic
 }
 
 func (a *Activity) applyCompleted(ctx chasm.MutableContext, event completeEvent) error {
+	a.closeStreamOnEnd(ctx, streamservicepb.CLOSE_STATE_COMPLETED)
 	return a.StoreOrSelf(ctx).RecordCompleted(ctx, func(ctx chasm.MutableContext) error {
 		req := event.req.GetCompleteRequest()
 
@@ -545,6 +547,7 @@ func (a *Activity) applyCompleted(ctx chasm.MutableContext, event completeEvent)
 // Not to be confused with applyFailedAttempt/recordFailedAttempt, which record the
 // failure of a single attempt that may still be retried.
 func (a *Activity) applyFailed(ctx chasm.MutableContext, event failedEvent) error {
+	a.closeStreamOnEnd(ctx, streamservicepb.CLOSE_STATE_FAILED)
 	return a.StoreOrSelf(ctx).RecordCompleted(ctx, func(ctx chasm.MutableContext) error {
 		req := event.req.GetFailedRequest()
 		a.Outcome.Get(ctx).RetryState = event.retryState
@@ -574,6 +577,7 @@ func (a *Activity) applyFailed(ctx chasm.MutableContext, event failedEvent) erro
 }
 
 func (a *Activity) applyTerminated(ctx chasm.MutableContext, event terminateEvent) error {
+	a.closeStreamOnEnd(ctx, streamservicepb.CLOSE_STATE_TERMINATED)
 	return a.StoreOrSelf(ctx).RecordCompleted(ctx, func(ctx chasm.MutableContext) error {
 		a.TerminateState = &activitypb.ActivityTerminateState{
 			RequestId: event.request.RequestID,
@@ -614,6 +618,7 @@ func (a *Activity) applyCancelRequested(ctx chasm.MutableContext, req *workflows
 }
 
 func (a *Activity) applyCanceled(ctx chasm.MutableContext, event cancelEvent) error {
+	a.closeStreamOnEnd(ctx, streamservicepb.CLOSE_STATE_CANCELED)
 	return a.StoreOrSelf(ctx).RecordCompleted(ctx, func(ctx chasm.MutableContext) error {
 		outcome := a.Outcome.Get(ctx)
 		failure := &failurepb.Failure{
@@ -640,6 +645,7 @@ func (a *Activity) applyCanceled(ctx chasm.MutableContext, event cancelEvent) er
 func (a *Activity) applyTimedOut(ctx chasm.MutableContext, event timeoutEvent) error {
 	timeoutType := event.timeoutType
 
+	a.closeStreamOnEnd(ctx, streamservicepb.CLOSE_STATE_TIMED_OUT)
 	return a.StoreOrSelf(ctx).RecordCompleted(ctx, func(ctx chasm.MutableContext) error {
 		a.Outcome.Get(ctx).RetryState = event.retryState
 		priorAttemptFailure := a.LastAttempt.Get(ctx).GetLastFailureDetails().GetFailure()

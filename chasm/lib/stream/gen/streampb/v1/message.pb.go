@@ -172,12 +172,16 @@ func (x *ProducerState) GetWorkflowTaskAttempt() int32 {
 	return 0
 }
 
-// The bytes of a native cursor: the boundary after the record at offset.
+// The bytes of a native cursor: the boundary after the record at offset, in the stream of a workflow
+// run chain (workflow_id, first_run_id) or a Standalone Activity execution (activity_id,
+// activity_run_id).
 type Cursor struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	WorkflowId    string                 `protobuf:"bytes,1,opt,name=workflow_id,json=workflowId,proto3" json:"workflow_id,omitempty"`
 	FirstRunId    string                 `protobuf:"bytes,2,opt,name=first_run_id,json=firstRunId,proto3" json:"first_run_id,omitempty"`
 	Offset        int64                  `protobuf:"varint,3,opt,name=offset,proto3" json:"offset,omitempty"`
+	ActivityId    string                 `protobuf:"bytes,4,opt,name=activity_id,json=activityId,proto3" json:"activity_id,omitempty"`
+	ActivityRunId string                 `protobuf:"bytes,5,opt,name=activity_run_id,json=activityRunId,proto3" json:"activity_run_id,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -233,6 +237,20 @@ func (x *Cursor) GetOffset() int64 {
 	return 0
 }
 
+func (x *Cursor) GetActivityId() string {
+	if x != nil {
+		return x.ActivityId
+	}
+	return ""
+}
+
+func (x *Cursor) GetActivityRunId() string {
+	if x != nil {
+		return x.ActivityRunId
+	}
+	return ""
+}
+
 var File_temporal_server_chasm_lib_stream_proto_v1_message_proto protoreflect.FileDescriptor
 
 const file_temporal_server_chasm_lib_stream_proto_v1_message_proto_rawDesc = "" +
@@ -251,13 +269,16 @@ const file_temporal_server_chasm_lib_stream_proto_v1_message_proto_rawDesc = "" 
 	"\ffirst_offset\x18\x04 \x01(\x03R\vfirstOffset\x12\x14\n" +
 	"\x05count\x18\x05 \x01(\x03R\x05count\x12\x16\n" +
 	"\x06digest\x18\x06 \x01(\fR\x06digest\x122\n" +
-	"\x15workflow_task_attempt\x18\a \x01(\x05R\x13workflowTaskAttempt\"c\n" +
+	"\x15workflow_task_attempt\x18\a \x01(\x05R\x13workflowTaskAttempt\"\xac\x01\n" +
 	"\x06Cursor\x12\x1f\n" +
 	"\vworkflow_id\x18\x01 \x01(\tR\n" +
 	"workflowId\x12 \n" +
 	"\ffirst_run_id\x18\x02 \x01(\tR\n" +
 	"firstRunId\x12\x16\n" +
-	"\x06offset\x18\x03 \x01(\x03R\x06offsetB>Z<go.temporal.io/server/chasm/lib/stream/gen/streampb;streampbb\x06proto3"
+	"\x06offset\x18\x03 \x01(\x03R\x06offset\x12\x1f\n" +
+	"\vactivity_id\x18\x04 \x01(\tR\n" +
+	"activityId\x12&\n" +
+	"\x0factivity_run_id\x18\x05 \x01(\tR\ractivityRunIdB>Z<go.temporal.io/server/chasm/lib/stream/gen/streampb;streampbb\x06proto3"
 
 var (
 	file_temporal_server_chasm_lib_stream_proto_v1_message_proto_rawDescOnce sync.Once

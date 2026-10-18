@@ -1,8 +1,9 @@
 package workflow
 
 // The stream service on the System Nexus Endpoint: Append, Read and Close on the stream owned by a
-// workflow run chain. The stream is embedded in the workflow's CHASM tree. Moving it to the new run
-// at continue-as-new is not built, so a new run of the chain starts with no stream.
+// workflow run chain or a Standalone Activity execution. The stream is embedded in its owner's CHASM
+// tree; the activity's side is in chasm/lib/activity. Moving a workflow's stream to the new run at
+// continue-as-new is not built, so a new run of the chain starts with no stream.
 
 import (
 	"context"
@@ -17,6 +18,7 @@ import (
 	"go.temporal.io/api/serviceerror"
 	enumsspb "go.temporal.io/server/api/enums/v1"
 	"go.temporal.io/server/chasm"
+	"go.temporal.io/server/chasm/lib/activity"
 	"go.temporal.io/server/chasm/lib/stream"
 	"go.temporal.io/server/chasm/lib/stream/gen/streampb/v1"
 	"go.temporal.io/server/common"
@@ -51,11 +53,16 @@ func (h *streamServiceHandler) append(
 	req *streamservicepb.AppendRequest,
 	_ nexus.StartOperationOptions,
 ) (*streamservicepb.AppendResponse, error) {
-	ref, err := h.workflowRef(req.GetStream())
+	ref, ownedByActivity, err := h.ownerRef(req.GetStream(), nil)
 	if err != nil {
 		return nil, err
 	}
-	resp, _, err := chasm.UpdateComponent(ctx, ref, (*Workflow).appendToStream, req)
+	var resp *streamservicepb.AppendResponse
+	if ownedByActivity {
+		resp, _, err = chasm.UpdateComponent(ctx, ref, (*activity.Activity).AppendToStream, req)
+	} else {
+		resp, _, err = chasm.UpdateComponent(ctx, ref, (*Workflow).appendToStream, req)
+	}
 	return resp, streamOperationError(ownerNotFound(err))
 }
 
@@ -64,11 +71,16 @@ func (h *streamServiceHandler) close(
 	req *streamservicepb.CloseRequest,
 	_ nexus.StartOperationOptions,
 ) (*streamservicepb.CloseResponse, error) {
-	ref, err := h.workflowRef(req.GetStream())
+	ref, ownedByActivity, err := h.ownerRef(req.GetStream(), nil)
 	if err != nil {
 		return nil, err
 	}
-	resp, _, err := chasm.UpdateComponent(ctx, ref, (*Workflow).closeStream, req)
+	var resp *streamservicepb.CloseResponse
+	if ownedByActivity {
+		resp, _, err = chasm.UpdateComponent(ctx, ref, (*activity.Activity).CloseStream, req)
+	} else {
+		resp, _, err = chasm.UpdateComponent(ctx, ref, (*Workflow).closeStream, req)
+	}
 	return resp, streamOperationError(ownerNotFound(err))
 }
 
@@ -80,13 +92,13 @@ func (h *streamServiceHandler) read(
 	req *streamservicepb.ReadRequest,
 	_ nexus.StartOperationOptions,
 ) (*streamservicepb.ReadResponse, error) {
-	ref, err := h.workflowRef(req.GetStream())
-	if err != nil {
-		return nil, err
-	}
 	args, err := newStreamReadArgs(req)
 	if err != nil {
 		return nil, streamOperationError(err)
+	}
+	ref, ownedByActivity, err := h.ownerRef(req.GetStream(), args.Cursor)
+	if err != nil {
+		return nil, err
 	}
 	wait := min(req.GetWait().AsDuration(), maxStreamReadWait)
 	if wait > 0 {
@@ -95,9 +107,14 @@ func (h *streamServiceHandler) read(
 		defer cancel()
 	}
 	for {
-		resp, err := h.readOnce(ctx, ref, args, wait > 0)
+		var resp *streamservicepb.ReadResponse
+		if ownedByActivity {
+			resp, err = readStreamOnce(ctx, ref, (*activity.Activity).ReadStream, args, wait > 0)
+		} else {
+			resp, err = readStreamOnce(ctx, ref, (*Workflow).readStream, args, wait > 0)
+		}
 		if _, ok := errors.AsType[*serviceerror.NotFound](err); ok {
-			if args.cursor != nil {
+			if args.Cursor != nil {
 				return nil, streamOperationError(streamError(streamservicepb.STREAM_FAILURE_TYPE_EXPIRED, "the stream's owner no longer exists"))
 			}
 			if wait == 0 {
@@ -114,13 +131,21 @@ func (h *streamServiceHandler) read(
 	}
 }
 
-func (h *streamServiceHandler) readOnce(ctx context.Context, ref chasm.ComponentRef, args streamReadArgs, wait bool) (*streamservicepb.ReadResponse, error) {
-	resp, err := chasm.ReadComponent(ctx, ref, (*Workflow).readStream, args)
-	if err != nil || !wait || len(resp.Records) > 0 || resp.Close != nil || args.req.GetLast() > 0 {
+// readStreamOnce reads the owner's stream, and if wait is set and there is nothing to return,
+// long-polls until there is, or the context ends.
+func readStreamOnce[C any](
+	ctx context.Context,
+	ref chasm.ComponentRef,
+	read func(C, chasm.Context, stream.ReadArgs) (*streamservicepb.ReadResponse, error),
+	args stream.ReadArgs,
+	wait bool,
+) (*streamservicepb.ReadResponse, error) {
+	resp, err := chasm.ReadComponent(ctx, ref, read, args)
+	if err != nil || !wait || len(resp.Records) > 0 || resp.Close != nil || args.Req.GetLast() > 0 {
 		return resp, err
 	}
-	polled, _, err := chasm.PollComponent(ctx, ref, func(w *Workflow, ctx chasm.Context, args streamReadArgs) (*streamservicepb.ReadResponse, bool, error) {
-		resp, err := w.readStream(ctx, args)
+	polled, _, err := chasm.PollComponent(ctx, ref, func(c C, ctx chasm.Context, args stream.ReadArgs) (*streamservicepb.ReadResponse, bool, error) {
+		resp, err := read(c, ctx, args)
 		return resp, err == nil && (len(resp.Records) > 0 || resp.Close != nil), err
 	}, args)
 	if ctx.Err() != nil || (err == nil && polled == nil) {
@@ -129,29 +154,43 @@ func (h *streamServiceHandler) readOnce(ctx context.Context, ref chasm.Component
 	return polled, err
 }
 
-func (h *streamServiceHandler) workflowRef(ref *streamservicepb.StreamRef) (chasm.ComponentRef, error) {
+// ownerRef refers to the stream's owner: a workflow's current run, or a Standalone Activity
+// execution, the pinned one or the current one. A read after a cursor of an activity's stream reads
+// the execution the cursor belongs to.
+func (h *streamServiceHandler) ownerRef(ref *streamservicepb.StreamRef, cursor *streampb.Cursor) (chasm.ComponentRef, bool, error) {
 	nsID, err := h.namespaceRegistry.GetNamespaceID(namespace.Name(ref.GetNamespace()))
 	if err != nil {
-		return chasm.ComponentRef{}, err
+		return chasm.ComponentRef{}, false, err
+	}
+	if activityID := ref.GetActivityId(); activityID != "" {
+		runID := ref.GetActivityRunId()
+		if cursor != nil {
+			runID = cursor.GetActivityRunId()
+		}
+		return chasm.NewComponentRef[*activity.Activity](chasm.ExecutionKey{
+			NamespaceID: nsID.String(),
+			BusinessID:  activityID,
+			RunID:       runID,
+		}), true, nil
 	}
 	return chasm.NewComponentRef[*Workflow](chasm.ExecutionKey{
 		NamespaceID: nsID.String(),
 		BusinessID:  ref.GetWorkflowId(),
-	}), nil
+	}), false, nil
 }
 
-type streamReadArgs struct {
-	req    *streamservicepb.ReadRequest
-	cursor *streampb.Cursor
-}
-
-func newStreamReadArgs(req *streamservicepb.ReadRequest) (streamReadArgs, error) {
-	args := streamReadArgs{req: req}
+// newStreamReadArgs decodes the request's cursor, which must belong to the requested stream.
+func newStreamReadArgs(req *streamservicepb.ReadRequest) (stream.ReadArgs, error) {
+	args := stream.ReadArgs{Req: req}
 	if len(req.GetAfter()) == 0 {
 		return args, nil
 	}
-	args.cursor = &streampb.Cursor{}
-	if err := proto.Unmarshal(req.GetAfter(), args.cursor); err != nil || args.cursor.GetWorkflowId() != req.GetStream().GetWorkflowId() {
+	args.Cursor = &streampb.Cursor{}
+	ref := req.GetStream()
+	if err := proto.Unmarshal(req.GetAfter(), args.Cursor); err != nil ||
+		args.Cursor.GetWorkflowId() != ref.GetWorkflowId() ||
+		args.Cursor.GetActivityId() != ref.GetActivityId() ||
+		(ref.GetActivityRunId() != "" && args.Cursor.GetActivityRunId() != ref.GetActivityRunId()) {
 		return args, streamError(streamservicepb.STREAM_FAILURE_TYPE_CURSOR_MISMATCH, "the cursor belongs to another stream")
 	}
 	return args, nil
@@ -238,52 +277,19 @@ func (w *Workflow) AppendCommitModeRecords(ctx chasm.MutableContext, records []*
 	return err
 }
 
-func (w *Workflow) readStream(ctx chasm.Context, args streamReadArgs) (*streamservicepb.ReadResponse, error) {
-	if err := w.checkStreamChain(args.req.GetStream()); err != nil {
+func (w *Workflow) readStream(ctx chasm.Context, args stream.ReadArgs) (*streamservicepb.ReadResponse, error) {
+	if err := w.checkStreamChain(args.Req.GetStream()); err != nil {
 		return nil, err
 	}
-	resp := &streamservicepb.ReadResponse{Cursor: args.req.GetAfter()}
 	after := int64(-1)
-	if args.cursor != nil {
-		if args.cursor.GetFirstRunId() != w.firstRunID() {
+	if args.Cursor != nil {
+		if args.Cursor.GetFirstRunId() != w.firstRunID() {
 			return nil, streamError(streamservicepb.STREAM_FAILURE_TYPE_EXPIRED, "the cursor's run chain no longer exists")
 		}
-		after = args.cursor.GetOffset()
+		after = args.Cursor.GetOffset()
 	}
-	s, ok := w.Stream.TryGet(ctx)
-	if !ok {
-		return resp, nil
-	}
-	var result stream.ReadResult
-	var err error
-	if n := args.req.GetLast(); n > 0 {
-		result, err = s.ReadLast(ctx, int(n), args.req.GetTopics())
-	} else {
-		result, err = s.Read(ctx, after, args.req.GetTopics(), int(args.req.GetMaxRecords()))
-	}
-	if err != nil {
-		return nil, err
-	}
-	for _, r := range result.Records {
-		cursor, err := w.streamCursor(r.Offset)
-		if err != nil {
-			return nil, err
-		}
-		record := proto.CloneOf(r.Record)
-		record.Cursor = cursor
-		resp.Records = append(resp.Records, record)
-	}
-	if result.Position >= 0 {
-		cursor, err := w.streamCursor(result.Position)
-		if err != nil {
-			return nil, err
-		}
-		resp.Cursor = cursor
-	}
-	if result.Closed {
-		resp.Close = s.Close
-	}
-	return resp, nil
+	s, _ := w.Stream.TryGet(ctx)
+	return stream.ReadResponse(ctx, s, args.Req, after, w.streamCursor)
 }
 
 // RecordStreamWorkflowTaskCommit records, in the stream, that attempt completed the run's current
@@ -488,8 +494,8 @@ type streamOperationProcessor[I interface {
 
 func (streamOperationProcessor[I]) ProcessInput(ctx chasm.NexusOperationProcessorContext, req I) (*chasm.NexusOperationProcessorResult, error) {
 	ref := req.GetStream()
-	if ref.GetWorkflowId() == "" {
-		return nil, serviceerror.NewInvalidArgument("stream workflow ID is required")
+	if (ref.GetWorkflowId() == "") == (ref.GetActivityId() == "") {
+		return nil, serviceerror.NewInvalidArgument("a stream is named by exactly one of a workflow ID and an activity ID")
 	}
 	ns := ctx.Namespace.Name().String()
 	if ref.GetNamespace() == "" {
@@ -500,7 +506,7 @@ func (streamOperationProcessor[I]) ProcessInput(ctx chasm.NexusOperationProcesso
 	return &chasm.NexusOperationProcessorResult{
 		RoutingKey: chasm.NexusOperationRoutingKeyExecution{
 			NamespaceID: ctx.Namespace.ID().String(),
-			BusinessID:  ref.GetWorkflowId(),
+			BusinessID:  ref.GetWorkflowId() + ref.GetActivityId(),
 		},
 	}, nil
 }

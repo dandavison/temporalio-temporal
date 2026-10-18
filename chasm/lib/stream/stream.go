@@ -67,6 +67,17 @@ func newError(t streamservicepb.StreamFailureType, format string, args ...any) *
 	return &Error{Type: t, Message: fmt.Sprintf(format, args...)}
 }
 
+// NewError returns a stream operation failure of type t.
+func NewError(t streamservicepb.StreamFailureType, format string, args ...any) *Error {
+	return newError(t, format, args...)
+}
+
+// ReadArgs is a read request and its decoded cursor, nil for a read from the beginning.
+type ReadArgs struct {
+	Req    *streamservicepb.ReadRequest
+	Cursor *streampb.Cursor
+}
+
 // The size limits on an append.
 const (
 	MaxRecordsPerAppend = 1000
@@ -378,4 +389,48 @@ func appendDigest(records []*streamservicepb.AppendRecord, finish bool, closing 
 	}
 	sum := sha256.Sum256(append(b, c...))
 	return sum[:], nil
+}
+
+// ReadResponse answers a read of the records after offset after (-1 for the beginning), with
+// cursorFor encoding an offset as a cursor of the owner's stream. s is nil when the owner has no
+// stream yet.
+func ReadResponse(
+	ctx chasm.Context,
+	s *Stream,
+	req *streamservicepb.ReadRequest,
+	after int64,
+	cursorFor func(offset int64) ([]byte, error),
+) (*streamservicepb.ReadResponse, error) {
+	resp := &streamservicepb.ReadResponse{Cursor: req.GetAfter()}
+	if s == nil {
+		return resp, nil
+	}
+	var result ReadResult
+	var err error
+	if n := req.GetLast(); n > 0 {
+		result, err = s.ReadLast(ctx, int(n), req.GetTopics())
+	} else {
+		result, err = s.Read(ctx, after, req.GetTopics(), int(req.GetMaxRecords()))
+	}
+	if err != nil {
+		return nil, err
+	}
+	for _, r := range result.Records {
+		cursor, err := cursorFor(r.Offset)
+		if err != nil {
+			return nil, err
+		}
+		record := proto.CloneOf(r.Record)
+		record.Cursor = cursor
+		resp.Records = append(resp.Records, record)
+	}
+	if result.Position >= 0 {
+		if resp.Cursor, err = cursorFor(result.Position); err != nil {
+			return nil, err
+		}
+	}
+	if result.Closed {
+		resp.Close = s.Close
+	}
+	return resp, nil
 }
