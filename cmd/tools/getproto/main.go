@@ -34,7 +34,14 @@ func fatalIfErr(err error) {
 
 func findProtoImports() []string {
 	importMap := make(map[string]struct{})
-	fatalIfErr(filepath.WalkDir("proto/internal", func(path string, d fs.DirEntry, err error) error {
+	for _, root := range []string{"proto/internal", "chasm/lib"} {
+		findProtoImportsIn(root, importMap)
+	}
+	return expmaps.Keys(importMap)
+}
+
+func findProtoImportsIn(root string, importMap map[string]struct{}) {
+	fatalIfErr(filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {
 		if err != nil {
 			return err
 		}
@@ -54,7 +61,6 @@ func findProtoImports() []string {
 		}
 		return nil
 	}))
-	return expmaps.Keys(importMap)
 }
 
 func getImportName(i string) string {
@@ -152,6 +158,11 @@ func initSeeds() {
 
 func checkImports(files map[string]protoreflect.FileDescriptor) {
 	missing := make(map[string]struct{})
+	for _, imp := range findProtoImports() {
+		if _, ok := files[imp]; !ok {
+			missing[imp] = struct{}{}
+		}
+	}
 	for _, fd := range files {
 		imports := fd.Imports()
 		num := imports.Len()

@@ -311,7 +311,7 @@ rm -rf $${tmpdir} ;\
 endef
 
 ##### Proto #####
-$(API_BINPB): go.mod go.sum $(PROTO_FILES)
+$(API_BINPB): go.mod go.sum $(PROTO_FILES) $(CHASM_PROTO_FILES)
 	@printf $(COLOR) "Generating proto dependencies image..."
 	@./cmd/tools/getproto/run.sh --out $@
 
