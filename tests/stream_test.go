@@ -57,6 +57,7 @@ var streamBackends = []struct {
 }{
 	{"Native", func(_ *testing.T, env *testcore.TestEnv) streamBackendUnderTest { return newNativeStreamBackend(env) }},
 	{"Redis", newRedisStreamBackend},
+	{"PostgreSQL", newPostgresStreamBackend},
 }
 
 func newStreamEnv(t *testing.T, opts ...testcore.TestOption) *testcore.TestEnv {

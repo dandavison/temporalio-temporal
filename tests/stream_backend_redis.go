@@ -106,7 +106,7 @@ func (b *redisStreamBackend) Append(ctx context.Context, ref streamRef, req stre
 	if err := checkStreamAppendSize(req.Records); err != nil {
 		return streamAppendResponse{}, err
 	}
-	id, err := redisProducer(req.Producer)
+	id, err := externalProducer(req.Producer)
 	if err != nil {
 		return streamAppendResponse{}, err
 	}
@@ -137,7 +137,7 @@ func (b *redisStreamBackend) Append(ctx context.Context, ref streamRef, req stre
 }
 
 func (b *redisStreamBackend) Close(ctx context.Context, ref streamRef, req streamCloseRequest) error {
-	id, err := redisProducer(req.Owner)
+	id, err := externalProducer(req.Owner)
 	if err != nil {
 		return err
 	}
@@ -161,7 +161,7 @@ func (b *redisStreamBackend) Close(ctx context.Context, ref streamRef, req strea
 	return err
 }
 
-func (b *redisStreamBackend) runAppend(ctx context.Context, k redisKeys, id redisProducerIdentity, seq int64, entries [][]string, closing bool) ([]string, error) {
+func (b *redisStreamBackend) runAppend(ctx context.Context, k redisKeys, id externalProducerIdentity, seq int64, entries [][]string, closing bool) ([]string, error) {
 	args := []any{
 		k.firstRun, id.producer, id.runID, id.workflowTask, id.workflowTaskAttempt, id.epoch, seq,
 		appendDigest(entries), boolArg(closing), redisStreamRetention.Milliseconds(), len(entries),
@@ -398,7 +398,9 @@ func (b *redisStreamBackend) parseCursor(workflowID string, c streamCursor) (fir
 	return firstRun, entryID, nil
 }
 
-type redisProducerIdentity struct {
+// externalProducerIdentity is a producer's stored identity on an external store, the same on Redis
+// and PostgreSQL.
+type externalProducerIdentity struct {
 	producer            string
 	runID               string
 	workflowTask        int64
@@ -406,20 +408,20 @@ type redisProducerIdentity struct {
 	epoch               int64
 }
 
-func redisProducer(p streamProducer) (redisProducerIdentity, error) {
+func externalProducer(p streamProducer) (externalProducerIdentity, error) {
 	switch {
 	case p.ClientID != "":
-		return redisProducerIdentity{producer: "client/" + p.ClientID, epoch: p.ClientEpoch}, nil
+		return externalProducerIdentity{producer: "client/" + p.ClientID, epoch: p.ClientEpoch}, nil
 	case p.ActivityTask != nil:
 		t := p.ActivityTask
 		producer := "activity/" + t.ActivityRunId
 		if t.WorkflowExecution != nil {
 			producer = "activity/" + t.WorkflowExecution.RunId + "/" + t.ActivityId
 		}
-		return redisProducerIdentity{producer: producer, epoch: int64(t.AttemptStamp)}, nil
+		return externalProducerIdentity{producer: producer, epoch: int64(t.AttemptStamp)}, nil
 	case p.WorkflowTask != nil:
 		t := p.WorkflowTask
-		return redisProducerIdentity{
+		return externalProducerIdentity{
 			producer:            "workflow/" + t.WorkflowExecution.RunId,
 			runID:               t.WorkflowExecution.RunId,
 			workflowTask:        t.PreviousStartedEventId,
@@ -429,7 +431,7 @@ func redisProducer(p streamProducer) (redisProducerIdentity, error) {
 	case p.LocalActivity != nil:
 		la := p.LocalActivity
 		runID := la.Task.WorkflowExecution.RunId
-		return redisProducerIdentity{
+		return externalProducerIdentity{
 			producer:            "local-activity/" + runID + "/" + la.ActivityID,
 			runID:               runID,
 			workflowTask:        la.Task.PreviousStartedEventId,
@@ -437,7 +439,7 @@ func redisProducer(p streamProducer) (redisProducerIdentity, error) {
 			epoch:               int64(la.Attempt),
 		}, nil
 	default:
-		return redisProducerIdentity{}, errors.New("stream producer has no identity")
+		return externalProducerIdentity{}, errors.New("stream producer has no identity")
 	}
 }
 
