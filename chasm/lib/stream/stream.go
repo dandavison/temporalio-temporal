@@ -146,15 +146,15 @@ func (s *Stream) Append(
 
 // RecordCommit records that attempt committed workflow task workflowTask of producer, if any
 // attempt of that task appended.
-func (s *Stream) RecordCommit(ctx chasm.MutableContext, producer string, workflowTask, attempt int64) error {
+func (s *Stream) RecordCommit(ctx chasm.MutableContext, producer, runID string, workflowTask, attempt int64) error {
 	field, ok := s.Producers[producer]
 	if !ok || field.Get(ctx).WorkflowTask != workflowTask {
 		return nil
 	}
 	_, err := s.add(ctx, &streamservicepb.Record{WorkflowTaskCommit: &streamservicepb.WorkflowTaskCommit{
-		Producer:     producer,
-		WorkflowTask: workflowTask,
-		Attempt:      attempt,
+		WorkflowRunId: runID,
+		WorkflowTask:  workflowTask,
+		Attempt:       attempt,
 	}})
 	return err
 }

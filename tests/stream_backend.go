@@ -40,13 +40,22 @@ type streamRef struct {
 type streamCursor []byte
 
 // streamProducer says who is appending. The backend derives the stored producer identity from it:
-// for an activity, from the activity task; for a workflow, from the workflow task; for a client,
-// from the ID and epoch the client supplies.
+// for an activity, from the activity task; for a workflow, from the workflow task; for a local
+// activity, from the workflow task it started in and its own ID and attempt; for a client, from the
+// ID and epoch the client supplies.
 type streamProducer struct {
-	ClientID     string
-	ClientEpoch  int64
-	ActivityTask *workflowservice.PollActivityTaskQueueResponse
-	WorkflowTask *workflowservice.PollWorkflowTaskQueueResponse
+	ClientID      string
+	ClientEpoch   int64
+	ActivityTask  *workflowservice.PollActivityTaskQueueResponse
+	WorkflowTask  *workflowservice.PollWorkflowTaskQueueResponse
+	LocalActivity *streamLocalActivity
+}
+
+// streamLocalActivity is a local activity attempt, started in workflow task Task.
+type streamLocalActivity struct {
+	Task       *workflowservice.PollWorkflowTaskQueueResponse
+	ActivityID string
+	Attempt    int32
 }
 
 func clientProducer(id string, epoch int64) streamProducer {
@@ -64,28 +73,47 @@ func workflowProducer(task *workflowservice.PollWorkflowTaskQueueResponse) strea
 	return streamProducer{WorkflowTask: task}
 }
 
-// streamProducerIdentity is the (producer, epoch, seq) stored with every record. Producer is a
-// backend-chosen stable string: an activity, a workflow run, or a client's ID.
-//
-// The epoch numbers the producer's incarnations. For an activity it is the started stamp of the
-// attempt, which increases on every retry, reset, pause, unpause and options update. For a client
-// it is what the client supplies. For a workflow it is (WorkflowTask, Epoch): WorkflowTask is the
-// started event ID of the run's last completed workflow task, and Epoch is the attempt of the
-// current one. Records of a workflow are superseded only by a later attempt of the same task.
-type streamProducerIdentity struct {
-	Producer     string
-	WorkflowTask int64
-	Epoch        int64
-	Seq          int64
+// localActivityProducer is attempt of local activity activityID, which started in workflow task
+// task. The task may have completed since, through a task heartbeat.
+func localActivityProducer(task *workflowservice.PollWorkflowTaskQueueResponse, activityID string, attempt int32) streamProducer {
+	return streamProducer{LocalActivity: &streamLocalActivity{Task: task, ActivityID: activityID, Attempt: attempt}}
 }
 
-// streamWorkflowTaskCommit records which attempt of a workflow task committed. Native only: the
-// server writes it in the same transaction as the task's completion.
-type streamWorkflowTaskCommit struct {
-	Producer     string
-	WorkflowTask int64
-	Attempt      int64
+// streamProducerIdentity is the (producer, epoch, seq) stored with every record. Producer is a
+// backend-chosen stable string: an activity, a workflow run, a local activity, or a client's ID.
+//
+// The epoch numbers the producer's incarnations, and is (WorkflowTask, WorkflowTaskAttempt, Epoch),
+// compared in that order. For an activity, Epoch is the stamp the attempt started with, which a
+// retry or reset increases. For a client it is what the client supplies. For a workflow,
+// WorkflowTask is the started event ID of the run's last completed workflow task, and
+// WorkflowTaskAttempt and Epoch are the current task's attempt. For a local activity, WorkflowTask
+// and WorkflowTaskAttempt are those of the task it started in, and Epoch is its own attempt.
+// WorkflowRunID is set for workflow and local activity producers.
+type streamProducerIdentity struct {
+	Producer            string
+	WorkflowRunID       string
+	WorkflowTask        int64
+	WorkflowTaskAttempt int32
+	Epoch               int64
+	Seq                 int64
 }
+
+// streamWorkflowTaskCommit records which attempt completed a workflow task. Native only: the server
+// writes one for every workflow task of a run that owns a stream, in the same transaction as the
+// task's completion. A reader keeps a workflow or local activity record of that task if the commit
+// names its WorkflowTaskAttempt, and discards it otherwise.
+type streamWorkflowTaskCommit struct {
+	WorkflowRunID string
+	WorkflowTask  int64
+	Attempt       int64
+}
+
+// The size limits on an append, the same on every backend.
+const (
+	streamMaxRecordsPerAppend = 1000
+	streamMaxRecordBytes      = 1 << 20
+	streamMaxAppendBytes      = 4 << 20
+)
 
 type streamAppendRecord struct {
 	Topic   string
@@ -174,6 +202,8 @@ var (
 	errStreamSeqStale       = errors.New("seq lower than the producer's latest")
 	errStreamEpochFenced    = errors.New("epoch lower than one already seen for this producer")
 	errStreamSpeculative    = errors.New("appends from speculative workflow tasks are not supported")
+	errStreamSeqGap         = errors.New("seq skips one")
+	errStreamTooLarge       = errors.New("append is too large")
 	errStreamNotImplemented = errors.New("stream backend not implemented")
 )
 

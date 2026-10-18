@@ -183,6 +183,17 @@ func nativeProducer(p streamProducer) (*streamservicepb.Producer, error) {
 		return &streamservicepb.Producer{Variant: &streamservicepb.Producer_WorkflowTask{
 			WorkflowTask: nativeWorkflowTaskProducer(p.WorkflowTask),
 		}}, nil
+	case p.LocalActivity != nil:
+		la := p.LocalActivity
+		return &streamservicepb.Producer{Variant: &streamservicepb.Producer_LocalActivity{
+			LocalActivity: &streamservicepb.LocalActivityProducer{
+				RunId:                  la.Task.WorkflowExecution.RunId,
+				PreviousStartedEventId: la.Task.PreviousStartedEventId,
+				WorkflowTaskAttempt:    la.Task.Attempt,
+				ActivityId:             la.ActivityID,
+				Attempt:                la.Attempt,
+			},
+		}}, nil
 	default:
 		return nil, errors.New("stream producer has no identity")
 	}
@@ -200,17 +211,19 @@ func nativeRecord(r *streamservicepb.Record) streamRecord {
 	rec := streamRecord{
 		Cursor: r.Cursor,
 		Producer: streamProducerIdentity{
-			Producer:     r.Producer.GetProducer(),
-			WorkflowTask: r.Producer.GetWorkflowTask(),
-			Epoch:        r.Producer.GetEpoch(),
-			Seq:          r.Producer.GetSeq(),
+			Producer:            r.Producer.GetProducer(),
+			WorkflowRunID:       r.Producer.GetWorkflowRunId(),
+			WorkflowTask:        r.Producer.GetWorkflowTask(),
+			WorkflowTaskAttempt: r.Producer.GetWorkflowTaskAttempt(),
+			Epoch:               r.Producer.GetEpoch(),
+			Seq:                 r.Producer.GetSeq(),
 		},
 		Topic:   r.Topic,
 		Payload: r.Payload,
 		Finish:  r.Finish,
 	}
 	if c := r.WorkflowTaskCommit; c != nil {
-		rec.WorkflowTaskCommit = &streamWorkflowTaskCommit{Producer: c.Producer, WorkflowTask: c.WorkflowTask, Attempt: c.Attempt}
+		rec.WorkflowTaskCommit = &streamWorkflowTaskCommit{WorkflowRunID: c.WorkflowRunId, WorkflowTask: c.WorkflowTask, Attempt: c.Attempt}
 	}
 	return rec
 }
@@ -225,6 +238,8 @@ var nativeErrors = map[streamservicepb.StreamFailureType]error{
 	streamservicepb.STREAM_FAILURE_TYPE_SEQ_STALE:                 errStreamSeqStale,
 	streamservicepb.STREAM_FAILURE_TYPE_EPOCH_FENCED:              errStreamEpochFenced,
 	streamservicepb.STREAM_FAILURE_TYPE_SPECULATIVE_WORKFLOW_TASK: errStreamSpeculative,
+	streamservicepb.STREAM_FAILURE_TYPE_SEQ_GAP:                   errStreamSeqGap,
+	streamservicepb.STREAM_FAILURE_TYPE_TOO_LARGE:                 errStreamTooLarge,
 }
 
 // nativeError maps an operation failure to the stream error named by the ApplicationFailureInfo

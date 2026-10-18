@@ -257,7 +257,8 @@ func (w *Workflow) RecordStreamWorkflowTaskCommit(ctx chasm.MutableContext, atte
 	if !ok {
 		return nil
 	}
-	return s.RecordCommit(ctx, workflowStreamProducerID(w.GetExecutionState().GetRunId()), w.GetExecutionInfo().GetLastCompletedWorkflowTaskStartedEventId(), int64(attempt))
+	runID := w.GetExecutionState().GetRunId()
+	return s.RecordCommit(ctx, workflowStreamProducerID(runID), runID, w.GetExecutionInfo().GetLastCompletedWorkflowTaskStartedEventId(), int64(attempt))
 }
 
 // CloseStreamOnOwnerEnd closes the stream, unless it is already closed, in the transaction in
