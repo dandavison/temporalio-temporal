@@ -23,6 +23,7 @@ import (
 	"go.temporal.io/api/workflowservice/v1"
 	"go.temporal.io/server/api/adminservice/v1"
 	"go.temporal.io/server/chasm"
+	"go.temporal.io/server/chasm/lib/activity"
 	"go.temporal.io/server/common/dynamicconfig"
 	"go.temporal.io/server/common/payload"
 	"go.temporal.io/server/common/testing/await"
@@ -47,11 +48,20 @@ func TestStreamTestSuite(t *testing.T) {
 
 // streamFixture is one test's environment and the backend under test.
 type streamFixture struct {
-	t   *testing.T
-	env *testcore.TestEnv
-	b   streamBackendUnderTest
-	tv  *testvars.TestVars
+	t     *testing.T
+	env   *testcore.TestEnv
+	b     streamBackendUnderTest
+	tv    *testvars.TestVars
+	owner streamOwnerKind
 }
+
+// streamOwnerKind is the kind of execution that owns the test's stream.
+type streamOwnerKind int
+
+const (
+	workflowOwner streamOwnerKind = iota
+	activityOwner
+)
 
 // streamBackends lists the backends. The native backend is first.
 var streamBackends = []struct {
@@ -66,6 +76,7 @@ var streamBackends = []struct {
 func newStreamEnv(t *testing.T, opts ...testcore.TestOption) *testcore.TestEnv {
 	return testcore.NewEnv(t, append(opts, testcore.WithDynamicConfig(dynamicconfig.EnableChasm, true),
 		testcore.WithDynamicConfig(dynamicconfig.EnableDirectNexusCalls, true),
+		testcore.WithDynamicConfig(activity.Enabled, true),
 	)...)
 }
 
@@ -86,16 +97,46 @@ func (s *streamTestSuite) nativeOnly(test func(f *streamFixture), opts ...testco
 }
 
 func (s *streamTestSuite) runOnBackend(i int, test func(f *streamFixture), opts ...testcore.TestOption) {
-	s.Run(streamBackends[i].name, func(s *streamTestSuite) {
+	s.runOnBackendWithOwner(i, workflowOwner, test, opts...)
+}
+
+// forEachBackendAndOwner runs test once per backend and owner kind: a workflow and a Standalone
+// Activity.
+func (s *streamTestSuite) forEachBackendAndOwner(test func(f *streamFixture), opts ...testcore.TestOption) {
+	for i := range streamBackends {
+		s.runOnBackendWithOwner(i, workflowOwner, test, opts...)
+		s.runOnBackendWithOwner(i, activityOwner, test, opts...)
+	}
+}
+
+// nativeOnlyEachOwner runs test against the native backend alone, once per owner kind.
+func (s *streamTestSuite) nativeOnlyEachOwner(test func(f *streamFixture), opts ...testcore.TestOption) {
+	s.runOnBackendWithOwner(0, workflowOwner, test, opts...)
+	s.runOnBackendWithOwner(0, activityOwner, test, opts...)
+}
+
+// forEachBackendWithActivityOwner runs test once per backend, with a Standalone Activity owner.
+func (s *streamTestSuite) forEachBackendWithActivityOwner(test func(f *streamFixture), opts ...testcore.TestOption) {
+	for i := range streamBackends {
+		s.runOnBackendWithOwner(i, activityOwner, test, opts...)
+	}
+}
+
+func (s *streamTestSuite) runOnBackendWithOwner(i int, owner streamOwnerKind, test func(f *streamFixture), opts ...testcore.TestOption) {
+	name := streamBackends[i].name
+	if owner == activityOwner {
+		name += "ActivityOwner"
+	}
+	s.Run(name, func(s *streamTestSuite) {
 		env := newStreamEnv(s.T(), opts...)
-		test(&streamFixture{t: s.T(), env: env, b: streamBackends[i].new(s.T(), env), tv: env.Tv()})
+		test(&streamFixture{t: s.T(), env: env, b: streamBackends[i].new(s.T(), env), tv: env.Tv(), owner: owner})
 	})
 }
 
 // Acknowledged appends are read in one total order, and a read from a given position returns the
 // same records every time. Every backend.
 func (s *streamTestSuite) TestRecordsAreReadInOneStableOrder() {
-	s.forEachBackend(func(f *streamFixture) {
+	s.forEachBackendAndOwner(func(f *streamFixture) {
 		ref := f.startOwner(f.tv)
 		const appendsPerProducer = 10
 		var g errgroup.Group
@@ -132,7 +173,7 @@ func (s *streamTestSuite) TestRecordsAreReadInOneStableOrder() {
 // An append's records are stored contiguously, with no other producer's records between them.
 // Every backend.
 func (s *streamTestSuite) TestAppendIsContiguous() {
-	s.forEachBackend(func(f *streamFixture) {
+	s.forEachBackendAndOwner(func(f *streamFixture) {
 		ref := f.startOwner(f.tv)
 		const batch = 5
 		var g errgroup.Group
@@ -165,7 +206,7 @@ func (s *streamTestSuite) TestAppendIsContiguous() {
 // A retry of the latest append, with the same content, stores nothing new and returns the
 // original cursors. Every backend.
 func (s *streamTestSuite) TestRetriedAppendIsNotDuplicated() {
-	s.forEachBackend(func(f *streamFixture) {
+	s.forEachBackendAndOwner(func(f *streamFixture) {
 		ref := f.startOwner(f.tv)
 		p := clientProducer("a", 1)
 		first := f.append(ref, p, 0, "", "x", "y")
@@ -177,7 +218,7 @@ func (s *streamTestSuite) TestRetriedAppendIsNotDuplicated() {
 
 // A retry of the latest seq with different content is rejected. Every backend.
 func (s *streamTestSuite) TestRetryWithDifferentContentIsRejected() {
-	s.forEachBackend(func(f *streamFixture) {
+	s.forEachBackendAndOwner(func(f *streamFixture) {
 		ref := f.startOwner(f.tv)
 		p := clientProducer("a", 1)
 		f.append(ref, p, 0, "", "x")
@@ -189,7 +230,7 @@ func (s *streamTestSuite) TestRetryWithDifferentContentIsRejected() {
 
 // An append whose seq is lower than the producer's latest is rejected as stale. Every backend.
 func (s *streamTestSuite) TestLowerSeqIsStale() {
-	s.forEachBackend(func(f *streamFixture) {
+	s.forEachBackendAndOwner(func(f *streamFixture) {
 		ref := f.startOwner(f.tv)
 		p := clientProducer("a", 1)
 		f.append(ref, p, 0, "", "x")
@@ -202,7 +243,7 @@ func (s *streamTestSuite) TestLowerSeqIsStale() {
 
 // Once a producer has appended at an epoch, an append at a lower epoch is rejected. Every backend.
 func (s *streamTestSuite) TestLowerEpochIsFenced() {
-	s.forEachBackend(func(f *streamFixture) {
+	s.forEachBackendAndOwner(func(f *streamFixture) {
 		ref := f.startOwner(f.tv)
 		f.append(ref, clientProducer("a", 1), 0, "", "old")
 		f.append(ref, clientProducer("a", 2), 0, "", "new")
@@ -409,7 +450,7 @@ func (s *streamTestSuite) TestWorkflowTaskIdentityIncreasesAcrossTasks() {
 // A seq that skips one is rejected: a producer's first append, and the first append of each new
 // epoch, has seq 0, and each later append has the next seq. Every backend.
 func (s *streamTestSuite) TestSeqGapIsRejected() {
-	s.forEachBackend(func(f *streamFixture) {
+	s.forEachBackendAndOwner(func(f *streamFixture) {
 		ref := f.startOwner(f.tv)
 		_, err := f.tryAppend(ref, clientProducer("a", 1), 1, "", "x")
 		require.ErrorIs(f.t, err, errStreamSeqGap)
@@ -525,7 +566,7 @@ func (s *streamTestSuite) TestOptionsUpdateDoesNotFenceRunningAttempt() {
 // An append whose record exceeds the record size limit, or that has too many records, is rejected.
 // Native only; the shared SDK code enforces the same limits for Redis.
 func (s *streamTestSuite) TestOversizedAppendIsRejected() {
-	s.nativeOnly(func(f *streamFixture) {
+	s.nativeOnlyEachOwner(func(f *streamFixture) {
 		ref := f.startOwner(f.tv)
 		big := &commonpb.Payload{Data: make([]byte, streamMaxRecordBytes+1)}
 		_, err := f.b.Append(f.ctx(), ref, streamAppendRequest{
@@ -563,7 +604,7 @@ func (s *streamTestSuite) TestNewChainWithSameWorkflowIDHasNewStream() {
 // A read waiting at the head returns when a record is appended, well before its wait ends.
 // Every backend.
 func (s *streamTestSuite) TestWaitingReadReturnsOnAppend() {
-	s.forEachBackend(func(f *streamFixture) {
+	s.forEachBackendAndOwner(func(f *streamFixture) {
 		ref := f.startOwner(f.tv)
 		head := f.append(ref, clientProducer("a", 1), 0, "", "first").Cursors[0]
 		const wait = 20 * time.Second
@@ -579,7 +620,7 @@ func (s *streamTestSuite) TestWaitingReadReturnsOnAppend() {
 // No append is missed by a reader that keeps reading from its last cursor while records are
 // appended concurrently. Every backend.
 func (s *streamTestSuite) TestConcurrentReadsMissNoAppend() {
-	s.forEachBackend(func(f *streamFixture) {
+	s.forEachBackendAndOwner(func(f *streamFixture) {
 		ref := f.startOwner(f.tv)
 		const n = 30
 		var g errgroup.Group
@@ -612,7 +653,7 @@ func (s *streamTestSuite) TestConcurrentReadsMissNoAppend() {
 // Appends succeed with no reader, and readers at different positions do not affect each other.
 // Every backend.
 func (s *streamTestSuite) TestReadersAreIndependent() {
-	s.forEachBackend(func(f *streamFixture) {
+	s.forEachBackendAndOwner(func(f *streamFixture) {
 		ref := f.startOwner(f.tv)
 		cursors := f.append(ref, clientProducer("a", 1), 0, "", "x", "y", "z").Cursors
 		require.Equal(f.t, []string{"x", "y", "z"}, f.dataOf(f.readAll(ref, streamBeginning())))
@@ -624,7 +665,7 @@ func (s *streamTestSuite) TestReadersAreIndependent() {
 // A read with a topic filter returns only matching records, and its cursor resumes past the
 // records it skipped. Every backend.
 func (s *streamTestSuite) TestFilteredReadReturnsOnlyMatchingTopics() {
-	s.forEachBackend(func(f *streamFixture) {
+	s.forEachBackendAndOwner(func(f *streamFixture) {
 		ref := f.startOwner(f.tv)
 		p := clientProducer("a", 1)
 		f.append(ref, p, 0, "progress", "p1")
@@ -646,7 +687,7 @@ func (s *streamTestSuite) TestFilteredReadReturnsOnlyMatchingTopics() {
 // A filtered read waiting at the head is not woken by records of other topics. Native only: Redis
 // readers receive every record and filter it themselves.
 func (s *streamTestSuite) TestFilteredWaitIgnoresOtherTopics() {
-	s.nativeOnly(func(f *streamFixture) {
+	s.nativeOnlyEachOwner(func(f *streamFixture) {
 		ref := f.startOwner(f.tv)
 		p := clientProducer("a", 1)
 		head := f.append(ref, p, 0, "progress", "p1").Cursors[0]
@@ -662,7 +703,7 @@ func (s *streamTestSuite) TestFilteredWaitIgnoresOtherTopics() {
 
 // A tail read returns the last N records, and its cursor resumes after them. Every backend.
 func (s *streamTestSuite) TestTailRead() {
-	s.forEachBackend(func(f *streamFixture) {
+	s.forEachBackendAndOwner(func(f *streamFixture) {
 		ref := f.startOwner(f.tv)
 		p := clientProducer("a", 1)
 		f.append(ref, p, 0, "", "1", "2", "3", "4", "5")
@@ -723,7 +764,7 @@ func (s *streamTestSuite) TestAppendAfterCloseIsRejectedButStoredRetrySucceeds()
 
 // Only the owner may close the stream. Every backend.
 func (s *streamTestSuite) TestNonOwnerCannotClose() {
-	s.forEachBackend(func(f *streamFixture) {
+	s.forEachBackendAndOwner(func(f *streamFixture) {
 		ref := f.startOwner(f.tv)
 		f.append(ref, clientProducer("a", 1), 0, "", "x")
 		err := f.b.Close(f.ctx(), ref, streamCloseRequest{
@@ -736,7 +777,7 @@ func (s *streamTestSuite) TestNonOwnerCannotClose() {
 
 // A producer's finish is a record readers see; it does not close the stream. Every backend.
 func (s *streamTestSuite) TestProducerFinishDoesNotCloseStream() {
-	s.forEachBackend(func(f *streamFixture) {
+	s.forEachBackendAndOwner(func(f *streamFixture) {
 		ref := f.startOwner(f.tv)
 		_, err := f.b.Append(f.ctx(), ref, streamAppendRequest{Producer: clientProducer("a", 1), Finish: true})
 		require.NoError(f.t, err)
@@ -770,8 +811,8 @@ func (s *streamTestSuite) TestStreamClosesWhenOwnerCompletes() {
 // A read from the beginning that starts before the stream's owner exists receives the first
 // record. Every backend.
 func (s *streamTestSuite) TestReadFromBeginningWaitsForFirstAppend() {
-	s.forEachBackend(func(f *streamFixture) {
-		ref := streamRef{WorkflowID: f.tv.WorkflowID()}
+	s.forEachBackendAndOwner(func(f *streamFixture) {
+		ref := f.unstartedRef(f.tv)
 		result := make(chan streamReadResult, 1)
 		go func() {
 			for {
@@ -800,7 +841,7 @@ func (s *streamTestSuite) TestAppendWithoutOwnerFailsAsNotFound() {
 // A read after a cursor of a stream that has been deleted fails as expired, rather than waiting.
 // Every backend.
 func (s *streamTestSuite) TestReadAfterCursorOfDeletedStreamFails() {
-	s.forEachBackend(func(f *streamFixture) {
+	s.forEachBackendAndOwner(func(f *streamFixture) {
 		ref := f.startOwner(f.tv)
 		cursor := f.append(ref, clientProducer("a", 1), 0, "", "x").Cursors[0]
 		require.NoError(f.t, f.b.deleteStream(f.ctx(), ref))
@@ -811,7 +852,7 @@ func (s *streamTestSuite) TestReadAfterCursorOfDeletedStreamFails() {
 
 // A cursor from one stream is rejected by another. Every backend.
 func (s *streamTestSuite) TestCursorFromAnotherStreamIsRejected() {
-	s.forEachBackend(func(f *streamFixture) {
+	s.forEachBackendAndOwner(func(f *streamFixture) {
 		ref1 := f.startOwner(f.tv.WithWorkflowIDNumber(1))
 		ref2 := f.startOwner(f.tv.WithWorkflowIDNumber(2))
 		cursor := f.append(ref1, clientProducer("a", 1), 0, "", "x").Cursors[0]
@@ -868,10 +909,10 @@ func (s *streamTestSuite) TestNativeOffsetsAreContiguousAcrossContinueAsNew() {
 // An acknowledged append survives the stream's History shard being reloaded. Native only: Redis
 // durability depends on how Redis is configured.
 func (s *streamTestSuite) TestAppendSurvivesShardReload() {
-	s.nativeOnly(func(f *streamFixture) {
+	s.nativeOnlyEachOwner(func(f *streamFixture) {
 		ref := f.startOwner(f.tv)
 		f.append(ref, clientProducer("a", 1), 0, "", "x")
-		f.env.CloseShard(f.env.NamespaceID().String(), ref.WorkflowID)
+		f.env.CloseShard(f.env.NamespaceID().String(), ref.ownerID())
 		require.Equal(f.t, []string{"x"}, f.dataOf(f.readAll(ref, streamBeginning())))
 	}, testcore.WithDedicatedCluster())
 }
@@ -1003,9 +1044,90 @@ func (s *streamTestSuite) TestSinkModeAppendAfterCommitModeFails() {
 	})
 }
 
+// An activity's retry supersedes its earlier attempt: the retry appends as the same producer at a
+// higher epoch, and the earlier attempt can no longer append. Every backend, with a Standalone
+// Activity owner.
+func (s *streamTestSuite) TestActivityRetrySupersedesEarlierAttempt() {
+	s.forEachBackendWithActivityOwner(func(f *streamFixture) {
+		ref := f.startOwner(f.tv)
+		first := f.pollActivityTask(f.tv)
+		f.append(ref, activityProducer(first), 0, "", "attempt 1")
+		f.respondActivityFailed(first, false)
+		second := f.pollActivityTask(f.tv)
+		f.append(ref, activityProducer(second), 0, "", "attempt 2")
+		_, err := f.tryAppend(ref, activityProducer(first), 1, "", "stale")
+		require.ErrorIs(f.t, err, errStreamEpochFenced)
+
+		records := f.readAll(ref, streamBeginning())
+		require.Equal(f.t, []string{"attempt 1", "attempt 2"}, f.dataOf(records))
+		require.Equal(f.t, records[0].Producer.Producer, records[1].Producer.Producer)
+		require.Greater(f.t, records[1].Producer.Epoch, records[0].Producer.Epoch)
+	}, withRetryStamps)
+}
+
+// The owning activity may close its own stream, and a non-owner, including another producer,
+// cannot. Every backend, with a Standalone Activity owner.
+func (s *streamTestSuite) TestActivityClosesItsOwnStream() {
+	s.forEachBackendWithActivityOwner(func(f *streamFixture) {
+		ref := f.startOwner(f.tv)
+		task := f.pollActivityTask(f.tv)
+		f.append(ref, activityProducer(task), 0, "", "x")
+		require.NoError(f.t, f.b.Close(f.ctx(), ref, streamCloseRequest{
+			Owner: activityProducer(task), Seq: 1, Close: streamClose{Status: streamClosedCompleted},
+		}))
+		resp := f.read(ref, streamReadRequest{From: streamBeginning()})
+		require.Equal(f.t, []string{"x"}, f.dataOf(resp.Records))
+		require.NotNil(f.t, resp.Close)
+		require.Equal(f.t, streamClosedCompleted, resp.Close.Status)
+	})
+}
+
+// A Standalone Activity's stream closes with the activity's outcome, in the transaction that ends
+// it, and a retry does not close it. Native only: on Redis and PostgreSQL the activity's worker
+// writes the close.
+func (s *streamTestSuite) TestActivityOwnedStreamClosesWithOutcome() {
+	s.runOnBackendWithOwner(0, activityOwner, func(f *streamFixture) {
+		completed := f.startOwner(f.tv)
+		task := f.pollActivityTask(f.tv)
+		f.append(completed, activityProducer(task), 0, "", "x")
+		f.respondActivityFailed(task, false)
+		require.Nil(f.t, f.read(completed, streamReadRequest{From: streamBeginning()}).Close)
+		f.respondActivityCompleted(f.pollActivityTask(f.tv))
+		resp := f.read(completed, streamReadRequest{From: streamBeginning()})
+		require.Equal(f.t, []string{"x"}, f.dataOf(resp.Records))
+		require.NotNil(f.t, resp.Close)
+		require.Equal(f.t, streamClosedCompleted, resp.Close.Status)
+
+		tv := f.tv.WithWorkflowIDNumber(2).WithTaskQueueNumber(2)
+		failed := f.startOwner(tv)
+		task = f.pollActivityTask(tv)
+		f.append(failed, activityProducer(task), 0, "", "y")
+		f.respondActivityFailed(task, true)
+		resp = f.read(failed, streamReadRequest{From: streamBeginning()})
+		require.NotNil(f.t, resp.Close)
+		require.Equal(f.t, streamClosedFailed, resp.Close.Status)
+	})
+}
+
+// A reader can name a Standalone Activity's stream before the activity starts, and read it after
+// the activity ends. Every backend, with a Standalone Activity owner.
+func (s *streamTestSuite) TestActivityStreamIsReadableBeforeStartAndAfterEnd() {
+	s.forEachBackendWithActivityOwner(func(f *streamFixture) {
+		before := f.unstartedRef(f.tv)
+		result := f.readAsync(before, streamReadRequest{From: streamBeginning(), Wait: 10 * time.Second})
+		ref := f.startOwner(f.tv)
+		task := f.pollActivityTask(f.tv)
+		f.append(ref, activityProducer(task), 0, "", "x")
+		require.Equal(f.t, []string{"x"}, f.dataOf(f.awaitRead(result).Records))
+		f.respondActivityCompleted(task)
+		require.Equal(f.t, []string{"x"}, f.dataOf(f.readAll(unpinned(ref), streamBeginning())))
+		require.Equal(f.t, []string{"x"}, f.dataOf(f.readAll(ref, streamBeginning())))
+	})
+}
+
 // Payloads, including their metadata, are stored and returned byte for byte. Every backend.
 func (s *streamTestSuite) TestPayloadsRoundTripUnchanged() {
-	s.forEachBackend(func(f *streamFixture) {
+	s.forEachBackendAndOwner(func(f *streamFixture) {
 		ref := f.startOwner(f.tv)
 		p := &commonpb.Payload{
 			Metadata: map[string][]byte{"encoding": []byte("binary/encrypted"), "encryption-key-id": []byte("k1")},
@@ -1044,7 +1166,11 @@ func (f *streamFixture) ctx() context.Context {
 }
 
 // startOwner starts the workflow that owns the stream.
+// startOwner starts the execution that owns the stream, of the fixture's owner kind.
 func (f *streamFixture) startOwner(tv *testvars.TestVars) streamRef {
+	if f.owner == activityOwner {
+		return f.startActivityOwner(tv)
+	}
 	resp, err := f.env.FrontendClient().StartWorkflowExecution(f.ctx(), &workflowservice.StartWorkflowExecutionRequest{
 		Namespace:    f.env.Namespace().String(),
 		RequestId:    tv.Any().String(),
@@ -1055,6 +1181,61 @@ func (f *streamFixture) startOwner(tv *testvars.TestVars) streamRef {
 	})
 	require.NoError(f.t, err)
 	return streamRef{WorkflowID: tv.WorkflowID(), FirstRunID: resp.RunId}
+}
+
+// startActivityOwner starts a Standalone Activity, whose ID is the test's workflow ID so that it is
+// unique per test variables, to own the stream. Unanswered attempts time out and are retried.
+func (f *streamFixture) startActivityOwner(tv *testvars.TestVars) streamRef {
+	resp, err := f.env.FrontendClient().StartActivityExecution(f.ctx(), &workflowservice.StartActivityExecutionRequest{
+		Namespace:           f.env.Namespace().String(),
+		RequestId:           tv.Any().String(),
+		ActivityId:          tv.WorkflowID(),
+		ActivityType:        tv.ActivityType(),
+		TaskQueue:           tv.TaskQueue(),
+		Identity:            tv.ClientIdentity(),
+		StartToCloseTimeout: durationpb.New(streamActivityStartToClose),
+		RetryPolicy: &commonpb.RetryPolicy{
+			InitialInterval:    durationpb.New(time.Millisecond),
+			BackoffCoefficient: 1,
+			MaximumAttempts:    3,
+		},
+	})
+	require.NoError(f.t, err)
+	return streamRef{ActivityID: tv.WorkflowID(), ActivityRunID: resp.RunId}
+}
+
+// unstartedRef names the stream of the owner that startOwner(tv) will start, without its run ID.
+func (f *streamFixture) unstartedRef(tv *testvars.TestVars) streamRef {
+	if f.owner == activityOwner {
+		return streamRef{ActivityID: tv.WorkflowID()}
+	}
+	return streamRef{WorkflowID: tv.WorkflowID()}
+}
+
+// unpinned is ref without its run ID: a read of the owner ID's current chain or execution.
+func unpinned(ref streamRef) streamRef {
+	return streamRef{WorkflowID: ref.WorkflowID, ActivityID: ref.ActivityID}
+}
+
+func (f *streamFixture) respondActivityCompleted(task *workflowservice.PollActivityTaskQueueResponse) {
+	_, err := f.env.FrontendClient().RespondActivityTaskCompleted(f.ctx(), &workflowservice.RespondActivityTaskCompletedRequest{
+		Namespace: f.env.Namespace().String(),
+		TaskToken: task.TaskToken,
+		Identity:  f.tv.WorkerIdentity(),
+	})
+	require.NoError(f.t, err)
+}
+
+func (f *streamFixture) respondActivityFailed(task *workflowservice.PollActivityTaskQueueResponse, nonRetryable bool) {
+	_, err := f.env.FrontendClient().RespondActivityTaskFailed(f.ctx(), &workflowservice.RespondActivityTaskFailedRequest{
+		Namespace: f.env.Namespace().String(),
+		TaskToken: task.TaskToken,
+		Failure: &failurepb.Failure{Message: "activity failed", FailureInfo: &failurepb.Failure_ApplicationFailureInfo{
+			ApplicationFailureInfo: &failurepb.ApplicationFailureInfo{NonRetryable: nonRetryable},
+		}},
+		Identity: f.tv.WorkerIdentity(),
+	})
+	require.NoError(f.t, err)
 }
 
 func (f *streamFixture) tryAppend(ref streamRef, p streamProducer, seq int64, topic string, data ...string) (streamAppendResponse, error) {

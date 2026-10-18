@@ -4,10 +4,11 @@ package tests
 // never talks to Redis. It mirrors the Redis backend of temporalio-streams (the sdk-streams
 // submodule) and runs the same script, stream_append.lua, a copy of that crate's append.lua.
 //
-// A run chain's stream is four keys sharing a hash tag with its workflow ID: a Redis stream
-// holding the log, a hash holding each producer's dedupe and fencing state, a metadata hash
-// holding existence and close, and a tombstone. A fifth key names the workflow ID's latest chain,
-// for readers that do not know the first run ID. Every append and close goes through the script,
+// A stream is keyed by its owner: a workflow run chain, by workflow ID and first run ID, or a
+// Standalone Activity execution, by activity ID and run ID. It is four keys sharing a hash tag with
+// the owner's kind and ID: a Redis stream holding the log, a hash holding each producer's dedupe and
+// fencing state, a metadata hash holding existence and close, and a tombstone. A fifth key names the
+// owner ID's latest run, for readers that do not know the run ID. Every append and close goes through the script,
 // which checks and writes in one step. Producers that XADD to the log directly are not supported.
 //
 // Properties weaker than native, all because Redis cannot see the server's state:
@@ -77,29 +78,52 @@ type redisKeys struct {
 	prefix, meta, log, producers, tombstone, current, firstRun string
 }
 
-func (b *redisStreamBackend) workflowPrefix(workflowID string) string {
-	return fmt.Sprintf("stream:{%s/%s}", b.namespace, workflowID)
+func (b *redisStreamBackend) ownerPrefix(owner string) string {
+	return fmt.Sprintf("stream:{%s/%s}", b.namespace, owner)
 }
 
-func (b *redisStreamBackend) keys(workflowID, firstRun string) redisKeys {
-	prefix := b.workflowPrefix(workflowID) + ":" + firstRun
+func (b *redisStreamBackend) keys(owner, firstRun string) redisKeys {
+	prefix := b.ownerPrefix(owner) + ":" + firstRun
 	return redisKeys{
 		prefix:    prefix,
 		meta:      prefix + ":meta",
 		log:       prefix + ":log",
 		producers: prefix + ":producers",
 		tombstone: prefix + ":tombstone",
-		current:   b.workflowPrefix(workflowID) + ":current",
+		current:   b.ownerPrefix(owner) + ":current",
 		firstRun:  firstRun,
 	}
 }
 
-// writeKeys are the keys an append or close writes, which needs the first run ID.
+// writeKeys are the keys an append or close writes, which needs the owner's run ID.
 func (b *redisStreamBackend) writeKeys(ref streamRef) (redisKeys, error) {
-	if ref.FirstRunID == "" {
-		return redisKeys{}, errors.New("appends to a Redis stream need the first run ID of the stream's run chain")
+	if externalRun(ref) == "" {
+		return redisKeys{}, errors.New("appends to a Redis stream need the run ID of its owner: a workflow's first run ID, or the activity's run ID")
 	}
-	return b.keys(ref.WorkflowID, ref.FirstRunID), nil
+	return b.keys(externalOwner(ref), externalRun(ref)), nil
+}
+
+// externalOwner names a stream's owner on an external store, so that a workflow and an activity
+// with the same ID have different streams.
+func externalOwner(ref streamRef) string {
+	if ref.ActivityID != "" {
+		return "activity/" + ref.ActivityID
+	}
+	return "workflow/" + ref.WorkflowID
+}
+
+// externalRun is the run ID that pins a stream: a workflow's first run ID, or the activity's run ID.
+func externalRun(ref streamRef) string {
+	return ref.FirstRunID + ref.ActivityRunID
+}
+
+// isExternalOwner reports whether p is the stream's owner: a workflow task of the owning workflow,
+// or an attempt of the owning Standalone Activity. External stores cannot verify it.
+func isExternalOwner(ref streamRef, p streamProducer) bool {
+	if ref.ActivityID != "" {
+		return p.ActivityTask.GetActivityRunId() != "" && p.ActivityTask.GetActivityId() == ref.ActivityID
+	}
+	return p.WorkflowTask.GetWorkflowExecution().GetWorkflowId() == ref.WorkflowID
 }
 
 func (b *redisStreamBackend) Append(ctx context.Context, ref streamRef, req streamAppendRequest) (streamAppendResponse, error) {
@@ -141,7 +165,7 @@ func (b *redisStreamBackend) Close(ctx context.Context, ref streamRef, req strea
 	if err != nil {
 		return err
 	}
-	if req.Owner.WorkflowTask.GetWorkflowExecution().GetWorkflowId() != ref.WorkflowID {
+	if !isExternalOwner(ref, req.Owner) {
 		return errStreamNotOwner
 	}
 	k, err := b.writeKeys(ref)
@@ -190,14 +214,14 @@ func (b *redisStreamBackend) Read(ctx context.Context, ref streamRef, req stream
 			return streamReadResponse{}, err
 		}
 	} else {
-		firstRun, entryID, err := b.parseCursor(ref.WorkflowID, req.From.after)
+		firstRun, entryID, err := b.parseCursor(externalOwner(ref), req.From.after)
 		if err != nil {
 			return streamReadResponse{}, err
 		}
-		if ref.FirstRunID != "" && ref.FirstRunID != firstRun {
+		if run := externalRun(ref); run != "" && run != firstRun {
 			return streamReadResponse{}, errStreamCursor
 		}
-		k, lastID = b.keys(ref.WorkflowID, firstRun), entryID
+		k, lastID = b.keys(externalOwner(ref), firstRun), entryID
 	}
 	exists, err := b.exists(ctx, k.meta)
 	if err != nil {
@@ -223,14 +247,14 @@ func (b *redisStreamBackend) Read(ctx context.Context, ref streamRef, req stream
 // resolveChain returns the chain a read from the beginning reads: the pinned one, or the workflow
 // ID's latest, waiting until the deadline for one to exist.
 func (b *redisStreamBackend) resolveChain(ctx context.Context, ref streamRef, deadline time.Time) (redisKeys, bool, error) {
-	if ref.FirstRunID != "" {
-		return b.keys(ref.WorkflowID, ref.FirstRunID), true, nil
+	if run := externalRun(ref); run != "" {
+		return b.keys(externalOwner(ref), run), true, nil
 	}
-	current := b.workflowPrefix(ref.WorkflowID) + ":current"
+	current := b.ownerPrefix(externalOwner(ref)) + ":current"
 	for {
 		firstRun, err := b.rdb.Get(ctx, current).Result()
 		if err == nil {
-			return b.keys(ref.WorkflowID, firstRun), true, nil
+			return b.keys(externalOwner(ref), firstRun), true, nil
 		}
 		if !errors.Is(err, redis.Nil) {
 			return redisKeys{}, false, err
@@ -386,12 +410,12 @@ func (k redisKeys) cursor(entryID string) streamCursor {
 }
 
 // parseCursor splits a cursor into its chain's first run ID and its entry ID.
-func (b *redisStreamBackend) parseCursor(workflowID string, c streamCursor) (firstRun, entryID string, err error) {
+func (b *redisStreamBackend) parseCursor(owner string, c streamCursor) (firstRun, entryID string, err error) {
 	chain, entryID, ok := strings.Cut(string(c), "#")
 	if !ok {
 		return "", "", errStreamCursor
 	}
-	firstRun, ok = strings.CutPrefix(chain, b.workflowPrefix(workflowID)+":")
+	firstRun, ok = strings.CutPrefix(chain, b.ownerPrefix(owner)+":")
 	if !ok {
 		return "", "", errStreamCursor
 	}

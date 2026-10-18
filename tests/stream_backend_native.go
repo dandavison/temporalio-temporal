@@ -59,18 +59,22 @@ func (b *nativeStreamBackend) Append(ctx context.Context, ref streamRef, req str
 }
 
 func (b *nativeStreamBackend) Close(ctx context.Context, ref streamRef, req streamCloseRequest) error {
-	if req.Owner.WorkflowTask == nil {
-		return errStreamNotOwner
-	}
 	in := &streamservicepb.CloseRequest{
 		Stream: nativeRef(ref),
-		Owner:  nativeWorkflowTaskProducer(req.Owner.WorkflowTask),
 		Seq:    req.Seq,
 		Close: &streamservicepb.StreamClose{
 			State:   streamservicepb.CloseState(req.Close.Status),
 			Failure: req.Close.Failure,
 			Reason:  req.Close.Reason,
 		},
+	}
+	switch {
+	case req.Owner.WorkflowTask != nil:
+		in.Owner = nativeWorkflowTaskProducer(req.Owner.WorkflowTask)
+	case req.Owner.ActivityTask != nil:
+		in.ActivityTaskToken = req.Owner.ActivityTask.TaskToken
+	default:
+		return errStreamNotOwner
 	}
 	return b.call(ctx, "Close", in, &streamservicepb.CloseResponse{})
 }
@@ -102,6 +106,9 @@ func (b *nativeStreamBackend) Read(ctx context.Context, ref streamRef, req strea
 
 // deleteStream deletes the stream's owner, as retention would.
 func (b *nativeStreamBackend) deleteStream(ctx context.Context, ref streamRef) error {
+	if ref.ActivityID != "" {
+		return b.deleteActivity(ctx, ref)
+	}
 	execution := &commonpb.WorkflowExecution{WorkflowId: ref.WorkflowID}
 	if _, err := b.env.FrontendClient().TerminateWorkflowExecution(ctx, &workflowservice.TerminateWorkflowExecutionRequest{
 		Namespace:         b.env.Namespace().String(),
@@ -126,6 +133,31 @@ func (b *nativeStreamBackend) deleteStream(ctx context.Context, ref streamRef) e
 		select {
 		case <-ctx.Done():
 			return fmt.Errorf("workflow not deleted: %w", err)
+		case <-time.After(100 * time.Millisecond):
+		}
+	}
+}
+
+func (b *nativeStreamBackend) deleteActivity(ctx context.Context, ref streamRef) error {
+	if _, err := b.env.FrontendClient().DeleteActivityExecution(ctx, &workflowservice.DeleteActivityExecutionRequest{
+		Namespace:  b.env.Namespace().String(),
+		ActivityId: ref.ActivityID,
+		RunId:      ref.ActivityRunID,
+	}); err != nil {
+		return err
+	}
+	for {
+		_, err := b.env.FrontendClient().DescribeActivityExecution(ctx, &workflowservice.DescribeActivityExecutionRequest{
+			Namespace:  b.env.Namespace().String(),
+			ActivityId: ref.ActivityID,
+			RunId:      ref.ActivityRunID,
+		})
+		if _, ok := errors.AsType[*serviceerror.NotFound](err); ok {
+			return nil
+		}
+		select {
+		case <-ctx.Done():
+			return fmt.Errorf("activity not deleted: %w", err)
 		case <-time.After(100 * time.Millisecond):
 		}
 	}
@@ -166,7 +198,12 @@ func (b *nativeStreamBackend) call(ctx context.Context, operation string, in, ou
 }
 
 func nativeRef(ref streamRef) *streamservicepb.StreamRef {
-	return &streamservicepb.StreamRef{WorkflowId: ref.WorkflowID, FirstRunId: ref.FirstRunID}
+	return &streamservicepb.StreamRef{
+		WorkflowId:    ref.WorkflowID,
+		FirstRunId:    ref.FirstRunID,
+		ActivityId:    ref.ActivityID,
+		ActivityRunId: ref.ActivityRunID,
+	}
 }
 
 func nativeProducer(p streamProducer) (*streamservicepb.Producer, error) {

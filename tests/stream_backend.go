@@ -29,11 +29,20 @@ type streamBackend interface {
 	Read(ctx context.Context, ref streamRef, req streamReadRequest) (streamReadResponse, error)
 }
 
-// streamRef identifies a stream owned by a workflow run chain. FirstRunID is optional; when empty
-// the stream of the workflow ID's current chain is used.
+// streamRef identifies a stream by its owner: a workflow run chain, by WorkflowID and FirstRunID, or
+// a Standalone Activity execution, by ActivityID and ActivityRunID. Exactly one of WorkflowID and
+// ActivityID is set. FirstRunID and ActivityRunID are optional for reads: when empty, the stream of
+// the owner ID's current chain or execution is read.
 type streamRef struct {
-	WorkflowID string
-	FirstRunID string
+	WorkflowID    string
+	FirstRunID    string
+	ActivityID    string
+	ActivityRunID string
+}
+
+// ownerID is the business ID of the stream's owner.
+func (r streamRef) ownerID() string {
+	return r.WorkflowID + r.ActivityID
 }
 
 // streamCursor marks the boundary after a record. Its bytes belong to the backend that issued it.
@@ -175,6 +184,7 @@ type streamClose struct {
 }
 
 type streamCloseRequest struct {
+	// Owner is a workflow task of the owning run, or the owning activity's current attempt.
 	Owner streamProducer
 	Seq   int64
 	Close streamClose

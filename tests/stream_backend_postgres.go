@@ -4,9 +4,10 @@ package tests
 // server never talks to PostgreSQL. It is a check that the stream interface is not shaped by Redis,
 // not a product feature.
 //
-// A run chain's stream is a row in streams, holding its next position and its close, with its
-// records in records and each producer's dedupe and fencing state in producers. chains names each
-// workflow ID's latest chain. Positions are dense: each append takes the next ones under the
+// A stream is keyed by its owner, as on Redis: a workflow run chain or a Standalone Activity
+// execution. It is a row in streams, holding its next position and its close, with its records in
+// records and each producer's dedupe and fencing state in producers. chains names each owner ID's
+// latest run. Positions are dense: each append takes the next ones under the
 // stream row's lock. An append is one transaction, which notifies the channel streamChannel.
 // PostgreSQL has no blocking read, so a waiting read listens on that channel, then reads, then
 // waits for a notification or its deadline.
@@ -50,23 +51,23 @@ const streamChannel = "stream_appended"
 
 const postgresStreamSchema = `
 CREATE TABLE streams (
-  workflow_id text NOT NULL,
-  first_run_id text NOT NULL,
+  owner_id text NOT NULL,
+  owner_run_id text NOT NULL,
   next_pos bigint NOT NULL DEFAULT 1,
   closed boolean NOT NULL DEFAULT false,
   close_status int NOT NULL DEFAULT 0,
   close_failure bytea,
   close_reason text NOT NULL DEFAULT '',
   deleted boolean NOT NULL DEFAULT false,
-  PRIMARY KEY (workflow_id, first_run_id)
+  PRIMARY KEY (owner_id, owner_run_id)
 );
 CREATE TABLE chains (
-  workflow_id text PRIMARY KEY,
-  first_run_id text NOT NULL
+  owner_id text PRIMARY KEY,
+  owner_run_id text NOT NULL
 );
 CREATE TABLE records (
-  workflow_id text NOT NULL,
-  first_run_id text NOT NULL,
+  owner_id text NOT NULL,
+  owner_run_id text NOT NULL,
   pos bigint NOT NULL,
   kind text NOT NULL,
   topic text NOT NULL,
@@ -77,11 +78,11 @@ CREATE TABLE records (
   workflow_task_attempt int NOT NULL,
   epoch bigint NOT NULL,
   seq bigint NOT NULL,
-  PRIMARY KEY (workflow_id, first_run_id, pos)
+  PRIMARY KEY (owner_id, owner_run_id, pos)
 );
 CREATE TABLE producers (
-  workflow_id text NOT NULL,
-  first_run_id text NOT NULL,
+  owner_id text NOT NULL,
+  owner_run_id text NOT NULL,
   producer text NOT NULL,
   workflow_task bigint NOT NULL,
   workflow_task_attempt int NOT NULL,
@@ -90,7 +91,7 @@ CREATE TABLE producers (
   digest text NOT NULL,
   first_pos bigint NOT NULL,
   data_count int NOT NULL,
-  PRIMARY KEY (workflow_id, first_run_id, producer)
+  PRIMARY KEY (owner_id, owner_run_id, producer)
 );
 `
 
@@ -112,7 +113,7 @@ func newPostgresStreamBackend(t *testing.T, _ *testcore.TestEnv) streamBackendUn
 }
 
 type postgresChain struct {
-	workflowID, firstRunID string
+	owner, run string
 }
 
 func (b *postgresStreamBackend) Append(ctx context.Context, ref streamRef, req streamAppendRequest) (streamAppendResponse, error) {
@@ -154,7 +155,7 @@ func (b *postgresStreamBackend) Close(ctx context.Context, ref streamRef, req st
 	if err != nil {
 		return err
 	}
-	if req.Owner.WorkflowTask.GetWorkflowExecution().GetWorkflowId() != ref.WorkflowID {
+	if !isExternalOwner(ref, req.Owner) {
 		return errStreamNotOwner
 	}
 	chain, err := postgresWriteChain(ref)
@@ -175,18 +176,18 @@ type postgresEntry struct {
 func (b *postgresStreamBackend) runAppend(ctx context.Context, c postgresChain, id externalProducerIdentity, seq int64, entries []postgresEntry, closing *streamClose) (int64, error) {
 	var first int64
 	err := pgx.BeginFunc(ctx, b.pool, func(tx pgx.Tx) error {
-		tag, err := tx.Exec(ctx, `INSERT INTO streams (workflow_id, first_run_id) VALUES ($1, $2) ON CONFLICT DO NOTHING`, c.workflowID, c.firstRunID)
+		tag, err := tx.Exec(ctx, `INSERT INTO streams (owner_id, owner_run_id) VALUES ($1, $2) ON CONFLICT DO NOTHING`, c.owner, c.run)
 		if err != nil {
 			return err
 		}
 		if tag.RowsAffected() == 1 {
-			if _, err := tx.Exec(ctx, `INSERT INTO chains VALUES ($1, $2) ON CONFLICT (workflow_id) DO UPDATE SET first_run_id = $2`, c.workflowID, c.firstRunID); err != nil {
+			if _, err := tx.Exec(ctx, `INSERT INTO chains VALUES ($1, $2) ON CONFLICT (owner_id) DO UPDATE SET owner_run_id = $2`, c.owner, c.run); err != nil {
 				return err
 			}
 		}
 		var nextPos int64
 		var closed, deleted bool
-		if err := tx.QueryRow(ctx, `SELECT next_pos, closed, deleted FROM streams WHERE workflow_id = $1 AND first_run_id = $2 FOR UPDATE`, c.workflowID, c.firstRunID).Scan(&nextPos, &closed, &deleted); err != nil {
+		if err := tx.QueryRow(ctx, `SELECT next_pos, closed, deleted FROM streams WHERE owner_id = $1 AND owner_run_id = $2 FOR UPDATE`, c.owner, c.run).Scan(&nextPos, &closed, &deleted); err != nil {
 			return err
 		}
 		if deleted {
@@ -204,16 +205,16 @@ func (b *postgresStreamBackend) runAppend(ctx context.Context, c postgresChain, 
 		first = nextPos
 		for i, e := range entries {
 			if _, err := tx.Exec(ctx, `INSERT INTO records VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)`,
-				c.workflowID, c.firstRunID, nextPos+int64(i), e.kind, e.topic, e.payload,
+				c.owner, c.run, nextPos+int64(i), e.kind, e.topic, e.payload,
 				id.producer, id.runID, id.workflowTask, id.workflowTaskAttempt, id.epoch, seq); err != nil {
 				return err
 			}
 		}
 		if _, err := tx.Exec(ctx, `
 INSERT INTO producers VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
-ON CONFLICT (workflow_id, first_run_id, producer) DO UPDATE SET
+ON CONFLICT (owner_id, owner_run_id, producer) DO UPDATE SET
   workflow_task = $4, workflow_task_attempt = $5, epoch = $6, seq = $7, digest = $8, first_pos = $9, data_count = $10`,
-			c.workflowID, c.firstRunID, id.producer, id.workflowTask, id.workflowTaskAttempt, id.epoch, seq, digest, nextPos, len(entries)); err != nil {
+			c.owner, c.run, id.producer, id.workflowTask, id.workflowTaskAttempt, id.epoch, seq, digest, nextPos, len(entries)); err != nil {
 			return err
 		}
 		if closing != nil {
@@ -223,15 +224,15 @@ ON CONFLICT (workflow_id, first_run_id, producer) DO UPDATE SET
 					return err
 				}
 			}
-			if _, err := tx.Exec(ctx, `UPDATE streams SET closed = true, close_status = $3, close_failure = $4, close_reason = $5 WHERE workflow_id = $1 AND first_run_id = $2`,
-				c.workflowID, c.firstRunID, int(closing.Status), failure, closing.Reason); err != nil {
+			if _, err := tx.Exec(ctx, `UPDATE streams SET closed = true, close_status = $3, close_failure = $4, close_reason = $5 WHERE owner_id = $1 AND owner_run_id = $2`,
+				c.owner, c.run, int(closing.Status), failure, closing.Reason); err != nil {
 				return err
 			}
 		}
-		if _, err := tx.Exec(ctx, `UPDATE streams SET next_pos = $3 WHERE workflow_id = $1 AND first_run_id = $2`, c.workflowID, c.firstRunID, nextPos+int64(len(entries))); err != nil {
+		if _, err := tx.Exec(ctx, `UPDATE streams SET next_pos = $3 WHERE owner_id = $1 AND owner_run_id = $2`, c.owner, c.run, nextPos+int64(len(entries))); err != nil {
 			return err
 		}
-		_, err = tx.Exec(ctx, `SELECT pg_notify($1, $2)`, streamChannel, c.workflowID)
+		_, err = tx.Exec(ctx, `SELECT pg_notify($1, $2)`, streamChannel, c.owner)
 		return err
 	})
 	return first, err
@@ -243,8 +244,8 @@ func checkPostgresProducer(ctx context.Context, tx pgx.Tx, c postgresChain, id e
 	var st externalProducerIdentity
 	var stSeq, stFirst int64
 	var stDigest string
-	err = tx.QueryRow(ctx, `SELECT workflow_task, workflow_task_attempt, epoch, seq, digest, first_pos FROM producers WHERE workflow_id = $1 AND first_run_id = $2 AND producer = $3`,
-		c.workflowID, c.firstRunID, id.producer).Scan(&st.workflowTask, &st.workflowTaskAttempt, &st.epoch, &stSeq, &stDigest, &stFirst)
+	err = tx.QueryRow(ctx, `SELECT workflow_task, workflow_task_attempt, epoch, seq, digest, first_pos FROM producers WHERE owner_id = $1 AND owner_run_id = $2 AND producer = $3`,
+		c.owner, c.run, id.producer).Scan(&st.workflowTask, &st.workflowTaskAttempt, &st.epoch, &stSeq, &stDigest, &stFirst)
 	nextSeq := int64(0)
 	switch {
 	case errors.Is(err, pgx.ErrNoRows):
@@ -307,10 +308,10 @@ func (b *postgresStreamBackend) Read(ctx context.Context, ref streamRef, req str
 			return streamReadResponse{}, err
 		}
 	} else {
-		if chain, after, err = parsePostgresCursor(ref.WorkflowID, req.From.after); err != nil {
+		if chain, after, err = parsePostgresCursor(externalOwner(ref), req.From.after); err != nil {
 			return streamReadResponse{}, err
 		}
-		if ref.FirstRunID != "" && ref.FirstRunID != chain.firstRunID {
+		if run := externalRun(ref); run != "" && run != chain.run {
 			return streamReadResponse{}, errStreamCursor
 		}
 	}
@@ -326,7 +327,7 @@ func (b *postgresStreamBackend) Read(ctx context.Context, ref streamRef, req str
 			return resp, nil
 		}
 		if resp.Cursor != nil {
-			_, after, _ = parsePostgresCursor(ref.WorkflowID, resp.Cursor)
+			_, after, _ = parsePostgresCursor(externalOwner(ref), resp.Cursor)
 			req.From.after = resp.Cursor
 		}
 		if err := waitForNotification(ctx, conn.Conn(), deadline); err != nil {
@@ -338,14 +339,14 @@ func (b *postgresStreamBackend) Read(ctx context.Context, ref streamRef, req str
 // resolveChain returns the chain a read from the beginning reads: the pinned one, or the workflow
 // ID's latest, waiting until the deadline for one to exist.
 func (b *postgresStreamBackend) resolveChain(ctx context.Context, conn *pgxpool.Conn, ref streamRef, deadline time.Time) (postgresChain, bool, error) {
-	if ref.FirstRunID != "" {
-		return postgresChain{ref.WorkflowID, ref.FirstRunID}, true, nil
+	if run := externalRun(ref); run != "" {
+		return postgresChain{externalOwner(ref), run}, true, nil
 	}
 	for {
 		var firstRun string
-		err := conn.QueryRow(ctx, `SELECT first_run_id FROM chains WHERE workflow_id = $1`, ref.WorkflowID).Scan(&firstRun)
+		err := conn.QueryRow(ctx, `SELECT owner_run_id FROM chains WHERE owner_id = $1`, externalOwner(ref)).Scan(&firstRun)
 		if err == nil {
-			return postgresChain{ref.WorkflowID, firstRun}, true, nil
+			return postgresChain{externalOwner(ref), firstRun}, true, nil
 		}
 		if !errors.Is(err, pgx.ErrNoRows) {
 			return postgresChain{}, false, err
@@ -369,8 +370,8 @@ func (b *postgresStreamBackend) readOnce(ctx context.Context, conn *pgx.Conn, c 
 		var closeStatus int
 		var closeFailure []byte
 		var closeReason string
-		err := tx.QueryRow(ctx, `SELECT next_pos, closed, deleted, close_status, close_failure, close_reason FROM streams WHERE workflow_id = $1 AND first_run_id = $2`,
-			c.workflowID, c.firstRunID).Scan(&nextPos, &closed, &deleted, &closeStatus, &closeFailure, &closeReason)
+		err := tx.QueryRow(ctx, `SELECT next_pos, closed, deleted, close_status, close_failure, close_reason FROM streams WHERE owner_id = $1 AND owner_run_id = $2`,
+			c.owner, c.run).Scan(&nextPos, &closed, &deleted, &closeStatus, &closeFailure, &closeReason)
 		if errors.Is(err, pgx.ErrNoRows) {
 			return nil
 		}
@@ -387,13 +388,13 @@ func (b *postgresStreamBackend) readOnce(ctx context.Context, conn *pgx.Conn, c 
 			limit = req.MaxRecords
 		}
 		query := `SELECT pos, kind, topic, payload, producer, run_id, workflow_task, workflow_task_attempt, epoch, seq FROM records
-WHERE workflow_id = $1 AND first_run_id = $2 AND pos > $3 AND (coalesce(cardinality($4::text[]), 0) = 0 OR topic = ANY($4)) ORDER BY pos LIMIT $5`
+WHERE owner_id = $1 AND owner_run_id = $2 AND pos > $3 AND (coalesce(cardinality($4::text[]), 0) = 0 OR topic = ANY($4)) ORDER BY pos LIMIT $5`
 		if req.Last > 0 {
 			query = `SELECT pos, kind, topic, payload, producer, run_id, workflow_task, workflow_task_attempt, epoch, seq FROM records
-WHERE workflow_id = $1 AND first_run_id = $2 AND pos > $3 AND (coalesce(cardinality($4::text[]), 0) = 0 OR topic = ANY($4)) ORDER BY pos DESC LIMIT $5`
+WHERE owner_id = $1 AND owner_run_id = $2 AND pos > $3 AND (coalesce(cardinality($4::text[]), 0) = 0 OR topic = ANY($4)) ORDER BY pos DESC LIMIT $5`
 			limit = req.Last
 		}
-		rows, err := tx.Query(ctx, query, c.workflowID, c.firstRunID, after, req.Topics, limit)
+		rows, err := tx.Query(ctx, query, c.owner, c.run, after, req.Topics, limit)
 		if err != nil {
 			return err
 		}
@@ -468,33 +469,33 @@ func (b *postgresStreamBackend) deleteStream(ctx context.Context, ref streamRef)
 	}
 	return pgx.BeginFunc(ctx, b.pool, func(tx pgx.Tx) error {
 		for _, table := range []string{"records", "producers"} {
-			if _, err := tx.Exec(ctx, "DELETE FROM "+table+" WHERE workflow_id = $1 AND first_run_id = $2", chain.workflowID, chain.firstRunID); err != nil {
+			if _, err := tx.Exec(ctx, "DELETE FROM "+table+" WHERE owner_id = $1 AND owner_run_id = $2", chain.owner, chain.run); err != nil {
 				return err
 			}
 		}
-		_, err := tx.Exec(ctx, `UPDATE streams SET deleted = true WHERE workflow_id = $1 AND first_run_id = $2`, chain.workflowID, chain.firstRunID)
+		_, err := tx.Exec(ctx, `UPDATE streams SET deleted = true WHERE owner_id = $1 AND owner_run_id = $2`, chain.owner, chain.run)
 		return err
 	})
 }
 
 func postgresWriteChain(ref streamRef) (postgresChain, error) {
-	if ref.FirstRunID == "" {
-		return postgresChain{}, errors.New("appends to a PostgreSQL stream need the first run ID of the stream's run chain")
+	if externalRun(ref) == "" {
+		return postgresChain{}, errors.New("appends to a PostgreSQL stream need the run ID of its owner: a workflow's first run ID, or the activity's run ID")
 	}
-	return postgresChain{ref.WorkflowID, ref.FirstRunID}, nil
+	return postgresChain{externalOwner(ref), externalRun(ref)}, nil
 }
 
-// A cursor is the chain and a position: `<workflow ID>:<first run ID>#<position>`.
+// A cursor is the owner, its run and a position: `<owner>:<run ID>#<position>`.
 func (c postgresChain) cursor(pos int64) streamCursor {
-	return streamCursor(fmt.Sprintf("%s:%s#%d", c.workflowID, c.firstRunID, pos))
+	return streamCursor(fmt.Sprintf("%s:%s#%d", c.owner, c.run, pos))
 }
 
-func parsePostgresCursor(workflowID string, cur streamCursor) (postgresChain, int64, error) {
+func parsePostgresCursor(owner string, cur streamCursor) (postgresChain, int64, error) {
 	chain, posStr, ok := strings.Cut(string(cur), "#")
 	if !ok {
 		return postgresChain{}, 0, errStreamCursor
 	}
-	firstRun, ok := strings.CutPrefix(chain, workflowID+":")
+	firstRun, ok := strings.CutPrefix(chain, owner+":")
 	if !ok {
 		return postgresChain{}, 0, errStreamCursor
 	}
@@ -502,7 +503,7 @@ func parsePostgresCursor(workflowID string, cur streamCursor) (postgresChain, in
 	if err != nil {
 		return postgresChain{}, 0, errStreamCursor
 	}
-	return postgresChain{workflowID, firstRun}, pos, nil
+	return postgresChain{owner, firstRun}, pos, nil
 }
 
 func postgresPos(cur streamCursor) int64 {
