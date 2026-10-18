@@ -25,8 +25,11 @@ import (
 	"go.temporal.io/server/api/adminservice/v1"
 	"go.temporal.io/server/chasm"
 	"go.temporal.io/server/chasm/lib/activity"
+	streampb "go.temporal.io/server/chasm/lib/stream/gen/streampb/v1"
+	"go.temporal.io/server/common"
 	"go.temporal.io/server/common/dynamicconfig"
 	"go.temporal.io/server/common/payload"
+	"go.temporal.io/server/common/tasktoken"
 	"go.temporal.io/server/common/testing/await"
 	"go.temporal.io/server/common/testing/parallelsuite"
 	"go.temporal.io/server/common/testing/testcontext"
@@ -1149,6 +1152,155 @@ func (s *streamTestSuite) TestPayloadsRoundTripUnchanged() {
 	})
 }
 
+// maxStreamInt is the largest integer that every backend stores and compares exactly: Redis's
+// script holds numbers as doubles.
+const maxStreamInt = int64(1<<53 - 1)
+
+// Epochs and seqs from 0 to 2^53-1 are stored and compared exactly, and any outside that range is
+// rejected as an invalid argument, rather than losing precision. Every backend.
+func (s *streamTestSuite) TestEpochsAndSeqsOutsideExactIntegersAreRejected() {
+	s.forEachBackendAndOwner(func(f *streamFixture) {
+		ref := f.startOwner(f.tv)
+		f.append(ref, clientProducer("a", maxStreamInt), 0, "", "x")
+		f.append(ref, clientProducer("a", maxStreamInt), 1, "", "y")
+		records := f.readAll(ref, streamBeginning())
+		require.Equal(f.t, []string{"x", "y"}, f.dataOf(records))
+		require.Equal(f.t, maxStreamInt, records[1].Producer.Epoch)
+
+		for _, c := range []struct {
+			epoch, seq int64
+		}{{maxStreamInt + 1, 0}, {-1, 0}, {1, maxStreamInt + 1}} {
+			_, err := f.tryAppend(ref, clientProducer("b", c.epoch), c.seq, "", "z")
+			require.ErrorIs(f.t, err, errStreamInvalidArg, "epoch %d seq %d", c.epoch, c.seq)
+		}
+	})
+}
+
+// A cursor of an earlier run of a workflow chain never skips records: a read after it either
+// returns the later records or fails as expired. Every backend. Native fails as expired, because
+// moving the stream to the next run is not built.
+func (s *streamTestSuite) TestCursorOfEarlierRunDoesNotSkipRecords() {
+	s.forEachBackend(func(f *streamFixture) {
+		ref := f.startOwner(f.tv)
+		firstRun := f.pollWorkflowTask(f.tv)
+		cursor := f.append(ref, workflowProducer(firstRun), 0, "", "run1").Cursors[0]
+		f.completeWorkflowTask(firstRun, f.continueAsNew)
+		secondRun := f.pollWorkflowTask(f.tv)
+		f.append(ref, workflowProducer(secondRun), 0, "", "run2")
+
+		resp, err := f.b.Read(f.ctx(), ref, streamReadRequest{From: streamAfter(cursor)})
+		if err != nil {
+			require.ErrorIs(f.t, err, errStreamExpired)
+			return
+		}
+		require.Equal(f.t, []string{"run2"}, f.dataOf(withoutMarkers(resp.Records)))
+	})
+}
+
+// A read of the last N records of a closed stream reports the close, as a read forwards does.
+// Every backend.
+func (s *streamTestSuite) TestTailReadReportsClose() {
+	s.forEachBackendAndOwner(func(f *streamFixture) {
+		ref := f.startOwner(f.tv)
+		f.append(ref, clientProducer("a", 1), 0, "", "x")
+		f.closeAsOwner(ref, streamClose{Status: streamClosedCompleted})
+		resp := f.read(ref, streamReadRequest{Last: 1})
+		require.Equal(f.t, []string{"x"}, f.dataOf(resp.Records))
+		require.NotNil(f.t, resp.Close)
+		require.Equal(f.t, streamClosedCompleted, resp.Close.Status)
+	})
+}
+
+// An activity task token made by the frontend for a by-ID call (RespondActivityTaskCompletedById
+// and the like) is not an activity attempt, so it can neither append nor close as one. Native
+// only: Redis and PostgreSQL do not verify producers.
+func (s *streamTestSuite) TestByIDActivityTaskTokenIsRejected() {
+	s.nativeOnlyEachOwner(func(f *streamFixture) {
+		ref := f.startOwner(f.tv)
+		if f.owner == workflowOwner {
+			f.scheduleRetriedActivity(f.tv)
+		}
+		task := f.pollActivityTask(f.tv)
+		byID := proto.CloneOf(task)
+		byID.TaskToken = f.byIDTaskToken(task.TaskToken)
+
+		_, err := f.tryAppend(ref, activityProducer(byID), 0, "", "x")
+		require.ErrorIs(f.t, err, errStreamInvalidArg)
+		if f.owner == activityOwner {
+			err = f.b.Close(f.ctx(), ref, streamCloseRequest{Owner: activityProducer(byID), Close: streamClose{Status: streamClosedCompleted}})
+			require.ErrorIs(f.t, err, errStreamInvalidArg)
+		}
+		require.Empty(f.t, f.readAll(ref, streamBeginning()))
+	})
+}
+
+// An append to the stream of an owner that has ended without creating one fails as closed, and
+// creates no open stream. Native only: on Redis and PostgreSQL the owner's worker writes the close
+// when a workflow ends, whether or not it appended, and an activity must close its own stream.
+func (s *streamTestSuite) TestAppendAfterOwnerEndedWithoutStreamFailsAsClosed() {
+	s.nativeOnlyEachOwner(func(f *streamFixture) {
+		ref := f.startOwner(f.tv)
+		if f.owner == activityOwner {
+			f.respondActivityCompleted(f.pollActivityTask(f.tv))
+		} else {
+			f.completeWorkflowTask(f.pollWorkflowTask(f.tv), f.completeWorkflow)
+		}
+		for range 2 {
+			_, err := f.tryAppend(ref, clientProducer("a", 1), 0, "", "x")
+			require.ErrorIs(f.t, err, errStreamClosed)
+		}
+		require.Empty(f.t, f.readAll(ref, streamBeginning()))
+	})
+}
+
+// A read pinned to one run of an owner, after a cursor of another run with the same owner ID,
+// fails as a cursor of another stream. Every backend.
+func (s *streamTestSuite) TestPinnedRunNotMatchingCursorIsRejected() {
+	s.forEachBackendAndOwner(func(f *streamFixture) {
+		first := f.startOwner(f.tv)
+		firstCursor := f.append(first, clientProducer("a", 1), 0, "", "x").Cursors[0]
+		f.endOwner(f.tv)
+		second := f.startOwner(f.tv)
+		secondCursor := f.append(second, clientProducer("a", 1), 0, "", "y").Cursors[0]
+
+		_, err := f.b.Read(f.ctx(), second, streamReadRequest{From: streamAfter(firstCursor)})
+		require.ErrorIs(f.t, err, errStreamCursor)
+		_, err = f.b.Read(f.ctx(), first, streamReadRequest{From: streamAfter(secondCursor)})
+		require.ErrorIs(f.t, err, errStreamCursor)
+	})
+}
+
+// A cron run that fails does not close its stream, because its chain continues. Native only: on
+// Redis and PostgreSQL the worker writes the close.
+func (s *streamTestSuite) TestFailedCronRunDoesNotCloseStream() {
+	s.nativeOnly(func(f *streamFixture) {
+		resp, err := f.env.FrontendClient().StartWorkflowExecution(f.ctx(), &workflowservice.StartWorkflowExecutionRequest{
+			Namespace:    f.env.Namespace().String(),
+			RequestId:    f.tv.Any().String(),
+			WorkflowId:   f.tv.WorkflowID(),
+			WorkflowType: f.tv.WorkflowType(),
+			TaskQueue:    f.tv.TaskQueue(),
+			Identity:     f.tv.WorkerIdentity(),
+			CronSchedule: "@every 1s",
+		})
+		require.NoError(f.t, err)
+		ref := streamRef{WorkflowID: f.tv.WorkflowID(), FirstRunID: resp.RunId}
+		task := f.pollWorkflowTask(f.tv)
+		f.append(ref, workflowProducer(task), 0, "", "x")
+		f.completeWorkflowTask(task, func(req *workflowservice.RespondWorkflowTaskCompletedRequest) {
+			req.Commands = append(req.Commands, &commandpb.Command{
+				CommandType: enumspb.COMMAND_TYPE_FAIL_WORKFLOW_EXECUTION,
+				Attributes: &commandpb.Command_FailWorkflowExecutionCommandAttributes{
+					FailWorkflowExecutionCommandAttributes: &commandpb.FailWorkflowExecutionCommandAttributes{
+						Failure: &failurepb.Failure{Message: "cron run failed"},
+					},
+				},
+			})
+		})
+		require.Nil(f.t, f.streamStateOfRun(task.WorkflowExecution.RunId).GetClose())
+	})
+}
+
 // activityProducerNodes returns the CHASM nodes holding activity producers' state.
 func (f *streamFixture) activityProducerNodes(ref streamRef) []string {
 	desc, err := f.env.AdminClient().DescribeMutableState(f.ctx(), &adminservice.DescribeMutableStateRequest{
@@ -1164,6 +1316,58 @@ func (f *streamFixture) activityProducerNodes(ref streamRef) []string {
 		}
 	}
 	return nodes
+}
+
+// streamStateOfRun returns the state of the stream embedded in a workflow run.
+func (f *streamFixture) streamStateOfRun(runID string) *streampb.StreamState {
+	desc, err := f.env.AdminClient().DescribeMutableState(f.ctx(), &adminservice.DescribeMutableStateRequest{
+		Namespace: f.env.Namespace().String(),
+		Execution: &commonpb.WorkflowExecution{WorkflowId: f.tv.WorkflowID(), RunId: runID},
+		Archetype: chasm.WorkflowArchetype,
+	})
+	require.NoError(f.t, err)
+	node, ok := desc.GetDatabaseMutableState().GetChasmNodes()["Stream"]
+	require.True(f.t, ok, "run %s has no stream", runID)
+	state := &streampb.StreamState{}
+	require.NoError(f.t, proto.Unmarshal(node.GetData().GetData(), state))
+	return state
+}
+
+// closeAsOwner closes the stream as its owner: the owning workflow's first workflow task, or the
+// owning activity's first attempt.
+func (f *streamFixture) closeAsOwner(ref streamRef, c streamClose) {
+	var owner streamProducer
+	if f.owner == activityOwner {
+		owner = activityProducer(f.pollActivityTask(f.tv))
+	} else {
+		owner = workflowProducer(f.pollWorkflowTask(f.tv))
+	}
+	require.NoError(f.t, f.b.Close(f.ctx(), ref, streamCloseRequest{Owner: owner, Close: c}))
+}
+
+// endOwner completes the owner that startOwner(tv) started.
+func (f *streamFixture) endOwner(tv *testvars.TestVars) {
+	if f.owner == activityOwner {
+		f.respondActivityCompleted(f.pollActivityTask(tv))
+		return
+	}
+	f.completeWorkflowTask(f.pollWorkflowTask(tv), f.completeWorkflow)
+}
+
+// byIDTaskToken returns the token the frontend makes for a by-ID call on the activity of token.
+func (f *streamFixture) byIDTaskToken(token []byte) []byte {
+	t, err := tasktoken.NewSerializer().Deserialize(token)
+	require.NoError(f.t, err)
+	attempt := int32(1)
+	if len(t.ComponentRef) > 0 {
+		attempt = activity.ByIDTokenAttempt
+	}
+	byID, err := tasktoken.NewSerializer().Serialize(tasktoken.NewActivityTaskToken(
+		t.NamespaceId, t.WorkflowId, t.RunId, common.EmptyEventID, t.ActivityId, "", attempt,
+		nil, common.EmptyVersion, common.EmptyVersion, t.ComponentRef, 0,
+	))
+	require.NoError(f.t, err)
+	return byID
 }
 
 func (f *streamFixture) ctx() context.Context {

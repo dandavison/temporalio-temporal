@@ -251,6 +251,7 @@ var (
 	errStreamSeqGap         = errors.New("seq skips one")
 	errStreamTooLarge       = errors.New("append is too large")
 	errStreamAppendMode     = errors.New("workflow append is in the other mode from the one its run fixed")
+	errStreamInvalidArg     = errors.New("invalid argument")
 	errStreamNotImplemented = errors.New("stream backend not implemented")
 )
 

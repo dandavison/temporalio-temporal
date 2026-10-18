@@ -186,6 +186,9 @@ func (b *nativeStreamBackend) call(ctx context.Context, operation string, in, ou
 		Operation: operation,
 		Input:     input,
 	})
+	if _, ok := errors.AsType[*serviceerror.InvalidArgument](err); ok {
+		return fmt.Errorf("%w: %w", errStreamInvalidArg, err)
+	}
 	if err != nil {
 		return err
 	}
