@@ -17,6 +17,7 @@ import (
 	commonpb "go.temporal.io/api/common/v1"
 	enumspb "go.temporal.io/api/enums/v1"
 	failurepb "go.temporal.io/api/failure/v1"
+	historypb "go.temporal.io/api/history/v1"
 	streamservicepb "go.temporal.io/api/nexusservices/streamservice/v1"
 	protocolpb "go.temporal.io/api/protocol/v1"
 	updatepb "go.temporal.io/api/update/v1"
@@ -1025,6 +1026,9 @@ func (s *streamTestSuite) TestCommitModeAppendAfterSinkModeFailsTask() {
 		require.ErrorContains(f.t, err, "SINK")
 		require.ErrorContains(f.t, err, "COMMIT")
 		require.Equal(f.t, []string{"sink"}, f.dataOf(f.readAll(ref, streamBeginning())))
+		failed := f.lastWorkflowTaskFailure(ref)
+		require.Equal(f.t, enumspb.WORKFLOW_TASK_FAILED_CAUSE_WORKFLOW_WORKER_UNHANDLED_FAILURE, failed.GetCause())
+		require.Equal(f.t, "BAD_STREAM_APPEND", failed.GetFailure().GetApplicationFailureInfo().GetType())
 	})
 }
 
@@ -1412,6 +1416,23 @@ func (f *streamFixture) commitModeAppend(data ...string) func(*workflowservice.R
 			Body:               body,
 		})
 	}
+}
+
+// lastWorkflowTaskFailure returns the owner's last WorkflowTaskFailed event's attributes.
+func (f *streamFixture) lastWorkflowTaskFailure(ref streamRef) *historypb.WorkflowTaskFailedEventAttributes {
+	resp, err := f.env.FrontendClient().GetWorkflowExecutionHistory(f.ctx(), &workflowservice.GetWorkflowExecutionHistoryRequest{
+		Namespace: f.env.Namespace().String(),
+		Execution: &commonpb.WorkflowExecution{WorkflowId: ref.WorkflowID},
+	})
+	require.NoError(f.t, err)
+	var failed *historypb.WorkflowTaskFailedEventAttributes
+	for _, e := range resp.GetHistory().GetEvents() {
+		if a := e.GetWorkflowTaskFailedEventAttributes(); a != nil {
+			failed = a
+		}
+	}
+	require.NotNil(f.t, failed)
+	return failed
 }
 
 // appendModes returns the run append modes recorded in records.

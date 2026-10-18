@@ -29,6 +29,7 @@ import (
 	"go.temporal.io/server/common/definition"
 	"go.temporal.io/server/common/effect"
 	"go.temporal.io/server/common/enums"
+	"go.temporal.io/server/common/failure"
 	"go.temporal.io/server/common/log"
 	"go.temporal.io/server/common/log/tag"
 	"go.temporal.io/server/common/metrics"
@@ -93,6 +94,9 @@ type (
 		failedCause       enumspb.WorkflowTaskFailedCause
 		causeErr          error
 		terminateWorkflow bool // when true, this task failure should be considered terminal to its workflow
+		// failureType, when set, makes the task's failure an application failure of this type
+		// rather than a server failure.
+		failureType string
 	}
 
 	workflowTaskResponseMutation func(
@@ -1652,6 +1656,19 @@ func newWorkflowTaskFailedCause(failedCause enumspb.WorkflowTaskFailedCause, cau
 		failedCause:       failedCause,
 		causeErr:          causeErr,
 		terminateWorkflow: terminatesWorkflow,
+	}
+}
+
+// failure is the failure recorded in the task's WorkflowTaskFailed event.
+func (c *workflowTaskFailedCause) failure() *failurepb.Failure {
+	if c.failureType == "" {
+		return failure.NewServerFailure(c.Message(), false)
+	}
+	return &failurepb.Failure{
+		Message: c.Message(),
+		FailureInfo: &failurepb.Failure_ApplicationFailureInfo{ApplicationFailureInfo: &failurepb.ApplicationFailureInfo{
+			Type: c.failureType,
+		}},
 	}
 }
 

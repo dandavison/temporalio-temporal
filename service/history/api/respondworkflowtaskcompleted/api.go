@@ -25,7 +25,6 @@ import (
 	"go.temporal.io/server/common/collection"
 	"go.temporal.io/server/common/definition"
 	"go.temporal.io/server/common/effect"
-	"go.temporal.io/server/common/failure"
 	"go.temporal.io/server/common/locks"
 	"go.temporal.io/server/common/log"
 	"go.temporal.io/server/common/log/tag"
@@ -1169,7 +1168,7 @@ func failWorkflowTask(
 	wtFailedEvent, err := mutableState.AddWorkflowTaskFailedEvent(
 		workflowTask,
 		wtFailedCause.failedCause,
-		failure.NewServerFailure(wtFailedCause.Message(), false),
+		wtFailedCause.failure(),
 		request.GetIdentity(),
 		nil,
 		request.GetBinaryChecksum(),
@@ -1213,7 +1212,8 @@ func (handler *WorkflowTaskCompletedHandler) clearStickyTaskQueue(ctx context.Co
 
 // appendCommitModeStreamRecords applies the commit-mode stream appends among a workflow task
 // completion's messages, if apply is set, and returns the other messages. A stream append the
-// stream rejects, such as one in the other mode from the one the run fixed, fails the task.
+// stream rejects, such as one in the other mode from the one the run fixed, fails the task with an
+// application failure of type BAD_STREAM_APPEND.
 func appendCommitModeStreamRecords(
 	ctx context.Context,
 	ms historyi.MutableState,
@@ -1229,7 +1229,7 @@ func appendCommitModeStreamRecords(
 		}
 		body := &streamservicepb.CommitModeAppend{}
 		if err := msg.GetBody().UnmarshalTo(body); err != nil {
-			return nil, newWorkflowTaskFailedCause(enumspb.WORKFLOW_TASK_FAILED_CAUSE_BAD_STREAM_APPEND, serviceerror.NewInvalidArgument(err.Error()), false), nil
+			return nil, badStreamAppend(serviceerror.NewInvalidArgument(err.Error())), nil
 		}
 		appends = append(appends, body)
 	}
@@ -1237,8 +1237,7 @@ func appendCommitModeStreamRecords(
 		return others, nil, nil
 	}
 	if !ms.ChasmEnabled() {
-		return others, newWorkflowTaskFailedCause(enumspb.WORKFLOW_TASK_FAILED_CAUSE_BAD_STREAM_APPEND,
-			serviceerror.NewInvalidArgument("commit-mode stream appends need CHASM"), false), nil
+		return others, badStreamAppend(serviceerror.NewInvalidArgument("commit-mode stream appends need CHASM")), nil
 	}
 	wf, chasmCtx, err := ms.ChasmWorkflowComponent(ctx)
 	if err != nil {
@@ -1247,10 +1246,19 @@ func appendCommitModeStreamRecords(
 	for _, a := range appends {
 		if err := wf.AppendCommitModeRecords(chasmCtx, a.GetRecords()); err != nil {
 			if _, ok := errors.AsType[*stream.Error](err); ok {
-				return others, newWorkflowTaskFailedCause(enumspb.WORKFLOW_TASK_FAILED_CAUSE_BAD_STREAM_APPEND, serviceerror.NewInvalidArgument(err.Error()), false), nil
+				return others, badStreamAppend(serviceerror.NewInvalidArgument(err.Error())), nil
 			}
 			return nil, nil, err
 		}
 	}
 	return others, nil, nil
+}
+
+// badStreamAppend fails a workflow task whose completion carries a stream append the server cannot
+// apply. A workflow task failure is retried whatever its cause, so the failure type, not a cause of
+// its own, tells it apart.
+func badStreamAppend(err error) *workflowTaskFailedCause {
+	c := newWorkflowTaskFailedCause(enumspb.WORKFLOW_TASK_FAILED_CAUSE_WORKFLOW_WORKER_UNHANDLED_FAILURE, err, false)
+	c.failureType = "BAD_STREAM_APPEND"
+	return c
 }
