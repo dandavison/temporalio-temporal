@@ -9,6 +9,10 @@ import (
 
 func (wt *WorkflowTags) extractFromWorkflowServiceServerMessage(message any) []tag.Tag {
 	switch r := message.(type) {
+	case *workflowservice.CancelNexusOperationRequest:
+		return nil
+	case *workflowservice.CancelNexusOperationResponse:
+		return nil
 	case *workflowservice.CountActivityExecutionsRequest:
 		return nil
 	case *workflowservice.CountActivityExecutionsResponse:
@@ -525,6 +529,10 @@ func (wt *WorkflowTags) extractFromWorkflowServiceServerMessage(message any) []t
 	case *workflowservice.StartBatchOperationRequest:
 		return nil
 	case *workflowservice.StartBatchOperationResponse:
+		return nil
+	case *workflowservice.StartNexusOperationRequest:
+		return nil
+	case *workflowservice.StartNexusOperationResponse:
 		return nil
 	case *workflowservice.StartNexusOperationExecutionRequest:
 		return []tag.Tag{

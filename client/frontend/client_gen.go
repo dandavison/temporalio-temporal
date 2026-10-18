@@ -9,6 +9,16 @@ import (
 	"google.golang.org/grpc"
 )
 
+func (c *clientImpl) CancelNexusOperation(
+	ctx context.Context,
+	request *workflowservice.CancelNexusOperationRequest,
+	opts ...grpc.CallOption,
+) (*workflowservice.CancelNexusOperationResponse, error) {
+	ctx, cancel := c.createContext(ctx)
+	defer cancel()
+	return c.client.CancelNexusOperation(ctx, request, opts...)
+}
+
 func (c *clientImpl) CountActivityExecutions(
 	ctx context.Context,
 	request *workflowservice.CountActivityExecutionsRequest,
@@ -1007,6 +1017,16 @@ func (c *clientImpl) StartBatchOperation(
 	ctx, cancel := c.createContext(ctx)
 	defer cancel()
 	return c.client.StartBatchOperation(ctx, request, opts...)
+}
+
+func (c *clientImpl) StartNexusOperation(
+	ctx context.Context,
+	request *workflowservice.StartNexusOperationRequest,
+	opts ...grpc.CallOption,
+) (*workflowservice.StartNexusOperationResponse, error) {
+	ctx, cancel := c.createContext(ctx)
+	defer cancel()
+	return c.client.StartNexusOperation(ctx, request, opts...)
 }
 
 func (c *clientImpl) StartNexusOperationExecution(

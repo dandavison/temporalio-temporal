@@ -9,6 +9,20 @@ import (
 	"google.golang.org/grpc"
 )
 
+func (c *metricClient) CancelNexusOperation(
+	ctx context.Context,
+	request *workflowservice.CancelNexusOperationRequest,
+	opts ...grpc.CallOption,
+) (_ *workflowservice.CancelNexusOperationResponse, retError error) {
+
+	metricsHandler, startTime := c.startMetricsRecording(ctx, "FrontendClientCancelNexusOperation")
+	defer func() {
+		c.finishMetricsRecording(metricsHandler, startTime, retError)
+	}()
+
+	return c.client.CancelNexusOperation(ctx, request, opts...)
+}
+
 func (c *metricClient) CountActivityExecutions(
 	ctx context.Context,
 	request *workflowservice.CountActivityExecutionsRequest,
@@ -1407,6 +1421,20 @@ func (c *metricClient) StartBatchOperation(
 	}()
 
 	return c.client.StartBatchOperation(ctx, request, opts...)
+}
+
+func (c *metricClient) StartNexusOperation(
+	ctx context.Context,
+	request *workflowservice.StartNexusOperationRequest,
+	opts ...grpc.CallOption,
+) (_ *workflowservice.StartNexusOperationResponse, retError error) {
+
+	metricsHandler, startTime := c.startMetricsRecording(ctx, "FrontendClientStartNexusOperation")
+	defer func() {
+		c.finishMetricsRecording(metricsHandler, startTime, retError)
+	}()
+
+	return c.client.StartNexusOperation(ctx, request, opts...)
 }
 
 func (c *metricClient) StartNexusOperationExecution(

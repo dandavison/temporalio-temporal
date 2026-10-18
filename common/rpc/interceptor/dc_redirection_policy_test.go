@@ -158,6 +158,10 @@ func (s *selectedAPIsForwardingRedirectionPolicySuite) TestSelectedAPIs() {
 		wfMethod("RequestCancelNexusOperationExecution"): {},
 		wfMethod("TerminateNexusOperationExecution"):     {},
 		wfMethod("DeleteNexusOperationExecution"):        {},
+
+		// Direct Nexus calls
+		wfMethod("StartNexusOperation"):  {},
+		wfMethod("CancelNexusOperation"): {},
 	}, selectedAPIsForwardingRedirectionPolicyAllowedAPIs)
 }
 

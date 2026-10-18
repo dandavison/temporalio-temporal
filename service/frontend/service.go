@@ -257,6 +257,7 @@ type Config struct {
 	EnableMatchingFanOutForPollCancellation dynamicconfig.BoolPropertyFnWithNamespaceFilter
 	NumTaskQueueReadPartitions              dynamicconfig.IntPropertyFnWithTaskQueueFilter
 	WorkerCommandsEnabled                   dynamicconfig.BoolPropertyFnWithNamespaceFilter
+	EnableDirectNexusCalls                  dynamicconfig.BoolPropertyFnWithNamespaceFilter
 	PollerAutoscalingAutoEnroll             dynamicconfig.BoolPropertyFnWithNamespaceFilter
 	WorkflowPauseEnabled                    dynamicconfig.BoolPropertyFnWithNamespaceFilter
 	WorkflowTimeSkippingEnabled             dynamicconfig.BoolPropertyFnWithNamespaceFilter
@@ -452,6 +453,7 @@ func NewConfig(
 		EnableMatchingFanOutForPollCancellation: dynamicconfig.EnableMatchingFanOutForPollCancellation.Get(dc),
 		NumTaskQueueReadPartitions:              dynamicconfig.MatchingNumTaskqueueReadPartitions.Get(dc),
 		WorkerCommandsEnabled:                   dynamicconfig.WorkerCommandsEnabled.Get(dc),
+		EnableDirectNexusCalls:                  dynamicconfig.EnableDirectNexusCalls.Get(dc),
 		PollerAutoscalingAutoEnroll:             dynamicconfig.PollerAutoscalingAutoEnroll.Get(dc),
 		WorkflowPauseEnabled:                    dynamicconfig.WorkflowPauseEnabled.Get(dc),
 		WorkflowTimeSkippingEnabled:             dynamicconfig.WorkflowTimeSkippingEnabled.Get(dc),

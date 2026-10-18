@@ -167,6 +167,9 @@ var (
 		"RequestCancelNexusOperationExecution": func() any { return &workflowservice.RequestCancelNexusOperationExecutionResponse{} },
 		"StartNexusOperationExecution":         func() any { return &workflowservice.StartNexusOperationExecutionResponse{} },
 		"TerminateNexusOperationExecution":     func() any { return &workflowservice.TerminateNexusOperationExecutionResponse{} },
+
+		"StartNexusOperation":  func() any { return &workflowservice.StartNexusOperationResponse{} },
+		"CancelNexusOperation": func() any { return &workflowservice.CancelNexusOperationResponse{} },
 	}
 )
 

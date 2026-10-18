@@ -11,6 +11,21 @@ import (
 	"go.temporal.io/server/common/backoff"
 )
 
+func (c *retryableClient) CancelNexusOperation(
+	ctx context.Context,
+	request *workflowservice.CancelNexusOperationRequest,
+	opts ...grpc.CallOption,
+) (*workflowservice.CancelNexusOperationResponse, error) {
+	var resp *workflowservice.CancelNexusOperationResponse
+	op := func(ctx context.Context) error {
+		var err error
+		resp, err = c.client.CancelNexusOperation(ctx, request, opts...)
+		return err
+	}
+	err := backoff.ThrottleRetryContext(ctx, op, c.policy, c.isRetryable)
+	return resp, err
+}
+
 func (c *retryableClient) CountActivityExecutions(
 	ctx context.Context,
 	request *workflowservice.CountActivityExecutionsRequest,
@@ -1505,6 +1520,21 @@ func (c *retryableClient) StartBatchOperation(
 	op := func(ctx context.Context) error {
 		var err error
 		resp, err = c.client.StartBatchOperation(ctx, request, opts...)
+		return err
+	}
+	err := backoff.ThrottleRetryContext(ctx, op, c.policy, c.isRetryable)
+	return resp, err
+}
+
+func (c *retryableClient) StartNexusOperation(
+	ctx context.Context,
+	request *workflowservice.StartNexusOperationRequest,
+	opts ...grpc.CallOption,
+) (*workflowservice.StartNexusOperationResponse, error) {
+	var resp *workflowservice.StartNexusOperationResponse
+	op := func(ctx context.Context) error {
+		var err error
+		resp, err = c.client.StartNexusOperation(ctx, request, opts...)
 		return err
 	}
 	err := backoff.ThrottleRetryContext(ctx, op, c.policy, c.isRetryable)

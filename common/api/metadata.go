@@ -102,6 +102,8 @@ var (
 		"RequestCancelNexusOperationExecution":         {Scope: ScopeNamespace, Access: AccessWrite, Polling: PollingNone},
 		"StartActivityExecution":                       {Scope: ScopeNamespace, Access: AccessWrite, Polling: PollingNone},
 		"StartNexusOperationExecution":                 {Scope: ScopeNamespace, Access: AccessWrite, Polling: PollingNone},
+		"StartNexusOperation":                          {Scope: ScopeNamespace, Access: AccessWrite, Polling: PollingNone},
+		"CancelNexusOperation":                         {Scope: ScopeNamespace, Access: AccessWrite, Polling: PollingNone},
 		"TerminateActivityExecution":                   {Scope: ScopeNamespace, Access: AccessWrite, Polling: PollingNone},
 		"TerminateNexusOperationExecution":             {Scope: ScopeNamespace, Access: AccessWrite, Polling: PollingNone},
 		"PollNexusTaskQueue":                           {Scope: ScopeNamespace, Access: AccessWrite, Polling: PollingAlways},

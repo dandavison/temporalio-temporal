@@ -3859,6 +3859,13 @@ WorkerActivitiesPerSecond, MaxConcurrentActivityTaskPollers.
 		`WorkerCommandsEnabled is a "feature enable" flag. It allows clients to send commands to the workers.`,
 	)
 
+	EnableDirectNexusCalls = NewNamespaceBoolSetting(
+		"frontend.enableDirectNexusCalls",
+		false,
+		`EnableDirectNexusCalls enables the StartNexusOperation and CancelNexusOperation APIs, which call
+the System Nexus Endpoint synchronously without a NexusOperation component. Prototype.`,
+	)
+
 	PollerAutoscalingAutoEnroll = NewNamespaceBoolSetting(
 		"frontend.pollerAutoscalingAutoEnroll",
 		false,

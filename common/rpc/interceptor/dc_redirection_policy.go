@@ -100,6 +100,10 @@ var selectedAPIsForwardingRedirectionPolicyAllowedAPIs = map[string]struct{}{
 	wfMethod("RequestCancelNexusOperationExecution"): {},
 	wfMethod("TerminateNexusOperationExecution"):     {},
 	wfMethod("DeleteNexusOperationExecution"):        {},
+
+	// Direct Nexus calls
+	wfMethod("StartNexusOperation"):  {},
+	wfMethod("CancelNexusOperation"): {},
 }
 
 func wfMethod(name string) string { return api.WorkflowServicePrefix + name }
