@@ -19,8 +19,9 @@ package tests
 //     and its local activities', are not withdrawn.
 //   - Producers are not verified, and appends from speculative workflow tasks are not rejected.
 //   - The owner's worker writes a workflow's close. The stream is left open when the workflow is
-//     terminated or times out, when a failed run with a retry policy is not retried, or when the
-//     worker stops before writing the close.
+//     terminated or times out, when a failed run with a retry policy is not retried (native
+//     closes it, because the server knows its retries are exhausted), or when the worker stops
+//     before writing the close.
 //   - Nothing closes an activity's stream when the activity ends; the activity must close it
 //     itself. A worker cannot tell when its activity has ended: Core sends the Respond RPC and
 //     discards its result, so the worker does not learn whether the server accepted the
