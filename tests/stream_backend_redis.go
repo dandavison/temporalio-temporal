@@ -382,7 +382,8 @@ func (b *redisStreamBackend) closeFromMeta(ctx context.Context, k redisKeys) (*s
 	return c, nil
 }
 
-// readTail returns the last req.Last matching records, scanning the whole log backwards.
+// readTail returns the last req.Last matching records, scanning the whole log backwards, and the
+// close if the stream is closed.
 func (b *redisStreamBackend) readTail(ctx context.Context, k redisKeys, req streamReadRequest) (streamReadResponse, error) {
 	entries, err := b.rdb.XRevRange(ctx, k.log, "+", "-").Result()
 	if err != nil {
@@ -398,6 +399,11 @@ func (b *redisStreamBackend) readTail(ctx context.Context, k redisKeys, req stre
 		}
 		if r, ok := redisRecord(k.cursor(e.ID), e.Values, req.Topics); ok {
 			resp.Records = append([]streamRecord{r}, resp.Records...)
+		}
+	}
+	if b.rdb.HGet(ctx, k.meta, "closed").Val() == "1" {
+		if resp.Close, err = b.closeFromMeta(ctx, k); err != nil {
+			return streamReadResponse{}, err
 		}
 	}
 	return resp, nil
