@@ -1172,6 +1172,25 @@ func (s *streamTestSuite) TestEpochsAndSeqsOutsideExactIntegersAreRejected() {
 	})
 }
 
+// Epochs and seqs are compared as numbers, also across a change in their number of digits. Every
+// backend. Redis stores them as decimal strings, where a string comparison would order 10 before 9.
+func (s *streamTestSuite) TestEpochsAndSeqsCompareAsNumbers() {
+	s.forEachBackendAndOwner(func(f *streamFixture) {
+		ref := f.startOwner(f.tv)
+		for seq := range int64(11) {
+			f.append(ref, clientProducer("a", 9), seq, "", "a")
+		}
+		_, err := f.tryAppend(ref, clientProducer("a", 9), 9, "", "a")
+		require.ErrorIs(f.t, err, errStreamSeqStale)
+		f.append(ref, clientProducer("a", 10), 0, "", "b")
+		_, err = f.tryAppend(ref, clientProducer("a", 9), 11, "", "c")
+		require.ErrorIs(f.t, err, errStreamEpochFenced)
+		records := f.readAll(ref, streamBeginning())
+		last := records[len(records)-1].Producer
+		require.Equal(f.t, [2]int64{10, 0}, [2]int64{last.Epoch, last.Seq})
+	})
+}
+
 // A cursor of an earlier run of a workflow chain never skips records: a read after it either
 // returns the later records or fails as expired. Every backend. Native fails as expired, because
 // moving the stream to the next run is not built.
