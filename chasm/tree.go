@@ -208,6 +208,7 @@ type (
 		// TODO: Add methods needed from MutateState here.
 		GetExecutionState() *persistencespb.WorkflowExecutionState
 		GetExecutionInfo() *persistencespb.WorkflowExecutionInfo
+		GetActivityInfo(scheduledEventID int64) (*persistencespb.ActivityInfo, bool)
 		GetApproximatePersistedSize() int
 		ChasmSkipPersistenceEnabled() bool
 		// Returns the operator override of the logical task count that triggers the task count

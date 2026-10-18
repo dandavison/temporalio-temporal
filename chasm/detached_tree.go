@@ -187,6 +187,11 @@ func (b *readOnlyNodeBackend) GetExecutionInfo() *persistencespb.WorkflowExecuti
 	return b.mutableState.GetExecutionInfo()
 }
 
+func (b *readOnlyNodeBackend) GetActivityInfo(scheduledEventID int64) (*persistencespb.ActivityInfo, bool) {
+	ai, ok := b.mutableState.GetActivityInfos()[scheduledEventID]
+	return ai, ok
+}
+
 func (b *readOnlyNodeBackend) GetExecutionState() *persistencespb.WorkflowExecutionState {
 	return b.mutableState.GetExecutionState()
 }

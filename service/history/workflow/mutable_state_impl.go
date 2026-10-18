@@ -5052,6 +5052,11 @@ func (ms *MutableStateImpl) ApplyWorkflowExecutionCompletedEvent(
 	ms.executionInfo.CloseTime = event.GetEventTime()
 	ms.ClearStickyTaskQueue()
 	ms.writeEventToCache(event)
+	if ms.executionInfo.NewExecutionRunId == "" {
+		if err := ms.closeStreamOnEnd(nil); err != nil {
+			return err
+		}
+	}
 	return ms.processCloseCallbacks()
 }
 
@@ -5099,6 +5104,9 @@ func (ms *MutableStateImpl) ApplyWorkflowExecutionFailedEvent(
 
 	attrs := event.GetWorkflowExecutionFailedEventAttributes()
 	if attrs.RetryState != enumspb.RETRY_STATE_IN_PROGRESS {
+		if err := ms.closeStreamOnEnd(attrs.GetFailure()); err != nil {
+			return err
+		}
 		return ms.processCloseCallbacks()
 	}
 	// Workflow-level callbacks are inherited by the retry run, but update callbacks
@@ -5148,6 +5156,9 @@ func (ms *MutableStateImpl) ApplyWorkflowExecutionTimedoutEvent(
 
 	attrs := event.GetWorkflowExecutionTimedOutEventAttributes()
 	if attrs.RetryState != enumspb.RETRY_STATE_IN_PROGRESS {
+		if err := ms.closeStreamOnEnd(nil); err != nil {
+			return err
+		}
 		return ms.processCloseCallbacks()
 	}
 	// Workflow-level callbacks are inherited by the retry run, but update callbacks
@@ -5230,6 +5241,9 @@ func (ms *MutableStateImpl) ApplyWorkflowExecutionCanceledEvent(
 	ms.executionInfo.CloseTime = event.GetEventTime()
 	ms.ClearStickyTaskQueue()
 	ms.writeEventToCache(event)
+	if err := ms.closeStreamOnEnd(nil); err != nil {
+		return err
+	}
 	return ms.processCloseCallbacks()
 }
 
@@ -6283,7 +6297,9 @@ func (ms *MutableStateImpl) ApplyWorkflowExecutionTerminatedEvent(
 	ms.executionInfo.CloseTime = event.GetEventTime()
 	ms.ClearStickyTaskQueue()
 	ms.writeEventToCache(event)
-
+	if err := ms.closeStreamOnEnd(nil); err != nil {
+		return err
+	}
 	return ms.processCloseCallbacks()
 }
 
@@ -7433,6 +7449,43 @@ func (ms *MutableStateImpl) processCloseCallbacksChasm() error {
 	}
 
 	return wf.ProcessCloseCallbacks(ctx)
+}
+
+// streamWorkflowComponent returns the workflow component for writing if the workflow owns a stream.
+func (ms *MutableStateImpl) streamWorkflowComponent() (*chasmworkflow.Workflow, chasm.MutableContext, error) {
+	if !ms.ChasmEnabled() {
+		return nil, nil, nil
+	}
+	wf, roCtx, err := ms.ChasmWorkflowComponentReadOnly(context.Background())
+	if err != nil {
+		return nil, nil, err
+	}
+	if _, ok := wf.Stream.TryGet(roCtx); !ok {
+		return nil, nil, nil
+	}
+	return ms.ChasmWorkflowComponent(context.Background())
+}
+
+// recordStreamWorkflowTaskCommit records, in the workflow's stream, which attempt completed the
+// current workflow task.
+func (ms *MutableStateImpl) recordStreamWorkflowTaskCommit(attempt int32) error {
+	wf, ctx, err := ms.streamWorkflowComponent()
+	if wf == nil || err != nil {
+		return err
+	}
+	wf.RecordStreamWorkflowTaskCommit(ctx, attempt)
+	return nil
+}
+
+// closeStreamOnEnd closes the workflow's stream with a state taken from the workflow's terminal
+// status.
+func (ms *MutableStateImpl) closeStreamOnEnd(closeFailure *failurepb.Failure) error {
+	wf, ctx, err := ms.streamWorkflowComponent()
+	if wf == nil || err != nil {
+		return err
+	}
+	wf.CloseStreamOnOwnerEnd(ctx, chasmworkflow.StreamCloseState(ms.executionState.Status), closeFailure)
+	return nil
 }
 
 func (ms *MutableStateImpl) AddTasks(

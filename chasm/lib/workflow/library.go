@@ -13,6 +13,7 @@ type library struct {
 
 	registry                    *Registry
 	workflowServiceNexusHandler *workflowServiceNexusHandler
+	streamServiceHandler        *streamServiceHandler
 	config                      Config
 	saMapperProvider            searchattribute.MapperProvider
 	saValidator                 *searchattribute.Validator
@@ -34,6 +35,7 @@ func newLibrary(
 			config:            config,
 			namespaceRegistry: namespaceRegistry,
 		},
+		streamServiceHandler: &streamServiceHandler{namespaceRegistry: namespaceRegistry},
 	}
 }
 
@@ -94,6 +96,7 @@ func (l *library) NexusServices() []*nexus.Service {
 	}
 	return []*nexus.Service{
 		mustNewWorkflowServiceNexusHandler(l.workflowServiceNexusHandler),
+		mustNewStreamServiceNexusHandler(l.streamServiceHandler),
 	}
 }
 
@@ -103,5 +106,6 @@ func (l *library) NexusServiceProcessors() []*chasm.NexusServiceProcessor {
 	}
 	return []*chasm.NexusServiceProcessor{
 		NewWorkflowServiceNexusServiceProcessor(l.config, l.saMapperProvider, l.saValidator),
+		NewStreamServiceNexusServiceProcessor(),
 	}
 }

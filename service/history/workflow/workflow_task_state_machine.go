@@ -766,6 +766,10 @@ func (m *workflowTaskStateMachine) AddWorkflowTaskCompletedEvent(
 
 	m.ms.RemoveSpeculativeWorkflowTaskTimeoutTask()
 
+	if err := m.ms.recordStreamWorkflowTaskCommit(workflowTask.Attempt); err != nil {
+		return nil, err
+	}
+
 	// Capture if WorkflowTaskScheduled and WorkflowTaskStarted events were created
 	// before calling m.beforeAddWorkflowTaskCompletedEvent() because it will delete workflow task info from mutable state.
 	workflowTaskScheduledStartedEventsCreated := !m.ms.IsTransientWorkflowTask() && workflowTask.Type != enumsspb.WORKFLOW_TASK_TYPE_SPECULATIVE

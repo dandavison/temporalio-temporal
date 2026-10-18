@@ -25,6 +25,7 @@ type MockNodeBackend struct {
 	// Optional function overrides. If nil, methods return zero-values.
 	HandleGetExecutionState                   func() *persistencespb.WorkflowExecutionState
 	HandleGetExecutionInfo                    func() *persistencespb.WorkflowExecutionInfo
+	HandleGetActivityInfo                     func(scheduledEventID int64) (*persistencespb.ActivityInfo, bool)
 	HandleGetCurrentVersion                   func() int64
 	HandleNextTransitionCount                 func() int64
 	HandleGetApproximatePersistedSize         func() int
@@ -70,6 +71,13 @@ func (m *MockNodeBackend) GetExecutionInfo() *persistencespb.WorkflowExecutionIn
 		return m.HandleGetExecutionInfo()
 	}
 	return &persistencespb.WorkflowExecutionInfo{}
+}
+
+func (m *MockNodeBackend) GetActivityInfo(scheduledEventID int64) (*persistencespb.ActivityInfo, bool) {
+	if m.HandleGetActivityInfo != nil {
+		return m.HandleGetActivityInfo(scheduledEventID)
+	}
+	return nil, false
 }
 
 func (m *MockNodeBackend) GetApproximatePersistedSize() int {

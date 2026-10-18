@@ -2,8 +2,10 @@ package frontend
 
 import (
 	"context"
+	"errors"
 
 	"github.com/google/uuid"
+	"github.com/nexus-rpc/sdk-go/nexus"
 	nexuspb "go.temporal.io/api/nexus/v1"
 	"go.temporal.io/api/serviceerror"
 	"go.temporal.io/api/workflowservice/v1"
@@ -40,7 +42,7 @@ func (wh *WorkflowHandler) StartNexusOperation(
 		ReserializeInputPayload: true,
 	}, request.GetService(), request.GetOperation(), request.GetInput())
 	if err != nil {
-		return nil, err
+		return nil, handlerErrorToServiceError(err)
 	}
 	resp, err := wh.historyClient.StartNexusOperation(ctx, &historyservice.StartNexusOperationRequest{
 		NamespaceId: ns.ID().String(),
@@ -80,6 +82,26 @@ func (wh *WorkflowHandler) CancelNexusOperation(
 	*workflowservice.CancelNexusOperationRequest,
 ) (*workflowservice.CancelNexusOperationResponse, error) {
 	return nil, serviceerror.NewUnimplemented("direct Nexus calls support only synchronous operations")
+}
+
+// handlerErrorToServiceError converts a Nexus handler error from input processing to a gRPC error.
+func handlerErrorToServiceError(err error) error {
+	he, ok := errors.AsType[*nexus.HandlerError](err)
+	if !ok {
+		return err
+	}
+	switch he.Type {
+	case nexus.HandlerErrorTypeBadRequest:
+		return serviceerror.NewInvalidArgument(he.Error())
+	case nexus.HandlerErrorTypeNotFound:
+		return serviceerror.NewNotFound(he.Error())
+	case nexus.HandlerErrorTypeUnauthorized, nexus.HandlerErrorTypeUnauthenticated:
+		return serviceerror.NewPermissionDenied(he.Error(), "")
+	case nexus.HandlerErrorTypeNotImplemented:
+		return serviceerror.NewUnimplemented(he.Error())
+	default:
+		return serviceerror.NewInternal(he.Error())
+	}
 }
 
 func (wh *WorkflowHandler) directNexusCallNamespace(name, endpoint string) (*namespace.Namespace, error) {

@@ -5,6 +5,7 @@ import (
 
 	enumspb "go.temporal.io/api/enums/v1"
 	historypb "go.temporal.io/api/history/v1"
+	persistencespb "go.temporal.io/server/api/persistence/v1"
 	"go.temporal.io/server/common/nexus/nexusrpc"
 )
 
@@ -71,6 +72,21 @@ func (m MSPointer) LoadHistoryEvent(ctx Context, token []byte) (*historypb.Histo
 // GetNexusCompletion retrieves the Nexus operation completion data for the given request ID from the underlying mutable state.
 func (m MSPointer) GetNexusCompletion(ctx Context, requestID string) (nexusrpc.CompleteOperationOptions, error) {
 	return m.backend.GetNexusCompletion(ctx.goContext(), requestID)
+}
+
+// GetExecutionInfo returns the underlying mutable state's execution info.
+func (m MSPointer) GetExecutionInfo() *persistencespb.WorkflowExecutionInfo {
+	return m.backend.GetExecutionInfo()
+}
+
+// GetExecutionState returns the underlying mutable state's execution state.
+func (m MSPointer) GetExecutionState() *persistencespb.WorkflowExecutionState {
+	return m.backend.GetExecutionState()
+}
+
+// GetActivityInfo returns the pending activity with the given scheduled event ID.
+func (m MSPointer) GetActivityInfo(scheduledEventID int64) (*persistencespb.ActivityInfo, bool) {
+	return m.backend.GetActivityInfo(scheduledEventID)
 }
 
 // GetWorkflowTypeName retrieves the workflow type name from the underlying mutable state.
