@@ -625,6 +625,15 @@ func (s *streamTestSuite) TestReadFromBeginningWaitsForFirstAppend() {
 	})
 }
 
+// An append to a stream whose owner does not exist fails as not found. Native only: a native stream
+// is embedded in its owner, while on Redis the first append creates the stream.
+func (s *streamTestSuite) TestAppendWithoutOwnerFailsAsNotFound() {
+	s.nativeOnly(func(f *streamFixture) {
+		_, err := f.tryAppend(streamRef{WorkflowID: f.tv.WorkflowID()}, clientProducer("a", 1), 0, "", "x")
+		require.ErrorIs(f.t, err, errStreamNotFound)
+	})
+}
+
 // A read after a cursor of a stream that has been deleted fails as expired, rather than waiting.
 // Every backend.
 func (s *streamTestSuite) TestReadAfterCursorOfDeletedStreamFails() {
