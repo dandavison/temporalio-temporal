@@ -41,3 +41,77 @@ func (this *StreamState) Equal(that interface{}) bool {
 
 	return proto.Equal(this, that1)
 }
+
+// Marshal an object of type ProducerState to the protobuf v3 wire format
+func (val *ProducerState) Marshal() ([]byte, error) {
+	return proto.Marshal(val)
+}
+
+// Unmarshal an object of type ProducerState from the protobuf v3 wire format
+func (val *ProducerState) Unmarshal(buf []byte) error {
+	return proto.Unmarshal(buf, val)
+}
+
+// Size returns the size of the object, in bytes, once serialized
+func (val *ProducerState) Size() int {
+	return proto.Size(val)
+}
+
+// Equal returns whether two ProducerState values are equivalent by recursively
+// comparing the message's fields.
+// For more information see the documentation for
+// https://pkg.go.dev/google.golang.org/protobuf/proto#Equal
+func (this *ProducerState) Equal(that interface{}) bool {
+	if that == nil {
+		return this == nil
+	}
+
+	var that1 *ProducerState
+	switch t := that.(type) {
+	case *ProducerState:
+		that1 = t
+	case ProducerState:
+		that1 = &t
+	default:
+		return false
+	}
+
+	return proto.Equal(this, that1)
+}
+
+// Marshal an object of type Cursor to the protobuf v3 wire format
+func (val *Cursor) Marshal() ([]byte, error) {
+	return proto.Marshal(val)
+}
+
+// Unmarshal an object of type Cursor from the protobuf v3 wire format
+func (val *Cursor) Unmarshal(buf []byte) error {
+	return proto.Unmarshal(buf, val)
+}
+
+// Size returns the size of the object, in bytes, once serialized
+func (val *Cursor) Size() int {
+	return proto.Size(val)
+}
+
+// Equal returns whether two Cursor values are equivalent by recursively
+// comparing the message's fields.
+// For more information see the documentation for
+// https://pkg.go.dev/google.golang.org/protobuf/proto#Equal
+func (this *Cursor) Equal(that interface{}) bool {
+	if that == nil {
+		return this == nil
+	}
+
+	var that1 *Cursor
+	switch t := that.(type) {
+	case *Cursor:
+		that1 = t
+	case Cursor:
+		that1 = &t
+	default:
+		return false
+	}
+
+	return proto.Equal(this, that1)
+}

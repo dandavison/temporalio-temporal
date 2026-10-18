@@ -11,6 +11,7 @@ import (
 	sync "sync"
 	unsafe "unsafe"
 
+	v1 "go.temporal.io/api/nexusservices/streamservice/v1"
 	protoreflect "google.golang.org/protobuf/reflect/protoreflect"
 	protoimpl "google.golang.org/protobuf/runtime/protoimpl"
 )
@@ -23,7 +24,11 @@ const (
 )
 
 type StreamState struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// The offset the next record gets. Offsets are contiguous from 0.
+	NextOffset int64 `protobuf:"varint,1,opt,name=next_offset,json=nextOffset,proto3" json:"next_offset,omitempty"`
+	// Set once the stream is closed.
+	Close         *v1.StreamClose `protobuf:"bytes,2,opt,name=close,proto3" json:"close,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -58,12 +63,190 @@ func (*StreamState) Descriptor() ([]byte, []int) {
 	return file_temporal_server_chasm_lib_stream_proto_v1_message_proto_rawDescGZIP(), []int{0}
 }
 
+func (x *StreamState) GetNextOffset() int64 {
+	if x != nil {
+		return x.NextOffset
+	}
+	return 0
+}
+
+func (x *StreamState) GetClose() *v1.StreamClose {
+	if x != nil {
+		return x.Close
+	}
+	return nil
+}
+
+// A producer's highest epoch and its latest stored append in that epoch.
+type ProducerState struct {
+	state        protoimpl.MessageState `protogen:"open.v1"`
+	WorkflowTask int64                  `protobuf:"varint,1,opt,name=workflow_task,json=workflowTask,proto3" json:"workflow_task,omitempty"`
+	Epoch        int64                  `protobuf:"varint,2,opt,name=epoch,proto3" json:"epoch,omitempty"`
+	Seq          int64                  `protobuf:"varint,3,opt,name=seq,proto3" json:"seq,omitempty"`
+	// The offsets of the append's data records, for a retry to return.
+	FirstOffset int64 `protobuf:"varint,4,opt,name=first_offset,json=firstOffset,proto3" json:"first_offset,omitempty"`
+	Count       int64 `protobuf:"varint,5,opt,name=count,proto3" json:"count,omitempty"`
+	// A hash of the append's encoded content.
+	ContentHash   []byte `protobuf:"bytes,6,opt,name=content_hash,json=contentHash,proto3" json:"content_hash,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ProducerState) Reset() {
+	*x = ProducerState{}
+	mi := &file_temporal_server_chasm_lib_stream_proto_v1_message_proto_msgTypes[1]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ProducerState) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ProducerState) ProtoMessage() {}
+
+func (x *ProducerState) ProtoReflect() protoreflect.Message {
+	mi := &file_temporal_server_chasm_lib_stream_proto_v1_message_proto_msgTypes[1]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ProducerState.ProtoReflect.Descriptor instead.
+func (*ProducerState) Descriptor() ([]byte, []int) {
+	return file_temporal_server_chasm_lib_stream_proto_v1_message_proto_rawDescGZIP(), []int{1}
+}
+
+func (x *ProducerState) GetWorkflowTask() int64 {
+	if x != nil {
+		return x.WorkflowTask
+	}
+	return 0
+}
+
+func (x *ProducerState) GetEpoch() int64 {
+	if x != nil {
+		return x.Epoch
+	}
+	return 0
+}
+
+func (x *ProducerState) GetSeq() int64 {
+	if x != nil {
+		return x.Seq
+	}
+	return 0
+}
+
+func (x *ProducerState) GetFirstOffset() int64 {
+	if x != nil {
+		return x.FirstOffset
+	}
+	return 0
+}
+
+func (x *ProducerState) GetCount() int64 {
+	if x != nil {
+		return x.Count
+	}
+	return 0
+}
+
+func (x *ProducerState) GetContentHash() []byte {
+	if x != nil {
+		return x.ContentHash
+	}
+	return nil
+}
+
+// The bytes of a native cursor: the boundary after the record at offset.
+type Cursor struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	WorkflowId    string                 `protobuf:"bytes,1,opt,name=workflow_id,json=workflowId,proto3" json:"workflow_id,omitempty"`
+	FirstRunId    string                 `protobuf:"bytes,2,opt,name=first_run_id,json=firstRunId,proto3" json:"first_run_id,omitempty"`
+	Offset        int64                  `protobuf:"varint,3,opt,name=offset,proto3" json:"offset,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *Cursor) Reset() {
+	*x = Cursor{}
+	mi := &file_temporal_server_chasm_lib_stream_proto_v1_message_proto_msgTypes[2]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *Cursor) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*Cursor) ProtoMessage() {}
+
+func (x *Cursor) ProtoReflect() protoreflect.Message {
+	mi := &file_temporal_server_chasm_lib_stream_proto_v1_message_proto_msgTypes[2]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use Cursor.ProtoReflect.Descriptor instead.
+func (*Cursor) Descriptor() ([]byte, []int) {
+	return file_temporal_server_chasm_lib_stream_proto_v1_message_proto_rawDescGZIP(), []int{2}
+}
+
+func (x *Cursor) GetWorkflowId() string {
+	if x != nil {
+		return x.WorkflowId
+	}
+	return ""
+}
+
+func (x *Cursor) GetFirstRunId() string {
+	if x != nil {
+		return x.FirstRunId
+	}
+	return ""
+}
+
+func (x *Cursor) GetOffset() int64 {
+	if x != nil {
+		return x.Offset
+	}
+	return 0
+}
+
 var File_temporal_server_chasm_lib_stream_proto_v1_message_proto protoreflect.FileDescriptor
 
 const file_temporal_server_chasm_lib_stream_proto_v1_message_proto_rawDesc = "" +
 	"\n" +
-	"7temporal/server/chasm/lib/stream/proto/v1/message.proto\x12)temporal.server.chasm.lib.stream.proto.v1\"\r\n" +
-	"\vStreamStateB>Z<go.temporal.io/server/chasm/lib/stream/gen/streampb;streampbb\x06proto3"
+	"7temporal/server/chasm/lib/stream/proto/v1/message.proto\x12)temporal.server.chasm.lib.stream.proto.v1\x1aBtemporal/api/nexusservices/streamservice/v1/request_response.proto\"~\n" +
+	"\vStreamState\x12\x1f\n" +
+	"\vnext_offset\x18\x01 \x01(\x03R\n" +
+	"nextOffset\x12N\n" +
+	"\x05close\x18\x02 \x01(\v28.temporal.api.nexusservices.streamservice.v1.StreamCloseR\x05close\"\xb8\x01\n" +
+	"\rProducerState\x12#\n" +
+	"\rworkflow_task\x18\x01 \x01(\x03R\fworkflowTask\x12\x14\n" +
+	"\x05epoch\x18\x02 \x01(\x03R\x05epoch\x12\x10\n" +
+	"\x03seq\x18\x03 \x01(\x03R\x03seq\x12!\n" +
+	"\ffirst_offset\x18\x04 \x01(\x03R\vfirstOffset\x12\x14\n" +
+	"\x05count\x18\x05 \x01(\x03R\x05count\x12!\n" +
+	"\fcontent_hash\x18\x06 \x01(\fR\vcontentHash\"c\n" +
+	"\x06Cursor\x12\x1f\n" +
+	"\vworkflow_id\x18\x01 \x01(\tR\n" +
+	"workflowId\x12 \n" +
+	"\ffirst_run_id\x18\x02 \x01(\tR\n" +
+	"firstRunId\x12\x16\n" +
+	"\x06offset\x18\x03 \x01(\x03R\x06offsetB>Z<go.temporal.io/server/chasm/lib/stream/gen/streampb;streampbb\x06proto3"
 
 var (
 	file_temporal_server_chasm_lib_stream_proto_v1_message_proto_rawDescOnce sync.Once
@@ -77,16 +260,20 @@ func file_temporal_server_chasm_lib_stream_proto_v1_message_proto_rawDescGZIP() 
 	return file_temporal_server_chasm_lib_stream_proto_v1_message_proto_rawDescData
 }
 
-var file_temporal_server_chasm_lib_stream_proto_v1_message_proto_msgTypes = make([]protoimpl.MessageInfo, 1)
+var file_temporal_server_chasm_lib_stream_proto_v1_message_proto_msgTypes = make([]protoimpl.MessageInfo, 3)
 var file_temporal_server_chasm_lib_stream_proto_v1_message_proto_goTypes = []any{
-	(*StreamState)(nil), // 0: temporal.server.chasm.lib.stream.proto.v1.StreamState
+	(*StreamState)(nil),    // 0: temporal.server.chasm.lib.stream.proto.v1.StreamState
+	(*ProducerState)(nil),  // 1: temporal.server.chasm.lib.stream.proto.v1.ProducerState
+	(*Cursor)(nil),         // 2: temporal.server.chasm.lib.stream.proto.v1.Cursor
+	(*v1.StreamClose)(nil), // 3: temporal.api.nexusservices.streamservice.v1.StreamClose
 }
 var file_temporal_server_chasm_lib_stream_proto_v1_message_proto_depIdxs = []int32{
-	0, // [0:0] is the sub-list for method output_type
-	0, // [0:0] is the sub-list for method input_type
-	0, // [0:0] is the sub-list for extension type_name
-	0, // [0:0] is the sub-list for extension extendee
-	0, // [0:0] is the sub-list for field type_name
+	3, // 0: temporal.server.chasm.lib.stream.proto.v1.StreamState.close:type_name -> temporal.api.nexusservices.streamservice.v1.StreamClose
+	1, // [1:1] is the sub-list for method output_type
+	1, // [1:1] is the sub-list for method input_type
+	1, // [1:1] is the sub-list for extension type_name
+	1, // [1:1] is the sub-list for extension extendee
+	0, // [0:1] is the sub-list for field type_name
 }
 
 func init() { file_temporal_server_chasm_lib_stream_proto_v1_message_proto_init() }
@@ -100,7 +287,7 @@ func file_temporal_server_chasm_lib_stream_proto_v1_message_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_temporal_server_chasm_lib_stream_proto_v1_message_proto_rawDesc), len(file_temporal_server_chasm_lib_stream_proto_v1_message_proto_rawDesc)),
 			NumEnums:      0,
-			NumMessages:   1,
+			NumMessages:   3,
 			NumExtensions: 0,
 			NumServices:   0,
 		},

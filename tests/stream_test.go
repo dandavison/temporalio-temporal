@@ -55,7 +55,9 @@ var streamBackends = []struct {
 }
 
 func newStreamEnv(t *testing.T, opts ...testcore.TestOption) *testcore.TestEnv {
-	return testcore.NewEnv(t, append(opts, testcore.WithDynamicConfig(dynamicconfig.EnableChasm, true))...)
+	return testcore.NewEnv(t, append(opts, testcore.WithDynamicConfig(dynamicconfig.EnableChasm, true),
+		testcore.WithDynamicConfig(dynamicconfig.EnableDirectNexusCalls, true),
+	)...)
 }
 
 // withRetryStamps makes activity retries increase the attempt stamp. The setting is global, so the

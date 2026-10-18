@@ -4,4 +4,30 @@ package temporal.server.chasm.lib.stream.proto.v1;
 
 option go_package = "go.temporal.io/server/chasm/lib/stream/gen/streampb;streampb";
 
-message StreamState {}
+import "temporal/api/nexusservices/streamservice/v1/request_response.proto";
+
+message StreamState {
+    // The offset the next record gets. Offsets are contiguous from 0.
+    int64 next_offset = 1;
+    // Set once the stream is closed.
+    temporal.api.nexusservices.streamservice.v1.StreamClose close = 2;
+}
+
+// A producer's highest epoch and its latest stored append in that epoch.
+message ProducerState {
+    int64 workflow_task = 1;
+    int64 epoch = 2;
+    int64 seq = 3;
+    // The offsets of the append's data records, for a retry to return.
+    int64 first_offset = 4;
+    int64 count = 5;
+    // A hash of the append's encoded content.
+    bytes content_hash = 6;
+}
+
+// The bytes of a native cursor: the boundary after the record at offset.
+message Cursor {
+    string workflow_id = 1;
+    string first_run_id = 2;
+    int64 offset = 3;
+}
