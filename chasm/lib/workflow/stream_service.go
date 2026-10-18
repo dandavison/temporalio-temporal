@@ -180,7 +180,8 @@ func (h *streamServiceHandler) ownerRef(ref *streamservicepb.StreamRef, cursor *
 	}), false, nil
 }
 
-// newStreamReadArgs decodes the request's cursor, which must belong to the requested stream.
+// newStreamReadArgs decodes the request's cursor, which must belong to the requested stream,
+// including its pinned run chain or activity execution.
 func newStreamReadArgs(req *streamservicepb.ReadRequest) (stream.ReadArgs, error) {
 	args := stream.ReadArgs{Req: req}
 	if len(req.GetAfter()) == 0 {
@@ -191,6 +192,7 @@ func newStreamReadArgs(req *streamservicepb.ReadRequest) (stream.ReadArgs, error
 	if err := proto.Unmarshal(req.GetAfter(), args.Cursor); err != nil ||
 		args.Cursor.GetWorkflowId() != ref.GetWorkflowId() ||
 		args.Cursor.GetActivityId() != ref.GetActivityId() ||
+		(ref.GetFirstRunId() != "" && args.Cursor.GetFirstRunId() != ref.GetFirstRunId()) ||
 		(ref.GetActivityRunId() != "" && args.Cursor.GetActivityRunId() != ref.GetActivityRunId()) {
 		return args, streamError(streamservicepb.STREAM_FAILURE_TYPE_CURSOR_MISMATCH, "the cursor belongs to another stream")
 	}
