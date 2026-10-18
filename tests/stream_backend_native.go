@@ -225,21 +225,33 @@ func nativeRecord(r *streamservicepb.Record) streamRecord {
 	if c := r.WorkflowTaskCommit; c != nil {
 		rec.WorkflowTaskCommit = &streamWorkflowTaskCommit{WorkflowRunID: c.WorkflowRunId, WorkflowTask: c.WorkflowTask, Attempt: c.Attempt}
 	}
+	if c := r.StreamCreated; c != nil {
+		rec.StreamCreated = &streamCreated{WorkflowRunID: c.WorkflowRunId, NextWorkflowTask: c.NextWorkflowTask}
+	}
+	if m := r.WorkflowAppendMode; m != nil {
+		rec.AppendModeFixed = &streamAppendModeFixed{WorkflowRunID: m.WorkflowRunId, Mode: nativeAppendModes[m.Mode]}
+	}
 	return rec
 }
 
+var nativeAppendModes = map[streamservicepb.WorkflowAppendMode]streamWorkflowAppendMode{
+	streamservicepb.WORKFLOW_APPEND_MODE_SINK:   streamAppendModeSink,
+	streamservicepb.WORKFLOW_APPEND_MODE_COMMIT: streamAppendModeCommit,
+}
+
 var nativeErrors = map[streamservicepb.StreamFailureType]error{
-	streamservicepb.STREAM_FAILURE_TYPE_CLOSED:                    errStreamClosed,
-	streamservicepb.STREAM_FAILURE_TYPE_NOT_FOUND:                 errStreamNotFound,
-	streamservicepb.STREAM_FAILURE_TYPE_EXPIRED:                   errStreamExpired,
-	streamservicepb.STREAM_FAILURE_TYPE_NOT_OWNER:                 errStreamNotOwner,
-	streamservicepb.STREAM_FAILURE_TYPE_CURSOR_MISMATCH:           errStreamCursor,
-	streamservicepb.STREAM_FAILURE_TYPE_SEQ_DIVERGENT:             errStreamSeqDivergent,
-	streamservicepb.STREAM_FAILURE_TYPE_SEQ_STALE:                 errStreamSeqStale,
-	streamservicepb.STREAM_FAILURE_TYPE_EPOCH_FENCED:              errStreamEpochFenced,
-	streamservicepb.STREAM_FAILURE_TYPE_SPECULATIVE_WORKFLOW_TASK: errStreamSpeculative,
-	streamservicepb.STREAM_FAILURE_TYPE_SEQ_GAP:                   errStreamSeqGap,
-	streamservicepb.STREAM_FAILURE_TYPE_TOO_LARGE:                 errStreamTooLarge,
+	streamservicepb.STREAM_FAILURE_TYPE_CLOSED:                        errStreamClosed,
+	streamservicepb.STREAM_FAILURE_TYPE_NOT_FOUND:                     errStreamNotFound,
+	streamservicepb.STREAM_FAILURE_TYPE_EXPIRED:                       errStreamExpired,
+	streamservicepb.STREAM_FAILURE_TYPE_NOT_OWNER:                     errStreamNotOwner,
+	streamservicepb.STREAM_FAILURE_TYPE_CURSOR_MISMATCH:               errStreamCursor,
+	streamservicepb.STREAM_FAILURE_TYPE_SEQ_DIVERGENT:                 errStreamSeqDivergent,
+	streamservicepb.STREAM_FAILURE_TYPE_SEQ_STALE:                     errStreamSeqStale,
+	streamservicepb.STREAM_FAILURE_TYPE_EPOCH_FENCED:                  errStreamEpochFenced,
+	streamservicepb.STREAM_FAILURE_TYPE_SPECULATIVE_WORKFLOW_TASK:     errStreamSpeculative,
+	streamservicepb.STREAM_FAILURE_TYPE_SEQ_GAP:                       errStreamSeqGap,
+	streamservicepb.STREAM_FAILURE_TYPE_TOO_LARGE:                     errStreamTooLarge,
+	streamservicepb.STREAM_FAILURE_TYPE_WORKFLOW_APPEND_MODE_MISMATCH: errStreamAppendMode,
 }
 
 // nativeError maps an operation failure to the stream error named by the ApplicationFailureInfo

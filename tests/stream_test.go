@@ -17,6 +17,8 @@ import (
 	commonpb "go.temporal.io/api/common/v1"
 	enumspb "go.temporal.io/api/enums/v1"
 	failurepb "go.temporal.io/api/failure/v1"
+	streamservicepb "go.temporal.io/api/nexusservices/streamservice/v1"
+	protocolpb "go.temporal.io/api/protocol/v1"
 	updatepb "go.temporal.io/api/update/v1"
 	"go.temporal.io/api/workflowservice/v1"
 	"go.temporal.io/server/api/adminservice/v1"
@@ -30,6 +32,7 @@ import (
 	"go.temporal.io/server/tests/testcore"
 	"golang.org/x/sync/errgroup"
 	"google.golang.org/protobuf/proto"
+	"google.golang.org/protobuf/types/known/anypb"
 	"google.golang.org/protobuf/types/known/durationpb"
 	"google.golang.org/protobuf/types/known/fieldmaskpb"
 )
@@ -318,7 +321,7 @@ func (s *streamTestSuite) TestWorkflowTaskCompletionRecordsCommittedAttempt() {
 		rerun := f.pollWorkflowTask(f.tv)
 		f.completeWorkflowTask(rerun)
 
-		records := f.readAllWithCommits(ref, streamBeginning())
+		records := f.readAllWithMarkers(ref, streamBeginning())
 		require.Len(f.t, records, 2)
 		commit := records[1].WorkflowTaskCommit
 		require.NotNil(f.t, commit)
@@ -467,9 +470,9 @@ func (s *streamTestSuite) TestLocalActivityAppendsAfterTaskHeartbeat() {
 		f.pollWorkflowTask(f.tv)
 		f.append(ref, localActivityProducer(task, "1", 1), 0, "", "late")
 
-		records := f.readAllWithCommits(ref, streamBeginning())
+		records := f.readAllWithMarkers(ref, streamBeginning())
 		require.Equal(f.t, []string{"created", "late"}, f.dataOf(records))
-		late := withoutCommits(records)[1].Producer
+		late := withoutMarkers(records)[1].Producer
 		commit := f.commitOf(records, late.WorkflowRunID, late.WorkflowTask)
 		require.NotNil(f.t, commit)
 		require.Equal(f.t, int64(late.WorkflowTaskAttempt), commit.Attempt)
@@ -489,8 +492,8 @@ func (s *streamTestSuite) TestLocalActivityOfFailedTaskIsWithdrawn() {
 		f.append(ref, localActivityProducer(rerun, "1", 1), 0, "", "rerun")
 		f.completeWorkflowTask(rerun)
 
-		records := f.readAllWithCommits(ref, streamBeginning())
-		data := withoutCommits(records)
+		records := f.readAllWithMarkers(ref, streamBeginning())
+		data := withoutMarkers(records)
 		require.Equal(f.t, []string{"failed attempt", "rerun"}, f.dataOf(data))
 		commit := f.commitOf(records, rerun.WorkflowExecution.RunId, rerun.PreviousStartedEventId)
 		require.NotNil(f.t, commit)
@@ -850,7 +853,7 @@ func (s *streamTestSuite) TestNativeOffsetsAreContiguousAcrossContinueAsNew() {
 		secondRun := f.pollWorkflowTask(f.tv)
 		f.append(ref, workflowProducer(secondRun), 0, "", "run2")
 
-		records := f.readAllWithCommits(ref, streamBeginning())
+		records := f.readAllWithMarkers(ref, streamBeginning())
 		require.Equal(f.t, []string{"run1", "run2"}, f.dataOf(records))
 		first, err := f.b.offset(records[0].Cursor)
 		require.NoError(f.t, err)
@@ -891,6 +894,112 @@ func (s *streamTestSuite) TestClosedActivityProducerStateIsRemoved() {
 		require.NoError(f.t, err)
 		require.Empty(f.t, f.activityProducerNodes(ref))
 		require.Equal(f.t, []string{"x"}, f.dataOf(f.readAll(ref, streamBeginning())))
+	})
+}
+
+// An append that creates a stream records the run's next workflow task, so that readers can treat
+// records of tasks that completed before the stream existed, which have no commit record, as
+// committed. Native only.
+func (s *streamTestSuite) TestStreamCreationRecordsCompletedTasks() {
+	s.nativeOnly(func(f *streamFixture) {
+		ref := f.startOwner(f.tv)
+		first := f.pollWorkflowTask(f.tv)
+		f.completeWorkflowTask(first, f.forceNewWorkflowTask)
+		second := f.pollWorkflowTask(f.tv)
+		f.append(ref, localActivityProducer(first, "1", 1), 0, "", "late")
+
+		records := f.readAllWithMarkers(ref, streamBeginning())
+		created := records[0].StreamCreated
+		require.NotNil(f.t, created)
+		require.Equal(f.t, second.WorkflowExecution.RunId, created.WorkflowRunID)
+		require.Equal(f.t, second.PreviousStartedEventId, created.NextWorkflowTask)
+		late := withoutMarkers(records)[0].Producer
+		require.Less(f.t, late.WorkflowTask, created.NextWorkflowTask)
+		require.Nil(f.t, f.commitOf(records, late.WorkflowRunID, late.WorkflowTask))
+	})
+}
+
+// A workflow's commit-mode records, carried in its workflow task completion, are appended in the
+// completion's transaction, with the workflow task as their producer, and the run's append mode is
+// recorded. Native only.
+func (s *streamTestSuite) TestCommitModeAppendIsVisibleAtTaskCommit() {
+	s.nativeOnly(func(f *streamFixture) {
+		ref := f.startOwner(f.tv)
+		task := f.pollWorkflowTask(f.tv)
+		f.completeWorkflowTask(task, f.commitModeAppend("x", "y"))
+
+		records := f.readAllWithMarkers(ref, streamBeginning())
+		data := withoutMarkers(records)
+		require.Equal(f.t, []string{"x", "y"}, f.dataOf(data))
+		p := data[0].Producer
+		require.Equal(f.t, task.WorkflowExecution.RunId, p.WorkflowRunID)
+		require.Equal(f.t, task.PreviousStartedEventId, p.WorkflowTask)
+		require.Equal(f.t, task.Attempt, p.WorkflowTaskAttempt)
+		require.Equal(f.t, int64(task.Attempt), f.commitOf(records, p.WorkflowRunID, p.WorkflowTask).Attempt)
+		require.Equal(f.t, []streamAppendModeFixed{{task.WorkflowExecution.RunId, streamAppendModeCommit}}, f.appendModes(records))
+	})
+}
+
+// Commit-mode records in the run's terminal workflow task completion are appended before the stream
+// closes. Native only.
+func (s *streamTestSuite) TestCommitModeAppendLandsBeforeClose() {
+	s.nativeOnly(func(f *streamFixture) {
+		ref := f.startOwner(f.tv)
+		task := f.pollWorkflowTask(f.tv)
+		f.completeWorkflowTask(task, f.commitModeAppend("last"), f.completeWorkflow)
+
+		resp := f.read(ref, streamReadRequest{From: streamBeginning()})
+		require.Equal(f.t, []string{"last"}, f.dataOf(resp.Records))
+		require.NotNil(f.t, resp.Close)
+	})
+}
+
+// A run's first workflow append fixes its mode, which is recorded once. Native only.
+func (s *streamTestSuite) TestSinkModeIsRecordedOncePerRun() {
+	s.nativeOnly(func(f *streamFixture) {
+		ref := f.startOwner(f.tv)
+		first := f.pollWorkflowTask(f.tv)
+		f.append(ref, workflowProducer(first), 0, "", "a")
+		f.completeWorkflowTask(first, f.forceNewWorkflowTask)
+		second := f.pollWorkflowTask(f.tv)
+		f.append(ref, workflowProducer(second), 0, "", "b")
+
+		records := f.readAllWithMarkers(ref, streamBeginning())
+		require.Equal(f.t, []string{"a", "b"}, f.dataOf(records))
+		require.Equal(f.t, []streamAppendModeFixed{{first.WorkflowExecution.RunId, streamAppendModeSink}}, f.appendModes(records))
+	})
+}
+
+// Two workers of the same workflow disagree on the append mode, as in a rolling deploy: the run's
+// first workflow append, sink-style, fixes its mode, and a commit-mode append from the second worker
+// fails its workflow task, naming both modes. Native only.
+func (s *streamTestSuite) TestCommitModeAppendAfterSinkModeFailsTask() {
+	s.nativeOnly(func(f *streamFixture) {
+		ref := f.startOwner(f.tv)
+		first := f.pollWorkflowTask(f.tv)
+		f.append(ref, workflowProducer(first), 0, "", "sink")
+		f.completeWorkflowTask(first, f.forceNewWorkflowTask)
+		second := f.pollWorkflowTask(f.tv)
+		err := f.tryCompleteWorkflowTask(second, f.commitModeAppend("commit"))
+		require.ErrorContains(f.t, err, "SINK")
+		require.ErrorContains(f.t, err, "COMMIT")
+		require.Equal(f.t, []string{"sink"}, f.dataOf(f.readAll(ref, streamBeginning())))
+	})
+}
+
+// As TestCommitModeAppendAfterSinkModeFailsTask, with the modes the other way round: a sink-style
+// append fails, naming both modes. Native only.
+func (s *streamTestSuite) TestSinkModeAppendAfterCommitModeFails() {
+	s.nativeOnly(func(f *streamFixture) {
+		ref := f.startOwner(f.tv)
+		first := f.pollWorkflowTask(f.tv)
+		f.completeWorkflowTask(first, f.commitModeAppend("commit"), f.forceNewWorkflowTask)
+		second := f.pollWorkflowTask(f.tv)
+		_, err := f.tryAppend(ref, workflowProducer(second), 0, "", "sink")
+		require.ErrorIs(f.t, err, errStreamAppendMode)
+		require.ErrorContains(f.t, err, "SINK")
+		require.ErrorContains(f.t, err, "COMMIT")
+		require.Equal(f.t, []string{"commit"}, f.dataOf(f.readAll(ref, streamBeginning())))
 	})
 }
 
@@ -969,13 +1078,13 @@ func (f *streamFixture) read(ref streamRef, req streamReadRequest) streamReadRes
 	return resp
 }
 
-// readAll reads, without waiting, every data record after from. It omits workflow task commit
-// markers, which only native writes.
+// readAll reads, without waiting, every data record after from. It omits markers (workflow task
+// commits, stream creation, append modes), which only native writes.
 func (f *streamFixture) readAll(ref streamRef, from streamPosition) []streamRecord {
-	return withoutCommits(f.readAllWithCommits(ref, from))
+	return withoutMarkers(f.readAllWithMarkers(ref, from))
 }
 
-func (f *streamFixture) readAllWithCommits(ref streamRef, from streamPosition) []streamRecord {
+func (f *streamFixture) readAllWithMarkers(ref streamRef, from streamPosition) []streamRecord {
 	var records []streamRecord
 	for {
 		resp := f.read(ref, streamReadRequest{From: from})
@@ -990,7 +1099,7 @@ func (f *streamFixture) readAllWithCommits(ref streamRef, from streamPosition) [
 // commits reads the stream's workflow task commit records.
 func (f *streamFixture) commits(ref streamRef) []*streamWorkflowTaskCommit {
 	var commits []*streamWorkflowTaskCommit
-	for _, r := range f.readAllWithCommits(ref, streamBeginning()) {
+	for _, r := range f.readAllWithMarkers(ref, streamBeginning()) {
 		if r.WorkflowTaskCommit != nil {
 			commits = append(commits, r.WorkflowTaskCommit)
 		}
@@ -1008,10 +1117,10 @@ func (f *streamFixture) commitOf(records []streamRecord, runID string, workflowT
 	return nil
 }
 
-func withoutCommits(records []streamRecord) []streamRecord {
+func withoutMarkers(records []streamRecord) []streamRecord {
 	var data []streamRecord
 	for _, r := range records {
-		if r.WorkflowTaskCommit == nil {
+		if !r.isMarker() {
 			data = append(data, r)
 		}
 	}
@@ -1049,10 +1158,10 @@ func (f *streamFixture) data(r streamRecord) string {
 	return d
 }
 
-// dataOf decodes the data records, omitting workflow task commit markers.
+// dataOf decodes the data records, omitting markers.
 func (f *streamFixture) dataOf(records []streamRecord) []string {
 	data := []string{}
-	for _, r := range withoutCommits(records) {
+	for _, r := range withoutMarkers(records) {
 		data = append(data, f.data(r))
 	}
 	return data
@@ -1073,6 +1182,13 @@ func (f *streamFixture) completeWorkflowTask(
 	task *workflowservice.PollWorkflowTaskQueueResponse,
 	edits ...func(*workflowservice.RespondWorkflowTaskCompletedRequest),
 ) {
+	require.NoError(f.t, f.tryCompleteWorkflowTask(task, edits...))
+}
+
+func (f *streamFixture) tryCompleteWorkflowTask(
+	task *workflowservice.PollWorkflowTaskQueueResponse,
+	edits ...func(*workflowservice.RespondWorkflowTaskCompletedRequest),
+) error {
 	req := &workflowservice.RespondWorkflowTaskCompletedRequest{
 		Namespace: f.env.Namespace().String(),
 		TaskToken: task.TaskToken,
@@ -1082,7 +1198,7 @@ func (f *streamFixture) completeWorkflowTask(
 		edit(req)
 	}
 	_, err := f.env.FrontendClient().RespondWorkflowTaskCompleted(f.ctx(), req)
-	require.NoError(f.t, err)
+	return err
 }
 
 func (f *streamFixture) failWorkflowTask(task *workflowservice.PollWorkflowTaskQueueResponse) {
@@ -1098,6 +1214,34 @@ func (f *streamFixture) failWorkflowTask(task *workflowservice.PollWorkflowTaskQ
 
 func (f *streamFixture) forceNewWorkflowTask(req *workflowservice.RespondWorkflowTaskCompletedRequest) {
 	req.ForceCreateNewWorkflowTask = true
+}
+
+// commitModeAppend carries records in the workflow task completion, as a worker in commit mode does.
+func (f *streamFixture) commitModeAppend(data ...string) func(*workflowservice.RespondWorkflowTaskCompletedRequest) {
+	return func(req *workflowservice.RespondWorkflowTaskCompletedRequest) {
+		records := make([]*streamservicepb.AppendRecord, len(data))
+		for i, d := range data {
+			records[i] = &streamservicepb.AppendRecord{Payload: payload.EncodeString(d)}
+		}
+		body, err := anypb.New(&streamservicepb.CommitModeAppend{Records: records})
+		require.NoError(f.t, err)
+		req.Messages = append(req.Messages, &protocolpb.Message{
+			Id:                 f.tv.Any().String(),
+			ProtocolInstanceId: "stream",
+			Body:               body,
+		})
+	}
+}
+
+// appendModes returns the run append modes recorded in records.
+func (f *streamFixture) appendModes(records []streamRecord) []streamAppendModeFixed {
+	var modes []streamAppendModeFixed
+	for _, r := range records {
+		if r.AppendModeFixed != nil {
+			modes = append(modes, *r.AppendModeFixed)
+		}
+	}
+	return modes
 }
 
 func (f *streamFixture) completeWorkflow(req *workflowservice.RespondWorkflowTaskCompletedRequest) {

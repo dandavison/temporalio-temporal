@@ -108,6 +108,31 @@ type streamWorkflowTaskCommit struct {
 	Attempt       int64
 }
 
+// streamCreated is written when an append creates a native stream. The run's workflow tasks whose
+// identity is lower than NextWorkflowTask completed before the stream existed, so they have no
+// commit record; a reader treats a workflow or local activity record of such a task as committed.
+// Native only.
+type streamCreated struct {
+	WorkflowRunID    string
+	NextWorkflowTask int64
+}
+
+// streamWorkflowAppendMode is how a run's workflow appends to its stream: sink-style, at the end of
+// each activation, or in commit mode, in the workflow task completion. A run's first workflow append
+// fixes it. Commit mode is native only.
+type streamWorkflowAppendMode int
+
+const (
+	streamAppendModeSink streamWorkflowAppendMode = iota + 1
+	streamAppendModeCommit
+)
+
+// streamAppendModeFixed records the append mode a run's first workflow append fixed. Native only.
+type streamAppendModeFixed struct {
+	WorkflowRunID string
+	Mode          streamWorkflowAppendMode
+}
+
 // The size limits on an append, the same on every backend.
 const (
 	streamMaxRecordsPerAppend = 1000
@@ -182,6 +207,14 @@ type streamRecord struct {
 	Finish   bool
 	// WorkflowTaskCommit, when set, makes this record a commit marker rather than data.
 	WorkflowTaskCommit *streamWorkflowTaskCommit
+	// StreamCreated, when set, makes this record a creation marker rather than data.
+	StreamCreated *streamCreated
+	// AppendModeFixed, when set, makes this record an append mode marker rather than data.
+	AppendModeFixed *streamAppendModeFixed
+}
+
+func (r streamRecord) isMarker() bool {
+	return r.WorkflowTaskCommit != nil || r.StreamCreated != nil || r.AppendModeFixed != nil
 }
 
 type streamReadResponse struct {
@@ -204,6 +237,7 @@ var (
 	errStreamSpeculative    = errors.New("appends from speculative workflow tasks are not supported")
 	errStreamSeqGap         = errors.New("seq skips one")
 	errStreamTooLarge       = errors.New("append is too large")
+	errStreamAppendMode     = errors.New("workflow append is in the other mode from the one its run fixed")
 	errStreamNotImplemented = errors.New("stream backend not implemented")
 )
 
