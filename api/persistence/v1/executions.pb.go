@@ -2877,6 +2877,9 @@ type ActivityInfo struct {
 	// It increases monotonically when the activity's options are modified.
 	// It is used to check if an activity task is still relevant to the corresponding activity state machine.
 	Stamp int32 `protobuf:"varint,41,opt,name=stamp,proto3" json:"stamp,omitempty"`
+	// The stamp the running attempt started with. An options update raises stamp during the attempt,
+	// but not this, so a stream append from the running attempt is still accepted.
+	StartedStamp int32 `protobuf:"varint,53,opt,name=started_stamp,json=startedStamp,proto3" json:"started_stamp,omitempty"`
 	// Paused state. When activity is paused it will not advance until unpaused.
 	// Iw will not be scheduled, timer tasks will not be processed, etc.
 	// Note: it still can be cancelled/completed.
@@ -3225,6 +3228,13 @@ func (x *ActivityInfo) GetLastAttemptCompleteTime() *timestamppb.Timestamp {
 func (x *ActivityInfo) GetStamp() int32 {
 	if x != nil {
 		return x.Stamp
+	}
+	return 0
+}
+
+func (x *ActivityInfo) GetStartedStamp() int32 {
+	if x != nil {
+		return x.StartedStamp
 	}
 	return 0
 }
@@ -5287,7 +5297,7 @@ const file_temporal_server_api_persistence_v1_executions_proto_rawDesc = "" +
 	"\x17NexusInvocationTaskInfo\x12\x18\n" +
 	"\aattempt\x18\x01 \x01(\x05R\aattempt\"4\n" +
 	"\x18NexusCancelationTaskInfo\x12\x18\n" +
-	"\aattempt\x18\x01 \x01(\x05R\aattempt\"\xc8\x1c\n" +
+	"\aattempt\x18\x01 \x01(\x05R\aattempt\"\xed\x1c\n" +
 	"\fActivityInfo\x12\x18\n" +
 	"\aversion\x18\x01 \x01(\x03R\aversion\x127\n" +
 	"\x18scheduled_event_batch_id\x18\x02 \x01(\x03R\x15scheduledEventBatchId\x12A\n" +
@@ -5330,7 +5340,8 @@ const file_temporal_server_api_persistence_v1_executions_proto_rawDesc = "" +
 	" last_update_versioned_transition\x18& \x01(\v27.temporal.server.api.persistence.v1.VersionedTransitionR\x1dlastUpdateVersionedTransition\x12L\n" +
 	"\x14first_scheduled_time\x18' \x01(\v2\x1a.google.protobuf.TimestampR\x12firstScheduledTime\x12W\n" +
 	"\x1alast_attempt_complete_time\x18( \x01(\v2\x1a.google.protobuf.TimestampR\x17lastAttemptCompleteTime\x12\x14\n" +
-	"\x05stamp\x18) \x01(\x05R\x05stamp\x12\x16\n" +
+	"\x05stamp\x18) \x01(\x05R\x05stamp\x12#\n" +
+	"\rstarted_stamp\x185 \x01(\x05R\fstartedStamp\x12\x16\n" +
 	"\x06paused\x18* \x01(\bR\x06paused\x12^\n" +
 	"\x17last_started_deployment\x18+ \x01(\v2&.temporal.api.deployment.v1.DeploymentR\x15lastStartedDeployment\x12C\n" +
 	"\x1elast_worker_deployment_version\x18, \x01(\tR\x1blastWorkerDeploymentVersion\x12k\n" +

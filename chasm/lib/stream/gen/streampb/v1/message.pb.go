@@ -78,9 +78,10 @@ type ProducerState struct {
 	FirstOffset int64 `protobuf:"varint,4,opt,name=first_offset,json=firstOffset,proto3" json:"first_offset,omitempty"`
 	Count       int64 `protobuf:"varint,5,opt,name=count,proto3" json:"count,omitempty"`
 	// A digest of the append's encoded content.
-	Digest        []byte `protobuf:"bytes,6,opt,name=digest,proto3" json:"digest,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	Digest              []byte `protobuf:"bytes,6,opt,name=digest,proto3" json:"digest,omitempty"`
+	WorkflowTaskAttempt int32  `protobuf:"varint,7,opt,name=workflow_task_attempt,json=workflowTaskAttempt,proto3" json:"workflow_task_attempt,omitempty"`
+	unknownFields       protoimpl.UnknownFields
+	sizeCache           protoimpl.SizeCache
 }
 
 func (x *ProducerState) Reset() {
@@ -155,6 +156,13 @@ func (x *ProducerState) GetDigest() []byte {
 	return nil
 }
 
+func (x *ProducerState) GetWorkflowTaskAttempt() int32 {
+	if x != nil {
+		return x.WorkflowTaskAttempt
+	}
+	return 0
+}
+
 // The bytes of a native cursor: the boundary after the record at offset.
 type Cursor struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
@@ -222,14 +230,15 @@ const file_temporal_server_chasm_lib_stream_proto_v1_message_proto_rawDesc = "" 
 	"\n" +
 	"7temporal/server/chasm/lib/stream/proto/v1/message.proto\x12)temporal.server.chasm.lib.stream.proto.v1\x1aBtemporal/api/nexusservices/streamservice/v1/request_response.proto\"c\n" +
 	"\vStreamState\x12N\n" +
-	"\x05close\x18\x02 \x01(\v28.temporal.api.nexusservices.streamservice.v1.StreamCloseR\x05closeJ\x04\b\x01\x10\x02\"\xad\x01\n" +
+	"\x05close\x18\x02 \x01(\v28.temporal.api.nexusservices.streamservice.v1.StreamCloseR\x05closeJ\x04\b\x01\x10\x02\"\xe1\x01\n" +
 	"\rProducerState\x12#\n" +
 	"\rworkflow_task\x18\x01 \x01(\x03R\fworkflowTask\x12\x14\n" +
 	"\x05epoch\x18\x02 \x01(\x03R\x05epoch\x12\x10\n" +
 	"\x03seq\x18\x03 \x01(\x03R\x03seq\x12!\n" +
 	"\ffirst_offset\x18\x04 \x01(\x03R\vfirstOffset\x12\x14\n" +
 	"\x05count\x18\x05 \x01(\x03R\x05count\x12\x16\n" +
-	"\x06digest\x18\x06 \x01(\fR\x06digest\"c\n" +
+	"\x06digest\x18\x06 \x01(\fR\x06digest\x122\n" +
+	"\x15workflow_task_attempt\x18\a \x01(\x05R\x13workflowTaskAttempt\"c\n" +
 	"\x06Cursor\x12\x1f\n" +
 	"\vworkflow_id\x18\x01 \x01(\tR\n" +
 	"workflowId\x12 \n" +

@@ -2,6 +2,7 @@ package stream
 
 import (
 	"bytes"
+	"cmp"
 	"crypto/sha256"
 	"fmt"
 	"slices"
@@ -66,19 +67,32 @@ func newError(t streamservicepb.StreamFailureType, format string, args ...any) *
 	return &Error{Type: t, Message: fmt.Sprintf(format, args...)}
 }
 
-// Producer is a producer incarnation. A workflow producer's epoch is (WorkflowTask, Epoch).
+// The size limits on an append.
+const (
+	MaxRecordsPerAppend = 1000
+	MaxRecordBytes      = 1 << 20
+	MaxAppendBytes      = 4 << 20
+)
+
+// Producer is a producer incarnation. Its epoch is (WorkflowTask, WorkflowTaskAttempt, Epoch),
+// compared in that order. RunID, WorkflowTask and WorkflowTaskAttempt are set only for workflow and
+// local activity producers.
 type Producer struct {
-	ID           string
-	WorkflowTask int64
-	Epoch        int64
+	ID                  string
+	RunID               string
+	WorkflowTask        int64
+	WorkflowTaskAttempt int32
+	Epoch               int64
 }
 
-func (p Producer) before(st *streampb.ProducerState) bool {
-	return p.WorkflowTask < st.WorkflowTask || (p.WorkflowTask == st.WorkflowTask && p.Epoch < st.Epoch)
-}
-
-func (p Producer) sameEpoch(st *streampb.ProducerState) bool {
-	return p.WorkflowTask == st.WorkflowTask && p.Epoch == st.Epoch
+// compare orders the producer's epoch against the stored one: negative if earlier, 0 if the same,
+// positive if later.
+func (p Producer) compare(st *streampb.ProducerState) int {
+	return cmp.Or(
+		cmp.Compare(p.WorkflowTask, st.WorkflowTask),
+		cmp.Compare(p.WorkflowTaskAttempt, st.WorkflowTaskAttempt),
+		cmp.Compare(p.Epoch, st.Epoch),
+	)
 }
 
 // Append stores records, and closes the stream if closing is set, as one append of (producer,
@@ -93,31 +107,46 @@ func (s *Stream) Append(
 	finish bool,
 	closing *streamservicepb.StreamClose,
 ) ([]int64, error) {
+	if err := checkSize(records); err != nil {
+		return nil, err
+	}
 	digest, err := appendDigest(records, finish, closing)
 	if err != nil {
 		return nil, err
 	}
+	next := int64(0)
 	if field, ok := s.Producers[p.ID]; ok {
 		st := field.Get(ctx)
-		if p.before(st) {
+		switch c := p.compare(st); {
+		case c < 0:
 			return nil, newError(streamservicepb.STREAM_FAILURE_TYPE_EPOCH_FENCED, "producer %s has appended at a higher epoch", p.ID)
+		case c == 0 && seq == st.Seq && bytes.Equal(digest, st.Digest):
+			return offsetRange(st.FirstOffset, st.Count), nil
+		case c == 0 && seq == st.Seq:
+			return nil, newError(streamservicepb.STREAM_FAILURE_TYPE_SEQ_DIVERGENT, "seq %d is stored with different content", seq)
+		case c == 0 && seq < st.Seq:
+			return nil, newError(streamservicepb.STREAM_FAILURE_TYPE_SEQ_STALE, "seq %d is lower than the latest, %d", seq, st.Seq)
+		case c == 0:
+			next = st.Seq + 1
+		default:
+			// A later epoch starts again at seq 0.
 		}
-		if p.sameEpoch(st) {
-			switch {
-			case seq == st.Seq && bytes.Equal(digest, st.Digest):
-				return offsetRange(st.FirstOffset, st.Count), nil
-			case seq == st.Seq:
-				return nil, newError(streamservicepb.STREAM_FAILURE_TYPE_SEQ_DIVERGENT, "seq %d is stored with different content", seq)
-			case seq < st.Seq:
-				return nil, newError(streamservicepb.STREAM_FAILURE_TYPE_SEQ_STALE, "seq %d is lower than the latest, %d", seq, st.Seq)
-			}
-		}
+	}
+	if seq != next {
+		return nil, newError(streamservicepb.STREAM_FAILURE_TYPE_SEQ_GAP, "seq %d is not the next seq, %d", seq, next)
 	}
 	if s.Close != nil {
 		return nil, newError(streamservicepb.STREAM_FAILURE_TYPE_CLOSED, "stream is closed")
 	}
 	identity := func() *streamservicepb.ProducerIdentity {
-		return &streamservicepb.ProducerIdentity{Producer: p.ID, WorkflowTask: p.WorkflowTask, Epoch: p.Epoch, Seq: seq}
+		return &streamservicepb.ProducerIdentity{
+			Producer:            p.ID,
+			WorkflowRunId:       p.RunID,
+			WorkflowTask:        p.WorkflowTask,
+			WorkflowTaskAttempt: p.WorkflowTaskAttempt,
+			Epoch:               p.Epoch,
+			Seq:                 seq,
+		}
 	}
 	var batch []*streamservicepb.Record
 	for _, r := range records {
@@ -134,23 +163,21 @@ func (s *Stream) Append(
 		s.Close = closing
 	}
 	s.Producers[p.ID] = chasm.NewDataField(ctx, &streampb.ProducerState{
-		WorkflowTask: p.WorkflowTask,
-		Epoch:        p.Epoch,
-		Seq:          seq,
-		FirstOffset:  first,
-		Count:        int64(len(records)),
-		Digest:       digest,
+		WorkflowTask:        p.WorkflowTask,
+		WorkflowTaskAttempt: p.WorkflowTaskAttempt,
+		Epoch:               p.Epoch,
+		Seq:                 seq,
+		FirstOffset:         first,
+		Count:               int64(len(records)),
+		Digest:              digest,
 	})
 	return offsetRange(first, int64(len(records))), nil
 }
 
-// RecordCommit records that attempt committed workflow task workflowTask of producer, if any
-// attempt of that task appended.
-func (s *Stream) RecordCommit(ctx chasm.MutableContext, producer, runID string, workflowTask, attempt int64) error {
-	field, ok := s.Producers[producer]
-	if !ok || field.Get(ctx).WorkflowTask != workflowTask {
-		return nil
-	}
+// RecordCommit records that attempt completed workflow task workflowTask of run runID. It is written
+// for every task, so that readers can judge records that local activities append after their task
+// completed.
+func (s *Stream) RecordCommit(ctx chasm.MutableContext, runID string, workflowTask, attempt int64) error {
 	_, err := s.add(ctx, &streamservicepb.Record{WorkflowTaskCommit: &streamservicepb.WorkflowTaskCommit{
 		WorkflowRunId: runID,
 		WorkflowTask:  workflowTask,
@@ -264,6 +291,24 @@ func (s *Stream) scan(ctx chasm.Context, from int64, fn func(offset int64, r *st
 
 func matches(r *streamservicepb.Record, topics []string) bool {
 	return len(topics) == 0 || r.WorkflowTaskCommit != nil || slices.Contains(topics, r.Topic)
+}
+
+func checkSize(records []*streamservicepb.AppendRecord) error {
+	if len(records) > MaxRecordsPerAppend {
+		return newError(streamservicepb.STREAM_FAILURE_TYPE_TOO_LARGE, "%d records exceed the limit of %d per append", len(records), MaxRecordsPerAppend)
+	}
+	total := 0
+	for _, r := range records {
+		size := proto.Size(r.GetPayload())
+		if size > MaxRecordBytes {
+			return newError(streamservicepb.STREAM_FAILURE_TYPE_TOO_LARGE, "a record of %d bytes exceeds the limit of %d", size, MaxRecordBytes)
+		}
+		total += size
+	}
+	if total > MaxAppendBytes {
+		return newError(streamservicepb.STREAM_FAILURE_TYPE_TOO_LARGE, "an append of %d bytes exceeds the limit of %d", total, MaxAppendBytes)
+	}
+	return nil
 }
 
 func offsetRange(first, count int64) []int64 {

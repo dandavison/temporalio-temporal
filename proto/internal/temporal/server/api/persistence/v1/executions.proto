@@ -687,6 +687,10 @@ message ActivityInfo {
   // It is used to check if an activity task is still relevant to the corresponding activity state machine.
   int32 stamp = 41;
 
+  // The stamp the running attempt started with. An options update raises stamp during the attempt,
+  // but not this, so a stream append from the running attempt is still accepted.
+  int32 started_stamp = 53;
+
   // Paused state. When activity is paused it will not advance until unpaused.
   // Iw will not be scheduled, timer tasks will not be processed, etc.
   // Note: it still can be cancelled/completed.

@@ -22,6 +22,7 @@ message ProducerState {
     int64 count = 5;
     // A digest of the append's encoded content.
     bytes digest = 6;
+    int32 workflow_task_attempt = 7;
 }
 
 // The bytes of a native cursor: the boundary after the record at offset.

@@ -4591,6 +4591,7 @@ func (ms *MutableStateImpl) AddActivityTaskStartedEvent(
 		// instead update mutable state and will record started event when activity task is closed
 		activityInfo.Version = ms.GetCurrentVersion()
 		activityInfo.StartedEventId = common.TransientEventID
+		activityInfo.StartedStamp = activityInfo.Stamp
 		activityInfo.StartVersion = ms.GetCurrentVersion()
 		activityInfo.RequestId = requestID
 		activityInfo.StartedTime = timestamppb.New(ms.timeSource.Now())
@@ -4621,6 +4622,7 @@ func (ms *MutableStateImpl) ApplyActivityTaskStartedEvent(
 
 	ai.Version = event.GetVersion()
 	ai.StartedEventId = event.GetEventId()
+	ai.StartedStamp = ai.Stamp
 	ai.StartVersion = event.GetVersion()
 	ai.RequestId = attributes.GetRequestId()
 	ai.StartedTime = event.GetEventTime()

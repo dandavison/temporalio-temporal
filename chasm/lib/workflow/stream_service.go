@@ -249,16 +249,14 @@ func (w *Workflow) readStream(ctx chasm.Context, args streamReadArgs) (*streamse
 	return resp, nil
 }
 
-// RecordStreamWorkflowTaskCommit records, in the stream, that attempt committed the run's current
-// workflow task, if any attempt of that task appended. It is called in the transaction that
-// completes the task.
+// RecordStreamWorkflowTaskCommit records, in the stream, that attempt completed the run's current
+// workflow task. It is called in the transaction that completes the task.
 func (w *Workflow) RecordStreamWorkflowTaskCommit(ctx chasm.MutableContext, attempt int32) error {
 	s, ok := w.Stream.TryGet(ctx)
 	if !ok {
 		return nil
 	}
-	runID := w.GetExecutionState().GetRunId()
-	return s.RecordCommit(ctx, workflowStreamProducerID(runID), runID, w.GetExecutionInfo().GetLastCompletedWorkflowTaskStartedEventId(), int64(attempt))
+	return s.RecordCommit(ctx, w.GetExecutionState().GetRunId(), w.GetExecutionInfo().GetLastCompletedWorkflowTaskStartedEventId(), int64(attempt))
 }
 
 // CloseStreamOnOwnerEnd closes the stream, unless it is already closed, in the transaction in
@@ -318,6 +316,8 @@ func (w *Workflow) streamProducer(workflowID string, p *streamservicepb.Producer
 		return w.workflowTaskProducer(v.WorkflowTask)
 	case *streamservicepb.Producer_ActivityTaskToken:
 		return w.activityProducer(workflowID, v.ActivityTaskToken)
+	case *streamservicepb.Producer_LocalActivity:
+		return w.localActivityProducer(v.LocalActivity)
 	default:
 		return stream.Producer{}, serviceerror.NewInvalidArgument("producer is required")
 	}
@@ -336,14 +336,33 @@ func (w *Workflow) workflowTaskProducer(p *streamservicepb.WorkflowTaskProducer)
 		return stream.Producer{}, streamError(streamservicepb.STREAM_FAILURE_TYPE_SPECULATIVE_WORKFLOW_TASK, "appends from speculative workflow tasks are not supported")
 	}
 	return stream.Producer{
-		ID:           workflowStreamProducerID(p.GetRunId()),
-		WorkflowTask: p.GetPreviousStartedEventId(),
-		Epoch:        int64(p.GetAttempt()),
+		ID:                  workflowStreamProducerID(p.GetRunId()),
+		RunID:               p.GetRunId(),
+		WorkflowTask:        p.GetPreviousStartedEventId(),
+		WorkflowTaskAttempt: p.GetAttempt(),
+		Epoch:               int64(p.GetAttempt()),
 	}, nil
 }
 
-// activityProducer checks that the task token is for a started attempt of one of the run's
-// activities, with the attempt's current stamp.
+// localActivityProducer accepts a local activity of the current run without further checks: the
+// server cannot verify its Core-made task token. The workflow task it started in is part of its
+// epoch, and that task's commit record tells readers whether to keep its records.
+func (w *Workflow) localActivityProducer(p *streamservicepb.LocalActivityProducer) (stream.Producer, error) {
+	if p.GetRunId() != w.GetExecutionState().GetRunId() {
+		return stream.Producer{}, streamError(streamservicepb.STREAM_FAILURE_TYPE_EPOCH_FENCED, "the local activity's run is not the current one")
+	}
+	return stream.Producer{
+		ID:                  "local-activity/" + p.GetRunId() + "/" + p.GetActivityId(),
+		RunID:               p.GetRunId(),
+		WorkflowTask:        p.GetPreviousStartedEventId(),
+		WorkflowTaskAttempt: p.GetWorkflowTaskAttempt(),
+		Epoch:               int64(p.GetAttempt()),
+	}, nil
+}
+
+// activityProducer checks that the task token is for the started attempt of one of the run's
+// activities: the token's stamp must be the one the attempt started with. An options update raises
+// the activity's stamp during the attempt, but not the started stamp.
 func (w *Workflow) activityProducer(workflowID string, token []byte) (stream.Producer, error) {
 	t, err := tasktoken.NewSerializer().Deserialize(token)
 	if err != nil {
@@ -354,7 +373,7 @@ func (w *Workflow) activityProducer(workflowID string, token []byte) (stream.Pro
 	}
 	runID := w.GetExecutionState().GetRunId()
 	ai, ok := w.GetActivityInfo(t.GetScheduledEventId())
-	if t.GetRunId() != runID || !ok || ai.GetStartedEventId() == common.EmptyEventID || ai.GetStamp() != t.GetActivityAttemptStamp() {
+	if t.GetRunId() != runID || !ok || ai.GetStartedEventId() == common.EmptyEventID || ai.GetStartedStamp() != t.GetActivityAttemptStamp() {
 		return stream.Producer{}, streamError(streamservicepb.STREAM_FAILURE_TYPE_EPOCH_FENCED, "the activity attempt is not the current one")
 	}
 	return stream.Producer{
