@@ -51,7 +51,7 @@ var streamBackends = []struct {
 	new  func(t *testing.T, env *testcore.TestEnv) streamBackendUnderTest
 }{
 	{"Native", func(_ *testing.T, env *testcore.TestEnv) streamBackendUnderTest { return newNativeStreamBackend(env) }},
-	{"Redis", func(t *testing.T, _ *testcore.TestEnv) streamBackendUnderTest { return newRedisStreamBackend(t) }},
+	{"Redis", newRedisStreamBackend},
 }
 
 func newStreamEnv(t *testing.T, opts ...testcore.TestOption) *testcore.TestEnv {
@@ -805,7 +805,9 @@ func (f *streamFixture) awaitRead(result <-chan streamReadResult) streamReadResp
 }
 
 func (f *streamFixture) data(r streamRecord) string {
-	return payload.ToString(r.Payload)
+	var d string
+	require.NoError(f.t, payload.Decode(r.Payload, &d))
+	return d
 }
 
 // dataOf decodes the data records, omitting workflow task commit markers.
