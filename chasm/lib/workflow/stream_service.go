@@ -56,7 +56,7 @@ func (h *streamServiceHandler) append(
 		return nil, err
 	}
 	resp, _, err := chasm.UpdateComponent(ctx, ref, (*Workflow).appendToStream, req)
-	return resp, streamOperationError(err)
+	return resp, streamOperationError(ownerNotFound(err))
 }
 
 func (h *streamServiceHandler) close(
@@ -69,7 +69,7 @@ func (h *streamServiceHandler) close(
 		return nil, err
 	}
 	resp, _, err := chasm.UpdateComponent(ctx, ref, (*Workflow).closeStream, req)
-	return resp, streamOperationError(err)
+	return resp, streamOperationError(ownerNotFound(err))
 }
 
 // read returns the matching records after the request's cursor, waiting up to the request's wait
@@ -348,6 +348,15 @@ func (w *Workflow) activityProducer(workflowID string, token []byte) (stream.Pro
 		ID:    "activity/" + runID + "/" + t.GetActivityId(),
 		Epoch: int64(t.GetActivityAttemptStamp()),
 	}, nil
+}
+
+// ownerNotFound reports a missing owner as a missing stream: a stream exists only while its owner
+// does.
+func ownerNotFound(err error) error {
+	if _, ok := errors.AsType[*serviceerror.NotFound](err); ok {
+		return streamError(streamservicepb.STREAM_FAILURE_TYPE_NOT_FOUND, "the stream's owner does not exist: %v", err)
+	}
+	return err
 }
 
 func workflowStreamProducerID(runID string) string {
