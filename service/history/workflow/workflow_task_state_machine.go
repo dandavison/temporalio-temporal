@@ -776,6 +776,8 @@ func (m *workflowTaskStateMachine) AddWorkflowTaskCompletedEvent(
 	}
 
 	// After the skip: a rejected speculative task does not complete, and leaves no commit record.
+	// Before afterAddWorkflowTaskCompletedEvent, which moves LastCompletedWorkflowTaskStartedEventId
+	// past this task's identity.
 	if err := m.ms.recordStreamWorkflowTaskCommit(workflowTask.Attempt); err != nil {
 		return nil, err
 	}

@@ -353,7 +353,10 @@ func (handler *WorkflowTaskCompletedHandler) Invoke(
 		}
 	}
 	// Commit-mode stream appends are applied before the task's completion is recorded, so they carry
-	// the completing task as their producer, and the completion's commit record covers them.
+	// the completing task as their producer and the completion's commit record covers them, and
+	// before the commands are handled, so they land before a terminal command closes the stream. A
+	// heartbeat timeout applies only to a completion with no messages, so skipping the appends then
+	// drops nothing.
 	var streamAppendFailedCause *workflowTaskFailedCause
 	request.Messages, streamAppendFailedCause, err = appendCommitModeStreamRecords(ctx, ms, request.Messages, !wtHeartbeatTimedOut)
 	if err != nil {
@@ -1213,7 +1216,8 @@ func (handler *WorkflowTaskCompletedHandler) clearStickyTaskQueue(ctx context.Co
 // appendCommitModeStreamRecords applies the commit-mode stream appends among a workflow task
 // completion's messages, if apply is set, and returns the other messages. A stream append the
 // stream rejects, such as one in the other mode from the one the run fixed, fails the task with an
-// application failure of type BAD_STREAM_APPEND.
+// application failure of type BAD_STREAM_APPEND. The appends this completion made before the
+// rejected one are discarded with the rest of the completion's changes.
 func appendCommitModeStreamRecords(
 	ctx context.Context,
 	ms historyi.MutableState,

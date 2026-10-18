@@ -6,18 +6,20 @@ package tests
 //
 // A stream is keyed by its owner, as on Redis: a workflow run chain or a Standalone Activity
 // execution. It is a row in streams, holding its next position and its close, with its records in
-// records and each producer's dedupe and fencing state in producers. chains names each owner ID's
-// latest run. Positions are dense: each append takes the next ones under the
-// stream row's lock. An append is one transaction, which notifies the channel streamChannel.
-// PostgreSQL has no blocking read, so a waiting read listens on that channel, then reads, then
-// waits for a notification or its deadline.
+// records and each producer's dedupe and fencing state in producers. chains holds each owner ID's
+// latest run. Positions are dense: each append takes the next ones under the stream row's lock. An
+// append is one transaction, which notifies the channel streamChannel. PostgreSQL has no blocking
+// read, so a waiting read listens on that channel, then reads, then waits for a notification or its
+// deadline. Every stream notifies the same channel, so a waiting read also wakes, and reads again,
+// on appends to other streams.
 //
 // Properties weaker than native, all because PostgreSQL cannot see the server's state:
 //   - A stale producer is fenced only once its successor has appended.
 //   - Nothing writes workflow task commit records, so a failed workflow task attempt's records,
 //     and its local activities', are not withdrawn.
 //   - Producers are not verified, and appends from speculative workflow tasks are not rejected.
-//   - The owner's worker writes the close; after a worker crash it can be late or missing.
+//   - The owner's worker writes a workflow's close, so the close can be missing, as on Redis.
+//   - Nothing closes an activity's stream when the activity ends, as on Redis.
 //
 // Unlike Redis, PostgreSQL filters topics in the query, so a reader receives only matching
 // records, and a filtered wait returns only on a matching record.
@@ -336,8 +338,8 @@ func (b *postgresStreamBackend) Read(ctx context.Context, ref streamRef, req str
 	}
 }
 
-// resolveChain returns the chain a read from the beginning reads: the pinned one, or the workflow
-// ID's latest, waiting until the deadline for one to exist.
+// resolveChain returns the chain a read from the beginning reads: the pinned one, or the owner ID's
+// latest, waiting until the deadline for one to exist.
 func (b *postgresStreamBackend) resolveChain(ctx context.Context, conn *pgxpool.Conn, ref streamRef, deadline time.Time) (postgresChain, bool, error) {
 	if run := externalRun(ref); run != "" {
 		return postgresChain{externalOwner(ref), run}, true, nil
@@ -527,8 +529,8 @@ func postgresDigest(entries []postgresEntry, closing *streamClose) string {
 }
 
 // startPostgres creates a database for one test, on a PostgreSQL server shared by the test
-// process: macOS has too few shared memory IDs for a server per test. initdb and postgres must be
-// on PATH.
+// process: macOS has too few SysV shared memory IDs for a server per test. initdb and postgres must
+// be on PATH.
 func startPostgres(t *testing.T) *pgxpool.Pool {
 	postgresServerOnce.Do(func() { postgresServerURL, postgresServerErr = startPostgresServer() })
 	require.NoError(t, postgresServerErr)

@@ -20,7 +20,9 @@ import (
 )
 
 // nativeStreamBackend calls the stream service's operations on the System Nexus Endpoint, as direct
-// Nexus calls.
+// Nexus calls. Moving a workflow's stream to the next run of its chain (continue-as-new, retry,
+// cron) is not built, so a new run starts with no stream, and the continue-as-new tests fail
+// against this backend.
 type nativeStreamBackend struct {
 	env *testcore.TestEnv
 }
@@ -291,7 +293,7 @@ var nativeErrors = map[streamservicepb.StreamFailureType]error{
 	streamservicepb.STREAM_FAILURE_TYPE_WORKFLOW_APPEND_MODE_MISMATCH: errStreamAppendMode,
 }
 
-// nativeError maps an operation failure to the stream error named by the ApplicationFailureInfo
+// nativeError maps an operation failure to the stream error given by the ApplicationFailureInfo
 // type somewhere in its cause chain.
 func nativeError(f *failurepb.Failure) error {
 	for c := f; c != nil; c = c.GetCause() {

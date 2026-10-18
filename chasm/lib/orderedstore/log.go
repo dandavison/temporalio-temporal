@@ -1,13 +1,14 @@
-// Package orderedstore is a stub of the ordered storage that Yichao and Rodrigo are building for
-// CHASM components. It provides only what Rodrigo confirmed on 2026-10-14: events are appended in
-// batches, a batch is persisted as one row, and a component can hold any number of logs.
+// Package orderedstore is a stub of the ordered storage being built for CHASM components. It
+// provides only what that design has settled: events are appended in batches, a batch is persisted
+// as one row, and a component can hold any number of logs.
 //
 // Two things here are guesses, because they are undecided:
 //   - Events are addressed by a global, contiguous event ID. The alternative is (batch ID, event
 //     ID).
 //   - Events are bytes.
 //
-// Trimming from the head is confirmed but not stubbed, because nothing uses it yet.
+// Trimming from the head is settled but not stubbed, because nothing uses it yet, so a log grows
+// for as long as its component exists.
 package orderedstore
 
 import (

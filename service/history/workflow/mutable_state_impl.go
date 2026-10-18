@@ -7469,7 +7469,8 @@ func (ms *MutableStateImpl) streamWorkflowComponent() (*chasmworkflow.Workflow, 
 }
 
 // recordStreamWorkflowTaskCommit records, in the workflow's stream, which attempt completed the
-// current workflow task.
+// current workflow task. It writes nothing if the workflow has no stream yet; the stream's creation
+// record covers the tasks completed before it existed.
 func (ms *MutableStateImpl) recordStreamWorkflowTaskCommit(attempt int32) error {
 	wf, ctx, err := ms.streamWorkflowComponent()
 	if wf == nil || err != nil {
@@ -7494,7 +7495,11 @@ func (ms *MutableStateImpl) deleteClosedActivity(scheduledEventID int64) error {
 }
 
 // closeStreamOnEnd closes the workflow's stream with a state taken from the workflow's terminal
-// status.
+// status. It is not called at continue-as-new, for a run that is retried, or for a completed cron
+// run: those runs leave their stream open, because moving the stream to the next run is not built,
+// and nothing appends to or reads that stream again. A failed or timed-out cron run that is not
+// retried does close its stream, although the cron chain continues: this is inconsistent with a
+// completed cron run.
 func (ms *MutableStateImpl) closeStreamOnEnd(closeFailure *failurepb.Failure) error {
 	wf, ctx, err := ms.streamWorkflowComponent()
 	if wf == nil || err != nil {

@@ -2,8 +2,9 @@ package workflow
 
 // The stream service on the System Nexus Endpoint: Append, Read and Close on the stream owned by a
 // workflow run chain or a Standalone Activity execution. The stream is embedded in its owner's CHASM
-// tree; the activity's side is in chasm/lib/activity. Moving a workflow's stream to the new run at
-// continue-as-new is not built, so a new run of the chain starts with no stream.
+// tree; the activity's side is in chasm/lib/activity. Moving a workflow's stream to the next run
+// of its chain (continue-as-new, retry, cron) is not built, so a new run of the chain starts with
+// no stream, and the earlier run's stream is no longer read or written.
 
 import (
 	"context"
@@ -255,7 +256,11 @@ func (w *Workflow) closeStream(
 
 // AppendCommitModeRecords appends records that the run's current workflow task carries in its
 // completion, in commit mode, with the task as their producer. It is called in the completion's
-// transaction, before the task's completion is recorded.
+// transaction, before the task's completion is recorded, while
+// LastCompletedWorkflowTaskStartedEventId is still the task's identity.
+//
+// The server assigns the seq: the worker sends none, and a completion is applied at most once, so
+// there is no retry to dedupe.
 func (w *Workflow) AppendCommitModeRecords(ctx chasm.MutableContext, records []*streamservicepb.AppendRecord) error {
 	info := w.GetExecutionInfo()
 	runID := w.GetExecutionState().GetRunId()
@@ -286,6 +291,8 @@ func (w *Workflow) readStream(ctx chasm.Context, args stream.ReadArgs) (*streams
 		if args.Cursor.GetFirstRunId() != w.firstRunID() {
 			return nil, streamError(streamservicepb.STREAM_FAILURE_TYPE_EXPIRED, "the cursor's run chain no longer exists")
 		}
+		// A cursor from an earlier run of the chain passes the check above, but its offset is in that
+		// run's stream, so the read skips the current run's records up to that offset.
 		after = args.Cursor.GetOffset()
 	}
 	s, _ := w.Stream.TryGet(ctx)
@@ -293,7 +300,8 @@ func (w *Workflow) readStream(ctx chasm.Context, args stream.ReadArgs) (*streams
 }
 
 // RecordStreamWorkflowTaskCommit records, in the stream, that attempt completed the run's current
-// workflow task. It is called in the transaction that completes the task.
+// workflow task. It is called in the transaction that completes the task, before
+// LastCompletedWorkflowTaskStartedEventId moves past the task's identity.
 func (w *Workflow) RecordStreamWorkflowTaskCommit(ctx chasm.MutableContext, attempt int32) error {
 	s, ok := w.Stream.TryGet(ctx)
 	if !ok {
@@ -321,7 +329,9 @@ func (w *Workflow) RemoveStreamActivityProducer(ctx chasm.MutableContext, activi
 }
 
 // mutableStream returns the workflow's stream, creating it, with its creation record, if it does
-// not exist.
+// not exist. The creation record holds the run's current task identity (see Stream.RecordCreated,
+// including the case where readers' rule for it is wrong). A later run of the chain creates a new
+// stream, with offsets from 0 again.
 func (w *Workflow) mutableStream(ctx chasm.MutableContext) (*stream.Stream, error) {
 	if s, ok := w.Stream.TryGet(ctx); ok {
 		return s, nil
@@ -370,6 +380,8 @@ func (w *Workflow) streamProducer(workflowID string, p *streamservicepb.Producer
 }
 
 // workflowTaskProducer checks that the producer is the run's current workflow task attempt.
+// Speculative tasks are rejected because a discarded one leaves no commit record and no History,
+// and the next task can have the same identity and attempt.
 func (w *Workflow) workflowTaskProducer(p *streamservicepb.WorkflowTaskProducer) (stream.Producer, error) {
 	info := w.GetExecutionInfo()
 	if p.GetRunId() != w.GetExecutionState().GetRunId() ||
@@ -409,6 +421,16 @@ func (w *Workflow) localActivityProducer(p *streamservicepb.LocalActivityProduce
 // activityProducer checks that the task token is for the started attempt of one of the run's
 // activities: the token's stamp must be the one the attempt started with. An options update raises
 // the activity's stamp during the attempt, but not the started stamp.
+//
+// What this does not guarantee:
+//   - A retry raises the stamp only with system.enableActivityRetryStampIncrement, default off.
+//     With it off, every attempt has the same stamp, so a superseded attempt is not fenced, and
+//     its successor's appends fail as stale or divergent seqs in the same epoch, or are taken as a
+//     retry of the earlier attempt's append and not stored.
+//   - A token from before the stamp was added carries 0, which matches a first attempt.
+//
+// Activity-by-ID tokens, which have no scheduled event ID, are rejected. Standalone Activity tokens
+// are rejected, since checking one needs the activity's state, which is in another execution.
 func (w *Workflow) activityProducer(workflowID string, token []byte) (stream.Producer, error) {
 	t, err := tasktoken.NewSerializer().Deserialize(token)
 	if err != nil {
@@ -497,6 +519,7 @@ func (streamOperationProcessor[I]) ProcessInput(ctx chasm.NexusOperationProcesso
 	if (ref.GetWorkflowId() == "") == (ref.GetActivityId() == "") {
 		return nil, serviceerror.NewInvalidArgument("a stream is named by exactly one of a workflow ID and an activity ID")
 	}
+	// The history-side handler is not given the namespace, so it travels in the request.
 	ns := ctx.Namespace.Name().String()
 	if ref.GetNamespace() == "" {
 		ref.Namespace = ns

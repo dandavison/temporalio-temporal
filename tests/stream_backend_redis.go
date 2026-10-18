@@ -7,16 +7,25 @@ package tests
 // A stream is keyed by its owner: a workflow run chain, by workflow ID and first run ID, or a
 // Standalone Activity execution, by activity ID and run ID. It is four keys sharing a hash tag with
 // the owner's kind and ID: a Redis stream holding the log, a hash holding each producer's dedupe and
-// fencing state, a metadata hash holding existence and close, and a tombstone. A fifth key names the
-// owner ID's latest run, for readers that do not know the run ID. Every append and close goes through the script,
-// which checks and writes in one step. Producers that XADD to the log directly are not supported.
+// fencing state, a metadata hash holding existence and close, and a tombstone. A fifth key holds
+// the owner ID's latest run, for readers that do not know the run ID. Every append and close goes
+// through the script, which checks and writes in one step. Producers that XADD to the log directly
+// are not supported.
 //
-// Properties weaker than native, all because Redis cannot see the server's state:
+// Properties weaker than native, all because Redis cannot see the server's state (the same on
+// PostgreSQL, except the last):
 //   - A stale producer is fenced only once its successor has appended.
 //   - Nothing writes workflow task commit records, so a failed workflow task attempt's records,
 //     and its local activities', are not withdrawn.
 //   - Producers are not verified, and appends from speculative workflow tasks are not rejected.
-//   - The owner's worker writes the close; after a worker crash it can be late or missing.
+//   - The owner's worker writes a workflow's close. The stream is left open when the workflow is
+//     terminated or times out, when a failed run with a retry policy is not retried, or when the
+//     worker stops before writing the close.
+//   - Nothing closes an activity's stream when the activity ends; the activity must close it
+//     itself. A worker cannot tell when its activity has ended: Core sends the Respond RPC and
+//     discards its result, so the worker does not learn whether the server accepted the
+//     completion, and RespondActivityTaskFailedResponse does not say whether a failed attempt
+//     will be retried.
 //   - A topic filter is applied after reading: the reader receives every record.
 
 import (
@@ -72,8 +81,7 @@ func newRedisStreamBackend(t *testing.T, env *testcore.TestEnv) streamBackendUnd
 	}
 }
 
-// redisKeys are the keys of one run chain's stream, and the key naming the workflow ID's latest
-// chain.
+// redisKeys are the keys of one owner run's stream, and the key holding the owner ID's latest run.
 type redisKeys struct {
 	prefix, meta, log, producers, tombstone, current, firstRun string
 }
@@ -244,8 +252,8 @@ func (b *redisStreamBackend) Read(ctx context.Context, ref streamRef, req stream
 	return b.readAfter(ctx, k, req, lastID, deadline)
 }
 
-// resolveChain returns the chain a read from the beginning reads: the pinned one, or the workflow
-// ID's latest, waiting until the deadline for one to exist.
+// resolveChain returns the chain a read from the beginning reads: the pinned one, or the owner ID's
+// latest, waiting until the deadline for one to exist.
 func (b *redisStreamBackend) resolveChain(ctx context.Context, ref streamRef, deadline time.Time) (redisKeys, bool, error) {
 	if run := externalRun(ref); run != "" {
 		return b.keys(externalOwner(ref), run), true, nil
@@ -495,7 +503,7 @@ func redisRecord(cursor streamCursor, v map[string]any, topics []string) (stream
 	return r, true
 }
 
-// redisError maps a failure the script reports, named by its first word, to its sentinel.
+// redisError maps a failure the script reports, identified by its first word, to its sentinel.
 func redisError(err error) error {
 	code, _, _ := strings.Cut(err.Error(), " ")
 	sentinel, ok := map[string]error{

@@ -30,7 +30,11 @@ const defaultMaxRecords = 1000
 // and fencing by (producer, epoch, seq); the owner checks that the producer is who it says it is.
 //
 // Producer state is kept in the component, not in the ordered store, because it is overwritten in
-// place.
+// place. An owning workflow removes the entry of one of its activities when the activity closes,
+// and its run has one entry, overwritten by each workflow task. No other entry is removed (clients,
+// local activities, and producers other than the owner's own activities and run), so they
+// accumulate for the stream's life. Removing a client's entry at its finish would let a retried
+// finish be stored twice.
 type Stream struct {
 	chasm.UnimplementedComponent
 
@@ -200,6 +204,10 @@ func (s *Stream) RecordCommit(ctx chasm.MutableContext, runID string, workflowTa
 // RecordCreated records, as the stream's first record, the creating run's next workflow task: the
 // run's tasks with a lower identity completed before the stream existed, so they have no commit
 // record, and readers treat their records as committed.
+//
+// The rule is wrong in one case: a local activity of a failed attempt of a task that completed
+// before the stream existed, still running after the rerun, appends records that readers treat as
+// committed.
 func (s *Stream) RecordCreated(ctx chasm.MutableContext, runID string, nextWorkflowTask int64) error {
 	_, err := s.add(ctx, &streamservicepb.Record{StreamCreated: &streamservicepb.StreamCreated{
 		WorkflowRunId:    runID,

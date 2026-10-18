@@ -8,6 +8,8 @@ import (
 
 var _ chasm.RootComponent = (*Notifier)(nil)
 
+// Notifier is an empty placeholder archetype. It is registered but has no state, operations or
+// tasks, and nothing creates one.
 type Notifier struct {
 	chasm.UnimplementedComponent
 

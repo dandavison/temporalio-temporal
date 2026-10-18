@@ -11,7 +11,8 @@ import (
 
 // An activity task's attempt_stamp identifies the attempt among all attempts of the activity: it
 // increases with each attempt the server schedules, including after a reset, which sets the attempt
-// number back to 1.
+// number back to 1. A retry increases it only with system.enableActivityRetryStampIncrement (default
+// off), which these tests turn on.
 type activityAttemptStampSuite struct {
 	parallelsuite.Suite[*activityAttemptStampSuite]
 }
@@ -30,8 +31,8 @@ func (s *activityAttemptStampSuite) TestRetryIncreasesStamp() {
 	require.Greater(s.T(), attempt2.AttemptStamp, attempt1.AttemptStamp)
 }
 
-// A reset between attempts sets the next attempt's number back to 1, but not its stamp. A reset
-// during an attempt is not tested, because the two activity surfaces differ there; see
+// A reset between attempts sets the next attempt's number back to 1, but its stamp still increases.
+// A reset during an attempt is not tested, because the two activity surfaces differ there; see
 // TestAttemptBeforeResetIsFencedAfterSuccessorAppends.
 func (s *activityAttemptStampSuite) TestResetBetweenAttemptsIncreasesStamp() {
 	f := newAttemptStampFixture(s.T())

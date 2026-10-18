@@ -4,9 +4,9 @@ package tests
 //
 // It is shaped like the SDK-side boundary where a stream store plugs in: a client or worker
 // process, not the server. The native implementation calls the stream service's operations on the
-// System Nexus Endpoint as direct Nexus calls. The Redis implementation talks to Redis as a worker or client would, and the server never
-// talks to Redis. Code that the Redis implementation needs and the native one does not is the cost
-// of an external store.
+// System Nexus Endpoint as direct Nexus calls. The Redis and PostgreSQL implementations talk to
+// their store as a worker or client would, and the server never talks to it. Code that they need
+// and the native one does not is the cost of an external store.
 //
 // Cursors are opaque: application code passes them back but never compares them or does
 // arithmetic on them.
@@ -76,8 +76,8 @@ func activityProducer(task *workflowservice.PollActivityTaskQueueResponse) strea
 }
 
 // workflowProducer is a workflow appending sink-style: the worker appends the records at the end of
-// an activation of this workflow task, before responding to it. Appends from speculative workflow
-// tasks are rejected.
+// an activation of this workflow task, before responding to it. Native rejects appends from
+// speculative workflow tasks; external stores cannot tell that a task is speculative.
 func workflowProducer(task *workflowservice.PollWorkflowTaskQueueResponse) streamProducer {
 	return streamProducer{WorkflowTask: task}
 }
@@ -93,7 +93,8 @@ func localActivityProducer(task *workflowservice.PollWorkflowTaskQueueResponse, 
 //
 // The epoch numbers the producer's incarnations, and is (WorkflowTask, WorkflowTaskAttempt, Epoch),
 // compared in that order. For an activity, Epoch is the stamp the attempt started with, which a
-// retry or reset increases. For a client it is what the client supplies. For a workflow,
+// retry increases only when system.enableActivityRetryStampIncrement is on (the tests turn it on
+// where they need it). For a client it is what the client supplies. For a workflow,
 // WorkflowTask is the started event ID of the run's last completed workflow task, and
 // WorkflowTaskAttempt and Epoch are the current task's attempt. For a local activity, WorkflowTask
 // and WorkflowTaskAttempt are those of the task it started in, and Epoch is its own attempt.
@@ -108,9 +109,10 @@ type streamProducerIdentity struct {
 }
 
 // streamWorkflowTaskCommit records which attempt completed a workflow task. Native only: the server
-// writes one for every workflow task of a run that owns a stream, in the same transaction as the
-// task's completion. A reader keeps a workflow or local activity record of that task if the commit
-// names its WorkflowTaskAttempt, and discards it otherwise.
+// writes one for every completed workflow task of a run that owns a stream, in the same transaction
+// as the task's completion, and none for a rejected speculative task. A reader keeps a workflow or
+// local activity record of that task if the commit's Attempt is its WorkflowTaskAttempt, and
+// discards it otherwise.
 type streamWorkflowTaskCommit struct {
 	WorkflowRunID string
 	WorkflowTask  int64
@@ -120,7 +122,8 @@ type streamWorkflowTaskCommit struct {
 // streamCreated is written when an append creates a native stream. The run's workflow tasks whose
 // identity is lower than NextWorkflowTask completed before the stream existed, so they have no
 // commit record; a reader treats a workflow or local activity record of such a task as committed.
-// Native only.
+// Native only. The rule is wrong for a local activity of a failed attempt of such a task, still
+// running after the rerun: its records are treated as committed.
 type streamCreated struct {
 	WorkflowRunID    string
 	NextWorkflowTask int64

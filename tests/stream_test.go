@@ -271,8 +271,8 @@ func (s *streamTestSuite) TestStaleActivityAttemptIsFencedAfterSuccessorAppends(
 }
 
 // A timed-out activity attempt cannot append once its successor exists, even before the successor
-// appends: the server derives the epoch from the task token. Native only; on Redis a stale attempt
-// can write until its successor's first append.
+// appends: the server derives the epoch from the task token. Native only; on Redis and PostgreSQL
+// a stale attempt can write until its successor's first append.
 func (s *streamTestSuite) TestStaleActivityAttemptIsFencedBeforeSuccessorAppends() {
 	s.nativeOnly(func(f *streamFixture) {
 		ref := f.startOwner(f.tv)
@@ -353,7 +353,7 @@ func (s *streamTestSuite) TestFailedWorkflowTaskRecordsCarryLowerEpoch() {
 
 // A workflow task's completion records, in the stream, which attempt committed, so readers can
 // discard a failed attempt's records even when the attempt that succeeds appends nothing. Native
-// only: on Redis those records are not withdrawn.
+// only: on Redis and PostgreSQL those records are not withdrawn.
 func (s *streamTestSuite) TestWorkflowTaskCompletionRecordsCommittedAttempt() {
 	s.nativeOnly(func(f *streamFixture) {
 		ref := f.startOwner(f.tv)
@@ -406,7 +406,7 @@ func (s *streamTestSuite) TestFailedWorkflowTaskAttemptIsFencedBeforeRerunAppend
 }
 
 // Appends from a speculative workflow task (one created for an Update) are rejected. Native only:
-// a Redis backend cannot tell that a task is speculative.
+// an external store cannot tell that a task is speculative.
 func (s *streamTestSuite) TestSpeculativeWorkflowTaskAppendIsRejected() {
 	s.nativeOnly(func(f *streamFixture) {
 		ref := f.startOwner(f.tv)
@@ -501,7 +501,7 @@ func (s *streamTestSuite) TestLocalActivityRetryHasHigherEpoch() {
 }
 
 // A local activity that appends only after its workflow task has completed through a task heartbeat
-// is accepted, and the task's commit record names the attempt it ran in. Native only.
+// is accepted, and the task's commit record holds the attempt it ran in. Native only.
 func (s *streamTestSuite) TestLocalActivityAppendsAfterTaskHeartbeat() {
 	s.nativeOnly(func(f *streamFixture) {
 		ref := f.startOwner(f.tv)
@@ -521,8 +521,8 @@ func (s *streamTestSuite) TestLocalActivityAppendsAfterTaskHeartbeat() {
 }
 
 // A local activity of a failed workflow task attempt does not collide with the same local activity
-// rerun by the next attempt, and the commit record names the rerun's attempt, so readers withdraw
-// the failed attempt's records. Native only, because Redis writes no commit records.
+// rerun by the next attempt, and the commit record holds the rerun's attempt, so readers withdraw
+// the failed attempt's records. Native only, because external stores write no commit records.
 func (s *streamTestSuite) TestLocalActivityOfFailedTaskIsWithdrawn() {
 	s.nativeOnly(func(f *streamFixture) {
 		ref := f.startOwner(f.tv)
@@ -565,7 +565,7 @@ func (s *streamTestSuite) TestOptionsUpdateDoesNotFenceRunningAttempt() {
 }
 
 // An append whose record exceeds the record size limit, or that has too many records, is rejected.
-// Native only; the shared SDK code enforces the same limits for Redis.
+// Native only; the shared SDK code, and the external test backends, enforce the same limits.
 func (s *streamTestSuite) TestOversizedAppendIsRejected() {
 	s.nativeOnlyEachOwner(func(f *streamFixture) {
 		ref := f.startOwner(f.tv)
@@ -793,8 +793,8 @@ func (s *streamTestSuite) TestProducerFinishDoesNotCloseStream() {
 }
 
 // A stream embedded in its owner closes in the same transaction as the owner completing, with a
-// status taken from the owner's terminal state. Native only: on Redis the owner's worker writes
-// the close, so after a worker crash it can be late or missing.
+// status taken from the owner's terminal state. Native only: on Redis and PostgreSQL the owner's
+// worker writes the close, so it can be late or missing.
 func (s *streamTestSuite) TestStreamClosesWhenOwnerCompletes() {
 	s.nativeOnly(func(f *streamFixture) {
 		ref := f.startOwner(f.tv)
@@ -831,7 +831,7 @@ func (s *streamTestSuite) TestReadFromBeginningWaitsForFirstAppend() {
 }
 
 // An append to a stream whose owner does not exist fails as not found. Native only: a native stream
-// is embedded in its owner, while on Redis the first append creates the stream.
+// is embedded in its owner, while on Redis and PostgreSQL the first append creates the stream.
 func (s *streamTestSuite) TestAppendWithoutOwnerFailsAsNotFound() {
 	s.nativeOnly(func(f *streamFixture) {
 		_, err := f.tryAppend(streamRef{WorkflowID: f.tv.WorkflowID()}, clientProducer("a", 1), 0, "", "x")
@@ -865,7 +865,7 @@ func (s *streamTestSuite) TestCursorFromAnotherStreamIsRejected() {
 
 // A workflow-owned stream belongs to the run chain: records continue in order across
 // continue-as-new, which does not close the stream, and the chain can be pinned by its first run
-// ID. Every backend.
+// ID. Every backend. Fails on native: moving the stream to the new run is not built.
 func (s *streamTestSuite) TestStreamContinuesAcrossContinueAsNew() {
 	s.forEachBackend(func(f *streamFixture) {
 		ref := f.startOwner(f.tv)
@@ -885,7 +885,8 @@ func (s *streamTestSuite) TestStreamContinuesAcrossContinueAsNew() {
 	})
 }
 
-// Native offsets are contiguous across continue-as-new. Native only.
+// Native offsets are contiguous across continue-as-new. Native only. Fails: moving the stream to
+// the new run is not built.
 func (s *streamTestSuite) TestNativeOffsetsAreContiguousAcrossContinueAsNew() {
 	s.nativeOnly(func(f *streamFixture) {
 		ref := f.startOwner(f.tv)
@@ -907,8 +908,8 @@ func (s *streamTestSuite) TestNativeOffsetsAreContiguousAcrossContinueAsNew() {
 	})
 }
 
-// An acknowledged append survives the stream's History shard being reloaded. Native only: Redis
-// durability depends on how Redis is configured.
+// An acknowledged append survives the stream's History shard being reloaded. Native only: external
+// stores' durability depends on how they are configured.
 func (s *streamTestSuite) TestAppendSurvivesShardReload() {
 	s.nativeOnlyEachOwner(func(f *streamFixture) {
 		ref := f.startOwner(f.tv)
@@ -1014,7 +1015,7 @@ func (s *streamTestSuite) TestSinkModeIsRecordedOncePerRun() {
 
 // Two workers of the same workflow disagree on the append mode, as in a rolling deploy: the run's
 // first workflow append, sink-style, fixes its mode, and a commit-mode append from the second worker
-// fails its workflow task, naming both modes. Native only.
+// fails its workflow task, with a message that states both modes. Native only.
 func (s *streamTestSuite) TestCommitModeAppendAfterSinkModeFailsTask() {
 	s.nativeOnly(func(f *streamFixture) {
 		ref := f.startOwner(f.tv)
@@ -1033,7 +1034,7 @@ func (s *streamTestSuite) TestCommitModeAppendAfterSinkModeFailsTask() {
 }
 
 // As TestCommitModeAppendAfterSinkModeFailsTask, with the modes the other way round: a sink-style
-// append fails, naming both modes. Native only.
+// append fails, with a message that states both modes. Native only.
 func (s *streamTestSuite) TestSinkModeAppendAfterCommitModeFails() {
 	s.nativeOnly(func(f *streamFixture) {
 		ref := f.startOwner(f.tv)
@@ -1113,8 +1114,8 @@ func (s *streamTestSuite) TestActivityOwnedStreamClosesWithOutcome() {
 	})
 }
 
-// A reader can name a Standalone Activity's stream before the activity starts, and read it after
-// the activity ends. Every backend, with a Standalone Activity owner.
+// A reader can refer to a Standalone Activity's stream before the activity starts, and read it
+// after the activity ends. Every backend, with a Standalone Activity owner.
 func (s *streamTestSuite) TestActivityStreamIsReadableBeforeStartAndAfterEnd() {
 	s.forEachBackendWithActivityOwner(func(f *streamFixture) {
 		before := f.unstartedRef(f.tv)
@@ -1169,7 +1170,6 @@ func (f *streamFixture) ctx() context.Context {
 	return testcontext.For(f.t)
 }
 
-// startOwner starts the workflow that owns the stream.
 // startOwner starts the execution that owns the stream, of the fixture's owner kind.
 func (f *streamFixture) startOwner(tv *testvars.TestVars) streamRef {
 	if f.owner == activityOwner {
@@ -1208,7 +1208,8 @@ func (f *streamFixture) startActivityOwner(tv *testvars.TestVars) streamRef {
 	return streamRef{ActivityID: tv.WorkflowID(), ActivityRunID: resp.RunId}
 }
 
-// unstartedRef names the stream of the owner that startOwner(tv) will start, without its run ID.
+// unstartedRef refers to the stream of the owner that startOwner(tv) will start, without its run
+// ID.
 func (f *streamFixture) unstartedRef(tv *testvars.TestVars) streamRef {
 	if f.owner == activityOwner {
 		return streamRef{ActivityID: tv.WorkflowID()}

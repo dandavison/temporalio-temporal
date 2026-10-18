@@ -3,8 +3,9 @@ package activity
 // A Standalone Activity's stream: Append, Read and Close of the stream service on a stream embedded
 // in the activity's execution. The activity's own attempts append with their task token, checked
 // against the current attempt, so a superseded attempt is fenced. Other producers (workflows, other
-// activities, clients) are not verified. The stream closes with the activity's outcome, in the
-// transaction that ends it; a retry does not close it.
+// activities, clients) are not verified, and their dedupe and fencing state is never removed. The
+// stream closes with the activity's outcome, in the transaction that ends it; a retry does not
+// close it.
 
 import (
 	streamservicepb "go.temporal.io/api/nexusservices/streamservice/v1"
@@ -86,6 +87,8 @@ func (a *Activity) ReadStream(ctx chasm.Context, args stream.ReadArgs) (*streams
 
 // closeStreamOnEnd closes the activity's stream with state, unless it is already closed, in the
 // transaction in which the activity reaches a terminal state. A workflow activity has no stream.
+// Each terminal transition passes its state, because the transition sets the activity's status only
+// after its apply function returns.
 func (a *Activity) closeStreamOnEnd(ctx chasm.MutableContext, state streamservicepb.CloseState) {
 	if s, ok := a.Stream.TryGet(ctx); ok {
 		s.CloseIfOpen(&streamservicepb.StreamClose{State: state})
