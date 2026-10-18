@@ -159,6 +159,12 @@ func (s *Stream) RecordCommit(ctx chasm.MutableContext, producer string, workflo
 	return err
 }
 
+// RemoveProducer removes a producer's dedupe and fencing state, once the producer can no longer
+// append.
+func (s *Stream) RemoveProducer(producer string) {
+	delete(s.Producers, producer)
+}
+
 // CloseIfOpen closes the stream unless it is already closed.
 func (s *Stream) CloseIfOpen(c *streamservicepb.StreamClose) {
 	if s.Close == nil {

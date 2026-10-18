@@ -4695,7 +4695,7 @@ func (ms *MutableStateImpl) ApplyActivityTaskCompletedEvent(
 	attributes := event.GetActivityTaskCompletedEventAttributes()
 	scheduledEventID := attributes.GetScheduledEventId()
 
-	return ms.DeleteActivity(scheduledEventID)
+	return ms.deleteClosedActivity(scheduledEventID)
 }
 
 func (ms *MutableStateImpl) AddActivityTaskFailedEvent(
@@ -4745,7 +4745,7 @@ func (ms *MutableStateImpl) ApplyActivityTaskFailedEvent(
 	attributes := event.GetActivityTaskFailedEventAttributes()
 	scheduledEventID := attributes.GetScheduledEventId()
 
-	return ms.DeleteActivity(scheduledEventID)
+	return ms.deleteClosedActivity(scheduledEventID)
 }
 
 func (ms *MutableStateImpl) AddActivityTaskTimedOutEvent(
@@ -4797,7 +4797,7 @@ func (ms *MutableStateImpl) ApplyActivityTaskTimedOutEvent(
 	attributes := event.GetActivityTaskTimedOutEventAttributes()
 	scheduledEventID := attributes.GetScheduledEventId()
 
-	return ms.DeleteActivity(scheduledEventID)
+	return ms.deleteClosedActivity(scheduledEventID)
 }
 
 func (ms *MutableStateImpl) AddActivityTaskCancelRequestedEvent(
@@ -5009,7 +5009,7 @@ func (ms *MutableStateImpl) ApplyActivityTaskCanceledEvent(
 	attributes := event.GetActivityTaskCanceledEventAttributes()
 	scheduledEventID := attributes.GetScheduledEventId()
 
-	return ms.DeleteActivity(scheduledEventID)
+	return ms.deleteClosedActivity(scheduledEventID)
 }
 
 func (ms *MutableStateImpl) AddCompletedWorkflowEvent(
@@ -7474,6 +7474,21 @@ func (ms *MutableStateImpl) recordStreamWorkflowTaskCommit(attempt int32) error 
 		return err
 	}
 	return wf.RecordStreamWorkflowTaskCommit(ctx, attempt)
+}
+
+// deleteClosedActivity deletes an activity that has closed, and removes its state as a producer to
+// the workflow's stream.
+func (ms *MutableStateImpl) deleteClosedActivity(scheduledEventID int64) error {
+	if ai, ok := ms.pendingActivityInfoIDs[scheduledEventID]; ok {
+		wf, ctx, err := ms.streamWorkflowComponent()
+		if err != nil {
+			return err
+		}
+		if wf != nil {
+			wf.RemoveStreamActivityProducer(ctx, ai.ActivityId)
+		}
+	}
+	return ms.DeleteActivity(scheduledEventID)
 }
 
 // closeStreamOnEnd closes the workflow's stream with a state taken from the workflow's terminal

@@ -270,6 +270,14 @@ func (w *Workflow) CloseStreamOnOwnerEnd(ctx chasm.MutableContext, state streams
 	s.CloseIfOpen(&streamservicepb.StreamClose{State: state, Failure: failure})
 }
 
+// RemoveStreamActivityProducer removes the state of the run's activity as a stream producer. It is
+// called when the activity closes, after which the activity's task tokens cannot append.
+func (w *Workflow) RemoveStreamActivityProducer(ctx chasm.MutableContext, activityID string) {
+	if s, ok := w.Stream.TryGet(ctx); ok {
+		s.RemoveProducer(activityStreamProducerID(w.GetExecutionState().GetRunId(), activityID))
+	}
+}
+
 func (w *Workflow) mutableStream(ctx chasm.MutableContext) *stream.Stream {
 	if s, ok := w.Stream.TryGet(ctx); ok {
 		return s
@@ -349,7 +357,7 @@ func (w *Workflow) activityProducer(workflowID string, token []byte) (stream.Pro
 		return stream.Producer{}, streamError(streamservicepb.STREAM_FAILURE_TYPE_EPOCH_FENCED, "the activity attempt is not the current one")
 	}
 	return stream.Producer{
-		ID:    "activity/" + runID + "/" + t.GetActivityId(),
+		ID:    activityStreamProducerID(runID, t.GetActivityId()),
 		Epoch: int64(t.GetActivityAttemptStamp()),
 	}, nil
 }
@@ -361,6 +369,10 @@ func ownerNotFound(err error) error {
 		return streamError(streamservicepb.STREAM_FAILURE_TYPE_NOT_FOUND, "the stream's owner does not exist: %v", err)
 	}
 	return err
+}
+
+func activityStreamProducerID(runID, activityID string) string {
+	return "activity/" + runID + "/" + activityID
 }
 
 func workflowStreamProducerID(runID string) string {
