@@ -19,6 +19,7 @@ import (
 	"go.temporal.io/api/workflowservice/v1"
 	"go.temporal.io/server/common/dynamicconfig"
 	"go.temporal.io/server/common/payload"
+	"go.temporal.io/server/common/testing/await"
 	"go.temporal.io/server/common/testing/parallelsuite"
 	"go.temporal.io/server/common/testing/testcontext"
 	"go.temporal.io/server/common/testing/testvars"
@@ -56,6 +57,10 @@ var streamBackends = []struct {
 func newStreamEnv(t *testing.T, opts ...testcore.TestOption) *testcore.TestEnv {
 	return testcore.NewEnv(t, append(opts, testcore.WithDynamicConfig(dynamicconfig.EnableChasm, true))...)
 }
+
+// withRetryStamps makes activity retries increase the attempt stamp. The setting is global, so the
+// test gets a dedicated cluster.
+var withRetryStamps = testcore.WithDynamicConfig(dynamicconfig.EnableActivityRetryStampIncrement, true)
 
 // forEachBackend runs test once per backend, each in its own environment.
 func (s *streamTestSuite) forEachBackend(test func(f *streamFixture), opts ...testcore.TestOption) {
@@ -209,7 +214,7 @@ func (s *streamTestSuite) TestStaleActivityAttemptIsFencedAfterSuccessorAppends(
 		_, err := f.tryAppend(ref, activityProducer(attempt1), 0, "", "attempt1")
 		require.ErrorIs(f.t, err, errStreamEpochFenced)
 		require.Equal(f.t, []string{"attempt2"}, f.dataOf(f.readAll(ref, streamBeginning())))
-	})
+	}, withRetryStamps)
 }
 
 // A timed-out activity attempt cannot append once its successor exists, even before the successor
@@ -223,7 +228,7 @@ func (s *streamTestSuite) TestStaleActivityAttemptIsFencedBeforeSuccessorAppends
 		f.pollActivityTask(f.tv)
 		_, err := f.tryAppend(ref, activityProducer(attempt1), 0, "", "attempt1")
 		require.ErrorIs(f.t, err, errStreamEpochFenced)
-	})
+	}, withRetryStamps)
 }
 
 // Every record carries its producer and epoch: records of a retried activity attempt carry the same
@@ -241,26 +246,24 @@ func (s *streamTestSuite) TestRetriedActivityAttemptHasHigherEpoch() {
 		require.Len(f.t, records, 2)
 		require.Equal(f.t, records[0].Producer.Producer, records[1].Producer.Producer)
 		require.Greater(f.t, records[1].Producer.Epoch, records[0].Producer.Epoch)
-	})
+	}, withRetryStamps)
 }
 
-// Resetting an activity fences its running attempt, although reset sets the attempt number back to
-// 1: the epoch is the attempt's started stamp, which reset bumps. Native only; on Redis a stale
-// attempt can write until its successor's first append.
-func (s *streamTestSuite) TestActivityResetFencesRunningAttempt() {
-	s.nativeOnly(func(f *streamFixture) {
+// After a reset between attempts, the earlier attempt is fenced although the new attempt has the
+// same attempt number: the epoch is the attempt stamp. Every backend.
+func (s *streamTestSuite) TestAttemptBeforeResetIsFencedAfterSuccessorAppends() {
+	s.forEachBackend(func(f *streamFixture) {
 		ref := f.startOwner(f.tv)
 		f.scheduleRetriedActivity(f.tv)
-		running := f.pollActivityTask(f.tv)
-		f.append(ref, activityProducer(running), 0, "", "before reset")
-		_, err := f.env.FrontendClient().ResetActivity(f.ctx(), &workflowservice.ResetActivityRequest{
-			Namespace: f.env.Namespace().String(),
-			Execution: &commonpb.WorkflowExecution{WorkflowId: ref.WorkflowID},
-			Activity:  &workflowservice.ResetActivityRequest_Id{Id: f.tv.ActivityID()},
-		})
-		require.NoError(f.t, err)
-		_, err = f.tryAppend(ref, activityProducer(running), 1, "", "after reset")
+		attempt1 := f.pollActivityTask(f.tv)
+		f.resetActivityAwaitingAttempt(f.tv, 2)
+		afterReset := f.pollActivityTask(f.tv)
+		require.Equal(f.t, attempt1.Attempt, afterReset.Attempt)
+
+		f.append(ref, activityProducer(afterReset), 0, "", "after reset")
+		_, err := f.tryAppend(ref, activityProducer(attempt1), 0, "", "before reset")
 		require.ErrorIs(f.t, err, errStreamEpochFenced)
+		require.Equal(f.t, []string{"after reset"}, f.dataOf(f.readAll(ref, streamBeginning())))
 	})
 }
 
@@ -902,6 +905,27 @@ func (f *streamFixture) scheduleRetriedActivity(tv *testvars.TestVars) {
 			},
 		})
 	})
+}
+
+// resetActivityAwaitingAttempt waits until the activity's unanswered attempt has timed out and the
+// given attempt is scheduled but not started, then resets the activity.
+func (f *streamFixture) resetActivityAwaitingAttempt(tv *testvars.TestVars, attempt int32) {
+	await.Require(f.ctx(), f.t, func(t *await.T) {
+		resp, err := f.env.FrontendClient().DescribeWorkflowExecution(f.ctx(), &workflowservice.DescribeWorkflowExecutionRequest{
+			Namespace: f.env.Namespace().String(),
+			Execution: &commonpb.WorkflowExecution{WorkflowId: tv.WorkflowID()},
+		})
+		require.NoError(t, err)
+		require.Len(t, resp.PendingActivities, 1)
+		require.Equal(t, enumspb.PENDING_ACTIVITY_STATE_SCHEDULED, resp.PendingActivities[0].State)
+		require.Equal(t, attempt, resp.PendingActivities[0].Attempt)
+	}, 2*streamActivityStartToClose+5*time.Second, 100*time.Millisecond)
+	_, err := f.env.FrontendClient().ResetActivity(f.ctx(), &workflowservice.ResetActivityRequest{
+		Namespace: f.env.Namespace().String(),
+		Execution: &commonpb.WorkflowExecution{WorkflowId: tv.WorkflowID()},
+		Activity:  &workflowservice.ResetActivityRequest_Id{Id: tv.ActivityID()},
+	})
+	require.NoError(f.t, err)
 }
 
 func (f *streamFixture) pollActivityTask(tv *testvars.TestVars) *workflowservice.PollActivityTaskQueueResponse {
