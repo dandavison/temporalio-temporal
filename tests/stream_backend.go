@@ -3,8 +3,8 @@ package tests
 // The stream backend interface that the shared stream tests (stream_test.go) run against.
 //
 // It is shaped like the SDK-side boundary where a stream store plugs in: a client or worker
-// process, not the server. The native implementation is a gRPC client of the frontend's stream
-// RPCs. The Redis implementation talks to Redis as a worker or client would, and the server never
+// process, not the server. The native implementation calls the stream service's operations on the
+// System Nexus Endpoint as direct Nexus calls. The Redis implementation talks to Redis as a worker or client would, and the server never
 // talks to Redis. Code that the Redis implementation needs and the native one does not is the cost
 // of an external store.
 //
