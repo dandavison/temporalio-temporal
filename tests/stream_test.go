@@ -322,13 +322,12 @@ func (s *streamTestSuite) TestWorkflowTaskCompletionRecordsCommittedAttempt() {
 		f.completeWorkflowTask(rerun)
 
 		records := f.readAllWithMarkers(ref, streamBeginning())
-		require.Len(f.t, records, 2)
-		commit := records[1].WorkflowTaskCommit
+		data := withoutMarkers(records)
+		require.Len(f.t, data, 1)
+		commit := f.commitOf(records, data[0].Producer.WorkflowRunID, data[0].Producer.WorkflowTask)
 		require.NotNil(f.t, commit)
-		require.Equal(f.t, records[0].Producer.WorkflowRunID, commit.WorkflowRunID)
-		require.Equal(f.t, records[0].Producer.WorkflowTask, commit.WorkflowTask)
 		require.Equal(f.t, int64(rerun.Attempt), commit.Attempt)
-		require.Greater(f.t, commit.Attempt, records[0].Producer.Epoch)
+		require.Greater(f.t, commit.Attempt, data[0].Producer.Epoch)
 	})
 }
 
@@ -635,7 +634,7 @@ func (s *streamTestSuite) TestFilteredReadReturnsOnlyMatchingTopics() {
 
 		resp := f.read(ref, streamReadRequest{From: streamBeginning(), Topics: []string{"progress"}})
 		require.Equal(f.t, []string{"p1", "p2"}, f.dataOf(resp.Records))
-		for _, r := range resp.Records {
+		for _, r := range withoutMarkers(resp.Records) {
 			require.Equal(f.t, "progress", r.Topic)
 		}
 		f.append(ref, p, 4, "progress", "p3")
@@ -744,8 +743,9 @@ func (s *streamTestSuite) TestProducerFinishDoesNotCloseStream() {
 		f.append(ref, clientProducer("b", 1), 0, "", "y")
 
 		resp := f.read(ref, streamReadRequest{From: streamBeginning()})
-		require.Len(f.t, resp.Records, 2)
-		require.True(f.t, resp.Records[0].Finish)
+		records := withoutMarkers(resp.Records)
+		require.Len(f.t, records, 2)
+		require.True(f.t, records[0].Finish)
 		require.Nil(f.t, resp.Close)
 	})
 }

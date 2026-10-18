@@ -8,6 +8,7 @@ import (
 	commonpb "go.temporal.io/api/common/v1"
 	enumspb "go.temporal.io/api/enums/v1"
 	historypb "go.temporal.io/api/history/v1"
+	streamservicepb "go.temporal.io/api/nexusservices/streamservice/v1"
 	protocolpb "go.temporal.io/api/protocol/v1"
 	querypb "go.temporal.io/api/query/v1"
 	"go.temporal.io/api/serviceerror"
@@ -17,6 +18,7 @@ import (
 	"go.temporal.io/server/api/matchingservice/v1"
 	tokenspb "go.temporal.io/server/api/token/v1"
 	"go.temporal.io/server/chasm"
+	"go.temporal.io/server/chasm/lib/stream"
 	chasmworkflow "go.temporal.io/server/chasm/lib/workflow"
 	"go.temporal.io/server/common"
 	"go.temporal.io/server/common/clock"
@@ -351,6 +353,13 @@ func (handler *WorkflowTaskCompletedHandler) Invoke(
 			wtHeartbeatTimedOut = true
 		}
 	}
+	// Commit-mode stream appends are applied before the task's completion is recorded, so they carry
+	// the completing task as their producer, and the completion's commit record covers them.
+	var streamAppendFailedCause *workflowTaskFailedCause
+	request.Messages, streamAppendFailedCause, err = appendCommitModeStreamRecords(ctx, ms, request.Messages, !wtHeartbeatTimedOut)
+	if err != nil {
+		return nil, err
+	}
 	// WT wasn't timed out (due to too many heartbeats), therefore WTCompleted event should be created.
 	if !wtHeartbeatTimedOut {
 		completedEvent, err = ms.AddWorkflowTaskCompletedEvent(currentWorkflowTask, request, limits)
@@ -404,6 +413,8 @@ func (handler *WorkflowTaskCompletedHandler) Invoke(
 			serviceerror.NewInvalidArgument(
 				"workflow task completion buffer size exceeds the per-workflow limit"),
 			true)
+	} else if streamAppendFailedCause != nil {
+		wtFailedCause = streamAppendFailedCause
 	} else if err := namespaceEntry.VerifyBinaryChecksum(request.GetBinaryChecksum()); err != nil { //nolint:staticcheck // SA1019 deprecated stamp will clean up later
 		wtFailedCause = newWorkflowTaskFailedCause(
 			enumspb.WORKFLOW_TASK_FAILED_CAUSE_BAD_BINARY,
@@ -1198,4 +1209,48 @@ func (handler *WorkflowTaskCompletedHandler) clearStickyTaskQueue(ctx context.Co
 		return err
 	}
 	return nil
+}
+
+// appendCommitModeStreamRecords applies the commit-mode stream appends among a workflow task
+// completion's messages, if apply is set, and returns the other messages. A stream append the
+// stream rejects, such as one in the other mode from the one the run fixed, fails the task.
+func appendCommitModeStreamRecords(
+	ctx context.Context,
+	ms historyi.MutableState,
+	messages []*protocolpb.Message,
+	apply bool,
+) ([]*protocolpb.Message, *workflowTaskFailedCause, error) {
+	var others []*protocolpb.Message
+	var appends []*streamservicepb.CommitModeAppend
+	for _, msg := range messages {
+		if !msg.GetBody().MessageIs((*streamservicepb.CommitModeAppend)(nil)) {
+			others = append(others, msg)
+			continue
+		}
+		body := &streamservicepb.CommitModeAppend{}
+		if err := msg.GetBody().UnmarshalTo(body); err != nil {
+			return nil, newWorkflowTaskFailedCause(enumspb.WORKFLOW_TASK_FAILED_CAUSE_BAD_STREAM_APPEND, serviceerror.NewInvalidArgument(err.Error()), false), nil
+		}
+		appends = append(appends, body)
+	}
+	if len(appends) == 0 || !apply {
+		return others, nil, nil
+	}
+	if !ms.ChasmEnabled() {
+		return others, newWorkflowTaskFailedCause(enumspb.WORKFLOW_TASK_FAILED_CAUSE_BAD_STREAM_APPEND,
+			serviceerror.NewInvalidArgument("commit-mode stream appends need CHASM"), false), nil
+	}
+	wf, chasmCtx, err := ms.ChasmWorkflowComponent(ctx)
+	if err != nil {
+		return nil, nil, err
+	}
+	for _, a := range appends {
+		if err := wf.AppendCommitModeRecords(chasmCtx, a.GetRecords()); err != nil {
+			if _, ok := errors.AsType[*stream.Error](err); ok {
+				return others, newWorkflowTaskFailedCause(enumspb.WORKFLOW_TASK_FAILED_CAUSE_BAD_STREAM_APPEND, serviceerror.NewInvalidArgument(err.Error()), false), nil
+			}
+			return nil, nil, err
+		}
+	}
+	return others, nil, nil
 }

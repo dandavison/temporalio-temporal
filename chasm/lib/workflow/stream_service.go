@@ -168,7 +168,16 @@ func (w *Workflow) appendToStream(
 	if err != nil {
 		return nil, err
 	}
-	offsets, err := w.mutableStream(ctx).Append(ctx, p, req.GetSeq(), req.GetRecords(), req.GetFinish(), nil)
+	s, err := w.mutableStream(ctx)
+	if err != nil {
+		return nil, err
+	}
+	if req.GetProducer().GetWorkflowTask() != nil {
+		if err := s.FixWorkflowAppendMode(ctx, p.RunID, streamservicepb.WORKFLOW_APPEND_MODE_SINK); err != nil {
+			return nil, err
+		}
+	}
+	offsets, err := s.Append(ctx, p, req.GetSeq(), req.GetRecords(), req.GetFinish(), nil)
 	if err != nil {
 		return nil, err
 	}
@@ -197,8 +206,36 @@ func (w *Workflow) closeStream(
 	if err != nil {
 		return nil, err
 	}
-	_, err = w.mutableStream(ctx).Append(ctx, p, req.GetSeq(), nil, false, req.GetClose())
+	s, err := w.mutableStream(ctx)
+	if err != nil {
+		return nil, err
+	}
+	_, err = s.Append(ctx, p, req.GetSeq(), nil, false, req.GetClose())
 	return &streamservicepb.CloseResponse{}, err
+}
+
+// AppendCommitModeRecords appends records that the run's current workflow task carries in its
+// completion, in commit mode, with the task as their producer. It is called in the completion's
+// transaction, before the task's completion is recorded.
+func (w *Workflow) AppendCommitModeRecords(ctx chasm.MutableContext, records []*streamservicepb.AppendRecord) error {
+	info := w.GetExecutionInfo()
+	runID := w.GetExecutionState().GetRunId()
+	p := stream.Producer{
+		ID:                  workflowStreamProducerID(runID),
+		RunID:               runID,
+		WorkflowTask:        info.GetLastCompletedWorkflowTaskStartedEventId(),
+		WorkflowTaskAttempt: info.GetWorkflowTaskAttempt(),
+		Epoch:               int64(info.GetWorkflowTaskAttempt()),
+	}
+	s, err := w.mutableStream(ctx)
+	if err != nil {
+		return err
+	}
+	if err := s.FixWorkflowAppendMode(ctx, runID, streamservicepb.WORKFLOW_APPEND_MODE_COMMIT); err != nil {
+		return err
+	}
+	_, err = s.Append(ctx, p, s.NextSeq(ctx, p), records, false, nil)
+	return err
 }
 
 func (w *Workflow) readStream(ctx chasm.Context, args streamReadArgs) (*streamservicepb.ReadResponse, error) {
@@ -277,13 +314,16 @@ func (w *Workflow) RemoveStreamActivityProducer(ctx chasm.MutableContext, activi
 	}
 }
 
-func (w *Workflow) mutableStream(ctx chasm.MutableContext) *stream.Stream {
+// mutableStream returns the workflow's stream, creating it, with its creation record, if it does
+// not exist.
+func (w *Workflow) mutableStream(ctx chasm.MutableContext) (*stream.Stream, error) {
 	if s, ok := w.Stream.TryGet(ctx); ok {
-		return s
+		return s, nil
 	}
 	s := stream.New(ctx)
 	w.Stream = chasm.NewComponentField(ctx, s)
-	return s
+	err := s.RecordCreated(ctx, w.GetExecutionState().GetRunId(), w.GetExecutionInfo().GetLastCompletedWorkflowTaskStartedEventId())
+	return s, err
 }
 
 func (w *Workflow) firstRunID() string {

@@ -186,6 +186,50 @@ func (s *Stream) RecordCommit(ctx chasm.MutableContext, runID string, workflowTa
 	return err
 }
 
+// RecordCreated records, as the stream's first record, the creating run's next workflow task: the
+// run's tasks with a lower identity completed before the stream existed, so they have no commit
+// record, and readers treat their records as committed.
+func (s *Stream) RecordCreated(ctx chasm.MutableContext, runID string, nextWorkflowTask int64) error {
+	_, err := s.add(ctx, &streamservicepb.Record{StreamCreated: &streamservicepb.StreamCreated{
+		WorkflowRunId:    runID,
+		NextWorkflowTask: nextWorkflowTask,
+	}})
+	return err
+}
+
+// FixWorkflowAppendMode fixes and records a run's workflow append mode at its first workflow
+// append, and rejects a later workflow append in the other mode.
+func (s *Stream) FixWorkflowAppendMode(ctx chasm.MutableContext, runID string, mode streamservicepb.WorkflowAppendMode) error {
+	fixed, ok := s.WorkflowAppendModes[runID]
+	if ok && fixed != mode {
+		return newError(streamservicepb.STREAM_FAILURE_TYPE_WORKFLOW_APPEND_MODE_MISMATCH,
+			"run %s appends to its stream in %s, so a workflow append in %s is rejected; its workers disagree on the append mode",
+			runID, streamservicepb.WorkflowAppendMode_name[int32(fixed)], streamservicepb.WorkflowAppendMode_name[int32(mode)])
+	}
+	if ok {
+		return nil
+	}
+	if s.WorkflowAppendModes == nil {
+		s.WorkflowAppendModes = make(map[string]streamservicepb.WorkflowAppendMode)
+	}
+	s.WorkflowAppendModes[runID] = mode
+	_, err := s.add(ctx, &streamservicepb.Record{WorkflowAppendMode: &streamservicepb.WorkflowAppendModeFixed{
+		WorkflowRunId: runID,
+		Mode:          mode,
+	}})
+	return err
+}
+
+// NextSeq returns the seq that the producer's next append in its epoch takes.
+func (s *Stream) NextSeq(ctx chasm.Context, p Producer) int64 {
+	if field, ok := s.Producers[p.ID]; ok {
+		if st := field.Get(ctx); p.compare(st) == 0 {
+			return st.Seq + 1
+		}
+	}
+	return 0
+}
+
 // RemoveProducer removes a producer's dedupe and fencing state, once the producer can no longer
 // append.
 func (s *Stream) RemoveProducer(producer string) {
@@ -228,7 +272,7 @@ type ReadResult struct {
 }
 
 // Read returns up to maxRecords records after offset after (-1 for the beginning) that match
-// topics. Workflow task commit markers match every filter.
+// topics. Markers (workflow task commits, creation, append modes) match every filter.
 func (s *Stream) Read(ctx chasm.Context, after int64, topics []string, maxRecords int) (ReadResult, error) {
 	if maxRecords <= 0 {
 		maxRecords = defaultMaxRecords
@@ -290,7 +334,8 @@ func (s *Stream) scan(ctx chasm.Context, from int64, fn func(offset int64, r *st
 }
 
 func matches(r *streamservicepb.Record, topics []string) bool {
-	return len(topics) == 0 || r.WorkflowTaskCommit != nil || slices.Contains(topics, r.Topic)
+	return len(topics) == 0 || r.WorkflowTaskCommit != nil || r.StreamCreated != nil || r.WorkflowAppendMode != nil ||
+		slices.Contains(topics, r.Topic)
 }
 
 func checkSize(records []*streamservicepb.AppendRecord) error {

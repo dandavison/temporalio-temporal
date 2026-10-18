@@ -10,6 +10,8 @@ message StreamState {
     reserved 1;
     // Set once the stream is closed.
     temporal.api.nexusservices.streamservice.v1.StreamClose close = 2;
+    // Each run's workflow append mode, keyed by run ID, fixed by the run's first workflow append.
+    map<string, temporal.api.nexusservices.streamservice.v1.WorkflowAppendMode> workflow_append_modes = 3;
 }
 
 // A producer's highest epoch and its latest stored append in that epoch.
