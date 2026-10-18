@@ -293,8 +293,9 @@ func (w *Workflow) readStream(ctx chasm.Context, args stream.ReadArgs) (*streams
 		if args.Cursor.GetFirstRunId() != w.firstRunID() {
 			return nil, streamError(streamservicepb.STREAM_FAILURE_TYPE_EXPIRED, "the cursor's run chain no longer exists")
 		}
-		// A cursor from an earlier run of the chain passes the check above, but its offset is in that
-		// run's stream, so the read skips the current run's records up to that offset.
+		if args.Cursor.GetRunId() != w.GetExecutionState().GetRunId() {
+			return nil, streamError(streamservicepb.STREAM_FAILURE_TYPE_EXPIRED, "the cursor's run is no longer the chain's current run, and its stream was not moved to the current run")
+		}
 		after = args.Cursor.GetOffset()
 	}
 	s, _ := w.Stream.TryGet(ctx)
@@ -364,6 +365,7 @@ func (w *Workflow) streamCursor(offset int64) ([]byte, error) {
 	return proto.Marshal(&streampb.Cursor{
 		WorkflowId: w.GetExecutionInfo().GetWorkflowId(),
 		FirstRunId: w.firstRunID(),
+		RunId:      w.GetExecutionState().GetRunId(),
 		Offset:     offset,
 	})
 }

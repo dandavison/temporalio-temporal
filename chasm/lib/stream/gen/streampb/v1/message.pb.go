@@ -182,6 +182,9 @@ type Cursor struct {
 	Offset        int64                  `protobuf:"varint,3,opt,name=offset,proto3" json:"offset,omitempty"`
 	ActivityId    string                 `protobuf:"bytes,4,opt,name=activity_id,json=activityId,proto3" json:"activity_id,omitempty"`
 	ActivityRunId string                 `protobuf:"bytes,5,opt,name=activity_run_id,json=activityRunId,proto3" json:"activity_run_id,omitempty"`
+	// The workflow run that holds the stream. A workflow's stream is not moved to the next run of
+	// its chain, so a cursor of another run's stream cannot be read.
+	RunId         string `protobuf:"bytes,6,opt,name=run_id,json=runId,proto3" json:"run_id,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -251,6 +254,13 @@ func (x *Cursor) GetActivityRunId() string {
 	return ""
 }
 
+func (x *Cursor) GetRunId() string {
+	if x != nil {
+		return x.RunId
+	}
+	return ""
+}
+
 var File_temporal_server_chasm_lib_stream_proto_v1_message_proto protoreflect.FileDescriptor
 
 const file_temporal_server_chasm_lib_stream_proto_v1_message_proto_rawDesc = "" +
@@ -269,7 +279,7 @@ const file_temporal_server_chasm_lib_stream_proto_v1_message_proto_rawDesc = "" 
 	"\ffirst_offset\x18\x04 \x01(\x03R\vfirstOffset\x12\x14\n" +
 	"\x05count\x18\x05 \x01(\x03R\x05count\x12\x16\n" +
 	"\x06digest\x18\x06 \x01(\fR\x06digest\x122\n" +
-	"\x15workflow_task_attempt\x18\a \x01(\x05R\x13workflowTaskAttempt\"\xac\x01\n" +
+	"\x15workflow_task_attempt\x18\a \x01(\x05R\x13workflowTaskAttempt\"\xc3\x01\n" +
 	"\x06Cursor\x12\x1f\n" +
 	"\vworkflow_id\x18\x01 \x01(\tR\n" +
 	"workflowId\x12 \n" +
@@ -278,7 +288,8 @@ const file_temporal_server_chasm_lib_stream_proto_v1_message_proto_rawDesc = "" 
 	"\x06offset\x18\x03 \x01(\x03R\x06offset\x12\x1f\n" +
 	"\vactivity_id\x18\x04 \x01(\tR\n" +
 	"activityId\x12&\n" +
-	"\x0factivity_run_id\x18\x05 \x01(\tR\ractivityRunIdB>Z<go.temporal.io/server/chasm/lib/stream/gen/streampb;streampbb\x06proto3"
+	"\x0factivity_run_id\x18\x05 \x01(\tR\ractivityRunId\x12\x15\n" +
+	"\x06run_id\x18\x06 \x01(\tR\x05runIdB>Z<go.temporal.io/server/chasm/lib/stream/gen/streampb;streampbb\x06proto3"
 
 var (
 	file_temporal_server_chasm_lib_stream_proto_v1_message_proto_rawDescOnce sync.Once
