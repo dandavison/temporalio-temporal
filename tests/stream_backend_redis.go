@@ -507,12 +507,13 @@ func redisRecord(cursor streamCursor, v map[string]any, topics []string) (stream
 func redisError(err error) error {
 	code, _, _ := strings.Cut(err.Error(), " ")
 	sentinel, ok := map[string]error{
-		"EXPIRED":       errStreamExpired,
-		"EPOCH_FENCED":  errStreamEpochFenced,
-		"SEQ_DIVERGENT": errStreamSeqDivergent,
-		"SEQ_STALE":     errStreamSeqStale,
-		"SEQ_GAP":       errStreamSeqGap,
-		"CLOSED":        errStreamClosed,
+		"INVALID_ARGUMENT": errStreamInvalidArg,
+		"EXPIRED":          errStreamExpired,
+		"EPOCH_FENCED":     errStreamEpochFenced,
+		"SEQ_DIVERGENT":    errStreamSeqDivergent,
+		"SEQ_STALE":        errStreamSeqStale,
+		"SEQ_GAP":          errStreamSeqGap,
+		"CLOSED":           errStreamClosed,
 	}[code]
 	if !ok {
 		return err

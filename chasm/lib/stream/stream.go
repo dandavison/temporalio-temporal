@@ -8,6 +8,7 @@ import (
 	"slices"
 
 	streamservicepb "go.temporal.io/api/nexusservices/streamservice/v1"
+	"go.temporal.io/api/serviceerror"
 	"go.temporal.io/server/chasm"
 	"go.temporal.io/server/chasm/lib/orderedstore"
 	"go.temporal.io/server/chasm/lib/stream/gen/streampb/v1"
@@ -110,6 +111,11 @@ func (p Producer) compare(st *streampb.ProducerState) int {
 	)
 }
 
+// MaxExactInt is the largest workflow task, epoch or seq that every stream backend accepts. Redis
+// holds them as doubles, which hold integers exactly only up to 2^53-1, and the native stream applies
+// the same range so that every backend accepts the same values.
+const MaxExactInt = 1<<53 - 1
+
 // Append stores records, and closes the stream if closing is set, as one append of (producer,
 // seq). It returns the offsets of the data records. A retry of the producer's latest seq with the
 // same content stores nothing and returns the original offsets; the dedupe check comes before the
@@ -122,6 +128,11 @@ func (s *Stream) Append(
 	finish bool,
 	closing *streamservicepb.StreamClose,
 ) ([]int64, error) {
+	for _, v := range []int64{p.WorkflowTask, int64(p.WorkflowTaskAttempt), p.Epoch, seq} {
+		if v < 0 || v > MaxExactInt {
+			return nil, serviceerror.NewInvalidArgument("workflow tasks, epochs and seqs must be integers from 0 to 2^53-1")
+		}
+	}
 	if err := checkSize(records); err != nil {
 		return nil, err
 	}

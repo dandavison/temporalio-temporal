@@ -176,6 +176,12 @@ type postgresEntry struct {
 // runAppend appends entries for one (producer, epoch, seq), or closes the stream, applying
 // dedupe, fencing, seq order and close in one transaction. It returns the first entry's position.
 func (b *postgresStreamBackend) runAppend(ctx context.Context, c postgresChain, id externalProducerIdentity, seq int64, entries []postgresEntry, closing *streamClose) (int64, error) {
+	// PostgreSQL stores int64 exactly; the range is the one every backend accepts.
+	for _, v := range []int64{id.workflowTask, int64(id.workflowTaskAttempt), id.epoch, seq} {
+		if v < 0 || v > maxStreamInt {
+			return 0, errStreamInvalidArg
+		}
+	}
 	var first int64
 	err := pgx.BeginFunc(ctx, b.pool, func(tx pgx.Tx) error {
 		tag, err := tx.Exec(ctx, `INSERT INTO streams (owner_id, owner_run_id) VALUES ($1, $2) ON CONFLICT DO NOTHING`, c.owner, c.run)

@@ -152,6 +152,10 @@ const (
 	streamMaxAppendBytes      = 4 << 20
 )
 
+// maxStreamInt is the largest workflow task, epoch or seq that every backend accepts: Redis's script
+// holds them as doubles.
+const maxStreamInt = int64(1<<53 - 1)
+
 type streamAppendRecord struct {
 	Topic   string
 	Payload *commonpb.Payload

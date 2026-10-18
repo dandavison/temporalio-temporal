@@ -1152,10 +1152,6 @@ func (s *streamTestSuite) TestPayloadsRoundTripUnchanged() {
 	})
 }
 
-// maxStreamInt is the largest integer that every backend stores and compares exactly: Redis's
-// script holds numbers as doubles.
-const maxStreamInt = int64(1<<53 - 1)
-
 // Epochs and seqs from 0 to 2^53-1 are stored and compared exactly, and any outside that range is
 // rejected as an invalid argument, rather than losing precision. Every backend.
 func (s *streamTestSuite) TestEpochsAndSeqsOutsideExactIntegersAreRejected() {
