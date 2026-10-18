@@ -1431,6 +1431,7 @@ func (wh *WorkflowHandler) PollActivityTaskQueue(ctx context.Context, request *w
 		StartToCloseTimeout:                 matchingResponse.StartToCloseTimeout,
 		HeartbeatTimeout:                    matchingResponse.HeartbeatTimeout,
 		Attempt:                             matchingResponse.Attempt,
+		AttemptStamp:                        matchingResponse.AttemptStamp,
 		CurrentAttemptScheduledTime:         matchingResponse.CurrentAttemptScheduledTime,
 		HeartbeatDetails:                    matchingResponse.HeartbeatDetails,
 		WorkflowType:                        matchingResponse.WorkflowType,

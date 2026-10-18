@@ -662,7 +662,7 @@ func (handler *workflowTaskCompletedHandler) handlePostCommandEagerExecuteActivi
 		ai.Version,
 		ai.StartVersion,
 		nil,
-		0,
+		ai.Stamp,
 	)
 	serializedToken, err := handler.tokenSerializer.Serialize(taskToken)
 	if err != nil {
@@ -686,6 +686,7 @@ func (handler *workflowTaskCompletedHandler) handlePostCommandEagerExecuteActivi
 		HeartbeatTimeout:            attr.HeartbeatTimeout,
 		TaskToken:                   serializedToken,
 		Attempt:                     ai.Attempt,
+		AttemptStamp:                ai.Stamp,
 		HeartbeatDetails:            ai.LastHeartbeatDetails,
 		WorkflowType:                handler.mutableState.GetWorkflowType(),
 		WorkflowNamespace:           handler.mutableState.GetNamespaceEntry().Name().String(),

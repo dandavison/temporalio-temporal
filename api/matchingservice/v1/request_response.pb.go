@@ -661,6 +661,7 @@ type PollActivityTaskQueueResponse struct {
 	// ID of the activity run (applicable for standalone activities only)
 	ActivityRunId                       string                              `protobuf:"bytes,20,opt,name=activity_run_id,json=activityRunId,proto3" json:"activity_run_id,omitempty"`
 	PropagatedNexusSerializationContext *v17.PropagatedSerializationContext `protobuf:"bytes,21,opt,name=propagated_nexus_serialization_context,json=propagatedNexusSerializationContext,proto3" json:"propagated_nexus_serialization_context,omitempty"`
+	AttemptStamp                        int32                               `protobuf:"varint,22,opt,name=attempt_stamp,json=attemptStamp,proto3" json:"attempt_stamp,omitempty"`
 	unknownFields                       protoimpl.UnknownFields
 	sizeCache                           protoimpl.SizeCache
 }
@@ -840,6 +841,13 @@ func (x *PollActivityTaskQueueResponse) GetPropagatedNexusSerializationContext()
 		return x.PropagatedNexusSerializationContext
 	}
 	return nil
+}
+
+func (x *PollActivityTaskQueueResponse) GetAttemptStamp() int32 {
+	if x != nil {
+		return x.AttemptStamp
+	}
+	return 0
 }
 
 type AddWorkflowTaskRequest struct {
@@ -6356,7 +6364,7 @@ const file_temporal_server_api_matchingservice_v1_request_response_proto_rawDesc
 	"\x10forwarded_source\x18\x04 \x01(\tR\x0fforwardedSource\x12V\n" +
 	"\n" +
 	"conditions\x18\x05 \x01(\v26.temporal.server.api.matchingservice.v1.PollConditionsR\n" +
-	"conditions\"\xcd\v\n" +
+	"conditions\"\xf2\v\n" +
 	"\x1dPollActivityTaskQueueResponse\x12\x1d\n" +
 	"\n" +
 	"task_token\x18\x01 \x01(\fR\ttaskToken\x12X\n" +
@@ -6381,7 +6389,8 @@ const file_temporal_server_api_matchingservice_v1_request_response_proto_rawDesc
 	"\bpriority\x18\x12 \x01(\v2 .temporal.api.common.v1.PriorityR\bpriority\x12F\n" +
 	"\fretry_policy\x18\x13 \x01(\v2#.temporal.api.common.v1.RetryPolicyR\vretryPolicy\x12&\n" +
 	"\x0factivity_run_id\x18\x14 \x01(\tR\ractivityRunId\x12\x8a\x01\n" +
-	"&propagated_nexus_serialization_context\x18\x15 \x01(\v25.temporal.api.nexus.v1.PropagatedSerializationContextR#propagatedNexusSerializationContext\"\x9d\x05\n" +
+	"&propagated_nexus_serialization_context\x18\x15 \x01(\v25.temporal.api.nexus.v1.PropagatedSerializationContextR#propagatedNexusSerializationContext\x12#\n" +
+	"\rattempt_stamp\x18\x16 \x01(\x05R\fattemptStamp\"\x9d\x05\n" +
 	"\x16AddWorkflowTaskRequest\x12!\n" +
 	"\fnamespace_id\x18\x01 \x01(\tR\vnamespaceId\x12G\n" +
 	"\texecution\x18\x02 \x01(\v2).temporal.api.common.v1.WorkflowExecutionR\texecution\x12C\n" +

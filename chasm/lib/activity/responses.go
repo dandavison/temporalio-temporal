@@ -115,6 +115,7 @@ func (d *eagerActivityTaskData) response(componentRef []byte) (*workflowservice.
 		CurrentAttemptScheduledTime:         d.currentAttemptScheduledTime,
 		StartedTime:                         d.startedTime,
 		Attempt:                             d.attempt,
+		AttemptStamp:                        d.activityAttemptStartedStamp,
 		ScheduleToCloseTimeout:              d.scheduleToCloseTimeout,
 		StartToCloseTimeout:                 d.startToCloseTimeout,
 		HeartbeatTimeout:                    d.heartbeatTimeout,

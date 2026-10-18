@@ -3518,10 +3518,8 @@ func (e *matchingEngineImpl) createPollActivityTaskQueueResponse(
 	}
 
 	componentRef := task.event.GetData().GetComponentRef()
-	activityAttemptStamp := int32(0)
-	if len(componentRef) > 0 {
-		activityAttemptStamp = task.event.Data.GetStamp()
-	}
+	// History started this attempt only because its stamp matched the task's.
+	activityAttemptStamp := task.event.Data.GetStamp()
 
 	taskToken := tasktoken.NewActivityTaskToken(
 		task.event.Data.GetNamespaceId(),
@@ -3561,6 +3559,7 @@ func (e *matchingEngineImpl) createPollActivityTaskQueueResponse(
 		HeartbeatTimeout:                    attributes.HeartbeatTimeout,
 		TaskToken:                           serializedToken,
 		Attempt:                             taskToken.Attempt,
+		AttemptStamp:                        activityAttemptStamp,
 		HeartbeatDetails:                    historyResponse.HeartbeatDetails,
 		WorkflowType:                        historyResponse.WorkflowType,
 		WorkflowNamespace:                   historyResponse.WorkflowNamespace,
