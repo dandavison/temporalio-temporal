@@ -1,22 +1,21 @@
 package tests
 
 // redisStreamBackend stores streams in Redis, as a customer's worker or client would. The server
-// never talks to Redis.
+// never talks to Redis. It mirrors the Redis backend of temporalio-streams (the sdk-streams
+// submodule) and runs the same script, stream_append.lua, a copy of that crate's append.lua.
 //
-// A stream is three keys sharing a hash tag: a Redis stream holding the log, a hash holding each
-// producer's dedupe and fencing state, and a metadata hash holding existence, close and deletion.
-// Every append and close goes through appendScript, which checks and writes in one step. Producers
-// that XADD to the log directly are not supported.
+// A run chain's stream is four keys sharing a hash tag with its workflow ID: a Redis stream
+// holding the log, a hash holding each producer's dedupe and fencing state, a metadata hash
+// holding existence and close, and a tombstone. A fifth key names the workflow ID's latest chain,
+// for readers that do not know the first run ID. Every append and close goes through the script,
+// which checks and writes in one step. Producers that XADD to the log directly are not supported.
 //
 // Properties weaker than native, all because Redis cannot see the server's state:
 //   - A stale producer is fenced only once its successor has appended.
-//   - Nothing records which attempt of a workflow task committed, so a failed attempt's records are
-//     not withdrawn if the attempt that succeeds appends nothing.
-//   - Appends from speculative workflow tasks are not rejected.
-//   - The stream is keyed by workflow ID, not by run chain, so a closed stream blocks a new chain
-//     with the same workflow ID from appending.
-//   - When the owner closes, its worker must write the close; after a worker crash it can be late
-//     or missing.
+//   - Nothing writes workflow task commit records, so a failed workflow task attempt's records,
+//     and its local activities', are not withdrawn.
+//   - Producers are not verified, and appends from speculative workflow tasks are not rejected.
+//   - The owner's worker writes the close; after a worker crash it can be late or missing.
 //   - A topic filter is applied after reading: the reader receives every record.
 
 import (
@@ -24,6 +23,7 @@ import (
 	"cmp"
 	"context"
 	"crypto/sha256"
+	_ "embed"
 	"encoding/binary"
 	"encoding/hex"
 	"errors"
@@ -45,61 +45,14 @@ import (
 	"google.golang.org/protobuf/proto"
 )
 
-// appendScript appends entries for one (producer, epoch, seq), applying dedupe, fencing and close.
-//
-// KEYS: meta, log, producers.
-// ARGV: producer, workflow task, epoch, seq, digest, closing ("1" or "0"), entry count, then
-// for each entry a field count followed by that many field/value pairs.
-const appendScript = `
-local meta, log, producers = KEYS[1], KEYS[2], KEYS[3]
-local producer, wt, epoch, seq, digest = ARGV[1], tonumber(ARGV[2]), tonumber(ARGV[3]), tonumber(ARGV[4]), ARGV[5]
-local closing = ARGV[6] == '1'
-if redis.call('HGET', meta, 'deleted') == '1' then
-  return redis.error_reply('EXPIRED')
-end
-local raw = redis.call('HGET', producers, producer)
-if raw then
-  local st = cjson.decode(raw)
-  if wt < st.wt or (wt == st.wt and epoch < st.epoch) then
-    return redis.error_reply('FENCED')
-  end
-  if wt == st.wt and epoch == st.epoch then
-    if seq == st.seq then
-      if digest == st.digest then
-        return st.ids
-      end
-      return redis.error_reply('SEQ_DIVERGENT')
-    end
-    if seq < st.seq then
-      return redis.error_reply('SEQ_STALE')
-    end
-  end
-end
-if redis.call('HGET', meta, 'closed') == '1' then
-  return redis.error_reply('CLOSED')
-end
-local ids = {}
-local i = 8
-for _ = 1, tonumber(ARGV[7]) do
-  local nfields = tonumber(ARGV[i])
-  i = i + 1
-  local args = {'XADD', log, '*', 'producer', producer, 'wt', wt, 'epoch', epoch, 'seq', seq}
-  for j = 0, 2 * nfields - 1 do
-    args[#args + 1] = ARGV[i + j]
-    if closing and j % 2 == 0 then
-      redis.call('HSET', meta, 'close_' .. ARGV[i + j], ARGV[i + j + 1])
-    end
-  end
-  i = i + 2 * nfields
-  ids[#ids + 1] = redis.call(unpack(args))
-end
-redis.call('HSET', producers, producer, cjson.encode({wt = wt, epoch = epoch, seq = seq, digest = digest, ids = ids}))
-redis.call('HSET', meta, 'exists', '1')
-if closing then
-  redis.call('HSET', meta, 'closed', '1')
-end
-return ids
-`
+//go:embed stream_append.lua
+var appendScript string
+
+// redisStreamRetention is the time-to-live each write refreshes. The tests delete streams with
+// deleteStream rather than waiting for it.
+const redisStreamRetention = 7 * 24 * time.Hour
+
+const redisChainPollInterval = 100 * time.Millisecond
 
 const redisDefaultMaxRecords = 1000
 
@@ -118,18 +71,46 @@ func newRedisStreamBackend(t *testing.T, env *testcore.TestEnv) streamBackendUnd
 	}
 }
 
-// redisKeys are the keys of one stream.
+// redisKeys are the keys of one run chain's stream, and the key naming the workflow ID's latest
+// chain.
 type redisKeys struct {
-	prefix, meta, log, producers string
+	prefix, meta, log, producers, tombstone, current, firstRun string
 }
 
-func (b *redisStreamBackend) keys(ref streamRef) redisKeys {
-	prefix := fmt.Sprintf("stream:{%s/%s}", b.namespace, ref.WorkflowID)
-	return redisKeys{prefix: prefix, meta: prefix + ":meta", log: prefix + ":log", producers: prefix + ":producers"}
+func (b *redisStreamBackend) workflowPrefix(workflowID string) string {
+	return fmt.Sprintf("stream:{%s/%s}", b.namespace, workflowID)
+}
+
+func (b *redisStreamBackend) keys(workflowID, firstRun string) redisKeys {
+	prefix := b.workflowPrefix(workflowID) + ":" + firstRun
+	return redisKeys{
+		prefix:    prefix,
+		meta:      prefix + ":meta",
+		log:       prefix + ":log",
+		producers: prefix + ":producers",
+		tombstone: prefix + ":tombstone",
+		current:   b.workflowPrefix(workflowID) + ":current",
+		firstRun:  firstRun,
+	}
+}
+
+// writeKeys are the keys an append or close writes, which needs the first run ID.
+func (b *redisStreamBackend) writeKeys(ref streamRef) (redisKeys, error) {
+	if ref.FirstRunID == "" {
+		return redisKeys{}, errors.New("appends to a Redis stream need the first run ID of the stream's run chain")
+	}
+	return b.keys(ref.WorkflowID, ref.FirstRunID), nil
 }
 
 func (b *redisStreamBackend) Append(ctx context.Context, ref streamRef, req streamAppendRequest) (streamAppendResponse, error) {
+	if err := checkStreamAppendSize(req.Records); err != nil {
+		return streamAppendResponse{}, err
+	}
 	id, err := redisProducer(req.Producer)
+	if err != nil {
+		return streamAppendResponse{}, err
+	}
+	k, err := b.writeKeys(ref)
 	if err != nil {
 		return streamAppendResponse{}, err
 	}
@@ -144,13 +125,13 @@ func (b *redisStreamBackend) Append(ctx context.Context, ref streamRef, req stre
 	if req.Finish {
 		entries = append(entries, []string{"kind", "finish"})
 	}
-	ids, err := b.runAppend(ctx, ref, id, req.Seq, entries, false)
+	ids, err := b.runAppend(ctx, k, id, req.Seq, entries, false)
 	if err != nil {
 		return streamAppendResponse{}, err
 	}
 	resp := streamAppendResponse{}
 	for _, entryID := range ids[:len(req.Records)] {
-		resp.Cursors = append(resp.Cursors, b.cursor(ref, entryID))
+		resp.Cursors = append(resp.Cursors, k.cursor(entryID))
 	}
 	return resp, nil
 }
@@ -163,6 +144,10 @@ func (b *redisStreamBackend) Close(ctx context.Context, ref streamRef, req strea
 	if req.Owner.WorkflowTask.GetWorkflowExecution().GetWorkflowId() != ref.WorkflowID {
 		return errStreamNotOwner
 	}
+	k, err := b.writeKeys(ref)
+	if err != nil {
+		return err
+	}
 	failure := ""
 	if req.Close.Failure != nil {
 		data, err := proto.Marshal(req.Close.Failure)
@@ -172,20 +157,22 @@ func (b *redisStreamBackend) Close(ctx context.Context, ref streamRef, req strea
 		failure = string(data)
 	}
 	entry := []string{"kind", "close", "status", strconv.Itoa(int(req.Close.Status)), "failure", failure, "reason", req.Close.Reason}
-	_, err = b.runAppend(ctx, ref, id, req.Seq, [][]string{entry}, true)
+	_, err = b.runAppend(ctx, k, id, req.Seq, [][]string{entry}, true)
 	return err
 }
 
-func (b *redisStreamBackend) runAppend(ctx context.Context, ref streamRef, id redisProducerIdentity, seq int64, entries [][]string, closing bool) ([]string, error) {
-	k := b.keys(ref)
-	args := []any{id.producer, id.workflowTask, id.epoch, seq, appendDigest(entries), boolArg(closing), len(entries)}
+func (b *redisStreamBackend) runAppend(ctx context.Context, k redisKeys, id redisProducerIdentity, seq int64, entries [][]string, closing bool) ([]string, error) {
+	args := []any{
+		k.firstRun, id.producer, id.runID, id.workflowTask, id.workflowTaskAttempt, id.epoch, seq,
+		appendDigest(entries), boolArg(closing), redisStreamRetention.Milliseconds(), len(entries),
+	}
 	for _, e := range entries {
 		args = append(args, len(e)/2)
 		for _, f := range e {
 			args = append(args, f)
 		}
 	}
-	res, err := b.append.Run(ctx, b.rdb, []string{k.meta, k.log, k.producers}, args...).StringSlice()
+	res, err := b.append.Run(ctx, b.rdb, []string{k.meta, k.log, k.producers, k.tombstone, k.current}, args...).StringSlice()
 	if err != nil {
 		return nil, redisError(err)
 	}
@@ -193,28 +180,87 @@ func (b *redisStreamBackend) runAppend(ctx context.Context, ref streamRef, id re
 }
 
 func (b *redisStreamBackend) Read(ctx context.Context, ref streamRef, req streamReadRequest) (streamReadResponse, error) {
-	k := b.keys(ref)
-	meta, err := b.rdb.HGetAll(ctx, k.meta).Result()
+	deadline := time.Now().Add(req.Wait)
+	var k redisKeys
+	lastID := "0-0"
+	if req.From.after == nil {
+		var ok bool
+		var err error
+		if k, ok, err = b.resolveChain(ctx, ref, deadline); err != nil || !ok {
+			return streamReadResponse{}, err
+		}
+	} else {
+		firstRun, entryID, err := b.parseCursor(ref.WorkflowID, req.From.after)
+		if err != nil {
+			return streamReadResponse{}, err
+		}
+		if ref.FirstRunID != "" && ref.FirstRunID != firstRun {
+			return streamReadResponse{}, errStreamCursor
+		}
+		k, lastID = b.keys(ref.WorkflowID, firstRun), entryID
+	}
+	exists, err := b.exists(ctx, k.meta)
 	if err != nil {
 		return streamReadResponse{}, err
 	}
-	if meta["deleted"] == "1" {
-		return streamReadResponse{}, errStreamExpired
-	}
-	lastID := "0-0"
-	if req.From.after != nil {
-		if lastID, err = b.entryID(ref, req.From.after); err != nil {
-			return streamReadResponse{}, err
+	if !exists {
+		if tombstone, err := b.exists(ctx, k.tombstone); err != nil || tombstone {
+			return streamReadResponse{}, cmp.Or(err, errStreamExpired)
 		}
-		if meta["exists"] != "1" {
+		if req.From.after != nil {
 			return streamReadResponse{}, errStreamNotFound
+		}
+		if ok, err := b.awaitChainRecords(ctx, k, deadline); err != nil || !ok {
+			return streamReadResponse{}, err
 		}
 	}
 	if req.Last > 0 {
-		return b.readTail(ctx, ref, req)
+		return b.readTail(ctx, k, req)
 	}
+	return b.readAfter(ctx, k, req, lastID, deadline)
+}
+
+// resolveChain returns the chain a read from the beginning reads: the pinned one, or the workflow
+// ID's latest, waiting until the deadline for one to exist.
+func (b *redisStreamBackend) resolveChain(ctx context.Context, ref streamRef, deadline time.Time) (redisKeys, bool, error) {
+	if ref.FirstRunID != "" {
+		return b.keys(ref.WorkflowID, ref.FirstRunID), true, nil
+	}
+	current := b.workflowPrefix(ref.WorkflowID) + ":current"
+	for {
+		firstRun, err := b.rdb.Get(ctx, current).Result()
+		if err == nil {
+			return b.keys(ref.WorkflowID, firstRun), true, nil
+		}
+		if !errors.Is(err, redis.Nil) {
+			return redisKeys{}, false, err
+		}
+		if time.Until(deadline) < redisChainPollInterval {
+			return redisKeys{}, false, nil
+		}
+		if err := sleepCtx(ctx, redisChainPollInterval); err != nil {
+			return redisKeys{}, false, err
+		}
+	}
+}
+
+// awaitChainRecords waits until the deadline for a chain with no records yet to get its first.
+func (b *redisStreamBackend) awaitChainRecords(ctx context.Context, k redisKeys, deadline time.Time) (bool, error) {
+	for {
+		if exists, err := b.exists(ctx, k.meta); err != nil || exists {
+			return exists, err
+		}
+		if time.Until(deadline) < redisChainPollInterval {
+			return false, nil
+		}
+		if err := sleepCtx(ctx, redisChainPollInterval); err != nil {
+			return false, err
+		}
+	}
+}
+
+func (b *redisStreamBackend) readAfter(ctx context.Context, k redisKeys, req streamReadRequest, lastID string, deadline time.Time) (streamReadResponse, error) {
 	maxRecords := cmp.Or(req.MaxRecords, redisDefaultMaxRecords)
-	deadline := time.Now().Add(req.Wait)
 	resp := streamReadResponse{Cursor: req.From.after}
 	for {
 		entries, err := b.rdb.XRangeN(ctx, k.log, "("+lastID, "+", int64(maxRecords)).Result()
@@ -229,11 +275,8 @@ func (b *redisStreamBackend) Read(ctx context.Context, ref streamRef, req stream
 		}
 		for _, e := range entries {
 			lastID = e.ID
-			resp.Cursor = b.cursor(ref, e.ID)
-			if e.Values["kind"] == "close" {
-				break
-			}
-			if r, ok := redisRecord(b.cursor(ref, e.ID), e.Values, req.Topics); ok {
+			resp.Cursor = k.cursor(e.ID)
+			if r, ok := redisRecord(k.cursor(e.ID), e.Values, req.Topics); ok {
 				resp.Records = append(resp.Records, r)
 			}
 		}
@@ -242,11 +285,29 @@ func (b *redisStreamBackend) Read(ctx context.Context, ref streamRef, req stream
 		}
 	}
 	if b.closedAt(ctx, k, lastID) {
+		var err error
 		if resp.Close, err = b.closeFromMeta(ctx, k); err != nil {
 			return streamReadResponse{}, err
 		}
 	}
 	return resp, nil
+}
+
+// sleepCtx waits for d, as the Redis backend of temporalio-streams does between polls.
+func sleepCtx(ctx context.Context, d time.Duration) error {
+	timer := time.NewTimer(d)
+	defer timer.Stop()
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-timer.C:
+		return nil
+	}
+}
+
+func (b *redisStreamBackend) exists(ctx context.Context, key string) (bool, error) {
+	n, err := b.rdb.Exists(ctx, key).Result()
+	return n == 1, err
 }
 
 // block waits for entries after lastID, returning none if the wait ends first.
@@ -290,51 +351,59 @@ func (b *redisStreamBackend) closeFromMeta(ctx context.Context, k redisKeys) (*s
 }
 
 // readTail returns the last req.Last matching records, scanning the whole log backwards.
-func (b *redisStreamBackend) readTail(ctx context.Context, ref streamRef, req streamReadRequest) (streamReadResponse, error) {
-	entries, err := b.rdb.XRevRange(ctx, b.keys(ref).log, "+", "-").Result()
+func (b *redisStreamBackend) readTail(ctx context.Context, k redisKeys, req streamReadRequest) (streamReadResponse, error) {
+	entries, err := b.rdb.XRevRange(ctx, k.log, "+", "-").Result()
 	if err != nil {
 		return streamReadResponse{}, err
 	}
 	resp := streamReadResponse{}
 	if len(entries) > 0 {
-		resp.Cursor = b.cursor(ref, entries[0].ID)
+		resp.Cursor = k.cursor(entries[0].ID)
 	}
 	for _, e := range entries {
 		if len(resp.Records) == req.Last {
 			break
 		}
-		if r, ok := redisRecord(b.cursor(ref, e.ID), e.Values, req.Topics); ok {
+		if r, ok := redisRecord(k.cursor(e.ID), e.Values, req.Topics); ok {
 			resp.Records = append([]streamRecord{r}, resp.Records...)
 		}
 	}
 	return resp, nil
 }
 
+// deleteStream deletes a stream as its retention would: the tombstone outlives the data.
 func (b *redisStreamBackend) deleteStream(ctx context.Context, ref streamRef) error {
-	k := b.keys(ref)
-	if err := b.rdb.Del(ctx, k.log, k.producers).Err(); err != nil {
+	k, err := b.writeKeys(ref)
+	if err != nil {
 		return err
 	}
-	return b.rdb.HSet(ctx, k.meta, "deleted", "1").Err()
+	return b.rdb.Del(ctx, k.meta, k.log, k.producers).Err()
 }
 
-// A cursor is the stream's key prefix and a Redis entry ID.
-func (b *redisStreamBackend) cursor(ref streamRef, entryID string) streamCursor {
-	return streamCursor(b.keys(ref).prefix + "#" + entryID)
+// A cursor is the chain's key prefix and a Redis entry ID.
+func (k redisKeys) cursor(entryID string) streamCursor {
+	return streamCursor(k.prefix + "#" + entryID)
 }
 
-func (b *redisStreamBackend) entryID(ref streamRef, c streamCursor) (string, error) {
-	prefix, id, ok := strings.Cut(string(c), "#")
-	if !ok || prefix != b.keys(ref).prefix {
-		return "", errStreamCursor
+// parseCursor splits a cursor into its chain's first run ID and its entry ID.
+func (b *redisStreamBackend) parseCursor(workflowID string, c streamCursor) (firstRun, entryID string, err error) {
+	chain, entryID, ok := strings.Cut(string(c), "#")
+	if !ok {
+		return "", "", errStreamCursor
 	}
-	return id, nil
+	firstRun, ok = strings.CutPrefix(chain, b.workflowPrefix(workflowID)+":")
+	if !ok {
+		return "", "", errStreamCursor
+	}
+	return firstRun, entryID, nil
 }
 
 type redisProducerIdentity struct {
-	producer     string
-	workflowTask int64
-	epoch        int64
+	producer            string
+	runID               string
+	workflowTask        int64
+	workflowTaskAttempt int32
+	epoch               int64
 }
 
 func redisProducer(p streamProducer) (redisProducerIdentity, error) {
@@ -351,9 +420,21 @@ func redisProducer(p streamProducer) (redisProducerIdentity, error) {
 	case p.WorkflowTask != nil:
 		t := p.WorkflowTask
 		return redisProducerIdentity{
-			producer:     "workflow/" + t.WorkflowExecution.RunId,
-			workflowTask: t.PreviousStartedEventId,
-			epoch:        int64(t.Attempt),
+			producer:            "workflow/" + t.WorkflowExecution.RunId,
+			runID:               t.WorkflowExecution.RunId,
+			workflowTask:        t.PreviousStartedEventId,
+			workflowTaskAttempt: t.Attempt,
+			epoch:               int64(t.Attempt),
+		}, nil
+	case p.LocalActivity != nil:
+		la := p.LocalActivity
+		runID := la.Task.WorkflowExecution.RunId
+		return redisProducerIdentity{
+			producer:            "local-activity/" + runID + "/" + la.ActivityID,
+			runID:               runID,
+			workflowTask:        la.Task.PreviousStartedEventId,
+			workflowTaskAttempt: la.Task.Attempt,
+			epoch:               int64(la.Attempt),
 		}, nil
 	default:
 		return redisProducerIdentity{}, errors.New("stream producer has no identity")
@@ -369,10 +450,12 @@ func redisRecord(cursor streamCursor, v map[string]any, topics []string) (stream
 	r := streamRecord{
 		Cursor: cursor,
 		Producer: streamProducerIdentity{
-			Producer:     v["producer"].(string),
-			WorkflowTask: mustInt(v["wt"]),
-			Epoch:        mustInt(v["epoch"]),
-			Seq:          mustInt(v["seq"]),
+			Producer:            v["producer"].(string),
+			WorkflowRunID:       v["run"].(string),
+			WorkflowTask:        mustInt(v["wt"]),
+			WorkflowTaskAttempt: int32(mustInt(v["wta"])),
+			Epoch:               mustInt(v["epoch"]),
+			Seq:                 mustInt(v["seq"]),
 		},
 		Topic:  topic,
 		Finish: kind == "finish",
@@ -386,19 +469,40 @@ func redisRecord(cursor streamCursor, v map[string]any, topics []string) (stream
 	return r, true
 }
 
+// redisError maps a failure the script reports, named by its first word, to its sentinel.
 func redisError(err error) error {
-	for code, sentinel := range map[string]error{
+	code, _, _ := strings.Cut(err.Error(), " ")
+	sentinel, ok := map[string]error{
 		"EXPIRED":       errStreamExpired,
-		"FENCED":        errStreamEpochFenced,
+		"EPOCH_FENCED":  errStreamEpochFenced,
 		"SEQ_DIVERGENT": errStreamSeqDivergent,
 		"SEQ_STALE":     errStreamSeqStale,
+		"SEQ_GAP":       errStreamSeqGap,
 		"CLOSED":        errStreamClosed,
-	} {
-		if err.Error() == "ERR "+code {
-			return sentinel
-		}
+	}[code]
+	if !ok {
+		return err
 	}
-	return err
+	return fmt.Errorf("%w: %s", sentinel, err)
+}
+
+// checkStreamAppendSize applies the size limits, as the shared SDK code does before a Redis append.
+func checkStreamAppendSize(records []streamAppendRecord) error {
+	if len(records) > streamMaxRecordsPerAppend {
+		return errStreamTooLarge
+	}
+	total := 0
+	for _, r := range records {
+		n := proto.Size(r.Payload)
+		if n > streamMaxRecordBytes {
+			return errStreamTooLarge
+		}
+		total += n
+	}
+	if total > streamMaxAppendBytes {
+		return errStreamTooLarge
+	}
+	return nil
 }
 
 // appendDigest identifies an append's content, so that a retry with different content is detected.
