@@ -20,8 +20,8 @@ message ProducerState {
     // The offsets of the append's data records, for a retry to return.
     int64 first_offset = 4;
     int64 count = 5;
-    // A hash of the append's encoded content.
-    bytes content_hash = 6;
+    // A digest of the append's encoded content.
+    bytes digest = 6;
 }
 
 // The bytes of a native cursor: the boundary after the record at offset.

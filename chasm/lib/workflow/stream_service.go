@@ -147,11 +147,11 @@ type streamReadArgs struct {
 
 func newStreamReadArgs(req *streamservicepb.ReadRequest) (streamReadArgs, error) {
 	args := streamReadArgs{req: req}
-	if len(req.GetCursor()) == 0 {
+	if len(req.GetAfter()) == 0 {
 		return args, nil
 	}
 	args.cursor = &streampb.Cursor{}
-	if err := proto.Unmarshal(req.GetCursor(), args.cursor); err != nil || args.cursor.GetWorkflowId() != req.GetStream().GetWorkflowId() {
+	if err := proto.Unmarshal(req.GetAfter(), args.cursor); err != nil || args.cursor.GetWorkflowId() != req.GetStream().GetWorkflowId() {
 		return args, streamError(streamservicepb.STREAM_FAILURE_TYPE_CURSOR_MISMATCH, "the cursor belongs to another stream")
 	}
 	return args, nil
@@ -205,7 +205,7 @@ func (w *Workflow) readStream(ctx chasm.Context, args streamReadArgs) (*streamse
 	if err := w.checkStreamChain(args.req.GetStream()); err != nil {
 		return nil, err
 	}
-	resp := &streamservicepb.ReadResponse{Cursor: args.req.GetCursor()}
+	resp := &streamservicepb.ReadResponse{Cursor: args.req.GetAfter()}
 	after := int64(-1)
 	if args.cursor != nil {
 		if args.cursor.GetFirstRunId() != w.firstRunID() {

@@ -89,11 +89,11 @@ func (s *Stream) Append(
 	ctx chasm.MutableContext,
 	p Producer,
 	seq int64,
-	records []*streamservicepb.RecordInput,
+	records []*streamservicepb.AppendRecord,
 	finish bool,
 	closing *streamservicepb.StreamClose,
 ) ([]int64, error) {
-	hash, err := contentHash(records, finish, closing)
+	digest, err := appendDigest(records, finish, closing)
 	if err != nil {
 		return nil, err
 	}
@@ -104,12 +104,12 @@ func (s *Stream) Append(
 		}
 		if p.sameEpoch(st) {
 			switch {
-			case seq == st.Seq && bytes.Equal(hash, st.ContentHash):
+			case seq == st.Seq && bytes.Equal(digest, st.Digest):
 				return offsetRange(st.FirstOffset, st.Count), nil
 			case seq == st.Seq:
-				return nil, newError(streamservicepb.STREAM_FAILURE_TYPE_SEQ_CONFLICT, "seq %d is stored with different content", seq)
+				return nil, newError(streamservicepb.STREAM_FAILURE_TYPE_SEQ_DIVERGENT, "seq %d is stored with different content", seq)
 			case seq < st.Seq:
-				return nil, newError(streamservicepb.STREAM_FAILURE_TYPE_SEQ_SUPERSEDED, "seq %d is lower than the latest, %d", seq, st.Seq)
+				return nil, newError(streamservicepb.STREAM_FAILURE_TYPE_SEQ_STALE, "seq %d is lower than the latest, %d", seq, st.Seq)
 			}
 		}
 	}
@@ -139,7 +139,7 @@ func (s *Stream) Append(
 		Seq:          seq,
 		FirstOffset:  first,
 		Count:        int64(len(records)),
-		ContentHash:  hash,
+		Digest:       digest,
 	})
 	return offsetRange(first, int64(len(records))), nil
 }
@@ -274,9 +274,9 @@ func offsetRange(first, count int64) []int64 {
 	return offsets
 }
 
-// contentHash hashes an append's content as encoded by the caller, so it reveals nothing about
+// appendDigest digests an append's content as encoded by the caller, so it reveals nothing about
 // encrypted payloads.
-func contentHash(records []*streamservicepb.RecordInput, finish bool, closing *streamservicepb.StreamClose) ([]byte, error) {
+func appendDigest(records []*streamservicepb.AppendRecord, finish bool, closing *streamservicepb.StreamClose) ([]byte, error) {
 	content := &streamservicepb.AppendRequest{Records: records, Finish: finish}
 	b, err := proto.MarshalOptions{Deterministic: true}.Marshal(content)
 	if err != nil {

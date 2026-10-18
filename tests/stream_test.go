@@ -176,20 +176,20 @@ func (s *streamTestSuite) TestRetryWithDifferentContentIsRejected() {
 		p := clientProducer("a", 1)
 		f.append(ref, p, 0, "", "x")
 		_, err := f.tryAppend(ref, p, 0, "", "z")
-		require.ErrorIs(f.t, err, errStreamSeqConflict)
+		require.ErrorIs(f.t, err, errStreamSeqDivergent)
 		require.Equal(f.t, []string{"x"}, f.dataOf(f.readAll(ref, streamBeginning())))
 	})
 }
 
-// An append whose seq is lower than the producer's latest is rejected as superseded. Every backend.
-func (s *streamTestSuite) TestLowerSeqIsSuperseded() {
+// An append whose seq is lower than the producer's latest is rejected as stale. Every backend.
+func (s *streamTestSuite) TestLowerSeqIsStale() {
 	s.forEachBackend(func(f *streamFixture) {
 		ref := f.startOwner(f.tv)
 		p := clientProducer("a", 1)
 		f.append(ref, p, 0, "", "x")
 		f.append(ref, p, 1, "", "y")
 		_, err := f.tryAppend(ref, p, 0, "", "x")
-		require.ErrorIs(f.t, err, errStreamSeqSuperseded)
+		require.ErrorIs(f.t, err, errStreamSeqStale)
 		require.Equal(f.t, []string{"x", "y"}, f.dataOf(f.readAll(ref, streamBeginning())))
 	})
 }
@@ -747,7 +747,7 @@ func (s *streamTestSuite) TestPayloadsRoundTripUnchanged() {
 		}
 		_, err := f.b.Append(f.ctx(), ref, streamAppendRequest{
 			Producer: clientProducer("a", 1),
-			Records:  []streamRecordInput{{Topic: "t", Payload: p}},
+			Records:  []streamAppendRecord{{Topic: "t", Payload: p}},
 		})
 		require.NoError(f.t, err)
 		records := f.readAll(ref, streamBeginning())
@@ -792,9 +792,9 @@ func (f *streamFixture) startOwner(tv *testvars.TestVars) streamRef {
 }
 
 func (f *streamFixture) tryAppend(ref streamRef, p streamProducer, seq int64, topic string, data ...string) (streamAppendResponse, error) {
-	records := make([]streamRecordInput, len(data))
+	records := make([]streamAppendRecord, len(data))
 	for i, d := range data {
-		records[i] = streamRecordInput{Topic: topic, Payload: payload.EncodeString(d)}
+		records[i] = streamAppendRecord{Topic: topic, Payload: payload.EncodeString(d)}
 	}
 	return f.b.Append(f.ctx(), ref, streamAppendRequest{Producer: p, Seq: seq, Records: records})
 }

@@ -87,7 +87,7 @@ type streamWorkflowTaskCommit struct {
 	Attempt      int64
 }
 
-type streamRecordInput struct {
+type streamAppendRecord struct {
 	Topic   string
 	Payload *commonpb.Payload
 }
@@ -96,7 +96,7 @@ type streamAppendRequest struct {
 	Producer streamProducer
 	// Seq increases within one (producer, epoch). A producer has at most one append in flight.
 	Seq     int64
-	Records []streamRecordInput
+	Records []streamAppendRecord
 	// Finish records that this producer will write no more. It does not close the stream.
 	Finish bool
 }
@@ -170,8 +170,8 @@ var (
 	errStreamExpired        = errors.New("stream expired")
 	errStreamNotOwner       = errors.New("only the stream's owner may close it")
 	errStreamCursor         = errors.New("cursor belongs to another stream")
-	errStreamSeqConflict    = errors.New("seq already stored with different content")
-	errStreamSeqSuperseded  = errors.New("seq already superseded")
+	errStreamSeqDivergent   = errors.New("seq already stored with different content")
+	errStreamSeqStale       = errors.New("seq lower than the producer's latest")
 	errStreamEpochFenced    = errors.New("epoch lower than one already seen for this producer")
 	errStreamSpeculative    = errors.New("appends from speculative workflow tasks are not supported")
 	errStreamNotImplemented = errors.New("stream backend not implemented")

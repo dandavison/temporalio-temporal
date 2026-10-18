@@ -48,11 +48,11 @@ import (
 // appendScript appends entries for one (producer, epoch, seq), applying dedupe, fencing and close.
 //
 // KEYS: meta, log, producers.
-// ARGV: producer, workflow task, epoch, seq, content hash, closing ("1" or "0"), entry count, then
+// ARGV: producer, workflow task, epoch, seq, digest, closing ("1" or "0"), entry count, then
 // for each entry a field count followed by that many field/value pairs.
 const appendScript = `
 local meta, log, producers = KEYS[1], KEYS[2], KEYS[3]
-local producer, wt, epoch, seq, hash = ARGV[1], tonumber(ARGV[2]), tonumber(ARGV[3]), tonumber(ARGV[4]), ARGV[5]
+local producer, wt, epoch, seq, digest = ARGV[1], tonumber(ARGV[2]), tonumber(ARGV[3]), tonumber(ARGV[4]), ARGV[5]
 local closing = ARGV[6] == '1'
 if redis.call('HGET', meta, 'deleted') == '1' then
   return redis.error_reply('EXPIRED')
@@ -65,13 +65,13 @@ if raw then
   end
   if wt == st.wt and epoch == st.epoch then
     if seq == st.seq then
-      if hash == st.hash then
+      if digest == st.digest then
         return st.ids
       end
-      return redis.error_reply('SEQ_CONFLICT')
+      return redis.error_reply('SEQ_DIVERGENT')
     end
     if seq < st.seq then
-      return redis.error_reply('SEQ_SUPERSEDED')
+      return redis.error_reply('SEQ_STALE')
     end
   end
 end
@@ -93,7 +93,7 @@ for _ = 1, tonumber(ARGV[7]) do
   i = i + 2 * nfields
   ids[#ids + 1] = redis.call(unpack(args))
 end
-redis.call('HSET', producers, producer, cjson.encode({wt = wt, epoch = epoch, seq = seq, hash = hash, ids = ids}))
+redis.call('HSET', producers, producer, cjson.encode({wt = wt, epoch = epoch, seq = seq, digest = digest, ids = ids}))
 redis.call('HSET', meta, 'exists', '1')
 if closing then
   redis.call('HSET', meta, 'closed', '1')
@@ -178,7 +178,7 @@ func (b *redisStreamBackend) Close(ctx context.Context, ref streamRef, req strea
 
 func (b *redisStreamBackend) runAppend(ctx context.Context, ref streamRef, id redisProducerIdentity, seq int64, entries [][]string, closing bool) ([]string, error) {
 	k := b.keys(ref)
-	args := []any{id.producer, id.workflowTask, id.epoch, seq, contentHash(entries), boolArg(closing), len(entries)}
+	args := []any{id.producer, id.workflowTask, id.epoch, seq, appendDigest(entries), boolArg(closing), len(entries)}
 	for _, e := range entries {
 		args = append(args, len(e)/2)
 		for _, f := range e {
@@ -388,11 +388,11 @@ func redisRecord(cursor streamCursor, v map[string]any, topics []string) (stream
 
 func redisError(err error) error {
 	for code, sentinel := range map[string]error{
-		"EXPIRED":        errStreamExpired,
-		"FENCED":         errStreamEpochFenced,
-		"SEQ_CONFLICT":   errStreamSeqConflict,
-		"SEQ_SUPERSEDED": errStreamSeqSuperseded,
-		"CLOSED":         errStreamClosed,
+		"EXPIRED":       errStreamExpired,
+		"FENCED":        errStreamEpochFenced,
+		"SEQ_DIVERGENT": errStreamSeqDivergent,
+		"SEQ_STALE":     errStreamSeqStale,
+		"CLOSED":        errStreamClosed,
 	} {
 		if err.Error() == "ERR "+code {
 			return sentinel
@@ -401,8 +401,8 @@ func redisError(err error) error {
 	return err
 }
 
-// contentHash identifies an append's content, so that a retry with different content is detected.
-func contentHash(entries [][]string) string {
+// appendDigest identifies an append's content, so that a retry with different content is detected.
+func appendDigest(entries [][]string) string {
 	var buf bytes.Buffer
 	for _, e := range entries {
 		for _, f := range e {

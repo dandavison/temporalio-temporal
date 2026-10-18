@@ -45,7 +45,7 @@ func (b *nativeStreamBackend) Append(ctx context.Context, ref streamRef, req str
 	}
 	in := &streamservicepb.AppendRequest{Stream: nativeRef(ref), Producer: producer, Seq: req.Seq, Finish: req.Finish}
 	for _, r := range req.Records {
-		in.Records = append(in.Records, &streamservicepb.RecordInput{Topic: r.Topic, Payload: r.Payload})
+		in.Records = append(in.Records, &streamservicepb.AppendRecord{Topic: r.Topic, Payload: r.Payload})
 	}
 	var out streamservicepb.AppendResponse
 	if err := b.call(ctx, "Append", in, &out); err != nil {
@@ -78,7 +78,7 @@ func (b *nativeStreamBackend) Close(ctx context.Context, ref streamRef, req stre
 func (b *nativeStreamBackend) Read(ctx context.Context, ref streamRef, req streamReadRequest) (streamReadResponse, error) {
 	in := &streamservicepb.ReadRequest{
 		Stream:     nativeRef(ref),
-		Cursor:     req.From.after,
+		After:      req.From.after,
 		Topics:     req.Topics,
 		MaxRecords: int32(req.MaxRecords),
 		Last:       int32(req.Last),
@@ -221,8 +221,8 @@ var nativeErrors = map[streamservicepb.StreamFailureType]error{
 	streamservicepb.STREAM_FAILURE_TYPE_EXPIRED:                   errStreamExpired,
 	streamservicepb.STREAM_FAILURE_TYPE_NOT_OWNER:                 errStreamNotOwner,
 	streamservicepb.STREAM_FAILURE_TYPE_CURSOR_MISMATCH:           errStreamCursor,
-	streamservicepb.STREAM_FAILURE_TYPE_SEQ_CONFLICT:              errStreamSeqConflict,
-	streamservicepb.STREAM_FAILURE_TYPE_SEQ_SUPERSEDED:            errStreamSeqSuperseded,
+	streamservicepb.STREAM_FAILURE_TYPE_SEQ_DIVERGENT:             errStreamSeqDivergent,
+	streamservicepb.STREAM_FAILURE_TYPE_SEQ_STALE:                 errStreamSeqStale,
 	streamservicepb.STREAM_FAILURE_TYPE_EPOCH_FENCED:              errStreamEpochFenced,
 	streamservicepb.STREAM_FAILURE_TYPE_SPECULATIVE_WORKFLOW_TASK: errStreamSpeculative,
 }
