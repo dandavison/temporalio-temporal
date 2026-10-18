@@ -7,6 +7,7 @@ package tests
 import (
 	"context"
 	"fmt"
+	"strings"
 	"testing"
 	"time"
 
@@ -17,6 +18,8 @@ import (
 	failurepb "go.temporal.io/api/failure/v1"
 	updatepb "go.temporal.io/api/update/v1"
 	"go.temporal.io/api/workflowservice/v1"
+	"go.temporal.io/server/api/adminservice/v1"
+	"go.temporal.io/server/chasm"
 	"go.temporal.io/server/common/dynamicconfig"
 	"go.temporal.io/server/common/payload"
 	"go.temporal.io/server/common/testing/await"
@@ -713,6 +716,27 @@ func (s *streamTestSuite) TestAppendSurvivesShardReload() {
 	}, testcore.WithDedicatedCluster())
 }
 
+// An activity's producer state is removed when the activity closes, so the stream keeps no state
+// for producers that can no longer append. Native only.
+func (s *streamTestSuite) TestClosedActivityProducerStateIsRemoved() {
+	s.nativeOnly(func(f *streamFixture) {
+		ref := f.startOwner(f.tv)
+		f.scheduleRetriedActivity(f.tv)
+		task := f.pollActivityTask(f.tv)
+		f.append(ref, activityProducer(task), 0, "", "x")
+		require.Len(f.t, f.activityProducerNodes(ref), 1)
+
+		_, err := f.env.FrontendClient().RespondActivityTaskCompleted(f.ctx(), &workflowservice.RespondActivityTaskCompletedRequest{
+			Namespace: f.env.Namespace().String(),
+			TaskToken: task.TaskToken,
+			Identity:  f.tv.WorkerIdentity(),
+		})
+		require.NoError(f.t, err)
+		require.Empty(f.t, f.activityProducerNodes(ref))
+		require.Equal(f.t, []string{"x"}, f.dataOf(f.readAll(ref, streamBeginning())))
+	})
+}
+
 // Payloads, including their metadata, are stored and returned byte for byte. Every backend.
 func (s *streamTestSuite) TestPayloadsRoundTripUnchanged() {
 	s.forEachBackend(func(f *streamFixture) {
@@ -730,6 +754,23 @@ func (s *streamTestSuite) TestPayloadsRoundTripUnchanged() {
 		require.Len(f.t, records, 1)
 		require.True(f.t, proto.Equal(p, records[0].Payload))
 	})
+}
+
+// activityProducerNodes returns the CHASM nodes holding activity producers' state.
+func (f *streamFixture) activityProducerNodes(ref streamRef) []string {
+	desc, err := f.env.AdminClient().DescribeMutableState(f.ctx(), &adminservice.DescribeMutableStateRequest{
+		Namespace: f.env.Namespace().String(),
+		Execution: &commonpb.WorkflowExecution{WorkflowId: ref.WorkflowID},
+		Archetype: chasm.WorkflowArchetype,
+	})
+	require.NoError(f.t, err)
+	var nodes []string
+	for path := range desc.GetDatabaseMutableState().GetChasmNodes() {
+		if strings.Contains(path, "Producers") && strings.Contains(path, "activity") {
+			nodes = append(nodes, path)
+		}
+	}
+	return nodes
 }
 
 func (f *streamFixture) ctx() context.Context {
