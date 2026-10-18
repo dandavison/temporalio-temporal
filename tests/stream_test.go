@@ -251,6 +251,15 @@ func (s *streamTestSuite) TestRetriedActivityAttemptHasHigherEpoch() {
 
 // After a reset between attempts, the earlier attempt is fenced although the new attempt has the
 // same attempt number: the epoch is the attempt stamp. Every backend.
+//
+// The reset happens between attempts because a reset during an attempt differs between the two
+// activity surfaces. A standalone activity defers the reset until the running attempt ends: the
+// attempt stays valid, and its successor gets a higher stamp. A workflow activity applies the reset
+// at once by rewinding the attempt counter, which its task token uses as the credential, so the
+// running attempt's result and heartbeats are refused although its stamp is unchanged. Workflow
+// activities are planned to adopt the deferred reset, plus a forced reset that invalidates the
+// running attempt by increasing the stamp. Under that design a stamp fences exactly the attempts
+// that a reset supersedes, and this test can also cover a reset during an attempt.
 func (s *streamTestSuite) TestAttemptBeforeResetIsFencedAfterSuccessorAppends() {
 	s.forEachBackend(func(f *streamFixture) {
 		ref := f.startOwner(f.tv)

@@ -30,7 +30,9 @@ func (s *activityAttemptStampSuite) TestRetryIncreasesStamp() {
 	require.Greater(s.T(), attempt2.AttemptStamp, attempt1.AttemptStamp)
 }
 
-// A reset between attempts sets the next attempt's number back to 1, but not its stamp.
+// A reset between attempts sets the next attempt's number back to 1, but not its stamp. A reset
+// during an attempt is not tested, because the two activity surfaces differ there; see
+// TestAttemptBeforeResetIsFencedAfterSuccessorAppends.
 func (s *activityAttemptStampSuite) TestResetBetweenAttemptsIncreasesStamp() {
 	f := newAttemptStampFixture(s.T())
 	f.startOwner(f.tv)
