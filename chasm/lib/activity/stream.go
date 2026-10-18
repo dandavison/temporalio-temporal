@@ -144,7 +144,8 @@ func (a *Activity) streamProducer(ctx chasm.Context, p *streamservicepb.Producer
 // activityTokenProducer derives the producer of an activity task token. own is true when the token
 // is for this activity, in which case it must be for the current attempt; another activity's token
 // is not verified. A Standalone Activity's producer ID is its run ID; a workflow activity's is its
-// workflow run and activity ID, as on a workflow-owned stream.
+// workflow run and activity ID, as on a workflow-owned stream. A Standalone Activity token that the
+// frontend made for a by-ID call names no attempt, so it is rejected.
 func (a *Activity) activityTokenProducer(ctx chasm.Context, token []byte) (p stream.Producer, own bool, err error) {
 	t, err := tasktoken.NewSerializer().Deserialize(token)
 	if err != nil {
@@ -153,6 +154,9 @@ func (a *Activity) activityTokenProducer(ctx chasm.Context, token []byte) (p str
 	epoch := int64(t.GetActivityAttemptStamp())
 	if len(t.GetComponentRef()) == 0 {
 		return stream.Producer{ID: "activity/" + t.GetRunId() + "/" + t.GetActivityId(), Epoch: epoch}, false, nil
+	}
+	if t.GetAttempt() == ByIDTokenAttempt {
+		return stream.Producer{}, false, serviceerror.NewInvalidArgument("a by-ID activity task token is not an activity attempt")
 	}
 	ref, err := chasm.DeserializeComponentRef(t.GetComponentRef())
 	if err != nil {
