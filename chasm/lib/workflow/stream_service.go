@@ -331,13 +331,17 @@ func (w *Workflow) RemoveStreamActivityProducer(ctx chasm.MutableContext, activi
 // mutableStream returns the workflow's stream, creating it, with its creation record, if it does
 // not exist. The creation record holds the run's current task identity (see Stream.RecordCreated,
 // including the case where readers' rule for it is wrong). A later run of the chain creates a new
-// stream, with offsets from 0 again.
+// stream, with offsets from 0 again. A stream created after the run ended is created closed, so it
+// takes no appends.
 func (w *Workflow) mutableStream(ctx chasm.MutableContext) (*stream.Stream, error) {
 	if s, ok := w.Stream.TryGet(ctx); ok {
 		return s, nil
 	}
 	s := stream.New(ctx)
 	w.Stream = chasm.NewComponentField(ctx, s)
+	if status := w.GetExecutionState().GetStatus(); status != enumspb.WORKFLOW_EXECUTION_STATUS_RUNNING {
+		s.CloseIfOpen(&streamservicepb.StreamClose{State: StreamCloseState(status)})
+	}
 	err := s.RecordCreated(ctx, w.GetExecutionState().GetRunId(), w.GetExecutionInfo().GetLastCompletedWorkflowTaskStartedEventId())
 	return s, err
 }
