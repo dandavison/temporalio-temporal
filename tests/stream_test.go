@@ -28,7 +28,9 @@ import (
 	streampb "go.temporal.io/server/chasm/lib/stream/gen/streampb/v1"
 	"go.temporal.io/server/common"
 	"go.temporal.io/server/common/dynamicconfig"
+	commonnexus "go.temporal.io/server/common/nexus"
 	"go.temporal.io/server/common/payload"
+	sdkconverter "go.temporal.io/server/common/sdk"
 	"go.temporal.io/server/common/tasktoken"
 	"go.temporal.io/server/common/testing/await"
 	"go.temporal.io/server/common/testing/parallelsuite"
@@ -1398,6 +1400,242 @@ func (s *streamTestSuite) TestReadResponseReportsOwnerCloseAndRetention() {
 		require.NoError(f.t, err)
 		require.Equal(f.t, ns.Config.WorkflowExecutionRetentionTtl.AsDuration(), resp.Retention)
 	})
+}
+
+// A Wait after the stream's head completes on the next matching append, and not on an append of
+// another topic. Native only: Wait on an external store waits for Notify instead.
+func (s *streamTestSuite) TestWaitCompletesOnNextMatchingAppend() {
+	s.nativeOnlyEachOwner(func(f *streamFixture) {
+		ref := f.startOwner(f.tv)
+		head := f.append(ref, clientProducer("a", 1), 0, "progress", "p1").Cursors[0]
+		r := f.startReader()
+		r.wait(ref, &streamservicepb.WaitRequest{After: head, Topics: []string{"progress"}})
+		r.awaitStarted()
+		f.append(ref, clientProducer("a", 1), 1, "delta", "d1")
+		r.requireNotCompleted(2 * time.Second)
+		f.append(ref, clientProducer("a", 1), 2, "progress", "p2")
+		require.Equal(f.t, streamservicepb.WAKE_REASON_APPENDED, r.awaitCompleted().Reason)
+	})
+}
+
+// A Wait completes at once, without a subscription, when a matching record after its cursor is
+// already there. Native only.
+func (s *streamTestSuite) TestWaitCompletesAtOnceWhenRecordExists() {
+	s.nativeOnlyEachOwner(func(f *streamFixture) {
+		ref := f.startOwner(f.tv)
+		if f.owner == workflowOwner {
+			f.completeWorkflowTask(f.pollWorkflowTask(f.tv))
+		}
+		f.append(ref, clientProducer("a", 1), 0, "", "x")
+		r := f.startReader()
+		r.wait(ref, &streamservicepb.WaitRequest{})
+		require.Equal(f.t, streamservicepb.WAKE_REASON_APPENDED, r.awaitCompleted().Reason)
+		r.requireNotStarted()
+	})
+}
+
+// A pending Wait completes when the stream closes. Native only.
+func (s *streamTestSuite) TestWaitCompletesOnClose() {
+	s.nativeOnlyEachOwner(func(f *streamFixture) {
+		ref := f.startOwner(f.tv)
+		head := f.append(ref, clientProducer("a", 1), 0, "", "x").Cursors[0]
+		r := f.startReader()
+		r.wait(ref, &streamservicepb.WaitRequest{After: head})
+		r.awaitStarted()
+		f.endOwner(f.tv)
+		require.Equal(f.t, streamservicepb.WAKE_REASON_CLOSED, r.awaitCompleted().Reason)
+	})
+}
+
+// A Wait on an owner that does not exist completes at once, as not found. Native only.
+func (s *streamTestSuite) TestWaitOnMissingOwnerCompletesAsNotFound() {
+	s.nativeOnlyEachOwner(func(f *streamFixture) {
+		r := f.startReader()
+		r.wait(f.unstartedRef(f.tv), &streamservicepb.WaitRequest{})
+		require.Equal(f.t, streamservicepb.WAKE_REASON_OWNER_NOT_FOUND, r.awaitCompleted().Reason)
+	})
+}
+
+// A Wait on a workflow-owned stream whose mode is not yet known completes when the owner's first
+// workflow task completes, which fixes the mode. Native only.
+func (s *streamTestSuite) TestWaitWhileModeUnknownCompletesWhenOwnerFirstTaskCompletes() {
+	s.nativeOnly(func(f *streamFixture) {
+		ref := f.startOwner(f.tv)
+		r := f.startReader()
+		r.wait(ref, &streamservicepb.WaitRequest{})
+		r.awaitStarted()
+		f.completeWorkflowTask(f.pollWorkflowTask(f.tv))
+		r.awaitCompleted()
+		require.Equal(f.t, streamModeSink, f.read(ref, streamReadRequest{From: streamBeginning()}).Mode)
+	})
+}
+
+// A pending Wait completes when its workflow owner continues as new, so that the reader reads the
+// new run. Native only.
+func (s *streamTestSuite) TestWaitCompletesWhenOwnerContinuesAsNew() {
+	s.nativeOnly(func(f *streamFixture) {
+		ref := f.startOwner(f.tv)
+		task := f.pollWorkflowTask(f.tv)
+		head := f.append(ref, workflowProducer(task), 0, "", "x").Cursors[0]
+		r := f.startReader()
+		r.wait(ref, &streamservicepb.WaitRequest{After: head})
+		r.awaitStarted()
+		f.completeWorkflowTask(task, f.continueAsNew)
+		require.Equal(f.t, streamservicepb.WAKE_REASON_OWNER_ENDED, r.awaitCompleted().Reason)
+	})
+}
+
+// A canceled Wait removes its subscription. Native only.
+func (s *streamTestSuite) TestCanceledWaitRemovesSubscription() {
+	s.nativeOnlyEachOwner(func(f *streamFixture) {
+		ref := f.startOwner(f.tv)
+		head := f.append(ref, clientProducer("a", 1), 0, "", "x").Cursors[0]
+		r := f.startReader()
+		scheduled := r.wait(ref, &streamservicepb.WaitRequest{After: head})
+		r.awaitStarted()
+		require.Len(f.t, f.subscriptionNodes(ref), 1)
+		r.cancel(scheduled)
+		r.awaitEvent(enumspb.EVENT_TYPE_NEXUS_OPERATION_CANCEL_REQUEST_COMPLETED)
+		require.Empty(f.t, f.subscriptionNodes(ref))
+	})
+}
+
+// A Wait completes as expired when its subscription's lifetime passes. Native only.
+func (s *streamTestSuite) TestWaitExpires() {
+	s.nativeOnlyEachOwner(func(f *streamFixture) {
+		ref := f.startOwner(f.tv)
+		head := f.append(ref, clientProducer("a", 1), 0, "", "x").Cursors[0]
+		r := f.startReader()
+		r.wait(ref, &streamservicepb.WaitRequest{After: head, Lifetime: durationpb.New(2 * time.Second)})
+		r.awaitStarted()
+		require.Equal(f.t, streamservicepb.WAKE_REASON_EXPIRED, r.awaitCompleted().Reason)
+	})
+}
+
+// streamReader is a workflow that calls the stream service's Wait operation, as a workflow reader
+// of a stream does when a read returns nothing.
+type streamReader struct {
+	f  *streamFixture
+	tv *testvars.TestVars
+}
+
+func (f *streamFixture) startReader() *streamReader {
+	tv := f.tv.WithWorkflowIDNumber(100).WithTaskQueueNumber(100)
+	_, err := f.env.FrontendClient().StartWorkflowExecution(f.ctx(), &workflowservice.StartWorkflowExecutionRequest{
+		Namespace:    f.env.Namespace().String(),
+		RequestId:    tv.Any().String(),
+		WorkflowId:   tv.WorkflowID(),
+		WorkflowType: tv.WorkflowType(),
+		TaskQueue:    tv.TaskQueue(),
+		Identity:     tv.WorkerIdentity(),
+	})
+	require.NoError(f.t, err)
+	return &streamReader{f: f, tv: tv}
+}
+
+// wait completes the reader's next workflow task with a Wait on ref, and returns the operation's
+// scheduled event ID.
+func (r *streamReader) wait(ref streamRef, req *streamservicepb.WaitRequest) int64 {
+	req.Stream = nativeRef(ref)
+	input, err := sdkconverter.PreferProtoDataConverter.ToPayload(req)
+	require.NoError(r.f.t, err)
+	r.f.completeWorkflowTask(r.f.pollWorkflowTask(r.tv), func(c *workflowservice.RespondWorkflowTaskCompletedRequest) {
+		c.Commands = append(c.Commands, &commandpb.Command{
+			CommandType: enumspb.COMMAND_TYPE_SCHEDULE_NEXUS_OPERATION,
+			Attributes: &commandpb.Command_ScheduleNexusOperationCommandAttributes{
+				ScheduleNexusOperationCommandAttributes: &commandpb.ScheduleNexusOperationCommandAttributes{
+					Endpoint:               commonnexus.SystemEndpoint,
+					Service:                nativeStreamService,
+					Operation:              "Wait",
+					Input:                  input,
+					ScheduleToCloseTimeout: durationpb.New(time.Hour),
+				},
+			},
+		})
+	})
+	return r.awaitEvent(enumspb.EVENT_TYPE_NEXUS_OPERATION_SCHEDULED).EventId
+}
+
+// cancel completes the reader's next workflow task with a request to cancel the operation.
+func (r *streamReader) cancel(scheduledEventID int64) {
+	r.f.completeWorkflowTask(r.f.pollWorkflowTask(r.tv), func(c *workflowservice.RespondWorkflowTaskCompletedRequest) {
+		c.Commands = append(c.Commands, &commandpb.Command{
+			CommandType: enumspb.COMMAND_TYPE_REQUEST_CANCEL_NEXUS_OPERATION,
+			Attributes: &commandpb.Command_RequestCancelNexusOperationCommandAttributes{
+				RequestCancelNexusOperationCommandAttributes: &commandpb.RequestCancelNexusOperationCommandAttributes{ScheduledEventId: scheduledEventID},
+			},
+		})
+	})
+}
+
+func (r *streamReader) events() []*historypb.HistoryEvent {
+	resp, err := r.f.env.FrontendClient().GetWorkflowExecutionHistory(r.f.ctx(), &workflowservice.GetWorkflowExecutionHistoryRequest{
+		Namespace: r.f.env.Namespace().String(),
+		Execution: &commonpb.WorkflowExecution{WorkflowId: r.tv.WorkflowID()},
+	})
+	require.NoError(r.f.t, err)
+	return resp.History.Events
+}
+
+func (r *streamReader) find(t enumspb.EventType) *historypb.HistoryEvent {
+	for _, e := range r.events() {
+		if e.EventType == t {
+			return e
+		}
+	}
+	return nil
+}
+
+func (r *streamReader) awaitEvent(t enumspb.EventType) *historypb.HistoryEvent {
+	var event *historypb.HistoryEvent
+	await.Require(r.f.ctx(), r.f.t, func(at *await.T) {
+		event = r.find(t)
+		require.NotNil(at, event, "no %v event", t)
+	}, 30*time.Second, 100*time.Millisecond)
+	return event
+}
+
+func (r *streamReader) awaitStarted() {
+	r.awaitEvent(enumspb.EVENT_TYPE_NEXUS_OPERATION_STARTED)
+}
+
+func (r *streamReader) requireNotStarted() {
+	require.Nil(r.f.t, r.find(enumspb.EVENT_TYPE_NEXUS_OPERATION_STARTED))
+}
+
+// awaitCompleted returns the Wait operation's result.
+func (r *streamReader) awaitCompleted() *streamservicepb.WaitResponse {
+	event := r.awaitEvent(enumspb.EVENT_TYPE_NEXUS_OPERATION_COMPLETED)
+	resp := &streamservicepb.WaitResponse{}
+	require.NoError(r.f.t, sdkconverter.PreferProtoDataConverter.FromPayload(event.GetNexusOperationCompletedEventAttributes().GetResult(), resp))
+	return resp
+}
+
+func (r *streamReader) requireNotCompleted(d time.Duration) {
+	time.Sleep(d) //nolint:forbidigo // the test checks that nothing happens for a while
+	require.Nil(r.f.t, r.find(enumspb.EVENT_TYPE_NEXUS_OPERATION_COMPLETED))
+}
+
+// subscriptionNodes returns the CHASM nodes of the stream's subscriptions.
+func (f *streamFixture) subscriptionNodes(ref streamRef) []string {
+	req := &adminservice.DescribeMutableStateRequest{
+		Namespace: f.env.Namespace().String(),
+		Execution: &commonpb.WorkflowExecution{WorkflowId: ref.WorkflowID},
+		Archetype: chasm.WorkflowArchetype,
+	}
+	if ref.ActivityID != "" {
+		req.Execution = &commonpb.WorkflowExecution{WorkflowId: ref.ActivityID, RunId: ref.ActivityRunID}
+		req.Archetype = activity.Archetype
+	}
+	desc, err := f.env.AdminClient().DescribeMutableState(f.ctx(), req)
+	require.NoError(f.t, err)
+	var nodes []string
+	for path := range desc.GetDatabaseMutableState().GetChasmNodes() {
+		if strings.HasPrefix(path, "Stream$Subscriptions#") && strings.Count(path, "$") == 1 {
+			nodes = append(nodes, path)
+		}
+	}
+	return nodes
 }
 
 // streamStateOfRun returns the state of the stream embedded in a workflow run.
