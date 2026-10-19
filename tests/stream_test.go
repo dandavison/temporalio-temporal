@@ -11,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/stretchr/testify/require"
 	activitypb "go.temporal.io/api/activity/v1"
 	commandpb "go.temporal.io/api/command/v1"
@@ -1636,6 +1637,102 @@ func (f *streamFixture) subscriptionNodes(ref streamRef) []string {
 		}
 	}
 	return nodes
+}
+
+// For a stream in an external store, a Wait at the notifier position that NotifierState returned
+// completes on the next Notify. The notifier is embedded in the owner; these tests call it
+// directly, as the Redis backend does.
+func (s *streamTestSuite) TestNotifyCompletesWaitAtCurrentPosition() {
+	s.nativeOnlyEachOwner(func(f *streamFixture) {
+		ref := f.startOwner(f.tv)
+		pos := f.notifierState(ref).Position
+		r := f.startReader()
+		r.wait(ref, &streamservicepb.WaitRequest{Notifier: pos})
+		r.awaitStarted()
+		f.notify(ref)
+		require.Equal(f.t, streamservicepb.WAKE_REASON_APPENDED, r.awaitCompleted().Reason)
+	})
+}
+
+// A Wait at a notifier position that a Notify has since moved past completes at once, so a Notify
+// between a reader's read and its Wait is not lost.
+func (s *streamTestSuite) TestWaitAtStaleNotifierPositionCompletesAtOnce() {
+	s.nativeOnlyEachOwner(func(f *streamFixture) {
+		ref := f.startOwner(f.tv)
+		pos := f.notifierState(ref).Position
+		f.notify(ref)
+		r := f.startReader()
+		r.wait(ref, &streamservicepb.WaitRequest{Notifier: pos})
+		require.Equal(f.t, streamservicepb.WAKE_REASON_APPENDED, r.awaitCompleted().Reason)
+		r.requireNotStarted()
+	})
+}
+
+// A Notify to an owner that does not exist succeeds and does nothing, so producers whose owner has
+// not started are unaffected; and a Notify with no subscriptions writes nothing.
+func (s *streamTestSuite) TestNotifyWithoutSubscriptionsWritesNothing() {
+	s.nativeOnlyEachOwner(func(f *streamFixture) {
+		missing := f.unstartedRef(f.tv)
+		missing.FirstRunID, missing.ActivityRunID = "", ""
+		if f.owner == activityOwner {
+			missing.ActivityRunID = uuid.NewString()
+		} else {
+			missing.FirstRunID = uuid.NewString()
+		}
+		f.notify(missing)
+		ref := f.startOwner(f.tv)
+		before := f.stateTransitionCount(ref)
+		f.notify(ref)
+		f.notify(ref)
+		require.Equal(f.t, before, f.stateTransitionCount(ref))
+	})
+}
+
+// A Wait on the notifier completes when the owner ends, with the state it ended in, so a reader of
+// an external store can tell an owner that ended without closing the stream from a closed stream.
+func (s *streamTestSuite) TestNotifierWaitCompletesWithOwnerEnd() {
+	s.nativeOnly(func(f *streamFixture) {
+		ref := f.startOwner(f.tv)
+		pos := f.notifierState(ref).Position
+		r := f.startReader()
+		r.wait(ref, &streamservicepb.WaitRequest{Notifier: pos})
+		r.awaitStarted()
+		_, err := f.env.FrontendClient().TerminateWorkflowExecution(f.ctx(), &workflowservice.TerminateWorkflowExecutionRequest{
+			Namespace:         f.env.Namespace().String(),
+			WorkflowExecution: &commonpb.WorkflowExecution{WorkflowId: ref.WorkflowID},
+		})
+		require.NoError(f.t, err)
+		resp := r.awaitCompleted()
+		require.Equal(f.t, streamservicepb.WAKE_REASON_OWNER_ENDED, resp.Reason)
+		require.Equal(f.t, streamservicepb.CLOSE_STATE_TERMINATED, resp.OwnerEnd)
+		require.Equal(f.t, streamservicepb.CLOSE_STATE_TERMINATED, f.notifierState(ref).OwnerEnd)
+	})
+}
+
+func (f *streamFixture) notifierState(ref streamRef) *streamservicepb.NotifierStateResponse {
+	out := &streamservicepb.NotifierStateResponse{}
+	require.NoError(f.t, f.b.streamBackend.(*nativeStreamBackend).call(f.ctx(), "NotifierState", &streamservicepb.NotifierStateRequest{Stream: nativeRef(ref)}, out))
+	return out
+}
+
+func (f *streamFixture) notify(ref streamRef) {
+	require.NoError(f.t, f.b.streamBackend.(*nativeStreamBackend).call(f.ctx(), "Notify", &streamservicepb.NotifyRequest{Stream: nativeRef(ref)}, &streamservicepb.NotifyResponse{}))
+}
+
+// stateTransitionCount returns the number of transactions on the stream's owner.
+func (f *streamFixture) stateTransitionCount(ref streamRef) int64 {
+	req := &adminservice.DescribeMutableStateRequest{
+		Namespace: f.env.Namespace().String(),
+		Execution: &commonpb.WorkflowExecution{WorkflowId: ref.WorkflowID},
+		Archetype: chasm.WorkflowArchetype,
+	}
+	if ref.ActivityID != "" {
+		req.Execution = &commonpb.WorkflowExecution{WorkflowId: ref.ActivityID, RunId: ref.ActivityRunID}
+		req.Archetype = activity.Archetype
+	}
+	desc, err := f.env.AdminClient().DescribeMutableState(f.ctx(), req)
+	require.NoError(f.t, err)
+	return desc.GetDatabaseMutableState().GetExecutionInfo().GetStateTransitionCount()
 }
 
 // streamStateOfRun returns the state of the stream embedded in a workflow run.
