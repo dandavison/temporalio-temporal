@@ -318,8 +318,9 @@ func (s *Stream) CloseIfOpen(ctx chasm.MutableContext, c *streamservicepb.Stream
 	return s.FireSubscriptions(ctx, streamservicepb.WAKE_REASON_CLOSED, streamservicepb.CLOSE_STATE_UNSPECIFIED)
 }
 
-// add appends records to the ordered store as one batch, completes the pending Waits that one of
-// them matches, and returns the offset of the first.
+// add appends records to the ordered store as one batch, removes the subscriptions whose callbacks
+// have finished, completes the pending Waits that one of the records matches, and returns the offset
+// of the first.
 func (s *Stream) add(ctx chasm.MutableContext, records ...*streamservicepb.Record) (int64, error) {
 	events := make([][]byte, len(records))
 	for i, r := range records {
@@ -330,6 +331,7 @@ func (s *Stream) add(ctx chasm.MutableContext, records ...*streamservicepb.Recor
 		events[i] = b
 	}
 	first := s.Records.Get(ctx).Append(ctx, events...)
+	removeFinished(ctx, s.Subscriptions)
 	return first, s.fireMatchingSubscriptions(ctx, records)
 }
 
