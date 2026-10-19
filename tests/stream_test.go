@@ -1419,6 +1419,81 @@ func (s *streamTestSuite) TestWaitCompletesOnNextMatchingAppend() {
 	})
 }
 
+// A pending Wait completes when the owner's workflow task that wrote a record the reader read
+// completes: the task's commit record decides that record, which the reader may be holding as
+// provisional. Native only.
+func (s *streamTestSuite) TestWaitCompletesOnCommitOfTaskThatWroteMatchingRecord() {
+	s.nativeOnly(func(f *streamFixture) {
+		ref := f.startOwner(f.tv)
+		task := f.pollWorkflowTask(f.tv)
+		f.append(ref, workflowProducer(task), 0, "progress", "p1")
+		head := f.read(ref, streamReadRequest{From: streamBeginning()}).Cursor
+		r := f.startReader()
+		r.wait(ref, &streamservicepb.WaitRequest{After: head, Topics: []string{"progress"}})
+		r.awaitStarted()
+		f.completeWorkflowTask(task)
+		require.Equal(f.t, streamservicepb.WAKE_REASON_APPENDED, r.awaitCompleted().Reason)
+	})
+}
+
+// A pending Wait does not complete when the owner completes a workflow task that wrote no record
+// matching the Wait's topics: that task's commit record decides nothing the reader holds. Without
+// this, every workflow task of a busy owner would wake every idle reader. Native only.
+func (s *streamTestSuite) TestWaitIgnoresCommitOfTaskThatWroteNoMatchingRecord() {
+	s.nativeOnly(func(f *streamFixture) {
+		ref := f.startOwner(f.tv)
+		task := f.pollWorkflowTask(f.tv)
+		f.append(ref, workflowProducer(task), 0, "progress", "p1")
+		f.completeWorkflowTask(task, f.forceNewWorkflowTask)
+		head := f.read(ref, streamReadRequest{From: streamBeginning()}).Cursor
+		r := f.startReader()
+		r.wait(ref, &streamservicepb.WaitRequest{After: head, Topics: []string{"progress"}})
+		r.awaitStarted()
+		f.completeWorkflowTask(f.pollWorkflowTask(f.tv), f.forceNewWorkflowTask)
+		task = f.pollWorkflowTask(f.tv)
+		f.append(ref, workflowProducer(task), 0, "delta", "d1")
+		f.completeWorkflowTask(task, f.forceNewWorkflowTask)
+		r.requireNotCompleted(2 * time.Second)
+		f.append(ref, clientProducer("a", 1), 0, "progress", "p2")
+		require.Equal(f.t, streamservicepb.WAKE_REASON_APPENDED, r.awaitCompleted().Reason)
+	})
+}
+
+// A Wait whose cursor is before the commit record of a task that wrote a matching record completes
+// at once: the record it decides was read before the Wait. Native only.
+func (s *streamTestSuite) TestWaitCompletesAtOnceForCommitOfTaskThatWroteMatchingRecord() {
+	s.nativeOnly(func(f *streamFixture) {
+		ref := f.startOwner(f.tv)
+		task := f.pollWorkflowTask(f.tv)
+		f.append(ref, workflowProducer(task), 0, "progress", "p1")
+		head := f.read(ref, streamReadRequest{From: streamBeginning()}).Cursor
+		f.completeWorkflowTask(task)
+		r := f.startReader()
+		r.wait(ref, &streamservicepb.WaitRequest{After: head, Topics: []string{"progress"}})
+		require.Equal(f.t, streamservicepb.WAKE_REASON_APPENDED, r.awaitCompleted().Reason)
+		r.requireNotStarted()
+	})
+}
+
+// A Wait whose cursor is before only commit records of tasks that wrote no matching record
+// subscribes. Native only.
+func (s *streamTestSuite) TestWaitSubscribesPastCommitOfTaskThatWroteNoMatchingRecord() {
+	s.nativeOnly(func(f *streamFixture) {
+		ref := f.startOwner(f.tv)
+		task := f.pollWorkflowTask(f.tv)
+		f.append(ref, workflowProducer(task), 0, "progress", "p1")
+		f.completeWorkflowTask(task, f.forceNewWorkflowTask)
+		head := f.read(ref, streamReadRequest{From: streamBeginning()}).Cursor
+		task = f.pollWorkflowTask(f.tv)
+		f.append(ref, workflowProducer(task), 0, "delta", "d1")
+		f.completeWorkflowTask(task)
+		r := f.startReader()
+		r.wait(ref, &streamservicepb.WaitRequest{After: head, Topics: []string{"progress"}})
+		r.awaitStarted()
+		r.requireNotCompleted(2 * time.Second)
+	})
+}
+
 // A Wait completes at once, without a subscription, when a matching record after its cursor is
 // already there. Native only.
 func (s *streamTestSuite) TestWaitCompletesAtOnceWhenRecordExists() {
