@@ -1513,6 +1513,30 @@ func (s *streamTestSuite) TestWaitExpires() {
 	})
 }
 
+// A subscription whose reader has closed is removed after it fires: its delivery fails as not
+// found, and the stream's next append removes it. Native only.
+func (s *streamTestSuite) TestSubscriptionOfClosedReaderIsRemoved() {
+	s.nativeOnlyEachOwner(func(f *streamFixture) {
+		ref := f.startOwner(f.tv)
+		head := f.append(ref, clientProducer("a", 1), 0, "", "x").Cursors[0]
+		r := f.startReader()
+		r.wait(ref, &streamservicepb.WaitRequest{After: head})
+		r.awaitStarted()
+		_, err := f.env.FrontendClient().TerminateWorkflowExecution(f.ctx(), &workflowservice.TerminateWorkflowExecutionRequest{
+			Namespace:         f.env.Namespace().String(),
+			WorkflowExecution: &commonpb.WorkflowExecution{WorkflowId: r.tv.WorkflowID()},
+		})
+		require.NoError(f.t, err)
+		f.append(ref, clientProducer("a", 1), 1, "", "y")
+		seq := int64(2)
+		await.Require(f.ctx(), f.t, func(t *await.T) {
+			f.append(ref, clientProducer("a", 1), seq, "", "z")
+			seq++
+			require.Empty(t, f.subscriptionNodes(ref))
+		}, 30*time.Second, 500*time.Millisecond)
+	})
+}
+
 // streamReader is a workflow that calls the stream service's Wait operation, as a workflow reader
 // of a stream does when a read returns nothing.
 type streamReader struct {
