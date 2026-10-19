@@ -214,6 +214,10 @@ type streamReadRequest struct {
 	MaxRecords int
 	// Wait is how long the read may wait for a matching record. Zero returns at once.
 	Wait time.Duration
+	// Until, if set, makes the read return no record after the one at this cursor.
+	Until streamCursor
+	// MaxBytes, if positive, bounds the total payload bytes of the records returned.
+	MaxBytes int
 }
 
 type streamRecord struct {
@@ -240,7 +244,23 @@ type streamReadResponse struct {
 	Cursor streamCursor
 	// Close is set once the stream is closed and the reader has every record.
 	Close *streamClose
+	// Mode is the stream's mode for the owner's current run. External stores are always sink-mode.
+	Mode streamMode
+	// OwnerCloseTime is set once the owner has closed, with Retention, after which the stream is
+	// removed. Native only.
+	OwnerCloseTime *time.Time
+	Retention      time.Duration
 }
+
+// streamMode is how a stream's owner writes it and how workflows read it.
+type streamMode int
+
+const (
+	// streamModeUnknown: the owner is a workflow whose first workflow task has not completed.
+	streamModeUnknown streamMode = iota
+	streamModeSink
+	streamModeCommit
+)
 
 var (
 	errStreamClosed         = errors.New("stream is closed")

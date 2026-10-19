@@ -1333,6 +1333,73 @@ func (f *streamFixture) activityProducerNodes(ref streamRef) []string {
 	return nodes
 }
 
+// A read with Until returns no record after the one at that cursor, so a workflow's replay can
+// re-read exactly a recorded range. Every backend.
+func (s *streamTestSuite) TestReadStopsAtUntil() {
+	s.forEachBackendAndOwner(func(f *streamFixture) {
+		ref := f.startOwner(f.tv)
+		cursors := f.append(ref, clientProducer("a", 1), 0, "", "x", "y", "z").Cursors
+		resp := f.read(ref, streamReadRequest{From: streamBeginning(), Until: cursors[1]})
+		require.Equal(f.t, []string{"x", "y"}, f.dataOf(resp.Records))
+		require.Equal(f.t, []string{"z"}, f.dataOf(f.read(ref, streamReadRequest{From: streamAfter(resp.Cursor), Until: cursors[2]}).Records))
+	})
+}
+
+// A read with MaxBytes returns records in order until the next would exceed it, and its cursor
+// resumes at that record; a record that alone exceeds it fails the read as too large. Every
+// backend.
+func (s *streamTestSuite) TestReadMaxBytesResumesAtFirstRecordLeftOut() {
+	s.forEachBackendAndOwner(func(f *streamFixture) {
+		ref := f.startOwner(f.tv)
+		f.append(ref, clientProducer("a", 1), 0, "", "xxxx", "yyyy", "zzzz")
+		size := proto.Size(payload.EncodeString("xxxx"))
+		resp := f.read(ref, streamReadRequest{From: streamBeginning(), MaxBytes: 2*size + size/2})
+		require.Equal(f.t, []string{"xxxx", "yyyy"}, f.dataOf(resp.Records))
+		require.Equal(f.t, []string{"zzzz"}, f.dataOf(f.read(ref, streamReadRequest{From: streamAfter(resp.Cursor), MaxBytes: size}).Records))
+		_, err := f.b.Read(f.ctx(), ref, streamReadRequest{From: streamBeginning(), MaxBytes: size - 1})
+		require.ErrorIs(f.t, err, errStreamTooLarge)
+	})
+}
+
+// A read response states the stream's mode: unknown while a workflow owner's first workflow task
+// has not completed, then sink unless that run declared commit mode; always sink for a Standalone
+// Activity owner. Native only: external stores are always sink-mode.
+func (s *streamTestSuite) TestReadResponseStatesStreamMode() {
+	s.nativeOnlyEachOwner(func(f *streamFixture) {
+		ref := f.startOwner(f.tv)
+		f.append(ref, clientProducer("a", 1), 0, "", "x")
+		if f.owner == activityOwner {
+			require.Equal(f.t, streamModeSink, f.read(ref, streamReadRequest{From: streamBeginning()}).Mode)
+			return
+		}
+		require.Equal(f.t, streamModeUnknown, f.read(ref, streamReadRequest{From: streamBeginning()}).Mode)
+		f.completeWorkflowTask(f.pollWorkflowTask(f.tv))
+		require.Equal(f.t, streamModeSink, f.read(ref, streamReadRequest{From: streamBeginning()}).Mode)
+
+		tv := f.tv.WithWorkflowIDNumber(2).WithTaskQueueNumber(2)
+		declared := f.startOwner(tv)
+		f.completeWorkflowTask(f.pollWorkflowTask(tv), f.declareStreamMode(streamservicepb.STREAM_MODE_COMMIT))
+		require.Equal(f.t, streamModeCommit, f.read(declared, streamReadRequest{From: streamBeginning()}).Mode)
+	})
+}
+
+// A read response states when the owner closed and the namespace's retention, after which the
+// stream is removed, so that a reader knows how long its range can be replayed. Native only.
+func (s *streamTestSuite) TestReadResponseReportsOwnerCloseAndRetention() {
+	s.nativeOnlyEachOwner(func(f *streamFixture) {
+		ref := f.startOwner(f.tv)
+		f.append(ref, clientProducer("a", 1), 0, "", "x")
+		require.Nil(f.t, f.read(ref, streamReadRequest{From: streamBeginning()}).OwnerCloseTime)
+		f.endOwner(f.tv)
+		resp := f.read(ref, streamReadRequest{From: streamBeginning()})
+		require.NotNil(f.t, resp.OwnerCloseTime)
+		require.WithinDuration(f.t, time.Now(), *resp.OwnerCloseTime, time.Minute)
+		ns, err := f.env.FrontendClient().DescribeNamespace(f.ctx(), &workflowservice.DescribeNamespaceRequest{Namespace: f.env.Namespace().String()})
+		require.NoError(f.t, err)
+		require.Equal(f.t, ns.Config.WorkflowExecutionRetentionTtl.AsDuration(), resp.Retention)
+	})
+}
+
 // streamStateOfRun returns the state of the stream embedded in a workflow run.
 func (f *streamFixture) streamStateOfRun(runID string) *streampb.StreamState {
 	desc, err := f.env.AdminClient().DescribeMutableState(f.ctx(), &adminservice.DescribeMutableStateRequest{
@@ -1622,6 +1689,19 @@ func (f *streamFixture) forceNewWorkflowTask(req *workflowservice.RespondWorkflo
 }
 
 // commitModeAppend carries records in the workflow task completion, as a worker in commit mode does.
+// declareStreamMode adds a declaration of the run's stream mode to a workflow task completion.
+func (f *streamFixture) declareStreamMode(mode streamservicepb.StreamMode) func(*workflowservice.RespondWorkflowTaskCompletedRequest) {
+	return func(req *workflowservice.RespondWorkflowTaskCompletedRequest) {
+		body, err := anypb.New(&streamservicepb.StreamModeDeclaration{Mode: mode})
+		require.NoError(f.t, err)
+		req.Messages = append(req.Messages, &protocolpb.Message{
+			Id:                 f.tv.Any().String(),
+			ProtocolInstanceId: "stream",
+			Body:               body,
+		})
+	}
+}
+
 func (f *streamFixture) commitModeAppend(data ...string) func(*workflowservice.RespondWorkflowTaskCompletedRequest) {
 	return func(req *workflowservice.RespondWorkflowTaskCompletedRequest) {
 		records := make([]*streamservicepb.AppendRecord, len(data))
