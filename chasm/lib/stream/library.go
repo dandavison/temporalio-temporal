@@ -33,6 +33,7 @@ func (l *library) Components() []*chasm.RegistrableComponent {
 	return []*chasm.RegistrableComponent{
 		chasm.NewRegistrableComponent[*Stream](componentName),
 		chasm.NewRegistrableComponent[*Subscription]("subscription", chasm.WithDetached()),
+		chasm.NewRegistrableComponent[*Notifier]("notifier"),
 		// The ordered store stub has no library of its own.
 		chasm.NewRegistrableComponent[*orderedstore.Log]("orderedstore_log"),
 	}

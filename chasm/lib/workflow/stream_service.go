@@ -49,6 +49,8 @@ func mustNewStreamServiceNexusHandler(h *streamServiceHandler) *nexus.Service {
 		nexus.NewSyncOperation(stream.ReadOperation, h.read),
 		nexus.NewSyncOperation(stream.CloseOperation, h.close),
 		&waitOperation{h: h},
+		nexus.NewSyncOperation(stream.NotifierStateOperation, h.notifierState),
+		nexus.NewSyncOperation(stream.NotifyOperation, h.notify),
 	)
 	return svc
 }
@@ -74,6 +76,11 @@ func (o *waitOperation) Start(
 	if err != nil {
 		return nil, streamOperationError(err)
 	}
+	if req.GetNotifier() != nil {
+		if err := requireNotifierRun(req.GetStream()); err != nil {
+			return nil, err
+		}
+	}
 	ref, ownedByActivity, err := o.h.ownerRef(req.GetStream(), cursor)
 	if err != nil {
 		return nil, err
@@ -88,9 +95,14 @@ func (o *waitOperation) Start(
 		}}},
 	}
 	var resp *streamservicepb.WaitResponse
-	if ownedByActivity {
+	switch {
+	case req.GetNotifier() != nil && ownedByActivity:
+		resp, _, err = chasm.UpdateComponent(ctx, ref, (*activity.Activity).WaitOnNotifier, args)
+	case req.GetNotifier() != nil:
+		resp, _, err = chasm.UpdateComponent(ctx, ref, (*Workflow).waitOnNotifier, args)
+	case ownedByActivity:
 		resp, _, err = chasm.UpdateComponent(ctx, ref, (*activity.Activity).WaitOnStream, args)
-	} else {
+	default:
 		resp, _, err = chasm.UpdateComponent(ctx, ref, (*Workflow).waitOnStream, args)
 	}
 	if _, ok := errors.AsType[*serviceerror.NotFound](err); ok {
@@ -136,6 +148,87 @@ func (o *waitOperation) Cancel(ctx context.Context, token string, _ nexus.Cancel
 	return err
 }
 
+// notifierState returns the notifier position of a stream in an external store, and the owner's
+// terminal state if it has ended. The position is read before the owner, so that a reader that
+// reads the store after this call misses no Notify.
+func (h *streamServiceHandler) notifierState(
+	ctx context.Context,
+	req *streamservicepb.NotifierStateRequest,
+	_ nexus.StartOperationOptions,
+) (*streamservicepb.NotifierStateResponse, error) {
+	if err := requireNotifierRun(req.GetStream()); err != nil {
+		return nil, err
+	}
+	pos := stream.Counters().Position(stream.NotifierOwnerKey(req.GetStream()))
+	ref, ownedByActivity, err := h.ownerRef(req.GetStream(), nil)
+	if err != nil {
+		return nil, err
+	}
+	var resp *streamservicepb.NotifierStateResponse
+	if ownedByActivity {
+		resp, err = chasm.ReadComponent(ctx, ref, (*activity.Activity).NotifierState, req.GetStream())
+	} else {
+		resp, err = chasm.ReadComponent(ctx, ref, (*Workflow).notifierState, req.GetStream())
+	}
+	if _, ok := errors.AsType[*serviceerror.NotFound](err); ok {
+		resp, err = &streamservicepb.NotifierStateResponse{}, nil
+	}
+	if err != nil {
+		return nil, streamOperationError(err)
+	}
+	resp.Position = pos
+	return resp, nil
+}
+
+// notify counts a Notify in memory, and fires the owner's pending Waits, if any. With none it writes
+// nothing. A Notify to an owner that does not exist does nothing. The count moves before the owner
+// is read, under the owner's lock, so a Wait that compared the count before this call either is
+// subscribed already, and fires, or compared it after the increment, and completed at once.
+func (h *streamServiceHandler) notify(
+	ctx context.Context,
+	req *streamservicepb.NotifyRequest,
+	_ nexus.StartOperationOptions,
+) (*streamservicepb.NotifyResponse, error) {
+	if err := requireNotifierRun(req.GetStream()); err != nil {
+		return nil, err
+	}
+	stream.Counters().Increment(stream.NotifierOwnerKey(req.GetStream()))
+	ref, ownedByActivity, err := h.ownerRef(req.GetStream(), nil)
+	if err != nil {
+		return nil, err
+	}
+	var pending bool
+	if ownedByActivity {
+		pending, err = chasm.ReadComponent(ctx, ref, (*activity.Activity).NotifierPending, req.GetStream())
+	} else {
+		pending, err = chasm.ReadComponent(ctx, ref, (*Workflow).notifierPending, req.GetStream())
+	}
+	if _, ok := errors.AsType[*serviceerror.NotFound](err); ok {
+		return &streamservicepb.NotifyResponse{}, nil
+	}
+	if _, ok := errors.AsType[*stream.Error](err); ok {
+		return &streamservicepb.NotifyResponse{}, nil
+	}
+	if err != nil || !pending {
+		return &streamservicepb.NotifyResponse{}, err
+	}
+	if ownedByActivity {
+		_, _, err = chasm.UpdateComponent(ctx, ref, (*activity.Activity).FireNotifier, req.GetStream())
+	} else {
+		_, _, err = chasm.UpdateComponent(ctx, ref, (*Workflow).fireNotifier, req.GetStream())
+	}
+	return &streamservicepb.NotifyResponse{}, err
+}
+
+// requireNotifierRun rejects a notifier operation that does not name the owner's run: the notify
+// count is kept per run, so a Notify and a Wait must name the same one.
+func requireNotifierRun(ref *streamservicepb.StreamRef) error {
+	if ref.GetFirstRunId() == "" && ref.GetActivityRunId() == "" {
+		return serviceerror.NewInvalidArgument("notifier operations need the owner's run ID: a workflow's first run ID, or the activity's run ID")
+	}
+	return nil
+}
+
 // waitOnStream completes a Wait on the workflow's stream at once, or subscribes it. It creates the
 // stream if it does not exist, as a subscription creates a missing notifier.
 func (w *Workflow) waitOnStream(ctx chasm.MutableContext, args stream.WaitArgs) (*streamservicepb.WaitResponse, error) {
@@ -156,6 +249,9 @@ func (w *Workflow) waitOnStream(ctx chasm.MutableContext, args stream.WaitArgs) 
 func (w *Workflow) cancelStreamWait(ctx chasm.MutableContext, requestID string) (chasm.NoValue, error) {
 	if s, ok := w.Stream.TryGet(ctx); ok {
 		s.CancelSubscription(ctx, requestID)
+	}
+	if n, ok := w.StreamNotifier.TryGet(ctx); ok {
+		n.CancelSubscription(ctx, requestID)
 	}
 	return nil, nil
 }
@@ -498,6 +594,11 @@ func (w *Workflow) RecordStreamWorkflowTaskCommit(ctx chasm.MutableContext, atte
 // CloseStreamOnOwnerEnd closes the stream, unless it is already closed, in the transaction in
 // which its owner reaches a terminal state.
 func (w *Workflow) CloseStreamOnOwnerEnd(ctx chasm.MutableContext, state streamservicepb.CloseState, failure *failurepb.Failure) error {
+	if n, ok := w.StreamNotifier.TryGet(ctx); ok {
+		if err := n.Fire(ctx, streamservicepb.WAKE_REASON_OWNER_ENDED, state); err != nil {
+			return err
+		}
+	}
 	s, ok := w.Stream.TryGet(ctx)
 	if !ok {
 		return nil
@@ -508,11 +609,80 @@ func (w *Workflow) CloseStreamOnOwnerEnd(ctx chasm.MutableContext, state streams
 // EndStreamRun completes the stream's pending Waits when the run ends but its chain continues in a
 // new run, which leaves the stream open: the readers read again, which addresses the new run.
 func (w *Workflow) EndStreamRun(ctx chasm.MutableContext) error {
+	if n, ok := w.StreamNotifier.TryGet(ctx); ok {
+		if err := n.Fire(ctx, streamservicepb.WAKE_REASON_OWNER_ENDED, streamservicepb.CLOSE_STATE_UNSPECIFIED); err != nil {
+			return err
+		}
+	}
 	s, ok := w.Stream.TryGet(ctx)
 	if !ok {
 		return nil
 	}
 	return s.FireSubscriptions(ctx, streamservicepb.WAKE_REASON_OWNER_ENDED, streamservicepb.CLOSE_STATE_UNSPECIFIED)
+}
+
+// waitOnNotifier completes a Wait on the notifier of the workflow's stream in an external store at
+// once, if the run has ended or a Notify has moved the position since the reader read it, and
+// otherwise subscribes it. It creates the notifier if it does not exist.
+func (w *Workflow) waitOnNotifier(ctx chasm.MutableContext, args stream.WaitArgs) (*streamservicepb.WaitResponse, error) {
+	if err := w.checkStreamChain(args.Req.GetStream()); err != nil {
+		return nil, err
+	}
+	if end := w.streamOwnerEnd(); end != nil {
+		return &streamservicepb.WaitResponse{Reason: streamservicepb.WAKE_REASON_OWNER_ENDED, OwnerEnd: *end}, nil
+	}
+	if !proto.Equal(stream.Counters().Position(w.notifierKey(args.Req.GetStream())), args.Req.GetNotifier()) {
+		return &streamservicepb.WaitResponse{Reason: streamservicepb.WAKE_REASON_APPENDED}, nil
+	}
+	n, ok := w.StreamNotifier.TryGet(ctx)
+	if !ok {
+		n = stream.NewNotifier()
+		w.StreamNotifier = chasm.NewComponentField(ctx, n)
+	}
+	return nil, n.Subscribe(ctx, args)
+}
+
+// notifierKey names the workflow's run chain in the notify counters.
+func (w *Workflow) notifierKey(ref *streamservicepb.StreamRef) string {
+	return stream.NotifierOwnerKey(&streamservicepb.StreamRef{Namespace: ref.GetNamespace(), WorkflowId: w.GetExecutionInfo().GetWorkflowId(), FirstRunId: w.firstRunID()})
+}
+
+// streamOwnerEnd returns the state the run ended in, or nil while it runs.
+func (w *Workflow) streamOwnerEnd() *streamservicepb.CloseState {
+	status := w.GetExecutionState().GetStatus()
+	if status == enumspb.WORKFLOW_EXECUTION_STATUS_RUNNING {
+		return nil
+	}
+	end := StreamCloseState(status)
+	return &end
+}
+
+// notifierState returns the state the run ended in, if it has, for NotifierState.
+func (w *Workflow) notifierState(ctx chasm.Context, ref *streamservicepb.StreamRef) (*streamservicepb.NotifierStateResponse, error) {
+	if err := w.checkStreamChain(ref); err != nil {
+		return nil, err
+	}
+	resp := &streamservicepb.NotifierStateResponse{}
+	if end := w.streamOwnerEnd(); end != nil {
+		resp.OwnerEnd = *end
+	}
+	return resp, nil
+}
+
+// notifierPending reports whether the notifier has a pending Wait, so that a Notify must write.
+func (w *Workflow) notifierPending(ctx chasm.Context, ref *streamservicepb.StreamRef) (bool, error) {
+	if err := w.checkStreamChain(ref); err != nil {
+		return false, err
+	}
+	n, ok := w.StreamNotifier.TryGet(ctx)
+	return ok && n.HasPending(ctx), nil
+}
+
+func (w *Workflow) fireNotifier(ctx chasm.MutableContext, _ *streamservicepb.StreamRef) (chasm.NoValue, error) {
+	if n, ok := w.StreamNotifier.TryGet(ctx); ok {
+		return nil, n.Fire(ctx, streamservicepb.WAKE_REASON_APPENDED, streamservicepb.CLOSE_STATE_UNSPECIFIED)
+	}
+	return nil, nil
 }
 
 // RemoveStreamActivityProducer removes the state of the run's activity as a stream producer. It is
@@ -742,5 +912,7 @@ func NewStreamServiceNexusServiceProcessor() *chasm.NexusServiceProcessor {
 	sp.MustRegisterOperation(stream.ReadOperation, chasm.NewRegisterableNexusOperationProcessor(streamOperationProcessor[*streamservicepb.ReadRequest]{}))
 	sp.MustRegisterOperation(stream.CloseOperation, chasm.NewRegisterableNexusOperationProcessor(streamOperationProcessor[*streamservicepb.CloseRequest]{}))
 	sp.MustRegisterOperation(stream.WaitOperation, chasm.NewRegisterableNexusOperationProcessor(streamOperationProcessor[*streamservicepb.WaitRequest]{}))
+	sp.MustRegisterOperation(stream.NotifierStateOperation, chasm.NewRegisterableNexusOperationProcessor(streamOperationProcessor[*streamservicepb.NotifierStateRequest]{}))
+	sp.MustRegisterOperation(stream.NotifyOperation, chasm.NewRegisterableNexusOperationProcessor(streamOperationProcessor[*streamservicepb.NotifyRequest]{}))
 	return sp
 }

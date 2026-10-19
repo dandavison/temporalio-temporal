@@ -49,6 +49,10 @@ type Workflow struct {
 
 	// Stream is the stream owned by the workflow, created by its first append.
 	Stream chasm.Field[*stream.Stream]
+
+	// StreamNotifier holds the pending Waits of readers of the workflow's stream in an external
+	// store, created by the first such Wait.
+	StreamNotifier chasm.Field[*stream.Notifier]
 }
 
 func NewWorkflow(

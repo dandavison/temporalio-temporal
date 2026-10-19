@@ -7454,7 +7454,8 @@ func (ms *MutableStateImpl) processCloseCallbacksChasm() error {
 	return wf.ProcessCloseCallbacks(ctx)
 }
 
-// streamWorkflowComponent returns the workflow component for writing if the workflow owns a stream.
+// streamWorkflowComponent returns the workflow component for writing if the workflow owns a stream,
+// or a notifier for a stream in an external store.
 func (ms *MutableStateImpl) streamWorkflowComponent() (*chasmworkflow.Workflow, chasm.MutableContext, error) {
 	if !ms.ChasmEnabled() {
 		return nil, nil, nil
@@ -7463,7 +7464,9 @@ func (ms *MutableStateImpl) streamWorkflowComponent() (*chasmworkflow.Workflow, 
 	if err != nil {
 		return nil, nil, err
 	}
-	if _, ok := wf.Stream.TryGet(roCtx); !ok {
+	_, hasStream := wf.Stream.TryGet(roCtx)
+	_, hasNotifier := wf.StreamNotifier.TryGet(roCtx)
+	if !hasStream && !hasNotifier {
 		return nil, nil, nil
 	}
 	return ms.ChasmWorkflowComponent(context.Background())

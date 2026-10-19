@@ -79,6 +79,10 @@ type Activity struct {
 
 	// Stream is the standalone activity's stream, created by its first append. Standalone only.
 	Stream chasm.Field[*stream.Stream]
+
+	// StreamNotifier holds the pending Waits of readers of the activity's stream in an external
+	// store, created by the first such Wait. Standalone only.
+	StreamNotifier chasm.Field[*stream.Notifier]
 }
 
 // WithToken wraps a request with its deserialized task token.

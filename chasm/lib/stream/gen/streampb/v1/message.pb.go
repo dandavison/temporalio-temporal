@@ -449,6 +449,44 @@ func (x *WaitToken) GetRequestId() string {
 	return ""
 }
 
+// The state of a notifier for a stream in an external store. Its subscriptions are its children; the
+// count of Notify calls is kept in memory (see NotifyCounters).
+type NotifierState struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *NotifierState) Reset() {
+	*x = NotifierState{}
+	mi := &file_temporal_server_chasm_lib_stream_proto_v1_message_proto_msgTypes[6]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *NotifierState) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*NotifierState) ProtoMessage() {}
+
+func (x *NotifierState) ProtoReflect() protoreflect.Message {
+	mi := &file_temporal_server_chasm_lib_stream_proto_v1_message_proto_msgTypes[6]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use NotifierState.ProtoReflect.Descriptor instead.
+func (*NotifierState) Descriptor() ([]byte, []int) {
+	return file_temporal_server_chasm_lib_stream_proto_v1_message_proto_rawDescGZIP(), []int{6}
+}
+
 var File_temporal_server_chasm_lib_stream_proto_v1_message_proto protoreflect.FileDescriptor
 
 const file_temporal_server_chasm_lib_stream_proto_v1_message_proto_rawDesc = "" +
@@ -493,7 +531,8 @@ const file_temporal_server_chasm_lib_stream_proto_v1_message_proto_rawDesc = "" 
 	"\tWaitToken\x12N\n" +
 	"\x06stream\x18\x01 \x01(\v26.temporal.api.nexusservices.streamservice.v1.StreamRefR\x06stream\x12\x1d\n" +
 	"\n" +
-	"request_id\x18\x02 \x01(\tR\trequestIdB>Z<go.temporal.io/server/chasm/lib/stream/gen/streampb;streampbb\x06proto3"
+	"request_id\x18\x02 \x01(\tR\trequestId\"\x0f\n" +
+	"\rNotifierStateB>Z<go.temporal.io/server/chasm/lib/stream/gen/streampb;streampbb\x06proto3"
 
 var (
 	file_temporal_server_chasm_lib_stream_proto_v1_message_proto_rawDescOnce sync.Once
@@ -507,7 +546,7 @@ func file_temporal_server_chasm_lib_stream_proto_v1_message_proto_rawDescGZIP() 
 	return file_temporal_server_chasm_lib_stream_proto_v1_message_proto_rawDescData
 }
 
-var file_temporal_server_chasm_lib_stream_proto_v1_message_proto_msgTypes = make([]protoimpl.MessageInfo, 7)
+var file_temporal_server_chasm_lib_stream_proto_v1_message_proto_msgTypes = make([]protoimpl.MessageInfo, 8)
 var file_temporal_server_chasm_lib_stream_proto_v1_message_proto_goTypes = []any{
 	(*StreamState)(nil),            // 0: temporal.server.chasm.lib.stream.proto.v1.StreamState
 	(*ProducerState)(nil),          // 1: temporal.server.chasm.lib.stream.proto.v1.ProducerState
@@ -515,24 +554,25 @@ var file_temporal_server_chasm_lib_stream_proto_v1_message_proto_goTypes = []any
 	(*SubscriptionState)(nil),      // 3: temporal.server.chasm.lib.stream.proto.v1.SubscriptionState
 	(*SubscriptionExpiryTask)(nil), // 4: temporal.server.chasm.lib.stream.proto.v1.SubscriptionExpiryTask
 	(*WaitToken)(nil),              // 5: temporal.server.chasm.lib.stream.proto.v1.WaitToken
-	nil,                            // 6: temporal.server.chasm.lib.stream.proto.v1.StreamState.WorkflowAppendModesEntry
-	(*v1.StreamClose)(nil),         // 7: temporal.api.nexusservices.streamservice.v1.StreamClose
-	(*timestamppb.Timestamp)(nil),  // 8: google.protobuf.Timestamp
-	(v1.WakeReason)(0),             // 9: temporal.api.nexusservices.streamservice.v1.WakeReason
-	(v1.CloseState)(0),             // 10: temporal.api.nexusservices.streamservice.v1.CloseState
-	(*v1.StreamRef)(nil),           // 11: temporal.api.nexusservices.streamservice.v1.StreamRef
-	(v1.WorkflowAppendMode)(0),     // 12: temporal.api.nexusservices.streamservice.v1.WorkflowAppendMode
+	(*NotifierState)(nil),          // 6: temporal.server.chasm.lib.stream.proto.v1.NotifierState
+	nil,                            // 7: temporal.server.chasm.lib.stream.proto.v1.StreamState.WorkflowAppendModesEntry
+	(*v1.StreamClose)(nil),         // 8: temporal.api.nexusservices.streamservice.v1.StreamClose
+	(*timestamppb.Timestamp)(nil),  // 9: google.protobuf.Timestamp
+	(v1.WakeReason)(0),             // 10: temporal.api.nexusservices.streamservice.v1.WakeReason
+	(v1.CloseState)(0),             // 11: temporal.api.nexusservices.streamservice.v1.CloseState
+	(*v1.StreamRef)(nil),           // 12: temporal.api.nexusservices.streamservice.v1.StreamRef
+	(v1.WorkflowAppendMode)(0),     // 13: temporal.api.nexusservices.streamservice.v1.WorkflowAppendMode
 }
 var file_temporal_server_chasm_lib_stream_proto_v1_message_proto_depIdxs = []int32{
-	7,  // 0: temporal.server.chasm.lib.stream.proto.v1.StreamState.close:type_name -> temporal.api.nexusservices.streamservice.v1.StreamClose
-	6,  // 1: temporal.server.chasm.lib.stream.proto.v1.StreamState.workflow_append_modes:type_name -> temporal.server.chasm.lib.stream.proto.v1.StreamState.WorkflowAppendModesEntry
-	8,  // 2: temporal.server.chasm.lib.stream.proto.v1.SubscriptionState.expire_time:type_name -> google.protobuf.Timestamp
-	9,  // 3: temporal.server.chasm.lib.stream.proto.v1.SubscriptionState.reason:type_name -> temporal.api.nexusservices.streamservice.v1.WakeReason
-	10, // 4: temporal.server.chasm.lib.stream.proto.v1.SubscriptionState.owner_end:type_name -> temporal.api.nexusservices.streamservice.v1.CloseState
-	8,  // 5: temporal.server.chasm.lib.stream.proto.v1.SubscriptionState.start_time:type_name -> google.protobuf.Timestamp
-	8,  // 6: temporal.server.chasm.lib.stream.proto.v1.SubscriptionState.close_time:type_name -> google.protobuf.Timestamp
-	11, // 7: temporal.server.chasm.lib.stream.proto.v1.WaitToken.stream:type_name -> temporal.api.nexusservices.streamservice.v1.StreamRef
-	12, // 8: temporal.server.chasm.lib.stream.proto.v1.StreamState.WorkflowAppendModesEntry.value:type_name -> temporal.api.nexusservices.streamservice.v1.WorkflowAppendMode
+	8,  // 0: temporal.server.chasm.lib.stream.proto.v1.StreamState.close:type_name -> temporal.api.nexusservices.streamservice.v1.StreamClose
+	7,  // 1: temporal.server.chasm.lib.stream.proto.v1.StreamState.workflow_append_modes:type_name -> temporal.server.chasm.lib.stream.proto.v1.StreamState.WorkflowAppendModesEntry
+	9,  // 2: temporal.server.chasm.lib.stream.proto.v1.SubscriptionState.expire_time:type_name -> google.protobuf.Timestamp
+	10, // 3: temporal.server.chasm.lib.stream.proto.v1.SubscriptionState.reason:type_name -> temporal.api.nexusservices.streamservice.v1.WakeReason
+	11, // 4: temporal.server.chasm.lib.stream.proto.v1.SubscriptionState.owner_end:type_name -> temporal.api.nexusservices.streamservice.v1.CloseState
+	9,  // 5: temporal.server.chasm.lib.stream.proto.v1.SubscriptionState.start_time:type_name -> google.protobuf.Timestamp
+	9,  // 6: temporal.server.chasm.lib.stream.proto.v1.SubscriptionState.close_time:type_name -> google.protobuf.Timestamp
+	12, // 7: temporal.server.chasm.lib.stream.proto.v1.WaitToken.stream:type_name -> temporal.api.nexusservices.streamservice.v1.StreamRef
+	13, // 8: temporal.server.chasm.lib.stream.proto.v1.StreamState.WorkflowAppendModesEntry.value:type_name -> temporal.api.nexusservices.streamservice.v1.WorkflowAppendMode
 	9,  // [9:9] is the sub-list for method output_type
 	9,  // [9:9] is the sub-list for method input_type
 	9,  // [9:9] is the sub-list for extension type_name
@@ -551,7 +591,7 @@ func file_temporal_server_chasm_lib_stream_proto_v1_message_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_temporal_server_chasm_lib_stream_proto_v1_message_proto_rawDesc), len(file_temporal_server_chasm_lib_stream_proto_v1_message_proto_rawDesc)),
 			NumEnums:      0,
-			NumMessages:   7,
+			NumMessages:   8,
 			NumExtensions: 0,
 			NumServices:   0,
 		},

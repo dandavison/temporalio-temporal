@@ -66,3 +66,8 @@ message WaitToken {
     temporal.api.nexusservices.streamservice.v1.StreamRef stream = 1;
     string request_id = 2;
 }
+
+// The state of a notifier for a stream in an external store. Its subscriptions are its children; the
+// count of Notify calls is kept in memory (see NotifyCounters).
+message NotifierState {
+}

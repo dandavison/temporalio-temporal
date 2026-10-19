@@ -91,22 +91,28 @@ func (s *Subscription) GetNexusCompletion(chasm.Context, string) (nexusrpc.Compl
 	}, nil
 }
 
-// Subscribe stores a subscription for a Wait with the caller's request ID and callback, which fires
-// on the next record after offset after that matches topics, on the close, or when the owner ends.
-// A retried start with the same request ID finds its subscription and adds nothing.
-func (s *Stream) Subscribe(
+// Subscriptions are pending Waits, keyed by the Wait's request ID. A native Stream and an
+// external store's Notifier each hold them.
+type Subscriptions = chasm.Map[string, *Subscription]
+
+// subscribe stores a subscription for a Wait with the caller's request ID and callback, which fires
+// on the next record after offset after that matches topics, on the next Notify, on the close, or
+// when the owner ends. A retried start with the same request ID finds its subscription and adds
+// nothing.
+func subscribe(
 	ctx chasm.MutableContext,
+	subs *Subscriptions,
 	requestID string,
 	cb *commonpb.Callback,
 	after int64,
 	topics []string,
 	lifetime time.Duration,
 ) error {
-	s.removeFinishedSubscriptions(ctx)
-	if _, ok := s.Subscriptions[requestID]; ok {
+	removeFinished(ctx, *subs)
+	if _, ok := (*subs)[requestID]; ok {
 		return nil
 	}
-	if s.unfiredSubscriptions(ctx) >= MaxSubscriptions {
+	if unfired(ctx, *subs) >= MaxSubscriptions {
 		return serviceerror.NewResourceExhaustedf(enumspb.RESOURCE_EXHAUSTED_CAUSE_CONCURRENT_LIMIT,
 			"the stream already has %d pending waits", MaxSubscriptions)
 	}
@@ -117,7 +123,7 @@ func (s *Stream) Subscribe(
 	if lifetime <= 0 || lifetime > MaxSubscriptionLifetime {
 		lifetime = MaxSubscriptionLifetime
 	}
-	now := ctx.Now(s)
+	now := ctx.Now(nil)
 	sub := &Subscription{
 		SubscriptionState: &streampb.SubscriptionState{
 			After:      after,
@@ -129,29 +135,62 @@ func (s *Stream) Subscribe(
 			requestID: chasm.NewComponentField(ctx, callback.NewCallback(requestID, timestamppb.New(now), internal)),
 		},
 	}
-	if s.Subscriptions == nil {
-		s.Subscriptions = make(chasm.Map[string, *Subscription])
+	if *subs == nil {
+		*subs = make(Subscriptions)
 	}
-	s.Subscriptions[requestID] = chasm.NewComponentField(ctx, sub)
+	(*subs)[requestID] = chasm.NewComponentField(ctx, sub)
 	ctx.AddTask(sub, chasm.TaskAttributes{ScheduledTime: now.Add(lifetime)}, &streampb.SubscriptionExpiryTask{})
 	return nil
 }
 
-// CancelSubscription removes the subscription of a canceled Wait, if it has not fired.
-func (s *Stream) CancelSubscription(ctx chasm.MutableContext, requestID string) {
-	if field, ok := s.Subscriptions[requestID]; ok && !field.Get(ctx).fired() {
-		delete(s.Subscriptions, requestID)
+// cancelSubscription removes the subscription of a canceled Wait, if it has not fired.
+func cancelSubscription(ctx chasm.MutableContext, subs Subscriptions, requestID string) {
+	if field, ok := subs[requestID]; ok && !field.Get(ctx).fired() {
+		delete(subs, requestID)
 	}
 }
 
-// FireSubscriptions completes every pending Wait with reason.
-func (s *Stream) FireSubscriptions(ctx chasm.MutableContext, reason streamservicepb.WakeReason, ownerEnd streamservicepb.CloseState) error {
-	for _, field := range s.Subscriptions {
+// fireAll completes every pending Wait with reason.
+func fireAll(ctx chasm.MutableContext, subs Subscriptions, reason streamservicepb.WakeReason, ownerEnd streamservicepb.CloseState) error {
+	for _, field := range subs {
 		if err := field.Get(ctx).fire(ctx, reason, ownerEnd); err != nil {
 			return err
 		}
 	}
 	return nil
+}
+
+func removeFinished(ctx chasm.MutableContext, subs Subscriptions) {
+	for key, field := range subs {
+		if field.Get(ctx).finished(ctx) {
+			delete(subs, key)
+		}
+	}
+}
+
+func unfired(ctx chasm.Context, subs Subscriptions) int {
+	n := 0
+	for _, field := range subs {
+		if !field.Get(ctx).fired() {
+			n++
+		}
+	}
+	return n
+}
+
+// Subscribe stores a subscription for a Wait on the stream; see subscribe.
+func (s *Stream) Subscribe(ctx chasm.MutableContext, requestID string, cb *commonpb.Callback, after int64, topics []string, lifetime time.Duration) error {
+	return subscribe(ctx, &s.Subscriptions, requestID, cb, after, topics, lifetime)
+}
+
+// CancelSubscription removes the subscription of a canceled Wait, if it has not fired.
+func (s *Stream) CancelSubscription(ctx chasm.MutableContext, requestID string) {
+	cancelSubscription(ctx, s.Subscriptions, requestID)
+}
+
+// FireSubscriptions completes every pending Wait with reason.
+func (s *Stream) FireSubscriptions(ctx chasm.MutableContext, reason streamservicepb.WakeReason, ownerEnd streamservicepb.CloseState) error {
+	return fireAll(ctx, s.Subscriptions, reason, ownerEnd)
 }
 
 // HasRecordAfter reports whether a record after offset after matches topics.
@@ -179,24 +218,6 @@ func (s *Stream) fireMatchingSubscriptions(ctx chasm.MutableContext, records []*
 		}
 	}
 	return nil
-}
-
-func (s *Stream) removeFinishedSubscriptions(ctx chasm.MutableContext) {
-	for key, field := range s.Subscriptions {
-		if field.Get(ctx).finished(ctx) {
-			delete(s.Subscriptions, key)
-		}
-	}
-}
-
-func (s *Stream) unfiredSubscriptions(ctx chasm.Context) int {
-	n := 0
-	for _, field := range s.Subscriptions {
-		if !field.Get(ctx).fired() {
-			n++
-		}
-	}
-	return n
 }
 
 // subscriptionExpiryTaskHandler fires a subscription that has not fired by its expire time.

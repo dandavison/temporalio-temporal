@@ -91,6 +91,9 @@ func (a *Activity) CancelStreamWait(ctx chasm.MutableContext, requestID string) 
 	if s, ok := a.Stream.TryGet(ctx); ok {
 		s.CancelSubscription(ctx, requestID)
 	}
+	if n, ok := a.StreamNotifier.TryGet(ctx); ok {
+		n.CancelSubscription(ctx, requestID)
+	}
 	return nil, nil
 }
 
@@ -130,10 +133,62 @@ func streamOffset(ctx chasm.Context, c *streampb.Cursor) (int64, error) {
 // Each terminal transition passes its state, because the transition sets the activity's status only
 // after its apply function returns.
 func (a *Activity) closeStreamOnEnd(ctx chasm.MutableContext, state streamservicepb.CloseState) error {
+	if n, ok := a.StreamNotifier.TryGet(ctx); ok {
+		if err := n.Fire(ctx, streamservicepb.WAKE_REASON_OWNER_ENDED, state); err != nil {
+			return err
+		}
+	}
 	if s, ok := a.Stream.TryGet(ctx); ok {
 		return s.CloseIfOpen(ctx, &streamservicepb.StreamClose{State: state})
 	}
 	return nil
+}
+
+// WaitOnNotifier completes a Wait on the notifier of the activity's stream in an external store at
+// once, if the activity has ended or a Notify has moved the position since the reader read it, and
+// otherwise subscribes it.
+func (a *Activity) WaitOnNotifier(ctx chasm.MutableContext, args stream.WaitArgs) (*streamservicepb.WaitResponse, error) {
+	if a.LifecycleState(ctx) != chasm.LifecycleStateRunning {
+		return &streamservicepb.WaitResponse{Reason: streamservicepb.WAKE_REASON_OWNER_ENDED, OwnerEnd: streamCloseState(a.Status)}, nil
+	}
+	if !proto.Equal(stream.Counters().Position(notifierKey(ctx, args.Req.GetStream())), args.Req.GetNotifier()) {
+		return &streamservicepb.WaitResponse{Reason: streamservicepb.WAKE_REASON_APPENDED}, nil
+	}
+	n, ok := a.StreamNotifier.TryGet(ctx)
+	if !ok {
+		n = stream.NewNotifier()
+		a.StreamNotifier = chasm.NewComponentField(ctx, n)
+	}
+	return nil, n.Subscribe(ctx, args)
+}
+
+// NotifierState returns the state the activity ended in, if it has, for NotifierState.
+func (a *Activity) NotifierState(ctx chasm.Context, _ *streamservicepb.StreamRef) (*streamservicepb.NotifierStateResponse, error) {
+	resp := &streamservicepb.NotifierStateResponse{}
+	if a.LifecycleState(ctx) != chasm.LifecycleStateRunning {
+		resp.OwnerEnd = streamCloseState(a.Status)
+	}
+	return resp, nil
+}
+
+// NotifierPending reports whether the notifier has a pending Wait, so that a Notify must write.
+func (a *Activity) NotifierPending(ctx chasm.Context, _ *streamservicepb.StreamRef) (bool, error) {
+	n, ok := a.StreamNotifier.TryGet(ctx)
+	return ok && n.HasPending(ctx), nil
+}
+
+// FireNotifier completes the notifier's pending Waits, after a Notify.
+func (a *Activity) FireNotifier(ctx chasm.MutableContext, _ *streamservicepb.StreamRef) (chasm.NoValue, error) {
+	if n, ok := a.StreamNotifier.TryGet(ctx); ok {
+		return nil, n.Fire(ctx, streamservicepb.WAKE_REASON_APPENDED, streamservicepb.CLOSE_STATE_UNSPECIFIED)
+	}
+	return nil, nil
+}
+
+// notifierKey names this activity execution in the notify counters.
+func notifierKey(ctx chasm.Context, ref *streamservicepb.StreamRef) string {
+	key := ctx.ExecutionKey()
+	return stream.NotifierOwnerKey(&streamservicepb.StreamRef{Namespace: ref.GetNamespace(), ActivityId: key.BusinessID, ActivityRunId: key.RunID})
 }
 
 // mutableStream returns the activity's stream, creating it if it does not exist. A stream created
