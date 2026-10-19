@@ -92,9 +92,11 @@ type WaitArgs struct {
 }
 
 // Wait completes a Wait at once, returning its result, if what it waits for is already there, and
-// otherwise subscribes it and returns nil. A Wait does not complete for records while the stream's
-// mode is not yet known (known is false): the next record, which the owner's first workflow task
-// completion appends as its commit record, completes it.
+// otherwise subscribes it and returns nil. What a Wait waits for is a record of its topics, or the
+// commit record of a workflow task that wrote one, which decides a record the reader may hold as
+// provisional. While the stream's mode is not yet known (known is false), any marker also
+// completes it: the owner's first workflow task completion, which fixes the mode, appends a commit
+// record.
 func (s *Stream) Wait(ctx chasm.MutableContext, args WaitArgs, after int64, known bool) (*streamservicepb.WaitResponse, error) {
 	if s.Close != nil {
 		return &streamservicepb.WaitResponse{Reason: streamservicepb.WAKE_REASON_CLOSED}, nil
@@ -105,7 +107,7 @@ func (s *Stream) Wait(ctx chasm.MutableContext, args WaitArgs, after int64, know
 			return &streamservicepb.WaitResponse{Reason: streamservicepb.WAKE_REASON_APPENDED}, err
 		}
 	}
-	return nil, s.Subscribe(ctx, args.RequestID, args.Callback, after, args.Req.GetTopics(), args.Req.GetLifetime().AsDuration())
+	return nil, s.Subscribe(ctx, args.RequestID, args.Callback, after, args.Req.GetTopics(), !known, args.Req.GetLifetime().AsDuration())
 }
 
 // ReadArgs is a read request and its decoded cursors: Cursor is nil for a read from the beginning,
@@ -238,14 +240,24 @@ func (s *Stream) Append(
 
 // RecordCommit records that attempt completed workflow task workflowTask of run runID. It is written
 // for every task, so that readers can judge records that local activities append after their task
-// completed.
+// completed. It wakes only the pending Waits that read a topic the task wrote to.
 func (s *Stream) RecordCommit(ctx chasm.MutableContext, runID string, workflowTask, attempt int64) error {
-	_, err := s.add(ctx, &streamservicepb.Record{WorkflowTaskCommit: &streamservicepb.WorkflowTaskCommit{
+	topics := s.takeUncommittedTopics(runID, workflowTask)
+	offset, err := s.store(ctx, &streamservicepb.Record{WorkflowTaskCommit: &streamservicepb.WorkflowTaskCommit{
 		WorkflowRunId: runID,
 		WorkflowTask:  workflowTask,
 		Attempt:       attempt,
 	}})
-	return err
+	if err != nil {
+		return err
+	}
+	s.RecentCommits = append(s.RecentCommits, &streampb.CommitTopics{Offset: offset, Topics: topics})
+	if n := len(s.RecentCommits); n > maxRecentCommits {
+		s.RecentCommits = s.RecentCommits[n-maxRecentCommits:]
+	}
+	return s.fireSubscriptionsFor(ctx, func(sub *streampb.SubscriptionState) bool {
+		return sub.GetWakeOnMarkers() || readsAny(sub.GetTopics(), topics)
+	})
 }
 
 // RecordCreated records, as the stream's first record, the creating run's next workflow task: the
@@ -318,10 +330,22 @@ func (s *Stream) CloseIfOpen(ctx chasm.MutableContext, c *streamservicepb.Stream
 	return s.FireSubscriptions(ctx, streamservicepb.WAKE_REASON_CLOSED, streamservicepb.CLOSE_STATE_UNSPECIFIED)
 }
 
-// add appends records to the ordered store as one batch, removes the subscriptions whose callbacks
-// have finished, completes the pending Waits that one of the records matches, and returns the offset
-// of the first.
+// add appends records as one batch, completes the pending Waits that one of the records wakes, and
+// returns the offset of the first.
 func (s *Stream) add(ctx chasm.MutableContext, records ...*streamservicepb.Record) (int64, error) {
+	first, err := s.store(ctx, records...)
+	if err != nil {
+		return 0, err
+	}
+	s.noteUncommittedTopics(records)
+	return first, s.fireSubscriptionsFor(ctx, func(sub *streampb.SubscriptionState) bool {
+		return slices.ContainsFunc(records, func(r *streamservicepb.Record) bool { return wakes(sub, r) })
+	})
+}
+
+// store appends records to the ordered store as one batch, removes the subscriptions whose
+// callbacks have finished, and returns the offset of the first.
+func (s *Stream) store(ctx chasm.MutableContext, records ...*streamservicepb.Record) (int64, error) {
 	events := make([][]byte, len(records))
 	for i, r := range records {
 		b, err := proto.Marshal(r)
@@ -332,7 +356,7 @@ func (s *Stream) add(ctx chasm.MutableContext, records ...*streamservicepb.Recor
 	}
 	first := s.Records.Get(ctx).Append(ctx, events...)
 	removeFinished(ctx, s.Subscriptions)
-	return first, s.fireMatchingSubscriptions(ctx, records)
+	return first, nil
 }
 
 // OffsetRecord is a record and its offset.

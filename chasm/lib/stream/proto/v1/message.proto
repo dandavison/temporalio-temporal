@@ -13,6 +13,26 @@ message StreamState {
     temporal.api.nexusservices.streamservice.v1.StreamClose close = 2;
     // Each run's workflow append mode, keyed by run ID, fixed by the run's first workflow append.
     map<string, temporal.api.nexusservices.streamservice.v1.WorkflowAppendMode> workflow_append_modes = 3;
+    // The topics of the workflow and local activity records of each workflow task that has no
+    // commit record yet. The task's commit record decides those records, so it wakes the pending
+    // Waits that read one of these topics, and no others.
+    repeated TaskTopics uncommitted_tasks = 4;
+    // The topics that the most recent commit records decided, so that a Wait whose cursor is before
+    // one of them completes at once only if that commit decided a record it reads.
+    repeated CommitTopics recent_commits = 5;
+}
+
+// The topics of a workflow task's records.
+message TaskTopics {
+    string workflow_run_id = 1;
+    int64 workflow_task = 2;
+    repeated string topics = 3;
+}
+
+// The topics of the records that the commit record at offset decided.
+message CommitTopics {
+    int64 offset = 1;
+    repeated string topics = 2;
 }
 
 // A producer's highest epoch and its latest stored append in that epoch.
@@ -54,6 +74,10 @@ message SubscriptionState {
     temporal.api.nexusservices.streamservice.v1.CloseState owner_end = 5;
     google.protobuf.Timestamp start_time = 6;
     google.protobuf.Timestamp close_time = 7;
+    // Wake on every marker, as well as on a record of the topics. Set for a Wait made while the
+    // stream's mode is not known, which the owner's first workflow task completion fixes and marks
+    // with a commit record.
+    bool wake_on_markers = 8;
 }
 
 // Fires a subscription that has not fired by its expire time.

@@ -30,8 +30,15 @@ type StreamState struct {
 	Close *v1.StreamClose `protobuf:"bytes,2,opt,name=close,proto3" json:"close,omitempty"`
 	// Each run's workflow append mode, keyed by run ID, fixed by the run's first workflow append.
 	WorkflowAppendModes map[string]v1.WorkflowAppendMode `protobuf:"bytes,3,rep,name=workflow_append_modes,json=workflowAppendModes,proto3" json:"workflow_append_modes,omitempty" protobuf_key:"bytes,1,opt,name=key" protobuf_val:"varint,2,opt,name=value,enum=temporal.api.nexusservices.streamservice.v1.WorkflowAppendMode"`
-	unknownFields       protoimpl.UnknownFields
-	sizeCache           protoimpl.SizeCache
+	// The topics of the workflow and local activity records of each workflow task that has no
+	// commit record yet. The task's commit record decides those records, so it wakes the pending
+	// Waits that read one of these topics, and no others.
+	UncommittedTasks []*TaskTopics `protobuf:"bytes,4,rep,name=uncommitted_tasks,json=uncommittedTasks,proto3" json:"uncommitted_tasks,omitempty"`
+	// The topics that the most recent commit records decided, so that a Wait whose cursor is before
+	// one of them completes at once only if that commit decided a record it reads.
+	RecentCommits []*CommitTopics `protobuf:"bytes,5,rep,name=recent_commits,json=recentCommits,proto3" json:"recent_commits,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
 }
 
 func (x *StreamState) Reset() {
@@ -78,6 +85,134 @@ func (x *StreamState) GetWorkflowAppendModes() map[string]v1.WorkflowAppendMode 
 	return nil
 }
 
+func (x *StreamState) GetUncommittedTasks() []*TaskTopics {
+	if x != nil {
+		return x.UncommittedTasks
+	}
+	return nil
+}
+
+func (x *StreamState) GetRecentCommits() []*CommitTopics {
+	if x != nil {
+		return x.RecentCommits
+	}
+	return nil
+}
+
+// The topics of a workflow task's records.
+type TaskTopics struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	WorkflowRunId string                 `protobuf:"bytes,1,opt,name=workflow_run_id,json=workflowRunId,proto3" json:"workflow_run_id,omitempty"`
+	WorkflowTask  int64                  `protobuf:"varint,2,opt,name=workflow_task,json=workflowTask,proto3" json:"workflow_task,omitempty"`
+	Topics        []string               `protobuf:"bytes,3,rep,name=topics,proto3" json:"topics,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *TaskTopics) Reset() {
+	*x = TaskTopics{}
+	mi := &file_temporal_server_chasm_lib_stream_proto_v1_message_proto_msgTypes[1]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *TaskTopics) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*TaskTopics) ProtoMessage() {}
+
+func (x *TaskTopics) ProtoReflect() protoreflect.Message {
+	mi := &file_temporal_server_chasm_lib_stream_proto_v1_message_proto_msgTypes[1]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use TaskTopics.ProtoReflect.Descriptor instead.
+func (*TaskTopics) Descriptor() ([]byte, []int) {
+	return file_temporal_server_chasm_lib_stream_proto_v1_message_proto_rawDescGZIP(), []int{1}
+}
+
+func (x *TaskTopics) GetWorkflowRunId() string {
+	if x != nil {
+		return x.WorkflowRunId
+	}
+	return ""
+}
+
+func (x *TaskTopics) GetWorkflowTask() int64 {
+	if x != nil {
+		return x.WorkflowTask
+	}
+	return 0
+}
+
+func (x *TaskTopics) GetTopics() []string {
+	if x != nil {
+		return x.Topics
+	}
+	return nil
+}
+
+// The topics of the records that the commit record at offset decided.
+type CommitTopics struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Offset        int64                  `protobuf:"varint,1,opt,name=offset,proto3" json:"offset,omitempty"`
+	Topics        []string               `protobuf:"bytes,2,rep,name=topics,proto3" json:"topics,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *CommitTopics) Reset() {
+	*x = CommitTopics{}
+	mi := &file_temporal_server_chasm_lib_stream_proto_v1_message_proto_msgTypes[2]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *CommitTopics) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*CommitTopics) ProtoMessage() {}
+
+func (x *CommitTopics) ProtoReflect() protoreflect.Message {
+	mi := &file_temporal_server_chasm_lib_stream_proto_v1_message_proto_msgTypes[2]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use CommitTopics.ProtoReflect.Descriptor instead.
+func (*CommitTopics) Descriptor() ([]byte, []int) {
+	return file_temporal_server_chasm_lib_stream_proto_v1_message_proto_rawDescGZIP(), []int{2}
+}
+
+func (x *CommitTopics) GetOffset() int64 {
+	if x != nil {
+		return x.Offset
+	}
+	return 0
+}
+
+func (x *CommitTopics) GetTopics() []string {
+	if x != nil {
+		return x.Topics
+	}
+	return nil
+}
+
 // A producer's highest epoch and its latest stored append in that epoch.
 type ProducerState struct {
 	state        protoimpl.MessageState `protogen:"open.v1"`
@@ -96,7 +231,7 @@ type ProducerState struct {
 
 func (x *ProducerState) Reset() {
 	*x = ProducerState{}
-	mi := &file_temporal_server_chasm_lib_stream_proto_v1_message_proto_msgTypes[1]
+	mi := &file_temporal_server_chasm_lib_stream_proto_v1_message_proto_msgTypes[3]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -108,7 +243,7 @@ func (x *ProducerState) String() string {
 func (*ProducerState) ProtoMessage() {}
 
 func (x *ProducerState) ProtoReflect() protoreflect.Message {
-	mi := &file_temporal_server_chasm_lib_stream_proto_v1_message_proto_msgTypes[1]
+	mi := &file_temporal_server_chasm_lib_stream_proto_v1_message_proto_msgTypes[3]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -121,7 +256,7 @@ func (x *ProducerState) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ProducerState.ProtoReflect.Descriptor instead.
 func (*ProducerState) Descriptor() ([]byte, []int) {
-	return file_temporal_server_chasm_lib_stream_proto_v1_message_proto_rawDescGZIP(), []int{1}
+	return file_temporal_server_chasm_lib_stream_proto_v1_message_proto_rawDescGZIP(), []int{3}
 }
 
 func (x *ProducerState) GetWorkflowTask() int64 {
@@ -192,7 +327,7 @@ type Cursor struct {
 
 func (x *Cursor) Reset() {
 	*x = Cursor{}
-	mi := &file_temporal_server_chasm_lib_stream_proto_v1_message_proto_msgTypes[2]
+	mi := &file_temporal_server_chasm_lib_stream_proto_v1_message_proto_msgTypes[4]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -204,7 +339,7 @@ func (x *Cursor) String() string {
 func (*Cursor) ProtoMessage() {}
 
 func (x *Cursor) ProtoReflect() protoreflect.Message {
-	mi := &file_temporal_server_chasm_lib_stream_proto_v1_message_proto_msgTypes[2]
+	mi := &file_temporal_server_chasm_lib_stream_proto_v1_message_proto_msgTypes[4]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -217,7 +352,7 @@ func (x *Cursor) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use Cursor.ProtoReflect.Descriptor instead.
 func (*Cursor) Descriptor() ([]byte, []int) {
-	return file_temporal_server_chasm_lib_stream_proto_v1_message_proto_rawDescGZIP(), []int{2}
+	return file_temporal_server_chasm_lib_stream_proto_v1_message_proto_rawDescGZIP(), []int{4}
 }
 
 func (x *Cursor) GetWorkflowId() string {
@@ -271,17 +406,21 @@ type SubscriptionState struct {
 	Topics     []string               `protobuf:"bytes,2,rep,name=topics,proto3" json:"topics,omitempty"`
 	ExpireTime *timestamppb.Timestamp `protobuf:"bytes,3,opt,name=expire_time,json=expireTime,proto3" json:"expire_time,omitempty"`
 	// Set when the subscription fires: why, and for OWNER_ENDED, how the owner ended.
-	Reason        v1.WakeReason          `protobuf:"varint,4,opt,name=reason,proto3,enum=temporal.api.nexusservices.streamservice.v1.WakeReason" json:"reason,omitempty"`
-	OwnerEnd      v1.CloseState          `protobuf:"varint,5,opt,name=owner_end,json=ownerEnd,proto3,enum=temporal.api.nexusservices.streamservice.v1.CloseState" json:"owner_end,omitempty"`
-	StartTime     *timestamppb.Timestamp `protobuf:"bytes,6,opt,name=start_time,json=startTime,proto3" json:"start_time,omitempty"`
-	CloseTime     *timestamppb.Timestamp `protobuf:"bytes,7,opt,name=close_time,json=closeTime,proto3" json:"close_time,omitempty"`
+	Reason    v1.WakeReason          `protobuf:"varint,4,opt,name=reason,proto3,enum=temporal.api.nexusservices.streamservice.v1.WakeReason" json:"reason,omitempty"`
+	OwnerEnd  v1.CloseState          `protobuf:"varint,5,opt,name=owner_end,json=ownerEnd,proto3,enum=temporal.api.nexusservices.streamservice.v1.CloseState" json:"owner_end,omitempty"`
+	StartTime *timestamppb.Timestamp `protobuf:"bytes,6,opt,name=start_time,json=startTime,proto3" json:"start_time,omitempty"`
+	CloseTime *timestamppb.Timestamp `protobuf:"bytes,7,opt,name=close_time,json=closeTime,proto3" json:"close_time,omitempty"`
+	// Wake on every marker, as well as on a record of the topics. Set for a Wait made while the
+	// stream's mode is not known, which the owner's first workflow task completion fixes and marks
+	// with a commit record.
+	WakeOnMarkers bool `protobuf:"varint,8,opt,name=wake_on_markers,json=wakeOnMarkers,proto3" json:"wake_on_markers,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
 
 func (x *SubscriptionState) Reset() {
 	*x = SubscriptionState{}
-	mi := &file_temporal_server_chasm_lib_stream_proto_v1_message_proto_msgTypes[3]
+	mi := &file_temporal_server_chasm_lib_stream_proto_v1_message_proto_msgTypes[5]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -293,7 +432,7 @@ func (x *SubscriptionState) String() string {
 func (*SubscriptionState) ProtoMessage() {}
 
 func (x *SubscriptionState) ProtoReflect() protoreflect.Message {
-	mi := &file_temporal_server_chasm_lib_stream_proto_v1_message_proto_msgTypes[3]
+	mi := &file_temporal_server_chasm_lib_stream_proto_v1_message_proto_msgTypes[5]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -306,7 +445,7 @@ func (x *SubscriptionState) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use SubscriptionState.ProtoReflect.Descriptor instead.
 func (*SubscriptionState) Descriptor() ([]byte, []int) {
-	return file_temporal_server_chasm_lib_stream_proto_v1_message_proto_rawDescGZIP(), []int{3}
+	return file_temporal_server_chasm_lib_stream_proto_v1_message_proto_rawDescGZIP(), []int{5}
 }
 
 func (x *SubscriptionState) GetAfter() int64 {
@@ -358,6 +497,13 @@ func (x *SubscriptionState) GetCloseTime() *timestamppb.Timestamp {
 	return nil
 }
 
+func (x *SubscriptionState) GetWakeOnMarkers() bool {
+	if x != nil {
+		return x.WakeOnMarkers
+	}
+	return false
+}
+
 // Fires a subscription that has not fired by its expire time.
 type SubscriptionExpiryTask struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
@@ -367,7 +513,7 @@ type SubscriptionExpiryTask struct {
 
 func (x *SubscriptionExpiryTask) Reset() {
 	*x = SubscriptionExpiryTask{}
-	mi := &file_temporal_server_chasm_lib_stream_proto_v1_message_proto_msgTypes[4]
+	mi := &file_temporal_server_chasm_lib_stream_proto_v1_message_proto_msgTypes[6]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -379,7 +525,7 @@ func (x *SubscriptionExpiryTask) String() string {
 func (*SubscriptionExpiryTask) ProtoMessage() {}
 
 func (x *SubscriptionExpiryTask) ProtoReflect() protoreflect.Message {
-	mi := &file_temporal_server_chasm_lib_stream_proto_v1_message_proto_msgTypes[4]
+	mi := &file_temporal_server_chasm_lib_stream_proto_v1_message_proto_msgTypes[6]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -392,7 +538,7 @@ func (x *SubscriptionExpiryTask) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use SubscriptionExpiryTask.ProtoReflect.Descriptor instead.
 func (*SubscriptionExpiryTask) Descriptor() ([]byte, []int) {
-	return file_temporal_server_chasm_lib_stream_proto_v1_message_proto_rawDescGZIP(), []int{4}
+	return file_temporal_server_chasm_lib_stream_proto_v1_message_proto_rawDescGZIP(), []int{6}
 }
 
 // The operation token of an asynchronous Wait: the stream, to route a cancel to its owner, and the
@@ -407,7 +553,7 @@ type WaitToken struct {
 
 func (x *WaitToken) Reset() {
 	*x = WaitToken{}
-	mi := &file_temporal_server_chasm_lib_stream_proto_v1_message_proto_msgTypes[5]
+	mi := &file_temporal_server_chasm_lib_stream_proto_v1_message_proto_msgTypes[7]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -419,7 +565,7 @@ func (x *WaitToken) String() string {
 func (*WaitToken) ProtoMessage() {}
 
 func (x *WaitToken) ProtoReflect() protoreflect.Message {
-	mi := &file_temporal_server_chasm_lib_stream_proto_v1_message_proto_msgTypes[5]
+	mi := &file_temporal_server_chasm_lib_stream_proto_v1_message_proto_msgTypes[7]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -432,7 +578,7 @@ func (x *WaitToken) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use WaitToken.ProtoReflect.Descriptor instead.
 func (*WaitToken) Descriptor() ([]byte, []int) {
-	return file_temporal_server_chasm_lib_stream_proto_v1_message_proto_rawDescGZIP(), []int{5}
+	return file_temporal_server_chasm_lib_stream_proto_v1_message_proto_rawDescGZIP(), []int{7}
 }
 
 func (x *WaitToken) GetStream() *v1.StreamRef {
@@ -459,7 +605,7 @@ type NotifierState struct {
 
 func (x *NotifierState) Reset() {
 	*x = NotifierState{}
-	mi := &file_temporal_server_chasm_lib_stream_proto_v1_message_proto_msgTypes[6]
+	mi := &file_temporal_server_chasm_lib_stream_proto_v1_message_proto_msgTypes[8]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -471,7 +617,7 @@ func (x *NotifierState) String() string {
 func (*NotifierState) ProtoMessage() {}
 
 func (x *NotifierState) ProtoReflect() protoreflect.Message {
-	mi := &file_temporal_server_chasm_lib_stream_proto_v1_message_proto_msgTypes[6]
+	mi := &file_temporal_server_chasm_lib_stream_proto_v1_message_proto_msgTypes[8]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -484,20 +630,30 @@ func (x *NotifierState) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use NotifierState.ProtoReflect.Descriptor instead.
 func (*NotifierState) Descriptor() ([]byte, []int) {
-	return file_temporal_server_chasm_lib_stream_proto_v1_message_proto_rawDescGZIP(), []int{6}
+	return file_temporal_server_chasm_lib_stream_proto_v1_message_proto_rawDescGZIP(), []int{8}
 }
 
 var File_temporal_server_chasm_lib_stream_proto_v1_message_proto protoreflect.FileDescriptor
 
 const file_temporal_server_chasm_lib_stream_proto_v1_message_proto_rawDesc = "" +
 	"\n" +
-	"7temporal/server/chasm/lib/stream/proto/v1/message.proto\x12)temporal.server.chasm.lib.stream.proto.v1\x1a\x1fgoogle/protobuf/timestamp.proto\x1aBtemporal/api/nexusservices/streamservice/v1/request_response.proto\"\xf3\x02\n" +
+	"7temporal/server/chasm/lib/stream/proto/v1/message.proto\x12)temporal.server.chasm.lib.stream.proto.v1\x1a\x1fgoogle/protobuf/timestamp.proto\x1aBtemporal/api/nexusservices/streamservice/v1/request_response.proto\"\xb7\x04\n" +
 	"\vStreamState\x12N\n" +
 	"\x05close\x18\x02 \x01(\v28.temporal.api.nexusservices.streamservice.v1.StreamCloseR\x05close\x12\x83\x01\n" +
-	"\x15workflow_append_modes\x18\x03 \x03(\v2O.temporal.server.chasm.lib.stream.proto.v1.StreamState.WorkflowAppendModesEntryR\x13workflowAppendModes\x1a\x87\x01\n" +
+	"\x15workflow_append_modes\x18\x03 \x03(\v2O.temporal.server.chasm.lib.stream.proto.v1.StreamState.WorkflowAppendModesEntryR\x13workflowAppendModes\x12b\n" +
+	"\x11uncommitted_tasks\x18\x04 \x03(\v25.temporal.server.chasm.lib.stream.proto.v1.TaskTopicsR\x10uncommittedTasks\x12^\n" +
+	"\x0erecent_commits\x18\x05 \x03(\v27.temporal.server.chasm.lib.stream.proto.v1.CommitTopicsR\rrecentCommits\x1a\x87\x01\n" +
 	"\x18WorkflowAppendModesEntry\x12\x10\n" +
 	"\x03key\x18\x01 \x01(\tR\x03key\x12U\n" +
-	"\x05value\x18\x02 \x01(\x0e2?.temporal.api.nexusservices.streamservice.v1.WorkflowAppendModeR\x05value:\x028\x01J\x04\b\x01\x10\x02\"\xe1\x01\n" +
+	"\x05value\x18\x02 \x01(\x0e2?.temporal.api.nexusservices.streamservice.v1.WorkflowAppendModeR\x05value:\x028\x01J\x04\b\x01\x10\x02\"q\n" +
+	"\n" +
+	"TaskTopics\x12&\n" +
+	"\x0fworkflow_run_id\x18\x01 \x01(\tR\rworkflowRunId\x12#\n" +
+	"\rworkflow_task\x18\x02 \x01(\x03R\fworkflowTask\x12\x16\n" +
+	"\x06topics\x18\x03 \x03(\tR\x06topics\">\n" +
+	"\fCommitTopics\x12\x16\n" +
+	"\x06offset\x18\x01 \x01(\x03R\x06offset\x12\x16\n" +
+	"\x06topics\x18\x02 \x03(\tR\x06topics\"\xe1\x01\n" +
 	"\rProducerState\x12#\n" +
 	"\rworkflow_task\x18\x01 \x01(\x03R\fworkflowTask\x12\x14\n" +
 	"\x05epoch\x18\x02 \x01(\x03R\x05epoch\x12\x10\n" +
@@ -515,7 +671,7 @@ const file_temporal_server_chasm_lib_stream_proto_v1_message_proto_rawDesc = "" 
 	"\vactivity_id\x18\x04 \x01(\tR\n" +
 	"activityId\x12&\n" +
 	"\x0factivity_run_id\x18\x05 \x01(\tR\ractivityRunId\x12\x15\n" +
-	"\x06run_id\x18\x06 \x01(\tR\x05runId\"\x9b\x03\n" +
+	"\x06run_id\x18\x06 \x01(\tR\x05runId\"\xc3\x03\n" +
 	"\x11SubscriptionState\x12\x14\n" +
 	"\x05after\x18\x01 \x01(\x03R\x05after\x12\x16\n" +
 	"\x06topics\x18\x02 \x03(\tR\x06topics\x12;\n" +
@@ -526,7 +682,8 @@ const file_temporal_server_chasm_lib_stream_proto_v1_message_proto_rawDesc = "" 
 	"\n" +
 	"start_time\x18\x06 \x01(\v2\x1a.google.protobuf.TimestampR\tstartTime\x129\n" +
 	"\n" +
-	"close_time\x18\a \x01(\v2\x1a.google.protobuf.TimestampR\tcloseTime\"\x18\n" +
+	"close_time\x18\a \x01(\v2\x1a.google.protobuf.TimestampR\tcloseTime\x12&\n" +
+	"\x0fwake_on_markers\x18\b \x01(\bR\rwakeOnMarkers\"\x18\n" +
 	"\x16SubscriptionExpiryTask\"z\n" +
 	"\tWaitToken\x12N\n" +
 	"\x06stream\x18\x01 \x01(\v26.temporal.api.nexusservices.streamservice.v1.StreamRefR\x06stream\x12\x1d\n" +
@@ -546,38 +703,42 @@ func file_temporal_server_chasm_lib_stream_proto_v1_message_proto_rawDescGZIP() 
 	return file_temporal_server_chasm_lib_stream_proto_v1_message_proto_rawDescData
 }
 
-var file_temporal_server_chasm_lib_stream_proto_v1_message_proto_msgTypes = make([]protoimpl.MessageInfo, 8)
+var file_temporal_server_chasm_lib_stream_proto_v1_message_proto_msgTypes = make([]protoimpl.MessageInfo, 10)
 var file_temporal_server_chasm_lib_stream_proto_v1_message_proto_goTypes = []any{
 	(*StreamState)(nil),            // 0: temporal.server.chasm.lib.stream.proto.v1.StreamState
-	(*ProducerState)(nil),          // 1: temporal.server.chasm.lib.stream.proto.v1.ProducerState
-	(*Cursor)(nil),                 // 2: temporal.server.chasm.lib.stream.proto.v1.Cursor
-	(*SubscriptionState)(nil),      // 3: temporal.server.chasm.lib.stream.proto.v1.SubscriptionState
-	(*SubscriptionExpiryTask)(nil), // 4: temporal.server.chasm.lib.stream.proto.v1.SubscriptionExpiryTask
-	(*WaitToken)(nil),              // 5: temporal.server.chasm.lib.stream.proto.v1.WaitToken
-	(*NotifierState)(nil),          // 6: temporal.server.chasm.lib.stream.proto.v1.NotifierState
-	nil,                            // 7: temporal.server.chasm.lib.stream.proto.v1.StreamState.WorkflowAppendModesEntry
-	(*v1.StreamClose)(nil),         // 8: temporal.api.nexusservices.streamservice.v1.StreamClose
-	(*timestamppb.Timestamp)(nil),  // 9: google.protobuf.Timestamp
-	(v1.WakeReason)(0),             // 10: temporal.api.nexusservices.streamservice.v1.WakeReason
-	(v1.CloseState)(0),             // 11: temporal.api.nexusservices.streamservice.v1.CloseState
-	(*v1.StreamRef)(nil),           // 12: temporal.api.nexusservices.streamservice.v1.StreamRef
-	(v1.WorkflowAppendMode)(0),     // 13: temporal.api.nexusservices.streamservice.v1.WorkflowAppendMode
+	(*TaskTopics)(nil),             // 1: temporal.server.chasm.lib.stream.proto.v1.TaskTopics
+	(*CommitTopics)(nil),           // 2: temporal.server.chasm.lib.stream.proto.v1.CommitTopics
+	(*ProducerState)(nil),          // 3: temporal.server.chasm.lib.stream.proto.v1.ProducerState
+	(*Cursor)(nil),                 // 4: temporal.server.chasm.lib.stream.proto.v1.Cursor
+	(*SubscriptionState)(nil),      // 5: temporal.server.chasm.lib.stream.proto.v1.SubscriptionState
+	(*SubscriptionExpiryTask)(nil), // 6: temporal.server.chasm.lib.stream.proto.v1.SubscriptionExpiryTask
+	(*WaitToken)(nil),              // 7: temporal.server.chasm.lib.stream.proto.v1.WaitToken
+	(*NotifierState)(nil),          // 8: temporal.server.chasm.lib.stream.proto.v1.NotifierState
+	nil,                            // 9: temporal.server.chasm.lib.stream.proto.v1.StreamState.WorkflowAppendModesEntry
+	(*v1.StreamClose)(nil),         // 10: temporal.api.nexusservices.streamservice.v1.StreamClose
+	(*timestamppb.Timestamp)(nil),  // 11: google.protobuf.Timestamp
+	(v1.WakeReason)(0),             // 12: temporal.api.nexusservices.streamservice.v1.WakeReason
+	(v1.CloseState)(0),             // 13: temporal.api.nexusservices.streamservice.v1.CloseState
+	(*v1.StreamRef)(nil),           // 14: temporal.api.nexusservices.streamservice.v1.StreamRef
+	(v1.WorkflowAppendMode)(0),     // 15: temporal.api.nexusservices.streamservice.v1.WorkflowAppendMode
 }
 var file_temporal_server_chasm_lib_stream_proto_v1_message_proto_depIdxs = []int32{
-	8,  // 0: temporal.server.chasm.lib.stream.proto.v1.StreamState.close:type_name -> temporal.api.nexusservices.streamservice.v1.StreamClose
-	7,  // 1: temporal.server.chasm.lib.stream.proto.v1.StreamState.workflow_append_modes:type_name -> temporal.server.chasm.lib.stream.proto.v1.StreamState.WorkflowAppendModesEntry
-	9,  // 2: temporal.server.chasm.lib.stream.proto.v1.SubscriptionState.expire_time:type_name -> google.protobuf.Timestamp
-	10, // 3: temporal.server.chasm.lib.stream.proto.v1.SubscriptionState.reason:type_name -> temporal.api.nexusservices.streamservice.v1.WakeReason
-	11, // 4: temporal.server.chasm.lib.stream.proto.v1.SubscriptionState.owner_end:type_name -> temporal.api.nexusservices.streamservice.v1.CloseState
-	9,  // 5: temporal.server.chasm.lib.stream.proto.v1.SubscriptionState.start_time:type_name -> google.protobuf.Timestamp
-	9,  // 6: temporal.server.chasm.lib.stream.proto.v1.SubscriptionState.close_time:type_name -> google.protobuf.Timestamp
-	12, // 7: temporal.server.chasm.lib.stream.proto.v1.WaitToken.stream:type_name -> temporal.api.nexusservices.streamservice.v1.StreamRef
-	13, // 8: temporal.server.chasm.lib.stream.proto.v1.StreamState.WorkflowAppendModesEntry.value:type_name -> temporal.api.nexusservices.streamservice.v1.WorkflowAppendMode
-	9,  // [9:9] is the sub-list for method output_type
-	9,  // [9:9] is the sub-list for method input_type
-	9,  // [9:9] is the sub-list for extension type_name
-	9,  // [9:9] is the sub-list for extension extendee
-	0,  // [0:9] is the sub-list for field type_name
+	10, // 0: temporal.server.chasm.lib.stream.proto.v1.StreamState.close:type_name -> temporal.api.nexusservices.streamservice.v1.StreamClose
+	9,  // 1: temporal.server.chasm.lib.stream.proto.v1.StreamState.workflow_append_modes:type_name -> temporal.server.chasm.lib.stream.proto.v1.StreamState.WorkflowAppendModesEntry
+	1,  // 2: temporal.server.chasm.lib.stream.proto.v1.StreamState.uncommitted_tasks:type_name -> temporal.server.chasm.lib.stream.proto.v1.TaskTopics
+	2,  // 3: temporal.server.chasm.lib.stream.proto.v1.StreamState.recent_commits:type_name -> temporal.server.chasm.lib.stream.proto.v1.CommitTopics
+	11, // 4: temporal.server.chasm.lib.stream.proto.v1.SubscriptionState.expire_time:type_name -> google.protobuf.Timestamp
+	12, // 5: temporal.server.chasm.lib.stream.proto.v1.SubscriptionState.reason:type_name -> temporal.api.nexusservices.streamservice.v1.WakeReason
+	13, // 6: temporal.server.chasm.lib.stream.proto.v1.SubscriptionState.owner_end:type_name -> temporal.api.nexusservices.streamservice.v1.CloseState
+	11, // 7: temporal.server.chasm.lib.stream.proto.v1.SubscriptionState.start_time:type_name -> google.protobuf.Timestamp
+	11, // 8: temporal.server.chasm.lib.stream.proto.v1.SubscriptionState.close_time:type_name -> google.protobuf.Timestamp
+	14, // 9: temporal.server.chasm.lib.stream.proto.v1.WaitToken.stream:type_name -> temporal.api.nexusservices.streamservice.v1.StreamRef
+	15, // 10: temporal.server.chasm.lib.stream.proto.v1.StreamState.WorkflowAppendModesEntry.value:type_name -> temporal.api.nexusservices.streamservice.v1.WorkflowAppendMode
+	11, // [11:11] is the sub-list for method output_type
+	11, // [11:11] is the sub-list for method input_type
+	11, // [11:11] is the sub-list for extension type_name
+	11, // [11:11] is the sub-list for extension extendee
+	0,  // [0:11] is the sub-list for field type_name
 }
 
 func init() { file_temporal_server_chasm_lib_stream_proto_v1_message_proto_init() }
@@ -591,7 +752,7 @@ func file_temporal_server_chasm_lib_stream_proto_v1_message_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_temporal_server_chasm_lib_stream_proto_v1_message_proto_rawDesc), len(file_temporal_server_chasm_lib_stream_proto_v1_message_proto_rawDesc)),
 			NumEnums:      0,
-			NumMessages:   8,
+			NumMessages:   10,
 			NumExtensions: 0,
 			NumServices:   0,
 		},

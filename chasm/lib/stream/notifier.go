@@ -37,7 +37,7 @@ func (n *Notifier) LifecycleState(chasm.Context) chasm.LifecycleState {
 
 // Subscribe stores a subscription for a Wait; see subscribe.
 func (n *Notifier) Subscribe(ctx chasm.MutableContext, args WaitArgs) error {
-	return subscribe(ctx, &n.Subscriptions, args.RequestID, args.Callback, -1, nil, args.Req.GetLifetime().AsDuration())
+	return subscribe(ctx, &n.Subscriptions, args.RequestID, args.Callback, -1, nil, false, args.Req.GetLifetime().AsDuration())
 }
 
 // CancelSubscription removes the subscription of a canceled Wait, if it has not fired.
