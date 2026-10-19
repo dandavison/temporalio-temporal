@@ -27,6 +27,7 @@ import (
 	commonnexus "go.temporal.io/server/common/nexus"
 	"go.temporal.io/server/common/tasktoken"
 	"google.golang.org/protobuf/proto"
+	"google.golang.org/protobuf/types/known/durationpb"
 )
 
 // maxStreamReadWait is below the history client's 30 s per-attempt timeout.
@@ -128,6 +129,11 @@ func (h *streamServiceHandler) read(
 				continue
 			}
 		}
+		if err == nil && resp.OwnerCloseTime != nil {
+			if ns, nsErr := h.namespaceRegistry.GetNamespace(namespace.Name(req.GetStream().GetNamespace())); nsErr == nil {
+				resp.Retention = durationpb.New(ns.Retention())
+			}
+		}
 		return resp, streamOperationError(err)
 	}
 }
@@ -180,23 +186,37 @@ func (h *streamServiceHandler) ownerRef(ref *streamservicepb.StreamRef, cursor *
 	}), false, nil
 }
 
-// newStreamReadArgs decodes the request's cursor, which must belong to the requested stream,
+// newStreamReadArgs decodes the request's cursors, which must belong to the requested stream,
 // including its pinned run chain or activity execution.
 func newStreamReadArgs(req *streamservicepb.ReadRequest) (stream.ReadArgs, error) {
 	args := stream.ReadArgs{Req: req}
-	if len(req.GetAfter()) == 0 {
-		return args, nil
+	var err error
+	if args.Cursor, err = decodeStreamCursor(req.GetStream(), req.GetAfter()); err != nil {
+		return args, err
 	}
-	args.Cursor = &streampb.Cursor{}
-	ref := req.GetStream()
-	if err := proto.Unmarshal(req.GetAfter(), args.Cursor); err != nil ||
-		args.Cursor.GetWorkflowId() != ref.GetWorkflowId() ||
-		args.Cursor.GetActivityId() != ref.GetActivityId() ||
-		(ref.GetFirstRunId() != "" && args.Cursor.GetFirstRunId() != ref.GetFirstRunId()) ||
-		(ref.GetActivityRunId() != "" && args.Cursor.GetActivityRunId() != ref.GetActivityRunId()) {
-		return args, streamError(streamservicepb.STREAM_FAILURE_TYPE_CURSOR_MISMATCH, "the cursor belongs to another stream")
+	if args.Until, err = decodeStreamCursor(req.GetStream(), req.GetUntil()); err != nil {
+		return args, err
+	}
+	if args.Cursor != nil && args.Until != nil && args.Cursor.GetActivityRunId() != args.Until.GetActivityRunId() {
+		return args, streamError(streamservicepb.STREAM_FAILURE_TYPE_CURSOR_MISMATCH, "the cursors belong to different activity executions")
 	}
 	return args, nil
+}
+
+// decodeStreamCursor decodes a cursor of ref's stream, or returns nil for an empty one.
+func decodeStreamCursor(ref *streamservicepb.StreamRef, b []byte) (*streampb.Cursor, error) {
+	if len(b) == 0 {
+		return nil, nil
+	}
+	c := &streampb.Cursor{}
+	if err := proto.Unmarshal(b, c); err != nil ||
+		c.GetWorkflowId() != ref.GetWorkflowId() ||
+		c.GetActivityId() != ref.GetActivityId() ||
+		(ref.GetFirstRunId() != "" && c.GetFirstRunId() != ref.GetFirstRunId()) ||
+		(ref.GetActivityRunId() != "" && c.GetActivityRunId() != ref.GetActivityRunId()) {
+		return nil, streamError(streamservicepb.STREAM_FAILURE_TYPE_CURSOR_MISMATCH, "the cursor belongs to another stream")
+	}
+	return c, nil
 }
 
 func (w *Workflow) appendToStream(
@@ -288,18 +308,70 @@ func (w *Workflow) readStream(ctx chasm.Context, args stream.ReadArgs) (*streams
 	if err := w.checkStreamChain(args.Req.GetStream()); err != nil {
 		return nil, err
 	}
-	after := int64(-1)
-	if args.Cursor != nil {
-		if args.Cursor.GetFirstRunId() != w.firstRunID() {
-			return nil, streamError(streamservicepb.STREAM_FAILURE_TYPE_EXPIRED, "the cursor's run chain no longer exists")
-		}
-		if args.Cursor.GetRunId() != w.GetExecutionState().GetRunId() {
-			return nil, streamError(streamservicepb.STREAM_FAILURE_TYPE_EXPIRED, "the cursor's run is no longer the chain's current run, and its stream was not moved to the current run")
-		}
-		after = args.Cursor.GetOffset()
+	after, err := w.streamOffset(args.Cursor)
+	if err != nil {
+		return nil, err
+	}
+	until, err := w.streamOffset(args.Until)
+	if err != nil {
+		return nil, err
 	}
 	s, _ := w.Stream.TryGet(ctx)
-	return stream.ReadResponse(ctx, s, args.Req, after, w.streamCursor)
+	resp, err := stream.ReadResponse(ctx, s, args.Req, after, until, w.streamCursor)
+	if err != nil {
+		return nil, err
+	}
+	resp.Mode = w.streamMode(s)
+	return resp, nil
+}
+
+// streamOffset returns the offset of a cursor of the workflow's stream, or -1 for none. A cursor of
+// another chain, or of an earlier run of this chain, fails as EXPIRED.
+func (w *Workflow) streamOffset(c *streampb.Cursor) (int64, error) {
+	if c == nil {
+		return -1, nil
+	}
+	if c.GetFirstRunId() != w.firstRunID() {
+		return 0, streamError(streamservicepb.STREAM_FAILURE_TYPE_EXPIRED, "the cursor's run chain no longer exists")
+	}
+	if c.GetRunId() != w.GetExecutionState().GetRunId() {
+		return 0, streamError(streamservicepb.STREAM_FAILURE_TYPE_EXPIRED, "the cursor's run is no longer the chain's current run, and its stream was not moved to the current run")
+	}
+	return c.GetOffset(), nil
+}
+
+// streamMode is the stream's mode for the current run: the mode the run fixed, by its first
+// workflow append or its declaration; otherwise sink once the run's first workflow task has
+// completed, or the run has ended, since only the first completion declares a mode; otherwise not
+// yet known.
+func (w *Workflow) streamMode(s *stream.Stream) streamservicepb.StreamMode {
+	if s != nil {
+		if mode, ok := s.WorkflowAppendMode(w.GetExecutionState().GetRunId()); ok {
+			if mode == streamservicepb.WORKFLOW_APPEND_MODE_COMMIT {
+				return streamservicepb.STREAM_MODE_COMMIT
+			}
+			return streamservicepb.STREAM_MODE_SINK
+		}
+	}
+	if w.GetExecutionInfo().GetLastCompletedWorkflowTaskStartedEventId() != common.EmptyEventID ||
+		w.GetExecutionState().GetStatus() != enumspb.WORKFLOW_EXECUTION_STATUS_RUNNING {
+		return streamservicepb.STREAM_MODE_SINK
+	}
+	return streamservicepb.STREAM_MODE_UNSPECIFIED
+}
+
+// DeclareStreamMode applies a run's declaration of its stream's mode, from a protocol message in
+// its workflow task completion. Only commit mode is declared; sink is the default. It creates the
+// stream, and fixes the run's mode as its first workflow append would.
+func (w *Workflow) DeclareStreamMode(ctx chasm.MutableContext, mode streamservicepb.StreamMode) error {
+	if mode != streamservicepb.STREAM_MODE_COMMIT {
+		return streamError(streamservicepb.STREAM_FAILURE_TYPE_WORKFLOW_APPEND_MODE_MISMATCH, "only commit mode is declared; a stream is sink-mode unless its owner declares commit")
+	}
+	s, err := w.mutableStream(ctx)
+	if err != nil {
+		return err
+	}
+	return s.FixWorkflowAppendMode(ctx, w.GetExecutionState().GetRunId(), streamservicepb.WORKFLOW_APPEND_MODE_COMMIT)
 }
 
 // RecordStreamWorkflowTaskCommit records, in the stream, that attempt completed the run's current

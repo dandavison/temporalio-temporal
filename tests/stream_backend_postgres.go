@@ -323,8 +323,20 @@ func (b *postgresStreamBackend) Read(ctx context.Context, ref streamRef, req str
 			return streamReadResponse{}, errStreamCursor
 		}
 	}
+	until := int64(-1)
+	if req.Until != nil {
+		untilChain, pos, err := parsePostgresCursor(externalOwner(ref), req.Until)
+		if err != nil {
+			return streamReadResponse{}, err
+		}
+		if untilChain != chain {
+			return streamReadResponse{}, errStreamCursor
+		}
+		// A bounded read re-reads a range that exists, so it does not wait.
+		until, deadline = pos, time.Now()
+	}
 	for {
-		resp, found, err := b.readOnce(ctx, conn.Conn(), chain, req, after)
+		resp, found, err := b.readOnce(ctx, conn.Conn(), chain, req, after, until)
 		if err != nil {
 			return streamReadResponse{}, err
 		}
@@ -368,10 +380,11 @@ func (b *postgresStreamBackend) resolveChain(ctx context.Context, conn *pgxpool.
 	}
 }
 
-// readOnce reads matching records after a position in one snapshot. found is false if the stream
-// does not exist.
-func (b *postgresStreamBackend) readOnce(ctx context.Context, conn *pgx.Conn, c postgresChain, req streamReadRequest, after int64) (resp streamReadResponse, found bool, err error) {
+// readOnce reads matching records after a position, and up to until (-1 for no bound), in one
+// snapshot. found is false if the stream does not exist.
+func (b *postgresStreamBackend) readOnce(ctx context.Context, conn *pgx.Conn, c postgresChain, req streamReadRequest, after, until int64) (resp streamReadResponse, found bool, err error) {
 	resp.Cursor = req.From.after
+	resp.Mode = streamModeSink
 	err = pgx.BeginTxFunc(ctx, conn, pgx.TxOptions{IsoLevel: pgx.RepeatableRead, AccessMode: pgx.ReadOnly}, func(tx pgx.Tx) error {
 		var nextPos int64
 		var closed, deleted bool
@@ -390,7 +403,11 @@ func (b *postgresStreamBackend) readOnce(ctx context.Context, conn *pgx.Conn, c 
 			return errStreamExpired
 		}
 		found = true
-		head := nextPos - 1
+		end := nextPos - 1
+		head := end
+		if until >= 0 {
+			head = min(head, until)
+		}
 		limit := postgresDefaultMaxRecords
 		if req.MaxRecords > 0 {
 			limit = req.MaxRecords
@@ -402,7 +419,8 @@ WHERE owner_id = $1 AND owner_run_id = $2 AND pos > $3 AND (coalesce(cardinality
 WHERE owner_id = $1 AND owner_run_id = $2 AND pos > $3 AND (coalesce(cardinality($4::text[]), 0) = 0 OR topic = ANY($4)) ORDER BY pos DESC LIMIT $5`
 			limit = req.Last
 		}
-		rows, err := tx.Query(ctx, query, c.owner, c.run, after, req.Topics, limit)
+		query = strings.Replace(query, "AND pos > $3", "AND pos > $3 AND pos <= $6", 1)
+		rows, err := tx.Query(ctx, query, c.owner, c.run, after, req.Topics, limit, head)
 		if err != nil {
 			return err
 		}
@@ -415,6 +433,20 @@ WHERE owner_id = $1 AND owner_run_id = $2 AND pos > $3 AND (coalesce(cardinality
 		if req.Last > 0 {
 			slices.Reverse(records)
 		}
+		if req.Last == 0 && req.MaxBytes > 0 {
+			size := 0
+			for i, r := range records {
+				n := proto.Size(r.Payload)
+				if size+n > req.MaxBytes {
+					if size == 0 {
+						return errStreamTooLarge
+					}
+					records, limit = records[:i], i
+					break
+				}
+				size += n
+			}
+		}
 		resp.Records = records
 		readTo := head
 		if req.Last == 0 && len(records) == limit {
@@ -423,7 +455,7 @@ WHERE owner_id = $1 AND owner_run_id = $2 AND pos > $3 AND (coalesce(cardinality
 		if readTo > after {
 			resp.Cursor = c.cursor(readTo)
 		}
-		if closed && readTo == head {
+		if closed && readTo == end {
 			resp.Close = &streamClose{Status: streamCloseStatus(closeStatus), Reason: closeReason}
 			if len(closeFailure) > 0 {
 				resp.Close.Failure = &failurepb.Failure{}

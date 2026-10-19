@@ -74,15 +74,33 @@ func (a *Activity) CloseStream(
 
 // ReadStream reads the activity's stream.
 func (a *Activity) ReadStream(ctx chasm.Context, args stream.ReadArgs) (*streamservicepb.ReadResponse, error) {
-	after := int64(-1)
-	if args.Cursor != nil {
-		if args.Cursor.GetActivityRunId() != ctx.ExecutionKey().RunID {
-			return nil, stream.NewError(streamservicepb.STREAM_FAILURE_TYPE_EXPIRED, "the cursor's activity execution no longer exists")
-		}
-		after = args.Cursor.GetOffset()
+	after, err := streamOffset(ctx, args.Cursor)
+	if err != nil {
+		return nil, err
+	}
+	until, err := streamOffset(ctx, args.Until)
+	if err != nil {
+		return nil, err
 	}
 	s, _ := a.Stream.TryGet(ctx)
-	return stream.ReadResponse(ctx, s, args.Req, after, streamCursor(ctx))
+	resp, err := stream.ReadResponse(ctx, s, args.Req, after, until, streamCursor(ctx))
+	if err != nil {
+		return nil, err
+	}
+	// Only workflows declare commit mode.
+	resp.Mode = streamservicepb.STREAM_MODE_SINK
+	return resp, nil
+}
+
+// streamOffset returns the offset of a cursor of this execution's stream, or -1 for none.
+func streamOffset(ctx chasm.Context, c *streampb.Cursor) (int64, error) {
+	if c == nil {
+		return -1, nil
+	}
+	if c.GetActivityRunId() != ctx.ExecutionKey().RunID {
+		return 0, stream.NewError(streamservicepb.STREAM_FAILURE_TYPE_EXPIRED, "the cursor's activity execution no longer exists")
+	}
+	return c.GetOffset(), nil
 }
 
 // closeStreamOnEnd closes the activity's stream with state, unless it is already closed, in the

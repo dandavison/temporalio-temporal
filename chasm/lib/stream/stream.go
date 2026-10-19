@@ -13,6 +13,7 @@ import (
 	"go.temporal.io/server/chasm/lib/orderedstore"
 	"go.temporal.io/server/chasm/lib/stream/gen/streampb/v1"
 	"google.golang.org/protobuf/proto"
+	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
 // ServiceName is the stream service on the System Nexus Endpoint.
@@ -77,10 +78,12 @@ func NewError(t streamservicepb.StreamFailureType, format string, args ...any) *
 	return newError(t, format, args...)
 }
 
-// ReadArgs is a read request and its decoded cursor, nil for a read from the beginning.
+// ReadArgs is a read request and its decoded cursors: Cursor is nil for a read from the beginning,
+// and Until is nil for a read with no upper bound.
 type ReadArgs struct {
 	Req    *streamservicepb.ReadRequest
 	Cursor *streampb.Cursor
+	Until  *streampb.Cursor
 }
 
 // The size limits on an append.
@@ -227,8 +230,15 @@ func (s *Stream) RecordCreated(ctx chasm.MutableContext, runID string, nextWorkf
 	return err
 }
 
+// WorkflowAppendMode returns the append mode a run's first workflow append, or its declaration,
+// fixed, if any.
+func (s *Stream) WorkflowAppendMode(runID string) (streamservicepb.WorkflowAppendMode, bool) {
+	mode, ok := s.WorkflowAppendModes[runID]
+	return mode, ok
+}
+
 // FixWorkflowAppendMode fixes and records a run's workflow append mode at its first workflow
-// append, and rejects a later workflow append in the other mode.
+// append, or its declaration, and rejects a later workflow append in the other mode.
 func (s *Stream) FixWorkflowAppendMode(ctx chasm.MutableContext, runID string, mode streamservicepb.WorkflowAppendMode) error {
 	fixed, ok := s.WorkflowAppendModes[runID]
 	if ok && fixed != mode {
@@ -301,20 +311,47 @@ type ReadResult struct {
 	Closed bool
 }
 
-// Read returns up to maxRecords records after offset after (-1 for the beginning) that match
-// topics. Markers (workflow task commits, creation, append modes) match every filter.
-func (s *Stream) Read(ctx chasm.Context, after int64, topics []string, maxRecords int) (ReadResult, error) {
+// ReadBounds bound a read: no record after offset Until (-1 for none), at most MaxRecords records
+// (0 for the default), and at most MaxBytes payload bytes (0 for none). Markers have no payload.
+type ReadBounds struct {
+	Until      int64
+	MaxRecords int
+	MaxBytes   int64
+}
+
+// Read returns the records after offset after (-1 for the beginning) that match topics, within
+// bounds. Markers (workflow task commits, creation, append modes) match every filter. A read stops
+// before the first record that would exceed MaxBytes, and fails as TOO_LARGE if no record before it
+// in the read has a payload.
+func (s *Stream) Read(ctx chasm.Context, after int64, topics []string, bounds ReadBounds) (ReadResult, error) {
+	maxRecords := bounds.MaxRecords
 	if maxRecords <= 0 {
 		maxRecords = defaultMaxRecords
 	}
 	result := ReadResult{Position: after}
+	var size int64
+	tooLarge := false
 	err := s.scan(ctx, after+1, func(offset int64, r *streamservicepb.Record) bool {
-		result.Position = offset
+		if bounds.Until >= 0 && offset > bounds.Until {
+			return false
+		}
 		if matches(r, topics) {
+			n := int64(proto.Size(r.GetPayload()))
+			if bounds.MaxBytes > 0 && size+n > bounds.MaxBytes {
+				// Markers have no payload, so a record exceeds the limit alone if nothing before it
+				// in this read had a payload.
+				tooLarge = size == 0
+				return false
+			}
+			size += n
 			result.Records = append(result.Records, OffsetRecord{Offset: offset, Record: r})
 		}
+		result.Position = offset
 		return len(result.Records) < maxRecords
 	})
+	if err == nil && tooLarge {
+		return result, newError(streamservicepb.STREAM_FAILURE_TYPE_TOO_LARGE, "the next record exceeds the read's limit of %d bytes", bounds.MaxBytes)
+	}
 	result.Closed = s.Close != nil && result.Position == s.nextOffset(ctx)-1
 	return result, err
 }
@@ -410,17 +447,21 @@ func appendDigest(records []*streamservicepb.AppendRecord, finish bool, closing 
 	return sum[:], nil
 }
 
-// ReadResponse answers a read of the records after offset after (-1 for the beginning), with
-// cursorFor encoding an offset as a cursor of the owner's stream. s is nil when the owner has no
-// stream yet.
+// ReadResponse answers a read of the records after offset after (-1 for the beginning) and up to
+// offset until (-1 for no bound), with cursorFor encoding an offset as a cursor of the owner's
+// stream. s is nil when the owner has no stream yet. It sets the owner's close time once the owner
+// has closed; the caller sets the mode, and the retention.
 func ReadResponse(
 	ctx chasm.Context,
 	s *Stream,
 	req *streamservicepb.ReadRequest,
-	after int64,
+	after, until int64,
 	cursorFor func(offset int64) ([]byte, error),
 ) (*streamservicepb.ReadResponse, error) {
 	resp := &streamservicepb.ReadResponse{Cursor: req.GetAfter()}
+	if closeTime := ctx.ExecutionInfo().CloseTime; !closeTime.IsZero() {
+		resp.OwnerCloseTime = timestamppb.New(closeTime)
+	}
 	if s == nil {
 		return resp, nil
 	}
@@ -429,7 +470,7 @@ func ReadResponse(
 	if n := req.GetLast(); n > 0 {
 		result, err = s.ReadLast(ctx, int(n), req.GetTopics())
 	} else {
-		result, err = s.Read(ctx, after, req.GetTopics(), int(req.GetMaxRecords()))
+		result, err = s.Read(ctx, after, req.GetTopics(), ReadBounds{Until: until, MaxRecords: int(req.GetMaxRecords()), MaxBytes: req.GetMaxBytes()})
 	}
 	if err != nil {
 		return nil, err
