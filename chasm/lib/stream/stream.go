@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"slices"
 
+	commonpb "go.temporal.io/api/common/v1"
 	streamservicepb "go.temporal.io/api/nexusservices/streamservice/v1"
 	"go.temporal.io/api/serviceerror"
 	"go.temporal.io/server/chasm"
@@ -23,6 +24,7 @@ const (
 	AppendOperation = "Append"
 	ReadOperation   = "Read"
 	CloseOperation  = "Close"
+	WaitOperation   = "Wait"
 )
 
 const defaultMaxRecords = 1000
@@ -44,6 +46,8 @@ type Stream struct {
 
 	Records   chasm.Field[*orderedstore.Log]
 	Producers chasm.Map[string, *streampb.ProducerState]
+	// Subscriptions are the stream's pending Waits, keyed by the Wait's request ID.
+	Subscriptions chasm.Map[string, *Subscription]
 }
 
 func New(ctx chasm.MutableContext) *Stream {
@@ -76,6 +80,32 @@ func newError(t streamservicepb.StreamFailureType, format string, args ...any) *
 // NewError returns a stream operation failure of type t.
 func NewError(t streamservicepb.StreamFailureType, format string, args ...any) *Error {
 	return newError(t, format, args...)
+}
+
+// WaitArgs is a Wait request, its decoded cursor (nil for the beginning), and the caller's request
+// ID and callback.
+type WaitArgs struct {
+	Req       *streamservicepb.WaitRequest
+	Cursor    *streampb.Cursor
+	RequestID string
+	Callback  *commonpb.Callback
+}
+
+// Wait completes a Wait at once, returning its result, if what it waits for is already there, and
+// otherwise subscribes it and returns nil. A Wait does not complete for records while the stream's
+// mode is not yet known (known is false): the next record, which the owner's first workflow task
+// completion appends as its commit record, completes it.
+func (s *Stream) Wait(ctx chasm.MutableContext, args WaitArgs, after int64, known bool) (*streamservicepb.WaitResponse, error) {
+	if s.Close != nil {
+		return &streamservicepb.WaitResponse{Reason: streamservicepb.WAKE_REASON_CLOSED}, nil
+	}
+	if known {
+		found, err := s.HasRecordAfter(ctx, after, args.Req.GetTopics())
+		if err != nil || found {
+			return &streamservicepb.WaitResponse{Reason: streamservicepb.WAKE_REASON_APPENDED}, err
+		}
+	}
+	return nil, s.Subscribe(ctx, args.RequestID, args.Callback, after, args.Req.GetTopics(), args.Req.GetLifetime().AsDuration())
 }
 
 // ReadArgs is a read request and its decoded cursors: Cursor is nil for a read from the beginning,
@@ -190,6 +220,9 @@ func (s *Stream) Append(
 	}
 	if closing != nil {
 		s.Close = closing
+		if err := s.FireSubscriptions(ctx, streamservicepb.WAKE_REASON_CLOSED, streamservicepb.CLOSE_STATE_UNSPECIFIED); err != nil {
+			return nil, err
+		}
 	}
 	s.Producers[p.ID] = chasm.NewDataField(ctx, &streampb.ProducerState{
 		WorkflowTask:        p.WorkflowTask,
@@ -276,14 +309,17 @@ func (s *Stream) RemoveProducer(producer string) {
 	delete(s.Producers, producer)
 }
 
-// CloseIfOpen closes the stream unless it is already closed.
-func (s *Stream) CloseIfOpen(c *streamservicepb.StreamClose) {
-	if s.Close == nil {
-		s.Close = c
+// CloseIfOpen closes the stream unless it is already closed, and completes its pending Waits.
+func (s *Stream) CloseIfOpen(ctx chasm.MutableContext, c *streamservicepb.StreamClose) error {
+	if s.Close != nil {
+		return nil
 	}
+	s.Close = c
+	return s.FireSubscriptions(ctx, streamservicepb.WAKE_REASON_CLOSED, streamservicepb.CLOSE_STATE_UNSPECIFIED)
 }
 
-// add appends records to the ordered store as one batch and returns the offset of the first.
+// add appends records to the ordered store as one batch, completes the pending Waits that one of
+// them matches, and returns the offset of the first.
 func (s *Stream) add(ctx chasm.MutableContext, records ...*streamservicepb.Record) (int64, error) {
 	events := make([][]byte, len(records))
 	for i, r := range records {
@@ -293,7 +329,8 @@ func (s *Stream) add(ctx chasm.MutableContext, records ...*streamservicepb.Recor
 		}
 		events[i] = b
 	}
-	return s.Records.Get(ctx).Append(ctx, events...), nil
+	first := s.Records.Get(ctx).Append(ctx, events...)
+	return first, s.fireMatchingSubscriptions(ctx, records)
 }
 
 // OffsetRecord is a record and its offset.

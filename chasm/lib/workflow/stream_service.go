@@ -8,11 +8,13 @@ package workflow
 
 import (
 	"context"
+	"encoding/base64"
 	"errors"
 	"fmt"
 	"time"
 
 	"github.com/nexus-rpc/sdk-go/nexus"
+	commonpb "go.temporal.io/api/common/v1"
 	enumspb "go.temporal.io/api/enums/v1"
 	failurepb "go.temporal.io/api/failure/v1"
 	streamservicepb "go.temporal.io/api/nexusservices/streamservice/v1"
@@ -46,8 +48,116 @@ func mustNewStreamServiceNexusHandler(h *streamServiceHandler) *nexus.Service {
 		nexus.NewSyncOperation(stream.AppendOperation, h.append),
 		nexus.NewSyncOperation(stream.ReadOperation, h.read),
 		nexus.NewSyncOperation(stream.CloseOperation, h.close),
+		&waitOperation{h: h},
 	)
 	return svc
+}
+
+// waitOperation is the asynchronous Wait operation, which a workflow calls as a Nexus operation
+// after a read returned nothing. It completes at once when what it waits for is already there;
+// otherwise its subscription, held by the stream, completes it through the caller's callback.
+type waitOperation struct {
+	nexus.UnimplementedOperation[*streamservicepb.WaitRequest, *streamservicepb.WaitResponse]
+	h *streamServiceHandler
+}
+
+func (o *waitOperation) Name() string {
+	return stream.WaitOperation
+}
+
+func (o *waitOperation) Start(
+	ctx context.Context,
+	req *streamservicepb.WaitRequest,
+	options nexus.StartOperationOptions,
+) (nexus.HandlerStartOperationResult[*streamservicepb.WaitResponse], error) {
+	cursor, err := decodeStreamCursor(req.GetStream(), req.GetAfter())
+	if err != nil {
+		return nil, streamOperationError(err)
+	}
+	ref, ownedByActivity, err := o.h.ownerRef(req.GetStream(), cursor)
+	if err != nil {
+		return nil, err
+	}
+	args := stream.WaitArgs{
+		Req:       req,
+		Cursor:    cursor,
+		RequestID: options.RequestID,
+		Callback: &commonpb.Callback{Variant: &commonpb.Callback_Nexus_{Nexus: &commonpb.Callback_Nexus{
+			Url:    options.CallbackURL,
+			Header: options.CallbackHeader,
+		}}},
+	}
+	var resp *streamservicepb.WaitResponse
+	if ownedByActivity {
+		resp, _, err = chasm.UpdateComponent(ctx, ref, (*activity.Activity).WaitOnStream, args)
+	} else {
+		resp, _, err = chasm.UpdateComponent(ctx, ref, (*Workflow).waitOnStream, args)
+	}
+	if _, ok := errors.AsType[*serviceerror.NotFound](err); ok {
+		return &nexus.HandlerStartOperationResultSync[*streamservicepb.WaitResponse]{
+			Value: &streamservicepb.WaitResponse{Reason: streamservicepb.WAKE_REASON_OWNER_NOT_FOUND},
+		}, nil
+	}
+	if err != nil {
+		return nil, streamOperationError(err)
+	}
+	if resp != nil {
+		return &nexus.HandlerStartOperationResultSync[*streamservicepb.WaitResponse]{Value: resp}, nil
+	}
+	token, err := proto.Marshal(&streampb.WaitToken{Stream: req.GetStream(), RequestId: options.RequestID})
+	if err != nil {
+		return nil, err
+	}
+	return &nexus.HandlerStartOperationResultAsync{OperationToken: base64.URLEncoding.EncodeToString(token)}, nil
+}
+
+// Cancel removes the Wait's subscription, if it has not fired.
+func (o *waitOperation) Cancel(ctx context.Context, token string, _ nexus.CancelOperationOptions) error {
+	b, err := base64.URLEncoding.DecodeString(token)
+	if err != nil {
+		return serviceerror.NewInvalidArgument("invalid Wait operation token")
+	}
+	t := &streampb.WaitToken{}
+	if err := proto.Unmarshal(b, t); err != nil {
+		return serviceerror.NewInvalidArgument("invalid Wait operation token")
+	}
+	ref, ownedByActivity, err := o.h.ownerRef(t.GetStream(), nil)
+	if err != nil {
+		return err
+	}
+	if ownedByActivity {
+		_, _, err = chasm.UpdateComponent(ctx, ref, (*activity.Activity).CancelStreamWait, t.GetRequestId())
+	} else {
+		_, _, err = chasm.UpdateComponent(ctx, ref, (*Workflow).cancelStreamWait, t.GetRequestId())
+	}
+	if _, ok := errors.AsType[*serviceerror.NotFound](err); ok {
+		return nil
+	}
+	return err
+}
+
+// waitOnStream completes a Wait on the workflow's stream at once, or subscribes it. It creates the
+// stream if it does not exist, as a subscription creates a missing notifier.
+func (w *Workflow) waitOnStream(ctx chasm.MutableContext, args stream.WaitArgs) (*streamservicepb.WaitResponse, error) {
+	if err := w.checkStreamChain(args.Req.GetStream()); err != nil {
+		return nil, err
+	}
+	after, err := w.streamOffset(args.Cursor)
+	if err != nil {
+		return nil, err
+	}
+	s, err := w.mutableStream(ctx)
+	if err != nil {
+		return nil, err
+	}
+	return s.Wait(ctx, args, after, w.streamMode(s) != streamservicepb.STREAM_MODE_UNSPECIFIED)
+}
+
+func (w *Workflow) cancelStreamWait(ctx chasm.MutableContext, requestID string) (chasm.NoValue, error) {
+	if s, ok := w.Stream.TryGet(ctx); ok {
+		s.CancelSubscription(ctx, requestID)
+	}
+	return nil, nil
 }
 
 func (h *streamServiceHandler) append(
@@ -387,12 +497,22 @@ func (w *Workflow) RecordStreamWorkflowTaskCommit(ctx chasm.MutableContext, atte
 
 // CloseStreamOnOwnerEnd closes the stream, unless it is already closed, in the transaction in
 // which its owner reaches a terminal state.
-func (w *Workflow) CloseStreamOnOwnerEnd(ctx chasm.MutableContext, state streamservicepb.CloseState, failure *failurepb.Failure) {
+func (w *Workflow) CloseStreamOnOwnerEnd(ctx chasm.MutableContext, state streamservicepb.CloseState, failure *failurepb.Failure) error {
 	s, ok := w.Stream.TryGet(ctx)
 	if !ok {
-		return
+		return nil
 	}
-	s.CloseIfOpen(&streamservicepb.StreamClose{State: state, Failure: failure})
+	return s.CloseIfOpen(ctx, &streamservicepb.StreamClose{State: state, Failure: failure})
+}
+
+// EndStreamRun completes the stream's pending Waits when the run ends but its chain continues in a
+// new run, which leaves the stream open: the readers read again, which addresses the new run.
+func (w *Workflow) EndStreamRun(ctx chasm.MutableContext) error {
+	s, ok := w.Stream.TryGet(ctx)
+	if !ok {
+		return nil
+	}
+	return s.FireSubscriptions(ctx, streamservicepb.WAKE_REASON_OWNER_ENDED, streamservicepb.CLOSE_STATE_UNSPECIFIED)
 }
 
 // RemoveStreamActivityProducer removes the state of the run's activity as a stream producer. It is
@@ -415,7 +535,9 @@ func (w *Workflow) mutableStream(ctx chasm.MutableContext) (*stream.Stream, erro
 	s := stream.New(ctx)
 	w.Stream = chasm.NewComponentField(ctx, s)
 	if status := w.GetExecutionState().GetStatus(); status != enumspb.WORKFLOW_EXECUTION_STATUS_RUNNING {
-		s.CloseIfOpen(&streamservicepb.StreamClose{State: StreamCloseState(status)})
+		if err := s.CloseIfOpen(ctx, &streamservicepb.StreamClose{State: StreamCloseState(status)}); err != nil {
+			return nil, err
+		}
 	}
 	err := s.RecordCreated(ctx, w.GetExecutionState().GetRunId(), w.GetExecutionInfo().GetLastCompletedWorkflowTaskStartedEventId())
 	return s, err
@@ -619,5 +741,6 @@ func NewStreamServiceNexusServiceProcessor() *chasm.NexusServiceProcessor {
 	sp.MustRegisterOperation(stream.AppendOperation, chasm.NewRegisterableNexusOperationProcessor(streamOperationProcessor[*streamservicepb.AppendRequest]{}))
 	sp.MustRegisterOperation(stream.ReadOperation, chasm.NewRegisterableNexusOperationProcessor(streamOperationProcessor[*streamservicepb.ReadRequest]{}))
 	sp.MustRegisterOperation(stream.CloseOperation, chasm.NewRegisterableNexusOperationProcessor(streamOperationProcessor[*streamservicepb.CloseRequest]{}))
+	sp.MustRegisterOperation(stream.WaitOperation, chasm.NewRegisterableNexusOperationProcessor(streamOperationProcessor[*streamservicepb.WaitRequest]{}))
 	return sp
 }

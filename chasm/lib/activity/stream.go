@@ -72,6 +72,28 @@ func (a *Activity) CloseStream(
 	return &streamservicepb.CloseResponse{}, err
 }
 
+// WaitOnStream completes a Wait on the activity's stream at once, or subscribes it. The stream's
+// mode is always known: only workflows declare commit mode.
+func (a *Activity) WaitOnStream(ctx chasm.MutableContext, args stream.WaitArgs) (*streamservicepb.WaitResponse, error) {
+	after, err := streamOffset(ctx, args.Cursor)
+	if err != nil {
+		return nil, err
+	}
+	s, err := a.mutableStream(ctx)
+	if err != nil {
+		return nil, err
+	}
+	return s.Wait(ctx, args, after, true)
+}
+
+// CancelStreamWait removes the subscription of a canceled Wait.
+func (a *Activity) CancelStreamWait(ctx chasm.MutableContext, requestID string) (chasm.NoValue, error) {
+	if s, ok := a.Stream.TryGet(ctx); ok {
+		s.CancelSubscription(ctx, requestID)
+	}
+	return nil, nil
+}
+
 // ReadStream reads the activity's stream.
 func (a *Activity) ReadStream(ctx chasm.Context, args stream.ReadArgs) (*streamservicepb.ReadResponse, error) {
 	after, err := streamOffset(ctx, args.Cursor)
@@ -107,10 +129,11 @@ func streamOffset(ctx chasm.Context, c *streampb.Cursor) (int64, error) {
 // transaction in which the activity reaches a terminal state. A workflow activity has no stream.
 // Each terminal transition passes its state, because the transition sets the activity's status only
 // after its apply function returns.
-func (a *Activity) closeStreamOnEnd(ctx chasm.MutableContext, state streamservicepb.CloseState) {
+func (a *Activity) closeStreamOnEnd(ctx chasm.MutableContext, state streamservicepb.CloseState) error {
 	if s, ok := a.Stream.TryGet(ctx); ok {
-		s.CloseIfOpen(&streamservicepb.StreamClose{State: state})
+		return s.CloseIfOpen(ctx, &streamservicepb.StreamClose{State: state})
 	}
+	return nil
 }
 
 // mutableStream returns the activity's stream, creating it if it does not exist. A stream created
@@ -122,7 +145,9 @@ func (a *Activity) mutableStream(ctx chasm.MutableContext) (*stream.Stream, erro
 	s := stream.New(ctx)
 	a.Stream = chasm.NewComponentField(ctx, s)
 	if a.LifecycleState(ctx) != chasm.LifecycleStateRunning {
-		a.closeStreamOnEnd(ctx, streamCloseState(a.Status))
+		if err := a.closeStreamOnEnd(ctx, streamCloseState(a.Status)); err != nil {
+			return nil, err
+		}
 	}
 	return s, nil
 }

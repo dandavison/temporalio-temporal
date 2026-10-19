@@ -4,6 +4,7 @@ package temporal.server.chasm.lib.stream.proto.v1;
 
 option go_package = "go.temporal.io/server/chasm/lib/stream/gen/streampb;streampb";
 
+import "google/protobuf/timestamp.proto";
 import "temporal/api/nexusservices/streamservice/v1/request_response.proto";
 
 message StreamState {
@@ -39,4 +40,29 @@ message Cursor {
     // The workflow run that holds the stream. A workflow's stream is not moved to the next run of
     // its chain, so a cursor of another run's stream cannot be read.
     string run_id = 6;
+}
+
+// A pending Wait: a workflow reader's subscription to the stream. The stream completes it once, by
+// firing its callback, and removes it after the callback has finished, or when it is canceled.
+message SubscriptionState {
+    // Wake on a matching record after this offset (-1 for the beginning).
+    int64 after = 1;
+    repeated string topics = 2;
+    google.protobuf.Timestamp expire_time = 3;
+    // Set when the subscription fires: why, and for OWNER_ENDED, how the owner ended.
+    temporal.api.nexusservices.streamservice.v1.WakeReason reason = 4;
+    temporal.api.nexusservices.streamservice.v1.CloseState owner_end = 5;
+    google.protobuf.Timestamp start_time = 6;
+    google.protobuf.Timestamp close_time = 7;
+}
+
+// Fires a subscription that has not fired by its expire time.
+message SubscriptionExpiryTask {
+}
+
+// The operation token of an asynchronous Wait: the stream, to route a cancel to its owner, and the
+// subscription's key, the Wait's request ID.
+message WaitToken {
+    temporal.api.nexusservices.streamservice.v1.StreamRef stream = 1;
+    string request_id = 2;
 }
