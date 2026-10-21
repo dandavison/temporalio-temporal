@@ -58,6 +58,8 @@ var (
 
 		// Potentially long-running, depending on the operations.
 		"/temporal.api.workflowservice.v1.WorkflowService/ExecuteMultiOperation": 1,
+		// A direct call to a synchronous operation can wait, as a stream read does, for up to 20 s.
+		"/temporal.api.workflowservice.v1.WorkflowService/StartNexusOperation": 1,
 
 		// Dispatching a Nexus task is a potentially long running RPC, it's classified in the same bucket as QueryWorkflow.
 		DispatchNexusTaskByNamespaceAndTaskQueueAPIName: 1,
@@ -95,6 +97,7 @@ var (
 		"/temporal.api.workflowservice.v1.WorkflowService/StartBatchOperation":              1,
 		"/temporal.api.workflowservice.v1.WorkflowService/StartActivityExecution":           1,
 		"/temporal.api.workflowservice.v1.WorkflowService/StartNexusOperationExecution":     1,
+		"/temporal.api.workflowservice.v1.WorkflowService/StartNexusOperation":              1,
 		DispatchNexusTaskByNamespaceAndTaskQueueAPIName:                                     1,
 		DispatchNexusTaskByEndpointAPIName:                                                  1,
 
@@ -149,6 +152,7 @@ var (
 		"/temporal.api.workflowservice.v1.WorkflowService/TerminateActivityExecution":                 2,
 		"/temporal.api.workflowservice.v1.WorkflowService/DeleteActivityExecution":                    2,
 		"/temporal.api.workflowservice.v1.WorkflowService/RequestCancelNexusOperationExecution":       2,
+		"/temporal.api.workflowservice.v1.WorkflowService/CancelNexusOperation":                       2,
 		"/temporal.api.workflowservice.v1.WorkflowService/TerminateNexusOperationExecution":           2,
 		"/temporal.api.workflowservice.v1.WorkflowService/DeleteNexusOperationExecution":              2,
 		"/temporal.api.workflowservice.v1.WorkflowService/PauseWorkflowExecution":                     2,
