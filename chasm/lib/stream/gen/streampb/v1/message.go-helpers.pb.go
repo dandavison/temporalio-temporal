@@ -42,6 +42,80 @@ func (this *StreamState) Equal(that interface{}) bool {
 	return proto.Equal(this, that1)
 }
 
+// Marshal an object of type StandaloneState to the protobuf v3 wire format
+func (val *StandaloneState) Marshal() ([]byte, error) {
+	return proto.Marshal(val)
+}
+
+// Unmarshal an object of type StandaloneState from the protobuf v3 wire format
+func (val *StandaloneState) Unmarshal(buf []byte) error {
+	return proto.Unmarshal(buf, val)
+}
+
+// Size returns the size of the object, in bytes, once serialized
+func (val *StandaloneState) Size() int {
+	return proto.Size(val)
+}
+
+// Equal returns whether two StandaloneState values are equivalent by recursively
+// comparing the message's fields.
+// For more information see the documentation for
+// https://pkg.go.dev/google.golang.org/protobuf/proto#Equal
+func (this *StandaloneState) Equal(that interface{}) bool {
+	if that == nil {
+		return this == nil
+	}
+
+	var that1 *StandaloneState
+	switch t := that.(type) {
+	case *StandaloneState:
+		that1 = t
+	case StandaloneState:
+		that1 = &t
+	default:
+		return false
+	}
+
+	return proto.Equal(this, that1)
+}
+
+// Marshal an object of type IdleTimeoutTask to the protobuf v3 wire format
+func (val *IdleTimeoutTask) Marshal() ([]byte, error) {
+	return proto.Marshal(val)
+}
+
+// Unmarshal an object of type IdleTimeoutTask from the protobuf v3 wire format
+func (val *IdleTimeoutTask) Unmarshal(buf []byte) error {
+	return proto.Unmarshal(buf, val)
+}
+
+// Size returns the size of the object, in bytes, once serialized
+func (val *IdleTimeoutTask) Size() int {
+	return proto.Size(val)
+}
+
+// Equal returns whether two IdleTimeoutTask values are equivalent by recursively
+// comparing the message's fields.
+// For more information see the documentation for
+// https://pkg.go.dev/google.golang.org/protobuf/proto#Equal
+func (this *IdleTimeoutTask) Equal(that interface{}) bool {
+	if that == nil {
+		return this == nil
+	}
+
+	var that1 *IdleTimeoutTask
+	switch t := that.(type) {
+	case *IdleTimeoutTask:
+		that1 = t
+	case IdleTimeoutTask:
+		that1 = &t
+	default:
+		return false
+	}
+
+	return proto.Equal(this, that1)
+}
+
 // Marshal an object of type ProducerState to the protobuf v3 wire format
 func (val *ProducerState) Marshal() ([]byte, error) {
 	return proto.Marshal(val)

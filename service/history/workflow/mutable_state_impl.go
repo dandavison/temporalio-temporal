@@ -7451,24 +7451,24 @@ func (ms *MutableStateImpl) processCloseCallbacksChasm() error {
 	return wf.ProcessCloseCallbacks(ctx)
 }
 
-// streamWorkflowComponent returns the workflow component for writing if the workflow owns a stream.
+// streamWorkflowComponent returns the workflow component for writing if the workflow has a stream.
 func (ms *MutableStateImpl) streamWorkflowComponent() (*chasmworkflow.Workflow, chasm.MutableContext, error) {
 	if !ms.ChasmEnabled() {
 		return nil, nil, nil
 	}
-	wf, roCtx, err := ms.ChasmWorkflowComponentReadOnly(context.Background())
+	wf, _, err := ms.ChasmWorkflowComponentReadOnly(context.Background())
 	if err != nil {
 		return nil, nil, err
 	}
-	if _, ok := wf.Stream.TryGet(roCtx); !ok {
+	if len(wf.Streams) == 0 {
 		return nil, nil, nil
 	}
 	return ms.ChasmWorkflowComponent(context.Background())
 }
 
-// recordStreamWorkflowTaskCommit records, in the workflow's stream, which attempt completed the
-// current workflow task. It writes nothing if the workflow has no stream yet; the stream's creation
-// record covers the tasks completed before it existed.
+// recordStreamWorkflowTaskCommit records, in each of the workflow's streams, which attempt completed
+// the current workflow task. A stream created later has none; its creation record covers the tasks
+// completed before it existed.
 func (ms *MutableStateImpl) recordStreamWorkflowTaskCommit(attempt int32) error {
 	wf, ctx, err := ms.streamWorkflowComponent()
 	if wf == nil || err != nil {
@@ -7478,7 +7478,7 @@ func (ms *MutableStateImpl) recordStreamWorkflowTaskCommit(attempt int32) error 
 }
 
 // deleteClosedActivity deletes an activity that has closed, and removes its state as a producer to
-// the workflow's stream.
+// the workflow's streams.
 func (ms *MutableStateImpl) deleteClosedActivity(scheduledEventID int64) error {
 	if ai, ok := ms.pendingActivityInfoIDs[scheduledEventID]; ok {
 		wf, ctx, err := ms.streamWorkflowComponent()
@@ -7492,11 +7492,11 @@ func (ms *MutableStateImpl) deleteClosedActivity(scheduledEventID int64) error {
 	return ms.DeleteActivity(scheduledEventID)
 }
 
-// closeStreamOnEnd closes the workflow's stream with a state taken from the workflow's terminal
+// closeStreamOnEnd closes the workflow's streams with a state taken from the workflow's terminal
 // status, unless the run's chain continues in a new run: a cron run, whatever its outcome, or a run
-// that is retried. Those runs leave their stream open, because moving the stream to the next run is
-// not built, and nothing appends to or reads that stream again. It is not called at
-// continue-as-new, which also leaves the stream open.
+// that is retried. Those runs leave their streams open, because moving streams to the next run is
+// not built, and nothing appends to or reads those streams again. It is not called at
+// continue-as-new, which also leaves the streams open.
 func (ms *MutableStateImpl) closeStreamOnEnd(closeFailure *failurepb.Failure) error {
 	if ms.executionInfo.NewExecutionRunId != "" {
 		return nil

@@ -77,8 +77,9 @@ type Activity struct {
 	// for workflow-embedded activities as the workflow handles its own callbacks.
 	Callbacks chasm.Map[string, *callback.Callback]
 
-	// Stream is the standalone activity's stream, created by its first append. Standalone only.
-	Stream chasm.Field[*stream.Stream]
+	// Streams are the standalone activity's streams, keyed by name, each created by Create or its
+	// first append. Standalone only.
+	Streams chasm.Map[string, *stream.Stream]
 }
 
 // WithToken wraps a request with its deserialized task token.

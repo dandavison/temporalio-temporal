@@ -47,8 +47,8 @@ type Workflow struct {
 	// Updates indexed by update ID, used to store the update components.
 	Updates chasm.Map[string, *WorkflowUpdate]
 
-	// Stream is the stream owned by the workflow, created by its first append.
-	Stream chasm.Field[*stream.Stream]
+	// Streams are the workflow's streams, keyed by name, each created by Create or its first append.
+	Streams chasm.Map[string, *stream.Stream]
 }
 
 func NewWorkflow(

@@ -6,12 +6,14 @@ import (
 )
 
 const (
-	libraryName   = "stream"
-	componentName = "stream"
+	libraryName             = "stream"
+	componentName           = "stream"
+	standaloneComponentName = "standalone"
 )
 
+// Archetype is a standalone stream's.
 var (
-	Archetype   = chasm.FullyQualifiedName(libraryName, componentName)
+	Archetype   = chasm.FullyQualifiedName(libraryName, standaloneComponentName)
 	ArchetypeID = chasm.GenerateTypeID(Archetype)
 )
 
@@ -32,7 +34,14 @@ func (l *library) Name() string {
 func (l *library) Components() []*chasm.RegistrableComponent {
 	return []*chasm.RegistrableComponent{
 		chasm.NewRegistrableComponent[*Stream](componentName),
+		chasm.NewRegistrableComponent[*Standalone](standaloneComponentName, chasm.WithBusinessIDAlias("StreamId")),
 		// The ordered store stub has no library of its own.
 		chasm.NewRegistrableComponent[*orderedstore.Log]("orderedstore_log"),
+	}
+}
+
+func (l *library) Tasks() []*chasm.RegistrableTask {
+	return []*chasm.RegistrableTask{
+		chasm.NewRegistrablePureTask("idleTimeout", idleTimeoutTaskHandler{}),
 	}
 }

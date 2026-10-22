@@ -6,6 +6,7 @@ import (
 	"crypto/sha256"
 	"fmt"
 	"slices"
+	"time"
 
 	streamservicepb "go.temporal.io/api/nexusservices/streamservice/v1"
 	"go.temporal.io/api/serviceerror"
@@ -13,21 +14,33 @@ import (
 	"go.temporal.io/server/chasm/lib/orderedstore"
 	"go.temporal.io/server/chasm/lib/stream/gen/streampb/v1"
 	"google.golang.org/protobuf/proto"
+	"google.golang.org/protobuf/types/known/durationpb"
 )
 
 // ServiceName is the stream service on the System Nexus Endpoint.
 const ServiceName = "temporal.api.nexusservices.streamservice.v1.StreamService"
 
 const (
+	CreateOperation = "Create"
 	AppendOperation = "Append"
 	ReadOperation   = "Read"
 	CloseOperation  = "Close"
 )
 
+// MaxNameBytes is the longest name of an owner's stream.
+const MaxNameBytes = 255
+
+// DefaultIdleTimeout is a standalone stream's idle timeout when its creator sets none.
+const DefaultIdleTimeout = 7 * 24 * time.Hour
+
+// IdleCloseReason is the reason of the close a standalone stream gets at its idle timeout.
+const IdleCloseReason = "idle timeout"
+
 const defaultMaxRecords = 1000
 
-// Stream is a log of records embedded in its owner. A record's offset is its event ID in the
-// ordered store, so offsets are contiguous from 0, and each append is one batch. It applies dedupe
+// Stream is a log of records embedded in its owner, under its name, or in a standalone stream's
+// execution. A record's offset is its event ID in the ordered store, so offsets are contiguous from
+// 0, and each append is one batch. It applies dedupe
 // and fencing by (producer, epoch, seq); the owner checks that the producer is who it says it is.
 //
 // Producer state is kept in the component, not in the ordered store, because it is overwritten in
@@ -45,12 +58,53 @@ type Stream struct {
 	Producers chasm.Map[string, *streampb.ProducerState]
 }
 
-func New(ctx chasm.MutableContext) *Stream {
-	return &Stream{
-		StreamState: &streampb.StreamState{},
+// New creates a stream, by the Create with requestID, or by an append if requestID is empty.
+// idleTimeout is a standalone stream's, and zero for a stream of an owner.
+func New(ctx chasm.MutableContext, requestID string, idleTimeout time.Duration) *Stream {
+	s := &Stream{
+		StreamState: &streampb.StreamState{CreateRequestId: requestID},
 		Records:     chasm.NewComponentField(ctx, orderedstore.New()),
 		Producers:   make(chasm.Map[string, *streampb.ProducerState]),
 	}
+	if idleTimeout > 0 {
+		s.IdleTimeout = durationpb.New(idleTimeout)
+	}
+	return s
+}
+
+// Create answers a create of the stream, which exists: whether that create, by its request ID,
+// created the stream. A create of a closed stream fails as closed, unless it is a retry of the
+// create that created it, and one with another idle timeout fails as a settings mismatch.
+func (s *Stream) Create(requestID string, idleTimeout time.Duration) (bool, error) {
+	if requestID != "" && requestID == s.CreateRequestId {
+		return true, nil
+	}
+	if s.Close != nil {
+		return false, newError(streamservicepb.STREAM_FAILURE_TYPE_CLOSED, "stream is closed")
+	}
+	if idleTimeout != s.IdleTimeout.AsDuration() {
+		return false, newError(streamservicepb.STREAM_FAILURE_TYPE_SETTINGS_MISMATCH,
+			"the stream exists with idle timeout %v, not %v", s.IdleTimeout.AsDuration(), idleTimeout)
+	}
+	return false, nil
+}
+
+// IdleTimeout returns the idle timeout a create gives a stream: for a standalone stream, the
+// settings', or DefaultIdleTimeout if they set none. A stream of an owner closes with its owner, and
+// does not accept one.
+func IdleTimeout(ref *streamservicepb.StreamRef, settings *streamservicepb.StreamSettings) (time.Duration, error) {
+	idle := settings.GetIdleTimeout().AsDuration()
+	switch {
+	case idle < 0:
+		return 0, serviceerror.NewInvalidArgument("the idle timeout must not be negative")
+	case ref.GetStreamId() == "" && idle != 0:
+		return 0, serviceerror.NewInvalidArgument("a stream of a workflow or activity closes with its owner, and has no idle timeout")
+	case ref.GetStreamId() == "":
+		return 0, nil
+	case idle == 0:
+		return DefaultIdleTimeout, nil
+	}
+	return idle, nil
 }
 
 func (s *Stream) LifecycleState(chasm.Context) chasm.LifecycleState {
@@ -424,6 +478,7 @@ func ReadResponse(
 	if s == nil {
 		return resp, nil
 	}
+	resp.Exists = true
 	var result ReadResult
 	var err error
 	if n := req.GetLast(); n > 0 {

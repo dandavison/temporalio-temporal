@@ -1,10 +1,11 @@
 package workflow
 
-// The stream service on the System Nexus Endpoint: Append, Read and Close on the stream owned by a
-// workflow run chain or a Standalone Activity execution. The stream is embedded in its owner's CHASM
-// tree; the activity's side is in chasm/lib/activity. Moving a workflow's stream to the next run
-// of its chain (continue-as-new, retry, cron) is not built, so a new run of the chain starts with
-// no stream, and the earlier run's stream is no longer read or written.
+// The stream service on the System Nexus Endpoint: Create, Append, Read and Close on a named stream
+// of a workflow run chain or a Standalone Activity execution, or on a standalone stream. An owner's
+// streams are embedded in its CHASM tree; the activity's side is in chasm/lib/activity, and a
+// standalone stream, an execution of its own, is in chasm/lib/stream. Moving a workflow's streams to
+// the next run of its chain (continue-as-new, retry, cron) is not built, so a new run of the chain
+// starts with no streams, and the earlier run's streams are no longer read or written.
 
 import (
 	"context"
@@ -42,6 +43,7 @@ type streamServiceHandler struct {
 func mustNewStreamServiceNexusHandler(h *streamServiceHandler) *nexus.Service {
 	svc := nexus.NewService(stream.ServiceName)
 	svc.MustRegister(
+		nexus.NewSyncOperation(stream.CreateOperation, h.create),
 		nexus.NewSyncOperation(stream.AppendOperation, h.append),
 		nexus.NewSyncOperation(stream.ReadOperation, h.read),
 		nexus.NewSyncOperation(stream.CloseOperation, h.close),
@@ -49,19 +51,65 @@ func mustNewStreamServiceNexusHandler(h *streamServiceHandler) *nexus.Service {
 	return svc
 }
 
+// streamOwnerKind is the kind of execution that holds a stream: its owner, or, for a standalone
+// stream, the stream's own execution.
+type streamOwnerKind int
+
+const (
+	workflowStreamOwner streamOwnerKind = iota
+	activityStreamOwner
+	standaloneStream
+)
+
+func (h *streamServiceHandler) create(
+	ctx context.Context,
+	req *streamservicepb.CreateRequest,
+	_ nexus.StartOperationOptions,
+) (*streamservicepb.CreateResponse, error) {
+	idle, err := stream.IdleTimeout(req.GetStream(), req.GetSettings())
+	if err != nil {
+		return nil, err
+	}
+	ref, kind, err := h.ownerRef(req.GetStream(), nil)
+	if err != nil {
+		return nil, err
+	}
+	var resp *streamservicepb.CreateResponse
+	switch kind {
+	case standaloneStream:
+		resp, err = stream.UpdateOrStartStandalone(ctx, ref.ExecutionKey,
+			func(ctx chasm.MutableContext, in stream.StandaloneCreate) (*stream.Standalone, error) {
+				return stream.NewStandalone(ctx, in.Req.GetRequestId(), in.IdleTimeout), nil
+			},
+			(*stream.Standalone).Create, stream.StandaloneCreate{Req: req, IdleTimeout: idle})
+	case activityStreamOwner:
+		resp, _, err = chasm.UpdateComponent(ctx, ref, (*activity.Activity).CreateStream, req)
+	default:
+		resp, _, err = chasm.UpdateComponent(ctx, ref, (*Workflow).createStream, req)
+	}
+	return resp, streamOperationError(ownerNotFound(err))
+}
+
 func (h *streamServiceHandler) append(
 	ctx context.Context,
 	req *streamservicepb.AppendRequest,
 	_ nexus.StartOperationOptions,
 ) (*streamservicepb.AppendResponse, error) {
-	ref, ownedByActivity, err := h.ownerRef(req.GetStream(), nil)
+	ref, kind, err := h.ownerRef(req.GetStream(), nil)
 	if err != nil {
 		return nil, err
 	}
 	var resp *streamservicepb.AppendResponse
-	if ownedByActivity {
+	switch kind {
+	case standaloneStream:
+		resp, err = stream.UpdateOrStartStandalone(ctx, ref.ExecutionKey,
+			func(ctx chasm.MutableContext, in stream.StandaloneAppend) (*stream.Standalone, error) {
+				return stream.NewStandalone(ctx, "", in.IdleTimeout), nil
+			},
+			(*stream.Standalone).Append, stream.StandaloneAppend{Req: req, IdleTimeout: stream.DefaultIdleTimeout})
+	case activityStreamOwner:
 		resp, _, err = chasm.UpdateComponent(ctx, ref, (*activity.Activity).AppendToStream, req)
-	} else {
+	default:
 		resp, _, err = chasm.UpdateComponent(ctx, ref, (*Workflow).appendToStream, req)
 	}
 	return resp, streamOperationError(ownerNotFound(err))
@@ -72,14 +120,17 @@ func (h *streamServiceHandler) close(
 	req *streamservicepb.CloseRequest,
 	_ nexus.StartOperationOptions,
 ) (*streamservicepb.CloseResponse, error) {
-	ref, ownedByActivity, err := h.ownerRef(req.GetStream(), nil)
+	ref, kind, err := h.ownerRef(req.GetStream(), nil)
 	if err != nil {
 		return nil, err
 	}
 	var resp *streamservicepb.CloseResponse
-	if ownedByActivity {
+	switch kind {
+	case standaloneStream:
+		resp, _, err = chasm.UpdateComponent(ctx, ref, (*stream.Standalone).Close, req)
+	case activityStreamOwner:
 		resp, _, err = chasm.UpdateComponent(ctx, ref, (*activity.Activity).CloseStream, req)
-	} else {
+	default:
 		resp, _, err = chasm.UpdateComponent(ctx, ref, (*Workflow).closeStream, req)
 	}
 	return resp, streamOperationError(ownerNotFound(err))
@@ -97,7 +148,7 @@ func (h *streamServiceHandler) read(
 	if err != nil {
 		return nil, streamOperationError(err)
 	}
-	ref, ownedByActivity, err := h.ownerRef(req.GetStream(), args.Cursor)
+	ref, kind, err := h.ownerRef(req.GetStream(), args.Cursor)
 	if err != nil {
 		return nil, err
 	}
@@ -109,9 +160,12 @@ func (h *streamServiceHandler) read(
 	}
 	for {
 		var resp *streamservicepb.ReadResponse
-		if ownedByActivity {
+		switch kind {
+		case standaloneStream:
+			resp, err = readStreamOnce(ctx, ref, (*stream.Standalone).Read, args, wait > 0)
+		case activityStreamOwner:
 			resp, err = readStreamOnce(ctx, ref, (*activity.Activity).ReadStream, args, wait > 0)
-		} else {
+		default:
 			resp, err = readStreamOnce(ctx, ref, (*Workflow).readStream, args, wait > 0)
 		}
 		if _, ok := errors.AsType[*serviceerror.NotFound](err); ok {
@@ -155,29 +209,36 @@ func readStreamOnce[C any](
 	return polled, err
 }
 
-// ownerRef refers to the stream's owner: a workflow's current run, or a Standalone Activity
-// execution, the pinned one or the current one. A read after a cursor of an activity's stream reads
-// the execution the cursor belongs to.
-func (h *streamServiceHandler) ownerRef(ref *streamservicepb.StreamRef, cursor *streampb.Cursor) (chasm.ComponentRef, bool, error) {
+// ownerRef refers to the execution that holds the stream: a workflow's current run, a Standalone
+// Activity execution, the pinned one or the current one, or a standalone stream's current
+// execution. A read after a cursor of an activity's stream reads the execution the cursor belongs
+// to.
+func (h *streamServiceHandler) ownerRef(ref *streamservicepb.StreamRef, cursor *streampb.Cursor) (chasm.ComponentRef, streamOwnerKind, error) {
 	nsID, err := h.namespaceRegistry.GetNamespaceID(namespace.Name(ref.GetNamespace()))
 	if err != nil {
-		return chasm.ComponentRef{}, false, err
+		return chasm.ComponentRef{}, 0, err
 	}
-	if activityID := ref.GetActivityId(); activityID != "" {
+	switch {
+	case ref.GetActivityId() != "":
 		runID := ref.GetActivityRunId()
 		if cursor != nil {
 			runID = cursor.GetActivityRunId()
 		}
 		return chasm.NewComponentRef[*activity.Activity](chasm.ExecutionKey{
 			NamespaceID: nsID.String(),
-			BusinessID:  activityID,
+			BusinessID:  ref.GetActivityId(),
 			RunID:       runID,
-		}), true, nil
+		}), activityStreamOwner, nil
+	case ref.GetStreamId() != "":
+		return chasm.NewComponentRef[*stream.Standalone](chasm.ExecutionKey{
+			NamespaceID: nsID.String(),
+			BusinessID:  ref.GetStreamId(),
+		}), standaloneStream, nil
 	}
 	return chasm.NewComponentRef[*Workflow](chasm.ExecutionKey{
 		NamespaceID: nsID.String(),
 		BusinessID:  ref.GetWorkflowId(),
-	}), false, nil
+	}), workflowStreamOwner, nil
 }
 
 // newStreamReadArgs decodes the request's cursor, which must belong to the requested stream,
@@ -192,11 +253,33 @@ func newStreamReadArgs(req *streamservicepb.ReadRequest) (stream.ReadArgs, error
 	if err := proto.Unmarshal(req.GetAfter(), args.Cursor); err != nil ||
 		args.Cursor.GetWorkflowId() != ref.GetWorkflowId() ||
 		args.Cursor.GetActivityId() != ref.GetActivityId() ||
+		args.Cursor.GetStreamId() != ref.GetStreamId() ||
+		args.Cursor.GetName() != ref.GetName() ||
 		(ref.GetFirstRunId() != "" && args.Cursor.GetFirstRunId() != ref.GetFirstRunId()) ||
 		(ref.GetActivityRunId() != "" && args.Cursor.GetActivityRunId() != ref.GetActivityRunId()) {
 		return args, streamError(streamservicepb.STREAM_FAILURE_TYPE_CURSOR_MISMATCH, "the cursor belongs to another stream")
 	}
 	return args, nil
+}
+
+// createStream creates the workflow's stream, or answers a create of the stream if it exists.
+func (w *Workflow) createStream(
+	ctx chasm.MutableContext,
+	req *streamservicepb.CreateRequest,
+) (*streamservicepb.CreateResponse, error) {
+	if err := w.checkStreamChain(req.GetStream()); err != nil {
+		return nil, err
+	}
+	name := req.GetStream().GetName()
+	if s, ok := w.stream(ctx, name); ok {
+		created, err := s.Create(req.GetRequestId(), 0)
+		return &streamservicepb.CreateResponse{Created: created}, err
+	}
+	if w.GetExecutionState().GetStatus() != enumspb.WORKFLOW_EXECUTION_STATUS_RUNNING {
+		return nil, streamError(streamservicepb.STREAM_FAILURE_TYPE_CLOSED, "the stream's owner has ended")
+	}
+	_, err := w.newStream(ctx, name, req.GetRequestId())
+	return &streamservicepb.CreateResponse{Created: true}, err
 }
 
 func (w *Workflow) appendToStream(
@@ -210,7 +293,8 @@ func (w *Workflow) appendToStream(
 	if err != nil {
 		return nil, err
 	}
-	s, err := w.mutableStream(ctx)
+	name := req.GetStream().GetName()
+	s, err := w.mutableStream(ctx, name)
 	if err != nil {
 		return nil, err
 	}
@@ -225,7 +309,7 @@ func (w *Workflow) appendToStream(
 	}
 	resp := &streamservicepb.AppendResponse{}
 	for _, offset := range offsets {
-		cursor, err := w.streamCursor(offset)
+		cursor, err := w.streamCursor(name)(offset)
 		if err != nil {
 			return nil, err
 		}
@@ -248,7 +332,7 @@ func (w *Workflow) closeStream(
 	if err != nil {
 		return nil, err
 	}
-	s, err := w.mutableStream(ctx)
+	s, err := w.mutableStream(ctx, req.GetStream().GetName())
 	if err != nil {
 		return nil, err
 	}
@@ -257,13 +341,13 @@ func (w *Workflow) closeStream(
 }
 
 // AppendCommitModeRecords appends records that the run's current workflow task carries in its
-// completion, in commit mode, with the task as their producer. It is called in the completion's
+// completion, in commit mode, to the workflow's stream named name, with the task as their producer. It is called in the completion's
 // transaction, before the task's completion is recorded, while
 // LastCompletedWorkflowTaskStartedEventId is still the task's identity.
 //
 // The server assigns the seq: the worker sends none, and a completion is applied at most once, so
 // there is no retry to dedupe.
-func (w *Workflow) AppendCommitModeRecords(ctx chasm.MutableContext, records []*streamservicepb.AppendRecord) error {
+func (w *Workflow) AppendCommitModeRecords(ctx chasm.MutableContext, name string, records []*streamservicepb.AppendRecord) error {
 	info := w.GetExecutionInfo()
 	runID := w.GetExecutionState().GetRunId()
 	p := stream.Producer{
@@ -273,7 +357,7 @@ func (w *Workflow) AppendCommitModeRecords(ctx chasm.MutableContext, records []*
 		WorkflowTaskAttempt: info.GetWorkflowTaskAttempt(),
 		Epoch:               int64(info.GetWorkflowTaskAttempt()),
 	}
-	s, err := w.mutableStream(ctx)
+	s, err := w.mutableStream(ctx, name)
 	if err != nil {
 		return err
 	}
@@ -298,53 +382,72 @@ func (w *Workflow) readStream(ctx chasm.Context, args stream.ReadArgs) (*streams
 		}
 		after = args.Cursor.GetOffset()
 	}
-	s, _ := w.Stream.TryGet(ctx)
-	return stream.ReadResponse(ctx, s, args.Req, after, w.streamCursor)
+	s, _ := w.stream(ctx, args.Req.GetStream().GetName())
+	return stream.ReadResponse(ctx, s, args.Req, after, w.streamCursor(args.Req.GetStream().GetName()))
 }
 
-// RecordStreamWorkflowTaskCommit records, in the stream, that attempt completed the run's current
-// workflow task. It is called in the transaction that completes the task, before
+// RecordStreamWorkflowTaskCommit records, in each of the workflow's streams, that attempt completed
+// the run's current workflow task. It is called in the transaction that completes the task, before
 // LastCompletedWorkflowTaskStartedEventId moves past the task's identity.
 func (w *Workflow) RecordStreamWorkflowTaskCommit(ctx chasm.MutableContext, attempt int32) error {
-	s, ok := w.Stream.TryGet(ctx)
-	if !ok {
-		return nil
+	for _, field := range w.Streams {
+		if err := field.Get(ctx).RecordCommit(ctx, w.GetExecutionState().GetRunId(), w.GetExecutionInfo().GetLastCompletedWorkflowTaskStartedEventId(), int64(attempt)); err != nil {
+			return err
+		}
 	}
-	return s.RecordCommit(ctx, w.GetExecutionState().GetRunId(), w.GetExecutionInfo().GetLastCompletedWorkflowTaskStartedEventId(), int64(attempt))
+	return nil
 }
 
-// CloseStreamOnOwnerEnd closes the stream, unless it is already closed, in the transaction in
-// which its owner reaches a terminal state.
+// CloseStreamOnOwnerEnd closes each of the workflow's streams, unless it is already closed, in the
+// transaction in which its owner reaches a terminal state.
 func (w *Workflow) CloseStreamOnOwnerEnd(ctx chasm.MutableContext, state streamservicepb.CloseState, failure *failurepb.Failure) {
-	s, ok := w.Stream.TryGet(ctx)
-	if !ok {
-		return
+	for _, field := range w.Streams {
+		field.Get(ctx).CloseIfOpen(&streamservicepb.StreamClose{State: state, Failure: failure})
 	}
-	s.CloseIfOpen(&streamservicepb.StreamClose{State: state, Failure: failure})
 }
 
-// RemoveStreamActivityProducer removes the state of the run's activity as a stream producer. It is
-// called when the activity closes, after which the activity's task tokens cannot append.
+// RemoveStreamActivityProducer removes the state of the run's activity as a producer to each of the
+// workflow's streams. It is called when the activity closes, after which the activity's task tokens
+// cannot append.
 func (w *Workflow) RemoveStreamActivityProducer(ctx chasm.MutableContext, activityID string) {
-	if s, ok := w.Stream.TryGet(ctx); ok {
-		s.RemoveProducer(activityStreamProducerID(w.GetExecutionState().GetRunId(), activityID))
+	for _, field := range w.Streams {
+		field.Get(ctx).RemoveProducer(activityStreamProducerID(w.GetExecutionState().GetRunId(), activityID))
 	}
 }
 
-// mutableStream returns the workflow's stream, creating it, with its creation record, if it does
-// not exist. The creation record holds the run's current task identity (see Stream.RecordCreated,
-// including the case where readers' rule for it is wrong). A later run of the chain creates a new
-// stream, with offsets from 0 again. A stream created after the run ended is created closed, so it
-// takes no appends.
-func (w *Workflow) mutableStream(ctx chasm.MutableContext) (*stream.Stream, error) {
-	if s, ok := w.Stream.TryGet(ctx); ok {
+// stream returns the workflow's stream named name, if it exists.
+func (w *Workflow) stream(ctx chasm.Context, name string) (*stream.Stream, bool) {
+	field, ok := w.Streams[name]
+	if !ok {
+		return nil, false
+	}
+	return field.Get(ctx), true
+}
+
+// mutableStream returns the workflow's stream named name, creating it, with its creation record,
+// if it does not exist. A stream created after the run ended is created closed, so it takes no
+// appends.
+func (w *Workflow) mutableStream(ctx chasm.MutableContext, name string) (*stream.Stream, error) {
+	if s, ok := w.stream(ctx, name); ok {
 		return s, nil
 	}
-	s := stream.New(ctx)
-	w.Stream = chasm.NewComponentField(ctx, s)
+	s, err := w.newStream(ctx, name, "")
 	if status := w.GetExecutionState().GetStatus(); status != enumspb.WORKFLOW_EXECUTION_STATUS_RUNNING {
 		s.CloseIfOpen(&streamservicepb.StreamClose{State: StreamCloseState(status)})
 	}
+	return s, err
+}
+
+// newStream creates the workflow's stream named name, by the Create with requestID or by an append,
+// with its creation record, which holds the run's current task identity (see Stream.RecordCreated,
+// including the case where readers' rule for it is wrong). A later run of the chain creates new
+// streams, with offsets from 0 again.
+func (w *Workflow) newStream(ctx chasm.MutableContext, name, requestID string) (*stream.Stream, error) {
+	s := stream.New(ctx, requestID, 0)
+	if w.Streams == nil {
+		w.Streams = make(chasm.Map[string, *stream.Stream])
+	}
+	w.Streams[name] = chasm.NewComponentField(ctx, s)
 	err := s.RecordCreated(ctx, w.GetExecutionState().GetRunId(), w.GetExecutionInfo().GetLastCompletedWorkflowTaskStartedEventId())
 	return s, err
 }
@@ -361,13 +464,16 @@ func (w *Workflow) checkStreamChain(ref *streamservicepb.StreamRef) error {
 	return nil
 }
 
-func (w *Workflow) streamCursor(offset int64) ([]byte, error) {
-	return proto.Marshal(&streampb.Cursor{
-		WorkflowId: w.GetExecutionInfo().GetWorkflowId(),
-		FirstRunId: w.firstRunID(),
-		RunId:      w.GetExecutionState().GetRunId(),
-		Offset:     offset,
-	})
+func (w *Workflow) streamCursor(name string) func(offset int64) ([]byte, error) {
+	return func(offset int64) ([]byte, error) {
+		return proto.Marshal(&streampb.Cursor{
+			WorkflowId: w.GetExecutionInfo().GetWorkflowId(),
+			FirstRunId: w.firstRunID(),
+			RunId:      w.GetExecutionState().GetRunId(),
+			Name:       name,
+			Offset:     offset,
+		})
+	}
 }
 
 // streamProducer derives the producer and its epoch. Activity and workflow producers are checked
@@ -524,8 +630,8 @@ type streamOperationProcessor[I interface {
 
 func (streamOperationProcessor[I]) ProcessInput(ctx chasm.NexusOperationProcessorContext, req I) (*chasm.NexusOperationProcessorResult, error) {
 	ref := req.GetStream()
-	if (ref.GetWorkflowId() == "") == (ref.GetActivityId() == "") {
-		return nil, serviceerror.NewInvalidArgument("a stream is named by exactly one of a workflow ID and an activity ID")
+	if err := stream.ValidateRef(ref); err != nil {
+		return nil, err
 	}
 	// The history-side handler is not given the namespace, so it travels in the request.
 	ns := ctx.Namespace.Name().String()
@@ -537,13 +643,14 @@ func (streamOperationProcessor[I]) ProcessInput(ctx chasm.NexusOperationProcesso
 	return &chasm.NexusOperationProcessorResult{
 		RoutingKey: chasm.NexusOperationRoutingKeyExecution{
 			NamespaceID: ctx.Namespace.ID().String(),
-			BusinessID:  ref.GetWorkflowId() + ref.GetActivityId(),
+			BusinessID:  ref.GetWorkflowId() + ref.GetActivityId() + ref.GetStreamId(),
 		},
 	}, nil
 }
 
 func NewStreamServiceNexusServiceProcessor() *chasm.NexusServiceProcessor {
 	sp := chasm.NewNexusServiceProcessor(stream.ServiceName)
+	sp.MustRegisterOperation(stream.CreateOperation, chasm.NewRegisterableNexusOperationProcessor(streamOperationProcessor[*streamservicepb.CreateRequest]{}))
 	sp.MustRegisterOperation(stream.AppendOperation, chasm.NewRegisterableNexusOperationProcessor(streamOperationProcessor[*streamservicepb.AppendRequest]{}))
 	sp.MustRegisterOperation(stream.ReadOperation, chasm.NewRegisterableNexusOperationProcessor(streamOperationProcessor[*streamservicepb.ReadRequest]{}))
 	sp.MustRegisterOperation(stream.CloseOperation, chasm.NewRegisterableNexusOperationProcessor(streamOperationProcessor[*streamservicepb.CloseRequest]{}))

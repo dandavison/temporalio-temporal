@@ -1248,7 +1248,10 @@ func appendCommitModeStreamRecords(
 		return nil, nil, err
 	}
 	for _, a := range appends {
-		if err := wf.AppendCommitModeRecords(chasmCtx, a.GetRecords()); err != nil {
+		if err := stream.ValidateRef(&streamservicepb.StreamRef{WorkflowId: ms.GetExecutionInfo().GetWorkflowId(), Name: a.GetName()}); err != nil {
+			return others, badStreamAppend(err), nil
+		}
+		if err := wf.AppendCommitModeRecords(chasmCtx, a.GetName(), a.GetRecords()); err != nil {
 			if _, ok := errors.AsType[*stream.Error](err); ok {
 				return others, badStreamAppend(serviceerror.NewInvalidArgument(err.Error())), nil
 			}

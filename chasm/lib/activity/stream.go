@@ -1,11 +1,11 @@
 package activity
 
-// A Standalone Activity's stream: Append, Read and Close of the stream service on a stream embedded
-// in the activity's execution. The activity's own attempts append with their task token, checked
-// against the current attempt, so a superseded attempt is fenced. Other producers (workflows, other
-// activities, clients) are not verified, and their dedupe and fencing state is never removed. The
-// stream closes with the activity's outcome, in the transaction that ends it; a retry does not
-// close it.
+// A Standalone Activity's streams: Create, Append, Read and Close of the stream service on the
+// named streams embedded in the activity's execution. The activity's own attempts append with their
+// task token, checked against the current attempt, so a superseded attempt is fenced. Other
+// producers (workflows, other activities, clients) are not verified, and their dedupe and fencing
+// state is never removed. Every stream closes with the activity's outcome, in the transaction that
+// ends it; a retry does not close it.
 
 import (
 	streamservicepb "go.temporal.io/api/nexusservices/streamservice/v1"
@@ -18,6 +18,23 @@ import (
 	"google.golang.org/protobuf/proto"
 )
 
+// CreateStream creates the activity's stream, or answers a create of the stream if it exists.
+func (a *Activity) CreateStream(
+	ctx chasm.MutableContext,
+	req *streamservicepb.CreateRequest,
+) (*streamservicepb.CreateResponse, error) {
+	name := req.GetStream().GetName()
+	if s, ok := a.stream(ctx, name); ok {
+		created, err := s.Create(req.GetRequestId(), 0)
+		return &streamservicepb.CreateResponse{Created: created}, err
+	}
+	if a.LifecycleState(ctx) != chasm.LifecycleStateRunning {
+		return nil, stream.NewError(streamservicepb.STREAM_FAILURE_TYPE_CLOSED, "the stream's owner has ended")
+	}
+	a.newStream(ctx, name, req.GetRequestId())
+	return &streamservicepb.CreateResponse{Created: true}, nil
+}
+
 // AppendToStream appends to the activity's stream, creating it with the first append.
 func (a *Activity) AppendToStream(
 	ctx chasm.MutableContext,
@@ -27,17 +44,15 @@ func (a *Activity) AppendToStream(
 	if err != nil {
 		return nil, err
 	}
-	s, err := a.mutableStream(ctx)
-	if err != nil {
-		return nil, err
-	}
+	name := req.GetStream().GetName()
+	s := a.mutableStream(ctx, name)
 	offsets, err := s.Append(ctx, p, req.GetSeq(), req.GetRecords(), req.GetFinish(), nil)
 	if err != nil {
 		return nil, err
 	}
 	resp := &streamservicepb.AppendResponse{}
 	for _, offset := range offsets {
-		cursor, err := streamCursor(ctx)(offset)
+		cursor, err := streamCursor(ctx, name)(offset)
 		if err != nil {
 			return nil, err
 		}
@@ -64,11 +79,7 @@ func (a *Activity) CloseStream(
 	if !own {
 		return nil, stream.NewError(streamservicepb.STREAM_FAILURE_TYPE_NOT_OWNER, "only the stream's owner may close it")
 	}
-	s, err := a.mutableStream(ctx)
-	if err != nil {
-		return nil, err
-	}
-	_, err = s.Append(ctx, p, req.GetSeq(), nil, false, req.GetClose())
+	_, err = a.mutableStream(ctx, req.GetStream().GetName()).Append(ctx, p, req.GetSeq(), nil, false, req.GetClose())
 	return &streamservicepb.CloseResponse{}, err
 }
 
@@ -81,64 +92,60 @@ func (a *Activity) ReadStream(ctx chasm.Context, args stream.ReadArgs) (*streams
 		}
 		after = args.Cursor.GetOffset()
 	}
-	s, _ := a.Stream.TryGet(ctx)
-	return stream.ReadResponse(ctx, s, args.Req, after, streamCursor(ctx))
+	s, _ := a.stream(ctx, args.Req.GetStream().GetName())
+	return stream.ReadResponse(ctx, s, args.Req, after, streamCursor(ctx, args.Req.GetStream().GetName()))
 }
 
-// closeStreamOnEnd closes the activity's stream with state, unless it is already closed, in the
-// transaction in which the activity reaches a terminal state. A workflow activity has no stream.
-// Each terminal transition passes its state, because the transition sets the activity's status only
-// after its apply function returns.
+// closeStreamOnEnd closes each of the activity's streams with state, unless it is already closed,
+// in the transaction in which the activity reaches a terminal state. A workflow activity has no
+// streams. Each terminal transition passes its state, because the transition sets the activity's
+// status only after its apply function returns.
 func (a *Activity) closeStreamOnEnd(ctx chasm.MutableContext, state streamservicepb.CloseState) {
-	if s, ok := a.Stream.TryGet(ctx); ok {
-		s.CloseIfOpen(&streamservicepb.StreamClose{State: state})
+	for _, field := range a.Streams {
+		field.Get(ctx).CloseIfOpen(&streamservicepb.StreamClose{State: state})
 	}
 }
 
-// mutableStream returns the activity's stream, creating it if it does not exist. A stream created
-// after the activity ended is created closed, so it takes no appends.
-func (a *Activity) mutableStream(ctx chasm.MutableContext) (*stream.Stream, error) {
-	if s, ok := a.Stream.TryGet(ctx); ok {
-		return s, nil
+// stream returns the activity's stream named name, if it exists.
+func (a *Activity) stream(ctx chasm.Context, name string) (*stream.Stream, bool) {
+	field, ok := a.Streams[name]
+	if !ok {
+		return nil, false
 	}
-	s := stream.New(ctx)
-	a.Stream = chasm.NewComponentField(ctx, s)
+	return field.Get(ctx), true
+}
+
+// mutableStream returns the activity's stream named name, creating it if it does not exist. A
+// stream created after the activity ended is created closed, so it takes no appends.
+func (a *Activity) mutableStream(ctx chasm.MutableContext, name string) *stream.Stream {
+	if s, ok := a.stream(ctx, name); ok {
+		return s
+	}
+	s := a.newStream(ctx, name, "")
 	if a.LifecycleState(ctx) != chasm.LifecycleStateRunning {
-		a.closeStreamOnEnd(ctx, streamCloseState(a.Status))
+		s.CloseIfOpen(&streamservicepb.StreamClose{State: streamCloseState(a.Status)})
 	}
-	return s, nil
+	return s
+}
+
+// newStream creates the activity's stream named name, by the Create with requestID or by an append.
+func (a *Activity) newStream(ctx chasm.MutableContext, name, requestID string) *stream.Stream {
+	s := stream.New(ctx, requestID, 0)
+	if a.Streams == nil {
+		a.Streams = make(chasm.Map[string, *stream.Stream])
+	}
+	a.Streams[name] = chasm.NewComponentField(ctx, s)
+	return s
 }
 
 // streamProducer derives the producer and its epoch. The activity's own attempts are checked; other
 // producers are taken as they say they are.
 func (a *Activity) streamProducer(ctx chasm.Context, p *streamservicepb.Producer) (stream.Producer, error) {
-	switch v := p.GetVariant().(type) {
-	case *streamservicepb.Producer_Client:
-		return stream.Producer{ID: "client/" + v.Client.GetId(), Epoch: v.Client.GetEpoch()}, nil
-	case *streamservicepb.Producer_ActivityTaskToken:
+	if v, ok := p.GetVariant().(*streamservicepb.Producer_ActivityTaskToken); ok {
 		producer, _, err := a.activityTokenProducer(ctx, v.ActivityTaskToken)
 		return producer, err
-	case *streamservicepb.Producer_WorkflowTask:
-		w := v.WorkflowTask
-		return stream.Producer{
-			ID:                  "workflow/" + w.GetRunId(),
-			RunID:               w.GetRunId(),
-			WorkflowTask:        w.GetPreviousStartedEventId(),
-			WorkflowTaskAttempt: w.GetAttempt(),
-			Epoch:               int64(w.GetAttempt()),
-		}, nil
-	case *streamservicepb.Producer_LocalActivity:
-		la := v.LocalActivity
-		return stream.Producer{
-			ID:                  "local-activity/" + la.GetRunId() + "/" + la.GetActivityId(),
-			RunID:               la.GetRunId(),
-			WorkflowTask:        la.GetPreviousStartedEventId(),
-			WorkflowTaskAttempt: la.GetWorkflowTaskAttempt(),
-			Epoch:               int64(la.GetAttempt()),
-		}, nil
-	default:
-		return stream.Producer{}, serviceerror.NewInvalidArgument("producer is required")
 	}
+	return stream.UnverifiedProducer(p)
 }
 
 // activityTokenProducer derives the producer of an activity task token. own is true when the token
@@ -173,10 +180,10 @@ func (a *Activity) activityTokenProducer(ctx chasm.Context, token []byte) (p str
 	return p, true, nil
 }
 
-func streamCursor(ctx chasm.Context) func(offset int64) ([]byte, error) {
+func streamCursor(ctx chasm.Context, name string) func(offset int64) ([]byte, error) {
 	key := ctx.ExecutionKey()
 	return func(offset int64) ([]byte, error) {
-		return proto.Marshal(&streampb.Cursor{ActivityId: key.BusinessID, ActivityRunId: key.RunID, Offset: offset})
+		return proto.Marshal(&streampb.Cursor{ActivityId: key.BusinessID, ActivityRunId: key.RunID, Name: name, Offset: offset})
 	}
 }
 
