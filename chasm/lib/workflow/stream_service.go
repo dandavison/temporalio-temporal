@@ -278,6 +278,9 @@ func (o *waitOperation) Start(
 	if err := o.h.requireWorkflowReads(req.GetStream()); err != nil {
 		return nil, err
 	}
+	if options.CallbackURL == "" {
+		return nil, serviceerror.NewInvalidArgument("Wait needs a callback, which a direct call does not have")
+	}
 	cursor, err := decodeStreamCursor(req.GetStream(), req.GetAfter())
 	if err != nil {
 		return nil, streamOperationError(err)
