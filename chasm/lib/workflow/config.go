@@ -19,6 +19,8 @@ type Config struct {
 	maxLinksPerRequest                dynamicconfig.IntPropertyFnWithNamespaceFilter
 	linkMaxSize                       dynamicconfig.IntPropertyFnWithNamespaceFilter
 	enableSignalWithStartFromWorkflow dynamicconfig.BoolPropertyFnWithNamespaceFilter
+	enableNativeStreams               dynamicconfig.BoolPropertyFnWithNamespaceFilter
+	enableStreamWorkflowReads         dynamicconfig.BoolPropertyFnWithNamespaceFilter
 }
 
 func NewConfig(dc *dynamicconfig.Collection) Config {
@@ -28,5 +30,7 @@ func NewConfig(dc *dynamicconfig.Collection) Config {
 		maxLinksPerRequest:                dynamicconfig.FrontendMaxLinksPerRequest.Get(dc),
 		linkMaxSize:                       dynamicconfig.FrontendLinkMaxSize.Get(dc),
 		enableSignalWithStartFromWorkflow: dynamicconfig.EnableSignalWithStartFromWorkflow.Get(dc),
+		enableNativeStreams:               dynamicconfig.EnableNativeStreams.Get(dc),
+		enableStreamWorkflowReads:         dynamicconfig.EnableStreamWorkflowReads.Get(dc),
 	}
 }

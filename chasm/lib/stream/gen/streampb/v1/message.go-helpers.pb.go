@@ -42,6 +42,80 @@ func (this *StreamState) Equal(that interface{}) bool {
 	return proto.Equal(this, that1)
 }
 
+// Marshal an object of type TaskTopics to the protobuf v3 wire format
+func (val *TaskTopics) Marshal() ([]byte, error) {
+	return proto.Marshal(val)
+}
+
+// Unmarshal an object of type TaskTopics from the protobuf v3 wire format
+func (val *TaskTopics) Unmarshal(buf []byte) error {
+	return proto.Unmarshal(buf, val)
+}
+
+// Size returns the size of the object, in bytes, once serialized
+func (val *TaskTopics) Size() int {
+	return proto.Size(val)
+}
+
+// Equal returns whether two TaskTopics values are equivalent by recursively
+// comparing the message's fields.
+// For more information see the documentation for
+// https://pkg.go.dev/google.golang.org/protobuf/proto#Equal
+func (this *TaskTopics) Equal(that interface{}) bool {
+	if that == nil {
+		return this == nil
+	}
+
+	var that1 *TaskTopics
+	switch t := that.(type) {
+	case *TaskTopics:
+		that1 = t
+	case TaskTopics:
+		that1 = &t
+	default:
+		return false
+	}
+
+	return proto.Equal(this, that1)
+}
+
+// Marshal an object of type CommitTopics to the protobuf v3 wire format
+func (val *CommitTopics) Marshal() ([]byte, error) {
+	return proto.Marshal(val)
+}
+
+// Unmarshal an object of type CommitTopics from the protobuf v3 wire format
+func (val *CommitTopics) Unmarshal(buf []byte) error {
+	return proto.Unmarshal(buf, val)
+}
+
+// Size returns the size of the object, in bytes, once serialized
+func (val *CommitTopics) Size() int {
+	return proto.Size(val)
+}
+
+// Equal returns whether two CommitTopics values are equivalent by recursively
+// comparing the message's fields.
+// For more information see the documentation for
+// https://pkg.go.dev/google.golang.org/protobuf/proto#Equal
+func (this *CommitTopics) Equal(that interface{}) bool {
+	if that == nil {
+		return this == nil
+	}
+
+	var that1 *CommitTopics
+	switch t := that.(type) {
+	case *CommitTopics:
+		that1 = t
+	case CommitTopics:
+		that1 = &t
+	default:
+		return false
+	}
+
+	return proto.Equal(this, that1)
+}
+
 // Marshal an object of type StandaloneState to the protobuf v3 wire format
 func (val *StandaloneState) Marshal() ([]byte, error) {
 	return proto.Marshal(val)
@@ -182,6 +256,265 @@ func (this *Cursor) Equal(that interface{}) bool {
 	case *Cursor:
 		that1 = t
 	case Cursor:
+		that1 = &t
+	default:
+		return false
+	}
+
+	return proto.Equal(this, that1)
+}
+
+// Marshal an object of type SubscriptionState to the protobuf v3 wire format
+func (val *SubscriptionState) Marshal() ([]byte, error) {
+	return proto.Marshal(val)
+}
+
+// Unmarshal an object of type SubscriptionState from the protobuf v3 wire format
+func (val *SubscriptionState) Unmarshal(buf []byte) error {
+	return proto.Unmarshal(buf, val)
+}
+
+// Size returns the size of the object, in bytes, once serialized
+func (val *SubscriptionState) Size() int {
+	return proto.Size(val)
+}
+
+// Equal returns whether two SubscriptionState values are equivalent by recursively
+// comparing the message's fields.
+// For more information see the documentation for
+// https://pkg.go.dev/google.golang.org/protobuf/proto#Equal
+func (this *SubscriptionState) Equal(that interface{}) bool {
+	if that == nil {
+		return this == nil
+	}
+
+	var that1 *SubscriptionState
+	switch t := that.(type) {
+	case *SubscriptionState:
+		that1 = t
+	case SubscriptionState:
+		that1 = &t
+	default:
+		return false
+	}
+
+	return proto.Equal(this, that1)
+}
+
+// Marshal an object of type SubscriptionExpiryTask to the protobuf v3 wire format
+func (val *SubscriptionExpiryTask) Marshal() ([]byte, error) {
+	return proto.Marshal(val)
+}
+
+// Unmarshal an object of type SubscriptionExpiryTask from the protobuf v3 wire format
+func (val *SubscriptionExpiryTask) Unmarshal(buf []byte) error {
+	return proto.Unmarshal(buf, val)
+}
+
+// Size returns the size of the object, in bytes, once serialized
+func (val *SubscriptionExpiryTask) Size() int {
+	return proto.Size(val)
+}
+
+// Equal returns whether two SubscriptionExpiryTask values are equivalent by recursively
+// comparing the message's fields.
+// For more information see the documentation for
+// https://pkg.go.dev/google.golang.org/protobuf/proto#Equal
+func (this *SubscriptionExpiryTask) Equal(that interface{}) bool {
+	if that == nil {
+		return this == nil
+	}
+
+	var that1 *SubscriptionExpiryTask
+	switch t := that.(type) {
+	case *SubscriptionExpiryTask:
+		that1 = t
+	case SubscriptionExpiryTask:
+		that1 = &t
+	default:
+		return false
+	}
+
+	return proto.Equal(this, that1)
+}
+
+// Marshal an object of type WaitToken to the protobuf v3 wire format
+func (val *WaitToken) Marshal() ([]byte, error) {
+	return proto.Marshal(val)
+}
+
+// Unmarshal an object of type WaitToken from the protobuf v3 wire format
+func (val *WaitToken) Unmarshal(buf []byte) error {
+	return proto.Unmarshal(buf, val)
+}
+
+// Size returns the size of the object, in bytes, once serialized
+func (val *WaitToken) Size() int {
+	return proto.Size(val)
+}
+
+// Equal returns whether two WaitToken values are equivalent by recursively
+// comparing the message's fields.
+// For more information see the documentation for
+// https://pkg.go.dev/google.golang.org/protobuf/proto#Equal
+func (this *WaitToken) Equal(that interface{}) bool {
+	if that == nil {
+		return this == nil
+	}
+
+	var that1 *WaitToken
+	switch t := that.(type) {
+	case *WaitToken:
+		that1 = t
+	case WaitToken:
+		that1 = &t
+	default:
+		return false
+	}
+
+	return proto.Equal(this, that1)
+}
+
+// Marshal an object of type NotifierState to the protobuf v3 wire format
+func (val *NotifierState) Marshal() ([]byte, error) {
+	return proto.Marshal(val)
+}
+
+// Unmarshal an object of type NotifierState from the protobuf v3 wire format
+func (val *NotifierState) Unmarshal(buf []byte) error {
+	return proto.Unmarshal(buf, val)
+}
+
+// Size returns the size of the object, in bytes, once serialized
+func (val *NotifierState) Size() int {
+	return proto.Size(val)
+}
+
+// Equal returns whether two NotifierState values are equivalent by recursively
+// comparing the message's fields.
+// For more information see the documentation for
+// https://pkg.go.dev/google.golang.org/protobuf/proto#Equal
+func (this *NotifierState) Equal(that interface{}) bool {
+	if that == nil {
+		return this == nil
+	}
+
+	var that1 *NotifierState
+	switch t := that.(type) {
+	case *NotifierState:
+		that1 = t
+	case NotifierState:
+		that1 = &t
+	default:
+		return false
+	}
+
+	return proto.Equal(this, that1)
+}
+
+// Marshal an object of type StandaloneNotifierState to the protobuf v3 wire format
+func (val *StandaloneNotifierState) Marshal() ([]byte, error) {
+	return proto.Marshal(val)
+}
+
+// Unmarshal an object of type StandaloneNotifierState from the protobuf v3 wire format
+func (val *StandaloneNotifierState) Unmarshal(buf []byte) error {
+	return proto.Unmarshal(buf, val)
+}
+
+// Size returns the size of the object, in bytes, once serialized
+func (val *StandaloneNotifierState) Size() int {
+	return proto.Size(val)
+}
+
+// Equal returns whether two StandaloneNotifierState values are equivalent by recursively
+// comparing the message's fields.
+// For more information see the documentation for
+// https://pkg.go.dev/google.golang.org/protobuf/proto#Equal
+func (this *StandaloneNotifierState) Equal(that interface{}) bool {
+	if that == nil {
+		return this == nil
+	}
+
+	var that1 *StandaloneNotifierState
+	switch t := that.(type) {
+	case *StandaloneNotifierState:
+		that1 = t
+	case StandaloneNotifierState:
+		that1 = &t
+	default:
+		return false
+	}
+
+	return proto.Equal(this, that1)
+}
+
+// Marshal an object of type NotifierIdleTask to the protobuf v3 wire format
+func (val *NotifierIdleTask) Marshal() ([]byte, error) {
+	return proto.Marshal(val)
+}
+
+// Unmarshal an object of type NotifierIdleTask from the protobuf v3 wire format
+func (val *NotifierIdleTask) Unmarshal(buf []byte) error {
+	return proto.Unmarshal(buf, val)
+}
+
+// Size returns the size of the object, in bytes, once serialized
+func (val *NotifierIdleTask) Size() int {
+	return proto.Size(val)
+}
+
+// Equal returns whether two NotifierIdleTask values are equivalent by recursively
+// comparing the message's fields.
+// For more information see the documentation for
+// https://pkg.go.dev/google.golang.org/protobuf/proto#Equal
+func (this *NotifierIdleTask) Equal(that interface{}) bool {
+	if that == nil {
+		return this == nil
+	}
+
+	var that1 *NotifierIdleTask
+	switch t := that.(type) {
+	case *NotifierIdleTask:
+		that1 = t
+	case NotifierIdleTask:
+		that1 = &t
+	default:
+		return false
+	}
+
+	return proto.Equal(this, that1)
+}
+
+// Marshal an object of type DeclaredStreamMode to the protobuf v3 wire format
+func (val *DeclaredStreamMode) Marshal() ([]byte, error) {
+	return proto.Marshal(val)
+}
+
+// Unmarshal an object of type DeclaredStreamMode from the protobuf v3 wire format
+func (val *DeclaredStreamMode) Unmarshal(buf []byte) error {
+	return proto.Unmarshal(buf, val)
+}
+
+// Size returns the size of the object, in bytes, once serialized
+func (val *DeclaredStreamMode) Size() int {
+	return proto.Size(val)
+}
+
+// Equal returns whether two DeclaredStreamMode values are equivalent by recursively
+// comparing the message's fields.
+// For more information see the documentation for
+// https://pkg.go.dev/google.golang.org/protobuf/proto#Equal
+func (this *DeclaredStreamMode) Equal(that interface{}) bool {
+	if that == nil {
+		return this == nil
+	}
+
+	var that1 *DeclaredStreamMode
+	switch t := that.(type) {
+	case *DeclaredStreamMode:
+		that1 = t
+	case DeclaredStreamMode:
 		that1 = &t
 	default:
 		return false

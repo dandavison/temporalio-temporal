@@ -8,6 +8,7 @@ import (
 	"slices"
 	"time"
 
+	commonpb "go.temporal.io/api/common/v1"
 	streamservicepb "go.temporal.io/api/nexusservices/streamservice/v1"
 	"go.temporal.io/api/serviceerror"
 	"go.temporal.io/server/chasm"
@@ -15,6 +16,7 @@ import (
 	"go.temporal.io/server/chasm/lib/stream/gen/streampb/v1"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/durationpb"
+	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
 // ServiceName is the stream service on the System Nexus Endpoint.
@@ -56,6 +58,8 @@ type Stream struct {
 
 	Records   chasm.Field[*orderedstore.Log]
 	Producers chasm.Map[string, *streampb.ProducerState]
+	// Subscriptions are the stream's pending Waits, keyed by the Wait's request ID.
+	Subscriptions chasm.Map[string, *Subscription]
 }
 
 // New creates a stream, by the Create with requestID, or by an append if requestID is empty.
@@ -131,10 +135,40 @@ func NewError(t streamservicepb.StreamFailureType, format string, args ...any) *
 	return newError(t, format, args...)
 }
 
-// ReadArgs is a read request and its decoded cursor, nil for a read from the beginning.
+// WaitArgs is a Wait request, its decoded cursor (nil for the beginning), and the caller's request
+// ID and callback.
+type WaitArgs struct {
+	Req       *streamservicepb.WaitRequest
+	Cursor    *streampb.Cursor
+	RequestID string
+	Callback  *commonpb.Callback
+}
+
+// Wait completes a Wait at once, returning its result, if what it waits for is already there, and
+// otherwise subscribes it and returns nil. What a Wait waits for is a record of its topics, or the
+// commit record of a workflow task that wrote one, which decides a record the reader may hold as
+// provisional. While the stream's mode is not yet known (known is false), any marker also
+// completes it: the owner's first workflow task completion, which fixes the mode, appends a commit
+// record.
+func (s *Stream) Wait(ctx chasm.MutableContext, args WaitArgs, after int64, known bool) (*streamservicepb.WaitResponse, error) {
+	if s.Close != nil {
+		return &streamservicepb.WaitResponse{Reason: streamservicepb.WAKE_REASON_CLOSED}, nil
+	}
+	if known {
+		found, err := s.HasRecordAfter(ctx, after, args.Req.GetTopics())
+		if err != nil || found {
+			return &streamservicepb.WaitResponse{Reason: streamservicepb.WAKE_REASON_APPENDED}, err
+		}
+	}
+	return nil, s.Subscribe(ctx, args.RequestID, args.Callback, after, args.Req.GetTopics(), !known, args.Req.GetLifetime().AsDuration())
+}
+
+// ReadArgs is a read request and its decoded cursors: Cursor is nil for a read from the beginning,
+// and Until is nil for a read with no upper bound.
 type ReadArgs struct {
 	Req    *streamservicepb.ReadRequest
 	Cursor *streampb.Cursor
+	Until  *streampb.Cursor
 }
 
 // The size limits on an append.
@@ -241,6 +275,9 @@ func (s *Stream) Append(
 	}
 	if closing != nil {
 		s.Close = closing
+		if err := s.FireSubscriptions(ctx, streamservicepb.WAKE_REASON_CLOSED, streamservicepb.CLOSE_STATE_UNSPECIFIED); err != nil {
+			return nil, err
+		}
 	}
 	s.Producers[p.ID] = chasm.NewDataField(ctx, &streampb.ProducerState{
 		WorkflowTask:        p.WorkflowTask,
@@ -256,14 +293,25 @@ func (s *Stream) Append(
 
 // RecordCommit records that attempt completed workflow task workflowTask of run runID. It is written
 // for every task, so that readers can judge records that local activities append after their task
-// completed.
+// completed. It wakes only the pending Waits that read a topic the task wrote to, and those made
+// while the mode was not known.
 func (s *Stream) RecordCommit(ctx chasm.MutableContext, runID string, workflowTask, attempt int64) error {
-	_, err := s.add(ctx, &streamservicepb.Record{WorkflowTaskCommit: &streamservicepb.WorkflowTaskCommit{
+	topics := s.takeUncommittedTopics(runID, workflowTask)
+	offset, err := s.store(ctx, &streamservicepb.Record{WorkflowTaskCommit: &streamservicepb.WorkflowTaskCommit{
 		WorkflowRunId: runID,
 		WorkflowTask:  workflowTask,
 		Attempt:       attempt,
 	}})
-	return err
+	if err != nil {
+		return err
+	}
+	s.RecentCommits = append(s.RecentCommits, &streampb.CommitTopics{Offset: offset, Topics: topics})
+	if n := len(s.RecentCommits); n > maxRecentCommits {
+		s.RecentCommits = s.RecentCommits[n-maxRecentCommits:]
+	}
+	return s.fireSubscriptionsFor(ctx, func(sub *streampb.SubscriptionState) bool {
+		return sub.GetWakeOnMarkers() || readsAny(sub.GetTopics(), topics)
+	})
 }
 
 // RecordCreated records, as the stream's first record, the creating run's next workflow task: the
@@ -279,6 +327,12 @@ func (s *Stream) RecordCreated(ctx chasm.MutableContext, runID string, nextWorkf
 		NextWorkflowTask: nextWorkflowTask,
 	}})
 	return err
+}
+
+// WorkflowAppendMode returns the append mode that a run's first workflow append fixed, if any.
+func (s *Stream) WorkflowAppendMode(runID string) (streamservicepb.WorkflowAppendMode, bool) {
+	mode, ok := s.WorkflowAppendModes[runID]
+	return mode, ok
 }
 
 // FixWorkflowAppendMode fixes and records a run's workflow append mode at its first workflow
@@ -320,15 +374,31 @@ func (s *Stream) RemoveProducer(producer string) {
 	delete(s.Producers, producer)
 }
 
-// CloseIfOpen closes the stream unless it is already closed.
-func (s *Stream) CloseIfOpen(c *streamservicepb.StreamClose) {
-	if s.Close == nil {
-		s.Close = c
+// CloseIfOpen closes the stream unless it is already closed, and completes its pending Waits.
+func (s *Stream) CloseIfOpen(ctx chasm.MutableContext, c *streamservicepb.StreamClose) error {
+	if s.Close != nil {
+		return nil
 	}
+	s.Close = c
+	return s.FireSubscriptions(ctx, streamservicepb.WAKE_REASON_CLOSED, streamservicepb.CLOSE_STATE_UNSPECIFIED)
 }
 
-// add appends records to the ordered store as one batch and returns the offset of the first.
+// add appends records as one batch, completes the pending Waits that one of the records wakes, and
+// returns the offset of the first.
 func (s *Stream) add(ctx chasm.MutableContext, records ...*streamservicepb.Record) (int64, error) {
+	first, err := s.store(ctx, records...)
+	if err != nil {
+		return 0, err
+	}
+	s.noteUncommittedTopics(records)
+	return first, s.fireSubscriptionsFor(ctx, func(sub *streampb.SubscriptionState) bool {
+		return slices.ContainsFunc(records, func(r *streamservicepb.Record) bool { return wakes(sub, r) })
+	})
+}
+
+// store appends records to the ordered store as one batch, removes the subscriptions whose
+// callbacks have finished, and returns the offset of the first.
+func (s *Stream) store(ctx chasm.MutableContext, records ...*streamservicepb.Record) (int64, error) {
 	events := make([][]byte, len(records))
 	for i, r := range records {
 		b, err := proto.Marshal(r)
@@ -337,7 +407,9 @@ func (s *Stream) add(ctx chasm.MutableContext, records ...*streamservicepb.Recor
 		}
 		events[i] = b
 	}
-	return s.Records.Get(ctx).Append(ctx, events...), nil
+	first := s.Records.Get(ctx).Append(ctx, events...)
+	removeFinished(ctx, s.Subscriptions)
+	return first, nil
 }
 
 // OffsetRecord is a record and its offset.
@@ -355,20 +427,45 @@ type ReadResult struct {
 	Closed bool
 }
 
-// Read returns up to maxRecords records after offset after (-1 for the beginning) that match
-// topics. Markers (workflow task commits, creation, append modes) match every filter.
-func (s *Stream) Read(ctx chasm.Context, after int64, topics []string, maxRecords int) (ReadResult, error) {
+// ReadBounds bound a read: no record after offset Until (-1 for none), at most MaxRecords records
+// (0 for the default), and at most MaxBytes payload bytes (0 for none). Markers have no payload.
+type ReadBounds struct {
+	Until      int64
+	MaxRecords int
+	MaxBytes   int64
+}
+
+// Read returns the records after offset after (-1 for the beginning) that match topics, within
+// bounds. Markers (workflow task commits, creation, append modes) match every filter. A read stops
+// before the first record that would exceed MaxBytes, and fails as TOO_LARGE if no record before it
+// in the read has a payload.
+func (s *Stream) Read(ctx chasm.Context, after int64, topics []string, bounds ReadBounds) (ReadResult, error) {
+	maxRecords := bounds.MaxRecords
 	if maxRecords <= 0 {
 		maxRecords = defaultMaxRecords
 	}
 	result := ReadResult{Position: after}
+	var size int64
+	tooLarge := false
 	err := s.scan(ctx, after+1, func(offset int64, r *streamservicepb.Record) bool {
-		result.Position = offset
+		if bounds.Until >= 0 && offset > bounds.Until {
+			return false
+		}
 		if matches(r, topics) {
+			n := int64(proto.Size(r.GetPayload()))
+			if bounds.MaxBytes > 0 && size+n > bounds.MaxBytes {
+				tooLarge = size == 0
+				return false
+			}
+			size += n
 			result.Records = append(result.Records, OffsetRecord{Offset: offset, Record: r})
 		}
+		result.Position = offset
 		return len(result.Records) < maxRecords
 	})
+	if err == nil && tooLarge {
+		return result, newError(streamservicepb.STREAM_FAILURE_TYPE_TOO_LARGE, "the next record exceeds the read's limit of %d bytes", bounds.MaxBytes)
+	}
 	result.Closed = s.Close != nil && result.Position == s.nextOffset(ctx)-1
 	return result, err
 }
@@ -464,17 +561,21 @@ func appendDigest(records []*streamservicepb.AppendRecord, finish bool, closing 
 	return sum[:], nil
 }
 
-// ReadResponse answers a read of the records after offset after (-1 for the beginning), with
-// cursorFor encoding an offset as a cursor of the owner's stream. s is nil when the owner has no
-// stream yet.
+// ReadResponse answers a read of the records after offset after (-1 for the beginning) and up to
+// offset until (-1 for no bound), with cursorFor encoding an offset as a cursor of the stream. s is
+// nil when the owner has no such stream yet. It sets the close time of the execution that holds the
+// stream once it has closed; the caller sets the mode, and the retention.
 func ReadResponse(
 	ctx chasm.Context,
 	s *Stream,
 	req *streamservicepb.ReadRequest,
-	after int64,
+	after, until int64,
 	cursorFor func(offset int64) ([]byte, error),
 ) (*streamservicepb.ReadResponse, error) {
 	resp := &streamservicepb.ReadResponse{Cursor: req.GetAfter()}
+	if closeTime := ctx.ExecutionInfo().CloseTime; !closeTime.IsZero() {
+		resp.OwnerCloseTime = timestamppb.New(closeTime)
+	}
 	if s == nil {
 		return resp, nil
 	}
@@ -484,7 +585,7 @@ func ReadResponse(
 	if n := req.GetLast(); n > 0 {
 		result, err = s.ReadLast(ctx, int(n), req.GetTopics())
 	} else {
-		result, err = s.Read(ctx, after, req.GetTopics(), int(req.GetMaxRecords()))
+		result, err = s.Read(ctx, after, req.GetTopics(), ReadBounds{Until: until, MaxRecords: int(req.GetMaxRecords()), MaxBytes: req.GetMaxBytes()})
 	}
 	if err != nil {
 		return nil, err

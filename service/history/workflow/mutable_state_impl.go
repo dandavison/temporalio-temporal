@@ -6539,6 +6539,9 @@ func (ms *MutableStateImpl) ApplyWorkflowExecutionContinuedAsNewEvent(
 	ms.executionInfo.CloseTime = continueAsNewEvent.GetEventTime()
 	ms.ClearStickyTaskQueue()
 	ms.writeEventToCache(continueAsNewEvent)
+	if err := ms.closeStreamOnEnd(nil); err != nil {
+		return err
+	}
 	// Workflow-level callbacks are inherited by the new run, but update callbacks
 	// must fire now because the update was aborted on the old run.
 	return ms.processUpdateCloseCallbacks()
@@ -7451,7 +7454,8 @@ func (ms *MutableStateImpl) processCloseCallbacksChasm() error {
 	return wf.ProcessCloseCallbacks(ctx)
 }
 
-// streamWorkflowComponent returns the workflow component for writing if the workflow has a stream.
+// streamWorkflowComponent returns the workflow component for writing if the workflow has a stream, or
+// a notifier holding Waits on a stream.
 func (ms *MutableStateImpl) streamWorkflowComponent() (*chasmworkflow.Workflow, chasm.MutableContext, error) {
 	if !ms.ChasmEnabled() {
 		return nil, nil, nil
@@ -7460,7 +7464,7 @@ func (ms *MutableStateImpl) streamWorkflowComponent() (*chasmworkflow.Workflow, 
 	if err != nil {
 		return nil, nil, err
 	}
-	if len(wf.Streams) == 0 {
+	if len(wf.Streams) == 0 && len(wf.StreamNotifiers) == 0 {
 		return nil, nil, nil
 	}
 	return ms.ChasmWorkflowComponent(context.Background())
@@ -7493,20 +7497,19 @@ func (ms *MutableStateImpl) deleteClosedActivity(scheduledEventID int64) error {
 }
 
 // closeStreamOnEnd closes the workflow's streams with a state taken from the workflow's terminal
-// status, unless the run's chain continues in a new run: a cron run, whatever its outcome, or a run
-// that is retried. Those runs leave their streams open, because moving streams to the next run is
-// not built, and nothing appends to or reads those streams again. It is not called at
-// continue-as-new, which also leaves the streams open.
+// status, unless the run's chain continues in a new run: continue-as-new, a cron run, whatever its
+// outcome, or a run that is retried. Those runs leave their streams open, because moving the streams
+// to the next run is not built, and nothing appends to them again; their pending Waits complete, so
+// that readers read the new run.
 func (ms *MutableStateImpl) closeStreamOnEnd(closeFailure *failurepb.Failure) error {
-	if ms.executionInfo.NewExecutionRunId != "" {
-		return nil
-	}
 	wf, ctx, err := ms.streamWorkflowComponent()
 	if wf == nil || err != nil {
 		return err
 	}
-	wf.CloseStreamOnOwnerEnd(ctx, chasmworkflow.StreamCloseState(ms.executionState.Status), closeFailure)
-	return nil
+	if ms.executionInfo.NewExecutionRunId != "" {
+		return wf.EndStreamRun(ctx)
+	}
+	return wf.CloseStreamOnOwnerEnd(ctx, chasmworkflow.StreamCloseState(ms.executionState.Status), closeFailure)
 }
 
 func (ms *MutableStateImpl) AddTasks(

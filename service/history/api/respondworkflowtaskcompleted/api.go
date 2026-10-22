@@ -358,7 +358,7 @@ func (handler *WorkflowTaskCompletedHandler) Invoke(
 	// heartbeat timeout applies only to a completion with no messages, so skipping the appends then
 	// drops nothing.
 	var streamAppendFailedCause *workflowTaskFailedCause
-	request.Messages, streamAppendFailedCause, err = appendCommitModeStreamRecords(ctx, ms, request.Messages, !wtHeartbeatTimedOut)
+	request.Messages, streamAppendFailedCause, err = appendCommitModeStreamRecords(ctx, ms, request.Messages, !wtHeartbeatTimedOut, handler.config.EnableNativeStreams(nsName))
 	if err != nil {
 		return nil, err
 	}
@@ -1213,32 +1213,46 @@ func (handler *WorkflowTaskCompletedHandler) clearStickyTaskQueue(ctx context.Co
 	return nil
 }
 
-// appendCommitModeStreamRecords applies the commit-mode stream appends among a workflow task
-// completion's messages, if apply is set, and returns the other messages. A stream append the
-// stream rejects, such as one in the other mode from the one the run fixed, fails the task with an
-// application failure of type BAD_STREAM_APPEND. The appends this completion made before the
-// rejected one are discarded with the rest of the completion's changes.
+// appendCommitModeStreamRecords applies the stream messages among a workflow task completion's
+// messages, if apply is set, and returns the other messages: first a declaration of the run's
+// streams' mode, which a run that declares commit mode sends in its first completion, then the
+// commit-mode appends. A message the stream rejects, such as an append in the other mode from the one
+// the run fixed, fails the task with an application failure of type BAD_STREAM_APPEND, as does any
+// stream message when native streams are off. The changes this completion made before the rejected
+// one are discarded with the rest of the completion's changes.
 func appendCommitModeStreamRecords(
 	ctx context.Context,
 	ms historyi.MutableState,
 	messages []*protocolpb.Message,
 	apply bool,
+	nativeStreams bool,
 ) ([]*protocolpb.Message, *workflowTaskFailedCause, error) {
 	var others []*protocolpb.Message
+	var declarations []*streamservicepb.StreamModeDeclaration
 	var appends []*streamservicepb.CommitModeAppend
 	for _, msg := range messages {
-		if !msg.GetBody().MessageIs((*streamservicepb.CommitModeAppend)(nil)) {
+		var err error
+		switch {
+		case msg.GetBody().MessageIs((*streamservicepb.StreamModeDeclaration)(nil)):
+			body := &streamservicepb.StreamModeDeclaration{}
+			err = msg.GetBody().UnmarshalTo(body)
+			declarations = append(declarations, body)
+		case msg.GetBody().MessageIs((*streamservicepb.CommitModeAppend)(nil)):
+			body := &streamservicepb.CommitModeAppend{}
+			err = msg.GetBody().UnmarshalTo(body)
+			appends = append(appends, body)
+		default:
 			others = append(others, msg)
-			continue
 		}
-		body := &streamservicepb.CommitModeAppend{}
-		if err := msg.GetBody().UnmarshalTo(body); err != nil {
+		if err != nil {
 			return nil, badStreamAppend(serviceerror.NewInvalidArgument(err.Error())), nil
 		}
-		appends = append(appends, body)
 	}
-	if len(appends) == 0 || !apply {
+	if len(declarations)+len(appends) == 0 || !apply {
 		return others, nil, nil
+	}
+	if !nativeStreams {
+		return others, badStreamAppend(serviceerror.NewUnimplemented("native streams are disabled (history.enableNativeStreams)")), nil
 	}
 	if !ms.ChasmEnabled() {
 		return others, badStreamAppend(serviceerror.NewInvalidArgument("commit-mode stream appends need CHASM")), nil
@@ -1247,15 +1261,23 @@ func appendCommitModeStreamRecords(
 	if err != nil {
 		return nil, nil, err
 	}
+	rejected := func(err error) ([]*protocolpb.Message, *workflowTaskFailedCause, error) {
+		if _, ok := errors.AsType[*stream.Error](err); ok {
+			return others, badStreamAppend(serviceerror.NewInvalidArgument(err.Error())), nil
+		}
+		return nil, nil, err
+	}
+	for _, d := range declarations {
+		if err := wf.DeclareStreamMode(chasmCtx, d.GetMode()); err != nil {
+			return rejected(err)
+		}
+	}
 	for _, a := range appends {
 		if err := stream.ValidateRef(&streamservicepb.StreamRef{WorkflowId: ms.GetExecutionInfo().GetWorkflowId(), Name: a.GetName()}); err != nil {
 			return others, badStreamAppend(err), nil
 		}
 		if err := wf.AppendCommitModeRecords(chasmCtx, a.GetName(), a.GetRecords()); err != nil {
-			if _, ok := errors.AsType[*stream.Error](err); ok {
-				return others, badStreamAppend(serviceerror.NewInvalidArgument(err.Error())), nil
-			}
-			return nil, nil, err
+			return rejected(err)
 		}
 	}
 	return others, nil, nil

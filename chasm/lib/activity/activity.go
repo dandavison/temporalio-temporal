@@ -80,6 +80,11 @@ type Activity struct {
 	// Streams are the standalone activity's streams, keyed by name, each created by Create or its
 	// first append. Standalone only.
 	Streams chasm.Map[string, *stream.Stream]
+
+	// StreamNotifiers hold the pending Waits on each of the standalone activity's streams that the
+	// server cannot see: streams in external stores, and streams not created yet. Keyed by stream
+	// name, each created by the first such Wait. Standalone only.
+	StreamNotifiers chasm.Map[string, *stream.Notifier]
 }
 
 // WithToken wraps a request with its deserialized task token.

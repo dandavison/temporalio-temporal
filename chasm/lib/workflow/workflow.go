@@ -12,6 +12,7 @@ import (
 	callbackspb "go.temporal.io/server/chasm/lib/callback/gen/callbackpb/v1"
 	"go.temporal.io/server/chasm/lib/nexusoperation"
 	"go.temporal.io/server/chasm/lib/stream"
+	"go.temporal.io/server/chasm/lib/stream/gen/streampb/v1"
 	chasmworkflowpb "go.temporal.io/server/chasm/lib/workflow/gen/workflowpb/v1"
 	"go.temporal.io/server/service/history/historybuilder"
 	"google.golang.org/protobuf/types/known/emptypb"
@@ -49,6 +50,15 @@ type Workflow struct {
 
 	// Streams are the workflow's streams, keyed by name, each created by Create or its first append.
 	Streams chasm.Map[string, *stream.Stream]
+
+	// StreamNotifiers hold the pending Waits on each of the workflow's streams that the server
+	// cannot see: streams in external stores, and streams not created yet. Keyed by stream name,
+	// each created by the first such Wait.
+	StreamNotifiers chasm.Map[string, *stream.Notifier]
+
+	// StreamMode is the run's declaration of its streams' mode, from its first workflow task
+	// completion; unset if it declared none.
+	StreamMode chasm.Field[*streampb.DeclaredStreamMode]
 }
 
 func NewWorkflow(

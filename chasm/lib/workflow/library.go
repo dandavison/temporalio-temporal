@@ -35,7 +35,7 @@ func newLibrary(
 			config:            config,
 			namespaceRegistry: namespaceRegistry,
 		},
-		streamServiceHandler: &streamServiceHandler{namespaceRegistry: namespaceRegistry},
+		streamServiceHandler: &streamServiceHandler{namespaceRegistry: namespaceRegistry, config: config},
 	}
 }
 

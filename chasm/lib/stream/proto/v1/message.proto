@@ -18,6 +18,26 @@ message StreamState {
     string create_request_id = 4;
     // A standalone stream's idle timeout; zero for a stream of an owner.
     google.protobuf.Duration idle_timeout = 5;
+    // The topics of the workflow and local activity records of each workflow task that has no
+    // commit record yet. The task's commit record decides those records, so it wakes the pending
+    // Waits that read one of these topics, and no others.
+    repeated TaskTopics uncommitted_tasks = 6;
+    // The topics that the most recent commit records decided, so that a Wait whose cursor is before
+    // one of them completes at once only if that commit decided a record it reads.
+    repeated CommitTopics recent_commits = 7;
+}
+
+// The topics of a workflow task's records.
+message TaskTopics {
+    string workflow_run_id = 1;
+    int64 workflow_task = 2;
+    repeated string topics = 3;
+}
+
+// The topics of the records that the commit record at offset decided.
+message CommitTopics {
+    int64 offset = 1;
+    repeated string topics = 2;
 }
 
 // The root of a standalone stream's execution, which holds the stream.
@@ -62,4 +82,63 @@ message Cursor {
     string run_id = 6;
     string name = 7;
     string stream_id = 8;
+}
+
+// A pending Wait: a workflow reader's subscription to a stream. It fires once, by its callback, and
+// is removed after the callback has finished, or when its Wait is canceled.
+message SubscriptionState {
+    // Wake on a matching record after this offset (-1 for the beginning).
+    int64 after = 1;
+    repeated string topics = 2;
+    google.protobuf.Timestamp expire_time = 3;
+    // Set when the subscription fires: why, and for OWNER_ENDED, how the owner ended.
+    temporal.api.nexusservices.streamservice.v1.WakeReason reason = 4;
+    temporal.api.nexusservices.streamservice.v1.CloseState owner_end = 5;
+    google.protobuf.Timestamp start_time = 6;
+    google.protobuf.Timestamp close_time = 7;
+    // Wake on every marker, as well as on a record of the topics. Set for a Wait made while the
+    // stream's mode is not known, which the owner's first workflow task completion fixes and marks
+    // with a commit record.
+    bool wake_on_markers = 8;
+}
+
+// Fires a subscription that has not fired by its expire time.
+message SubscriptionExpiryTask {
+}
+
+// The operation token of an asynchronous Wait: the stream, to route a cancel to the execution that
+// holds the subscription, whether the notifier holds it, and the subscription's key, the Wait's
+// request ID.
+message WaitToken {
+    temporal.api.nexusservices.streamservice.v1.StreamRef stream = 1;
+    string request_id = 2;
+    bool notifier = 3;
+}
+
+// The state of a notifier, which holds the Waits on one stream that the server cannot see the
+// records of: a stream in an external store, or a stream of an owner that does not exist yet. Its
+// subscriptions are its children; the count of Notify calls is kept in memory (see NotifyCounters).
+message NotifierState {
+}
+
+// The root of a standalone stream's notifier execution, which holds the Waits on a standalone stream
+// in an external store.
+message StandaloneNotifierState {
+    // The time of the latest Wait, from which the idle period runs.
+    google.protobuf.Timestamp last_wait_time = 1;
+    // The scheduled time of the pending NotifierIdleTask. A task scheduled at another time has been
+    // processed.
+    google.protobuf.Timestamp idle_check_time = 2;
+    // Set when the execution closed, once it held no subscriptions at its idle check.
+    bool closed = 3;
+}
+
+// Checks, at a standalone notifier's idle deadline as of when it was scheduled, whether it holds no
+// subscriptions, and closes it if so.
+message NotifierIdleTask {
+}
+
+// A workflow run's declaration of its streams' mode, from its first workflow task completion.
+message DeclaredStreamMode {
+    temporal.api.nexusservices.streamservice.v1.StreamMode mode = 1;
 }

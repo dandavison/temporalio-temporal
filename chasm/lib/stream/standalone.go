@@ -57,8 +57,7 @@ func (s *Standalone) ContextMetadata(chasm.Context) map[string]string {
 }
 
 func (s *Standalone) Terminate(ctx chasm.MutableContext, req chasm.TerminateComponentRequest) (chasm.TerminateComponentResponse, error) {
-	s.Stream.Get(ctx).CloseIfOpen(&streamservicepb.StreamClose{State: streamservicepb.CLOSE_STATE_TERMINATED, Reason: req.Reason})
-	return chasm.TerminateComponentResponse{}, nil
+	return chasm.TerminateComponentResponse{}, s.Stream.Get(ctx).CloseIfOpen(ctx, &streamservicepb.StreamClose{State: streamservicepb.CLOSE_STATE_TERMINATED, Reason: req.Reason})
 }
 
 // StandaloneAppend is an append and the idle timeout of a stream that it creates.
@@ -75,7 +74,9 @@ func (s *Standalone) Append(ctx chasm.MutableContext, in StandaloneAppend) (*str
 	if err != nil {
 		return nil, err
 	}
-	s.closeIfIdle(ctx, ctx.Now(s))
+	if _, _, err := s.closeIfIdle(ctx, ctx.Now(s)); err != nil {
+		return nil, err
+	}
 	offsets, err := s.Stream.Get(ctx).Append(ctx, p, req.GetSeq(), req.GetRecords(), req.GetFinish(), nil)
 	if err != nil {
 		return nil, err
@@ -100,7 +101,9 @@ type StandaloneCreate struct {
 
 // Create answers a create of the stream, which exists.
 func (s *Standalone) Create(ctx chasm.MutableContext, in StandaloneCreate) (*streamservicepb.CreateResponse, error) {
-	s.closeIfIdle(ctx, ctx.Now(s))
+	if _, _, err := s.closeIfIdle(ctx, ctx.Now(s)); err != nil {
+		return nil, err
+	}
 	created, err := s.Stream.Get(ctx).Create(in.Req.GetRequestId(), in.IdleTimeout)
 	if err != nil {
 		return nil, err
@@ -114,25 +117,60 @@ func (s *Standalone) Close(ctx chasm.MutableContext, req *streamservicepb.CloseR
 	if req.GetClose().GetState() == streamservicepb.CLOSE_STATE_UNSPECIFIED {
 		return nil, serviceerror.NewInvalidArgument("close state is required")
 	}
-	s.closeIfIdle(ctx, ctx.Now(s))
+	if _, _, err := s.closeIfIdle(ctx, ctx.Now(s)); err != nil {
+		return nil, err
+	}
 	stream := s.Stream.Get(ctx)
 	if stream.Close != nil && !proto.Equal(stream.Close, req.GetClose()) {
 		return nil, newError(streamservicepb.STREAM_FAILURE_TYPE_CLOSED, "stream is closed")
 	}
-	stream.CloseIfOpen(req.GetClose())
-	return &streamservicepb.CloseResponse{}, nil
+	return &streamservicepb.CloseResponse{}, stream.CloseIfOpen(ctx, req.GetClose())
 }
 
 // Read reads the stream. A cursor of an earlier execution with the stream's ID fails as expired.
 func (s *Standalone) Read(ctx chasm.Context, args ReadArgs) (*streamservicepb.ReadResponse, error) {
-	after := int64(-1)
-	if args.Cursor != nil {
-		if args.Cursor.GetRunId() != ctx.ExecutionKey().RunID {
-			return nil, newError(streamservicepb.STREAM_FAILURE_TYPE_EXPIRED, "the cursor's stream no longer exists")
-		}
-		after = args.Cursor.GetOffset()
+	after, err := standaloneOffset(ctx, args.Cursor)
+	if err != nil {
+		return nil, err
 	}
-	return ReadResponse(ctx, s.Stream.Get(ctx), args.Req, after, standaloneCursor(ctx))
+	until, err := standaloneOffset(ctx, args.Until)
+	if err != nil {
+		return nil, err
+	}
+	resp, err := ReadResponse(ctx, s.Stream.Get(ctx), args.Req, after, until, standaloneCursor(ctx))
+	if err != nil {
+		return nil, err
+	}
+	resp.Mode = streamservicepb.STREAM_MODE_SINK
+	return resp, nil
+}
+
+// Wait completes a Wait on the stream at once, or subscribes it. A standalone stream is always
+// sink-mode, so its mode is known.
+func (s *Standalone) Wait(ctx chasm.MutableContext, args WaitArgs) (*streamservicepb.WaitResponse, error) {
+	after, err := standaloneOffset(ctx, args.Cursor)
+	if err != nil {
+		return nil, err
+	}
+	return s.Stream.Get(ctx).Wait(ctx, args, after, true)
+}
+
+// CancelWait removes the subscription of a canceled Wait.
+func (s *Standalone) CancelWait(ctx chasm.MutableContext, requestID string) (chasm.NoValue, error) {
+	s.Stream.Get(ctx).CancelSubscription(ctx, requestID)
+	return nil, nil
+}
+
+// standaloneOffset returns the offset of a cursor of this execution's stream, or -1 for none. A
+// cursor of an earlier execution with the stream's ID fails as expired.
+func standaloneOffset(ctx chasm.Context, c *streampb.Cursor) (int64, error) {
+	if c == nil {
+		return -1, nil
+	}
+	if c.GetRunId() != ctx.ExecutionKey().RunID {
+		return 0, newError(streamservicepb.STREAM_FAILURE_TYPE_EXPIRED, "the cursor's stream no longer exists")
+	}
+	return c.GetOffset(), nil
 }
 
 func (s *Standalone) touch(ctx chasm.MutableContext) {
@@ -141,27 +179,28 @@ func (s *Standalone) touch(ctx chasm.MutableContext) {
 
 // closeIfIdle closes the stream if, at time now, its idle timeout has passed since the last create
 // or append. It returns the idle deadline if the stream is open.
-func (s *Standalone) closeIfIdle(ctx chasm.MutableContext, now time.Time) (time.Time, bool) {
+func (s *Standalone) closeIfIdle(ctx chasm.MutableContext, now time.Time) (time.Time, bool, error) {
 	stream := s.Stream.Get(ctx)
 	if stream.Close != nil {
-		return time.Time{}, false
+		return time.Time{}, false, nil
 	}
 	deadline := s.LastWriteTime.AsTime().Add(stream.IdleTimeout.AsDuration())
 	if now.Before(deadline) {
-		return deadline, true
+		return deadline, true, nil
 	}
-	stream.CloseIfOpen(&streamservicepb.StreamClose{State: streamservicepb.CLOSE_STATE_TIMED_OUT, Reason: IdleCloseReason})
-	return time.Time{}, false
+	return time.Time{}, false, stream.CloseIfOpen(ctx, &streamservicepb.StreamClose{State: streamservicepb.CLOSE_STATE_TIMED_OUT, Reason: IdleCloseReason})
 }
 
 // onIdleTimeoutTask closes the stream if the task, scheduled at scheduled, was scheduled for the
 // current idle deadline, and otherwise schedules a check at the deadline that a later create or
 // append set. It compares the scheduled time, not the clock, because a timer task can run slightly
 // before its time. So appends schedule no tasks, and one check is pending while the stream is open.
-func (s *Standalone) onIdleTimeoutTask(ctx chasm.MutableContext, scheduled time.Time) {
-	if deadline, open := s.closeIfIdle(ctx, scheduled); open {
+func (s *Standalone) onIdleTimeoutTask(ctx chasm.MutableContext, scheduled time.Time) error {
+	deadline, open, err := s.closeIfIdle(ctx, scheduled)
+	if open {
 		s.scheduleIdleCheck(ctx, deadline)
 	}
+	return err
 }
 
 func (s *Standalone) scheduleIdleCheck(ctx chasm.MutableContext, at time.Time) {
