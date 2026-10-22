@@ -3338,6 +3338,20 @@ Requires service restart to take effect.`,
 		true,
 		"Use real chasm tree implementation instead of the noop one",
 	)
+	EnableNativeStreams = NewNamespaceBoolSetting(
+		"history.enableNativeStreams",
+		true,
+		`EnableNativeStreams lets the server store streams: the stream service's Create, Append, Read and
+Close operations, and commit-mode stream appends in workflow task completions. Off, they fail as
+unimplemented, and streams can be stored only in external stores. The operations also need
+frontend.enableDirectNexusCalls. Prototype.`,
+	)
+	EnableStreamWorkflowReads = NewNamespaceBoolSetting(
+		"history.enableStreamWorkflowReads",
+		true,
+		`EnableStreamWorkflowReads lets workflows wait on streams: the stream service's Wait, NotifierState
+and Notify operations. Off, they fail as unimplemented. Prototype.`,
+	)
 	EnableCHASMSkipPersistence = NewNamespaceBoolSetting(
 		"history.enableCHASMSkipPersistence",
 		false,

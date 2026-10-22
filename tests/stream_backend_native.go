@@ -101,6 +101,8 @@ func (b *nativeStreamBackend) Read(ctx context.Context, ref streamRef, req strea
 		Topics:     req.Topics,
 		MaxRecords: int32(req.MaxRecords),
 		Last:       int32(req.Last),
+		Until:      req.Until,
+		MaxBytes:   int64(req.MaxBytes),
 	}
 	if req.Wait > 0 {
 		in.Wait = durationpb.New(req.Wait)
@@ -115,6 +117,12 @@ func (b *nativeStreamBackend) Read(ctx context.Context, ref streamRef, req strea
 	}
 	if c := out.Close; c != nil {
 		resp.Close = &streamClose{Status: streamCloseStatus(c.State), Failure: c.Failure, Reason: c.Reason}
+	}
+	resp.Mode = nativeStreamModes[out.Mode]
+	if out.OwnerCloseTime != nil {
+		t := out.OwnerCloseTime.AsTime()
+		resp.OwnerCloseTime = &t
+		resp.Retention = out.Retention.AsDuration()
 	}
 	return resp, nil
 }
@@ -297,6 +305,12 @@ func nativeRecord(r *streamservicepb.Record) streamRecord {
 var nativeAppendModes = map[streamservicepb.WorkflowAppendMode]streamWorkflowAppendMode{
 	streamservicepb.WORKFLOW_APPEND_MODE_SINK:   streamAppendModeSink,
 	streamservicepb.WORKFLOW_APPEND_MODE_COMMIT: streamAppendModeCommit,
+}
+
+var nativeStreamModes = map[streamservicepb.StreamMode]streamMode{
+	streamservicepb.STREAM_MODE_UNSPECIFIED: streamModeUnknown,
+	streamservicepb.STREAM_MODE_SINK:        streamModeSink,
+	streamservicepb.STREAM_MODE_COMMIT:      streamModeCommit,
 }
 
 var nativeErrors = map[streamservicepb.StreamFailureType]error{

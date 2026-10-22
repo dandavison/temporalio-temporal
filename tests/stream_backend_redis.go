@@ -313,9 +313,22 @@ func (b *redisStreamBackend) Read(ctx context.Context, ref streamRef, req stream
 	if req.Last > 0 {
 		resp, err = b.readTail(ctx, k, req)
 	} else {
-		resp, err = b.readAfter(ctx, k, req, lastID, deadline)
+		end := "+"
+		if req.Until != nil {
+			untilRun, untilID, err := b.parseCursor(ref, req.Until)
+			if err != nil {
+				return streamReadResponse{}, err
+			}
+			if untilRun != k.firstRun {
+				return streamReadResponse{}, errStreamCursor
+			}
+			// A bounded read re-reads a range that exists, so it does not wait.
+			end, deadline = untilID, time.Now()
+		}
+		resp, err = b.readAfter(ctx, k, req, lastID, end, deadline)
 	}
 	resp.Exists = err == nil
+	resp.Mode = streamModeSink
 	return resp, err
 }
 
@@ -358,11 +371,15 @@ func (b *redisStreamBackend) awaitChainRecords(ctx context.Context, k redisKeys,
 	}
 }
 
-func (b *redisStreamBackend) readAfter(ctx context.Context, k redisKeys, req streamReadRequest, lastID string, deadline time.Time) (streamReadResponse, error) {
+// readAfter reads the entries after lastID and up to end ("+" for no bound), within the request's
+// limits. It stops before the first record that would exceed MaxBytes, and fails as too large if
+// that record is its first.
+func (b *redisStreamBackend) readAfter(ctx context.Context, k redisKeys, req streamReadRequest, lastID, end string, deadline time.Time) (streamReadResponse, error) {
 	maxRecords := cmp.Or(req.MaxRecords, redisDefaultMaxRecords)
 	resp := streamReadResponse{Cursor: req.From.after}
+	size := 0
 	for {
-		entries, err := b.rdb.XRangeN(ctx, k.log, "("+lastID, "+", int64(maxRecords)).Result()
+		entries, err := b.rdb.XRangeN(ctx, k.log, "("+lastID, end, int64(maxRecords)).Result()
 		if err != nil {
 			return streamReadResponse{}, err
 		}
@@ -372,14 +389,27 @@ func (b *redisStreamBackend) readAfter(ctx context.Context, k redisKeys, req str
 				return streamReadResponse{}, err
 			}
 		}
+		full := false
 		for _, e := range entries {
+			r, ok := redisRecord(k.cursor(e.ID), e.Values, req.Topics)
+			if ok && req.MaxBytes > 0 {
+				n := proto.Size(r.Payload)
+				if size+n > req.MaxBytes {
+					if size == 0 {
+						return streamReadResponse{}, errStreamTooLarge
+					}
+					full = true
+					break
+				}
+				size += n
+			}
 			lastID = e.ID
 			resp.Cursor = k.cursor(e.ID)
-			if r, ok := redisRecord(k.cursor(e.ID), e.Values, req.Topics); ok {
+			if ok {
 				resp.Records = append(resp.Records, r)
 			}
 		}
-		if len(resp.Records) > 0 || time.Until(deadline) <= 0 || b.closedAt(ctx, k, lastID) {
+		if full || len(resp.Records) > 0 || time.Until(deadline) <= 0 || b.closedAt(ctx, k, lastID) {
 			break
 		}
 	}
@@ -465,7 +495,7 @@ func (b *redisStreamBackend) readTail(ctx context.Context, k redisKeys, req stre
 	if err != nil {
 		return streamReadResponse{}, err
 	}
-	resp := streamReadResponse{}
+	resp := streamReadResponse{Mode: streamModeSink}
 	if len(entries) > 0 {
 		resp.Cursor = k.cursor(entries[0].ID)
 	}
