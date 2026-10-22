@@ -12,8 +12,10 @@ package tests
 // arithmetic on them.
 
 import (
+	"cmp"
 	"context"
 	"errors"
+	"fmt"
 	"time"
 
 	commonpb "go.temporal.io/api/common/v1"
@@ -22,27 +24,58 @@ import (
 )
 
 type streamBackend interface {
-	// Append appends records as one atomic, contiguous batch. The first append creates the stream.
+	// Create creates the stream before any append and fixes its settings. It is optional: the first
+	// append creates the stream, with default settings, if Create has not.
+	Create(ctx context.Context, ref streamRef, req streamCreateRequest) (streamCreateResponse, error)
+	// Append appends records as one atomic, contiguous batch.
 	Append(ctx context.Context, ref streamRef, req streamAppendRequest) (streamAppendResponse, error)
-	// Close closes the stream. Only the stream's owner may close it.
+	// Close closes the stream. Only the stream's owner may close it; any caller may close a
+	// standalone stream.
 	Close(ctx context.Context, ref streamRef, req streamCloseRequest) error
 	Read(ctx context.Context, ref streamRef, req streamReadRequest) (streamReadResponse, error)
 }
 
-// streamRef identifies a stream by its owner: a workflow run chain, by WorkflowID and FirstRunID, or
-// a Standalone Activity execution, by ActivityID and ActivityRunID. Exactly one of WorkflowID and
-// ActivityID is set. FirstRunID and ActivityRunID are optional for reads: when empty, the stream of
-// the owner ID's current chain or execution is read.
+// streamRef identifies a stream: one of the named streams of an owner, a workflow run chain (by
+// WorkflowID and FirstRunID) or a Standalone Activity execution (by ActivityID and ActivityRunID),
+// or a standalone stream, by StreamID. Exactly one of WorkflowID, ActivityID and StreamID is set.
+// Name is required for an owner's stream and empty for a standalone stream. FirstRunID and
+// ActivityRunID are optional for reads: when empty, the stream of the owner ID's current chain or
+// execution is read.
 type streamRef struct {
 	WorkflowID    string
 	FirstRunID    string
 	ActivityID    string
 	ActivityRunID string
+	Name          string
+	StreamID      string
 }
 
-// ownerID is the business ID of the stream's owner.
+// ownerID is the business ID of the stream's owner, or of the standalone stream.
 func (r streamRef) ownerID() string {
-	return r.WorkflowID + r.ActivityID
+	return r.WorkflowID + r.ActivityID + r.StreamID
+}
+
+// streamMaxNameBytes is the longest stream name every backend accepts.
+const streamMaxNameBytes = 255
+
+// streamDefaultIdleTimeout is a standalone stream's idle timeout when its creator sets none.
+const streamDefaultIdleTimeout = 7 * 24 * time.Hour
+
+// streamIdleCloseReason is the reason of the close a standalone stream gets at its idle timeout.
+const streamIdleCloseReason = "idle timeout"
+
+// streamCreateRequest creates a stream. A retry with the same RequestID of the create that created
+// the stream reports it as created. IdleTimeout is a standalone stream's; zero means
+// streamDefaultIdleTimeout. A stream of a workflow or activity closes with its owner, and does not
+// accept one.
+type streamCreateRequest struct {
+	RequestID   string
+	IdleTimeout time.Duration
+}
+
+type streamCreateResponse struct {
+	// Created is false when the stream already existed with the same settings.
+	Created bool
 }
 
 // streamCursor marks the boundary after a record. Its bytes belong to the backend that issued it.
@@ -191,7 +224,8 @@ type streamClose struct {
 }
 
 type streamCloseRequest struct {
-	// Owner is a workflow task of the owning run, or the owning activity's current attempt.
+	// Owner is a workflow task of the owning run, or the owning activity's current attempt. Unset
+	// for a standalone stream, which any caller may close.
 	Owner streamProducer
 	Seq   int64
 	Close streamClose
@@ -235,6 +269,8 @@ func (r streamRecord) isMarker() bool {
 }
 
 type streamReadResponse struct {
+	// Exists is set once the stream has been created, by Create or by an append.
+	Exists  bool
 	Records []streamRecord
 	// Cursor is where the next read resumes, past records a topic filter skipped.
 	Cursor streamCursor
@@ -255,6 +291,7 @@ var (
 	errStreamSeqGap         = errors.New("seq skips one")
 	errStreamTooLarge       = errors.New("append is too large")
 	errStreamAppendMode     = errors.New("workflow append is in the other mode from the one its run fixed")
+	errStreamSettings       = errors.New("stream exists with other settings")
 	errStreamInvalidArg     = errors.New("invalid argument")
 	errStreamNotImplemented = errors.New("stream backend not implemented")
 )
@@ -271,4 +308,41 @@ type streamBackendUnderTest struct {
 	deleteStream func(ctx context.Context, ref streamRef) error
 	// offset decodes a native cursor. Native only.
 	offset func(cursor streamCursor) (int64, error)
+}
+
+// checkStreamRef applies the rules every backend applies to a reference: exactly one of the IDs,
+// and a name of 1 to streamMaxNameBytes bytes for an owner's stream and none for a standalone
+// stream. The native server applies them itself.
+func checkStreamRef(ref streamRef) error {
+	ids := 0
+	for _, id := range []string{ref.WorkflowID, ref.ActivityID, ref.StreamID} {
+		if id != "" {
+			ids++
+		}
+	}
+	if ids != 1 {
+		return fmt.Errorf("%w: a stream is named by exactly one of a workflow ID, an activity ID and a stream ID", errStreamInvalidArg)
+	}
+	if ref.StreamID != "" && ref.Name != "" {
+		return fmt.Errorf("%w: a standalone stream has no name", errStreamInvalidArg)
+	}
+	if ref.StreamID == "" && (ref.Name == "" || len(ref.Name) > streamMaxNameBytes) {
+		return fmt.Errorf("%w: an owner's stream needs a name of 1 to %d bytes", errStreamInvalidArg, streamMaxNameBytes)
+	}
+	return nil
+}
+
+// streamIdleTimeout is the idle timeout a create gives the stream, or an error if the stream does
+// not accept one.
+func streamIdleTimeout(ref streamRef, req streamCreateRequest) (time.Duration, error) {
+	if ref.StreamID == "" {
+		if req.IdleTimeout != 0 {
+			return 0, fmt.Errorf("%w: a stream of a workflow or activity closes with its owner, and has no idle timeout", errStreamInvalidArg)
+		}
+		return 0, nil
+	}
+	if req.IdleTimeout < 0 {
+		return 0, fmt.Errorf("%w: the idle timeout must not be negative", errStreamInvalidArg)
+	}
+	return cmp.Or(req.IdleTimeout, streamDefaultIdleTimeout), nil
 }

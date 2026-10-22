@@ -2,15 +2,20 @@ package tests
 
 // redisStreamBackend stores streams in Redis, as a customer's worker or client would. The server
 // never talks to Redis. It mirrors the Redis backend of temporalio-streams (the sdk-streams
-// submodule) and runs the same script, stream_append.lua, a copy of that crate's append.lua.
+// submodule) and runs the same script, stream_script.lua, a copy of that crate's stream.lua.
 //
-// A stream is keyed by its owner: a workflow run chain, by workflow ID and first run ID, or a
-// Standalone Activity execution, by activity ID and run ID. It is four keys sharing a hash tag with
-// the owner's kind and ID: a Redis stream holding the log, a hash holding each producer's dedupe and
-// fencing state, a metadata hash holding existence and close, and a tombstone. A fifth key holds
-// the owner ID's latest run, for readers that do not know the run ID. Every append and close goes
-// through the script, which checks and writes in one step. Producers that XADD to the log directly
-// are not supported.
+// A stream is keyed by its owner and its name: a workflow run chain, by workflow ID and first run
+// ID, or a Standalone Activity execution, by activity ID and run ID; or, for a standalone stream, by
+// its stream ID. It is four keys sharing a hash tag with the owner's kind and ID: a Redis stream
+// holding the log, a hash holding each producer's dedupe and fencing state, a metadata hash holding
+// existence, settings and close, and a tombstone. An owner run also has a set of its streams' names
+// and a key set when the owner ends, and an owner a key holding the owner ID's latest run, for
+// readers that do not know the run ID. Every create, append and close goes through the script,
+// which checks and writes in one step. Producers that XADD to the log directly are not supported.
+//
+// A standalone stream's idle timeout is applied by the next create, append or close after it, and by
+// readers before they report whether the stream is closed, because nothing in Redis runs at that
+// time. So a reader waiting at the stream's end learns of the close only when its wait ends.
 //
 // Properties weaker than native, all because Redis cannot see the server's state (the same on
 // PostgreSQL, except the last):
@@ -56,8 +61,8 @@ import (
 	"google.golang.org/protobuf/proto"
 )
 
-//go:embed stream_append.lua
-var appendScript string
+//go:embed stream_script.lua
+var streamScript string
 
 // redisStreamRetention is the time-to-live each write refreshes. The tests delete streams with
 // deleteStream rather than waiting for it.
@@ -70,11 +75,11 @@ const redisDefaultMaxRecords = 1000
 type redisStreamBackend struct {
 	rdb       *redis.Client
 	namespace string
-	append    *redis.Script
+	script    *redis.Script
 }
 
 func newRedisStreamBackend(t *testing.T, env *testcore.TestEnv) streamBackendUnderTest {
-	b := &redisStreamBackend{rdb: startRedis(t), namespace: env.Namespace().String(), append: redis.NewScript(appendScript)}
+	b := &redisStreamBackend{rdb: startRedis(t), namespace: env.Namespace().String(), script: redis.NewScript(streamScript)}
 	return streamBackendUnderTest{
 		name:          "Redis",
 		streamBackend: b,
@@ -82,46 +87,63 @@ func newRedisStreamBackend(t *testing.T, env *testcore.TestEnv) streamBackendUnd
 	}
 }
 
-// redisKeys are the keys of one owner run's stream, and the key holding the owner ID's latest run.
+// redisKeys are the keys of one stream, of its owner run (streams and ended), and the key holding
+// the owner ID's latest run. runPrefix is the prefix of the owner run's stream keys.
 type redisKeys struct {
-	prefix, meta, log, producers, tombstone, current, firstRun string
+	prefix, meta, log, producers, tombstone, current, streams, ended, runPrefix, firstRun, name string
+	standalone                                                                                  bool
 }
 
 func (b *redisStreamBackend) ownerPrefix(owner string) string {
 	return fmt.Sprintf("stream:{%s/%s}", b.namespace, owner)
 }
 
-func (b *redisStreamBackend) keys(owner, firstRun string) redisKeys {
-	prefix := b.ownerPrefix(owner) + ":" + firstRun
+func (b *redisStreamBackend) keys(ref streamRef, firstRun string) redisKeys {
+	owner := b.ownerPrefix(externalOwner(ref))
+	runPrefix := owner + ":" + firstRun + ":"
+	prefix := runPrefix + ref.Name
 	return redisKeys{
-		prefix:    prefix,
-		meta:      prefix + ":meta",
-		log:       prefix + ":log",
-		producers: prefix + ":producers",
-		tombstone: prefix + ":tombstone",
-		current:   b.ownerPrefix(owner) + ":current",
-		firstRun:  firstRun,
+		prefix:     prefix,
+		meta:       prefix + ":meta",
+		log:        prefix + ":log",
+		producers:  prefix + ":producers",
+		tombstone:  prefix + ":tombstone",
+		current:    owner + ":current",
+		streams:    runPrefix + "streams",
+		ended:      runPrefix + "ended",
+		runPrefix:  runPrefix,
+		firstRun:   firstRun,
+		name:       ref.Name,
+		standalone: ref.StreamID != "",
 	}
 }
 
-// writeKeys are the keys an append or close writes, which needs the owner's run ID.
+// writeKeys are the keys a create, append or close writes, which needs the owner's run ID.
 func (b *redisStreamBackend) writeKeys(ref streamRef) (redisKeys, error) {
-	if externalRun(ref) == "" {
+	if err := checkStreamRef(ref); err != nil {
+		return redisKeys{}, err
+	}
+	if ref.StreamID == "" && externalRun(ref) == "" {
 		return redisKeys{}, errors.New("appends to a Redis stream need the run ID of its owner: a workflow's first run ID, or the activity's run ID")
 	}
-	return b.keys(externalOwner(ref), externalRun(ref)), nil
+	return b.keys(ref, externalRun(ref)), nil
 }
 
-// externalOwner names a stream's owner on an external store, so that a workflow and an activity
-// with the same ID have different streams.
+// externalOwner names a stream's owner on an external store, so that a workflow, an activity and a
+// standalone stream with the same ID have different streams.
 func externalOwner(ref streamRef) string {
-	if ref.ActivityID != "" {
+	switch {
+	case ref.ActivityID != "":
 		return "activity/" + ref.ActivityID
+	case ref.StreamID != "":
+		return "stream/" + ref.StreamID
+	default:
+		return "workflow/" + ref.WorkflowID
 	}
-	return "workflow/" + ref.WorkflowID
 }
 
 // externalRun is the run ID that pins a stream: a workflow's first run ID, or the activity's run ID.
+// A standalone stream has none.
 func externalRun(ref streamRef) string {
 	return ref.FirstRunID + ref.ActivityRunID
 }
@@ -133,6 +155,22 @@ func isExternalOwner(ref streamRef, p streamProducer) bool {
 		return p.ActivityTask.GetActivityRunId() != "" && p.ActivityTask.GetActivityId() == ref.ActivityID
 	}
 	return p.WorkflowTask.GetWorkflowExecution().GetWorkflowId() == ref.WorkflowID
+}
+
+func (b *redisStreamBackend) Create(ctx context.Context, ref streamRef, req streamCreateRequest) (streamCreateResponse, error) {
+	k, err := b.writeKeys(ref)
+	if err != nil {
+		return streamCreateResponse{}, err
+	}
+	idle, err := streamIdleTimeout(ref, req)
+	if err != nil {
+		return streamCreateResponse{}, err
+	}
+	created, err := b.script.Run(ctx, b.rdb, k.streamKeys(), append(k.headerArgs("create", idle), req.RequestID)...).Int()
+	if err != nil {
+		return streamCreateResponse{}, redisError(err)
+	}
+	return streamCreateResponse{Created: created == 1}, nil
 }
 
 func (b *redisStreamBackend) Append(ctx context.Context, ref streamRef, req streamAppendRequest) (streamAppendResponse, error) {
@@ -170,13 +208,6 @@ func (b *redisStreamBackend) Append(ctx context.Context, ref streamRef, req stre
 }
 
 func (b *redisStreamBackend) Close(ctx context.Context, ref streamRef, req streamCloseRequest) error {
-	id, err := externalProducer(req.Owner)
-	if err != nil {
-		return err
-	}
-	if !isExternalOwner(ref, req.Owner) {
-		return errStreamNotOwner
-	}
 	k, err := b.writeKeys(ref)
 	if err != nil {
 		return err
@@ -189,30 +220,61 @@ func (b *redisStreamBackend) Close(ctx context.Context, ref streamRef, req strea
 		}
 		failure = string(data)
 	}
-	entry := []string{"kind", "close", "status", strconv.Itoa(int(req.Close.Status)), "failure", failure, "reason", req.Close.Reason}
+	state := strconv.Itoa(int(req.Close.Status))
+	if k.standalone {
+		if err := b.script.Run(ctx, b.rdb, []string{k.meta, k.tombstone}, "close", redisStreamRetention.Milliseconds(), state, failure, req.Close.Reason).Err(); err != nil {
+			return redisError(err)
+		}
+		return nil
+	}
+	id, err := externalProducer(req.Owner)
+	if err != nil {
+		return err
+	}
+	if !isExternalOwner(ref, req.Owner) {
+		return errStreamNotOwner
+	}
+	entry := []string{"kind", "close", "state", state, "failure", failure, "reason", req.Close.Reason}
 	_, err = b.runAppend(ctx, k, id, req.Seq, [][]string{entry}, true)
 	return err
 }
 
 func (b *redisStreamBackend) runAppend(ctx context.Context, k redisKeys, id externalProducerIdentity, seq int64, entries [][]string, closing bool) ([]string, error) {
-	args := []any{
-		k.firstRun, id.producer, id.runID, id.workflowTask, id.workflowTaskAttempt, id.epoch, seq,
-		appendDigest(entries), boolArg(closing), redisStreamRetention.Milliseconds(), len(entries),
+	idle := time.Duration(0)
+	if k.standalone {
+		idle = streamDefaultIdleTimeout
 	}
+	args := append(k.headerArgs("append", idle),
+		id.producer, id.runID, id.workflowTask, id.workflowTaskAttempt, id.epoch, seq,
+		appendDigest(entries), boolArg(closing), len(entries),
+	)
 	for _, e := range entries {
 		args = append(args, len(e)/2)
 		for _, f := range e {
 			args = append(args, f)
 		}
 	}
-	res, err := b.append.Run(ctx, b.rdb, []string{k.meta, k.log, k.producers, k.tombstone, k.current}, args...).StringSlice()
+	res, err := b.script.Run(ctx, b.rdb, k.streamKeys(), args...).StringSlice()
 	if err != nil {
 		return nil, redisError(err)
 	}
 	return res, nil
 }
 
+// streamKeys are the keys of a create or append.
+func (k redisKeys) streamKeys() []string {
+	return []string{k.meta, k.log, k.producers, k.tombstone, k.current, k.streams, k.ended}
+}
+
+// headerArgs are the arguments a create or append starts with.
+func (k redisKeys) headerArgs(op string, idle time.Duration) []any {
+	return []any{op, k.firstRun, k.name, boolArg(k.standalone), redisStreamRetention.Milliseconds(), idle.Milliseconds()}
+}
+
 func (b *redisStreamBackend) Read(ctx context.Context, ref streamRef, req streamReadRequest) (streamReadResponse, error) {
+	if err := checkStreamRef(ref); err != nil {
+		return streamReadResponse{}, err
+	}
 	deadline := time.Now().Add(req.Wait)
 	var k redisKeys
 	lastID := "0-0"
@@ -223,14 +285,14 @@ func (b *redisStreamBackend) Read(ctx context.Context, ref streamRef, req stream
 			return streamReadResponse{}, err
 		}
 	} else {
-		firstRun, entryID, err := b.parseCursor(externalOwner(ref), req.From.after)
+		firstRun, entryID, err := b.parseCursor(ref, req.From.after)
 		if err != nil {
 			return streamReadResponse{}, err
 		}
 		if run := externalRun(ref); run != "" && run != firstRun {
 			return streamReadResponse{}, errStreamCursor
 		}
-		k, lastID = b.keys(externalOwner(ref), firstRun), entryID
+		k, lastID = b.keys(ref, firstRun), entryID
 	}
 	exists, err := b.exists(ctx, k.meta)
 	if err != nil {
@@ -247,23 +309,27 @@ func (b *redisStreamBackend) Read(ctx context.Context, ref streamRef, req stream
 			return streamReadResponse{}, err
 		}
 	}
+	var resp streamReadResponse
 	if req.Last > 0 {
-		return b.readTail(ctx, k, req)
+		resp, err = b.readTail(ctx, k, req)
+	} else {
+		resp, err = b.readAfter(ctx, k, req, lastID, deadline)
 	}
-	return b.readAfter(ctx, k, req, lastID, deadline)
+	resp.Exists = err == nil
+	return resp, err
 }
 
 // resolveChain returns the chain a read from the beginning reads: the pinned one, or the owner ID's
 // latest, waiting until the deadline for one to exist.
 func (b *redisStreamBackend) resolveChain(ctx context.Context, ref streamRef, deadline time.Time) (redisKeys, bool, error) {
-	if run := externalRun(ref); run != "" {
-		return b.keys(externalOwner(ref), run), true, nil
+	if run := externalRun(ref); run != "" || ref.StreamID != "" {
+		return b.keys(ref, run), true, nil
 	}
 	current := b.ownerPrefix(externalOwner(ref)) + ":current"
 	for {
 		firstRun, err := b.rdb.Get(ctx, current).Result()
 		if err == nil {
-			return b.keys(externalOwner(ref), firstRun), true, nil
+			return b.keys(ref, firstRun), true, nil
 		}
 		if !errors.Is(err, redis.Nil) {
 			return redisKeys{}, false, err
@@ -358,10 +424,19 @@ func (b *redisStreamBackend) block(ctx context.Context, log, lastID string, wait
 // closedAt reports whether the stream is closed and the reader has read every entry up to lastID,
 // which includes the close entry, the stream's last.
 func (b *redisStreamBackend) closedAt(ctx context.Context, k redisKeys, lastID string) bool {
-	if b.rdb.HGet(ctx, k.meta, "closed").Val() != "1" {
+	if !b.closed(ctx, k) {
 		return false
 	}
 	return len(b.rdb.XRangeN(ctx, k.log, "("+lastID, "+", 1).Val()) == 0
+}
+
+// closed reports whether the stream is closed, closing a standalone stream that has reached its idle
+// timeout first.
+func (b *redisStreamBackend) closed(ctx context.Context, k redisKeys) bool {
+	if k.standalone {
+		return b.script.Run(ctx, b.rdb, []string{k.meta}, "close_if_idle").Val() == int64(1)
+	}
+	return b.rdb.HGet(ctx, k.meta, "closed").Val() == "1"
 }
 
 func (b *redisStreamBackend) closeFromMeta(ctx context.Context, k redisKeys) (*streamClose, error) {
@@ -369,7 +444,7 @@ func (b *redisStreamBackend) closeFromMeta(ctx context.Context, k redisKeys) (*s
 	if err != nil {
 		return nil, err
 	}
-	status, err := strconv.Atoi(meta["close_status"])
+	status, err := strconv.Atoi(meta["close_state"])
 	if err != nil {
 		return nil, err
 	}
@@ -402,7 +477,7 @@ func (b *redisStreamBackend) readTail(ctx context.Context, k redisKeys, req stre
 			resp.Records = append([]streamRecord{r}, resp.Records...)
 		}
 	}
-	if b.rdb.HGet(ctx, k.meta, "closed").Val() == "1" {
+	if b.closed(ctx, k) {
 		if resp.Close, err = b.closeFromMeta(ctx, k); err != nil {
 			return streamReadResponse{}, err
 		}
@@ -424,14 +499,21 @@ func (k redisKeys) cursor(entryID string) streamCursor {
 	return streamCursor(k.prefix + "#" + entryID)
 }
 
-// parseCursor splits a cursor into its chain's first run ID and its entry ID.
-func (b *redisStreamBackend) parseCursor(owner string, c streamCursor) (firstRun, entryID string, err error) {
-	chain, entryID, ok := strings.Cut(string(c), "#")
+// parseCursor splits a cursor, `<owner prefix>:<run ID>:<name>#<entry ID>`, into its chain's first
+// run ID and its entry ID. The prefix and name bind it to the namespace, owner and stream. Run IDs
+// contain no ':' and entry IDs no '#'; names may contain either.
+func (b *redisStreamBackend) parseCursor(ref streamRef, c streamCursor) (firstRun, entryID string, err error) {
+	i := strings.LastIndex(string(c), "#")
+	if i < 0 {
+		return "", "", errStreamCursor
+	}
+	stream, entryID := string(c)[:i], string(c)[i+1:]
+	runAndName, ok := strings.CutPrefix(stream, b.ownerPrefix(externalOwner(ref))+":")
 	if !ok {
 		return "", "", errStreamCursor
 	}
-	firstRun, ok = strings.CutPrefix(chain, b.ownerPrefix(owner)+":")
-	if !ok {
+	firstRun, name, ok := strings.Cut(runAndName, ":")
+	if !ok || name != ref.Name {
 		return "", "", errStreamCursor
 	}
 	return firstRun, entryID, nil
@@ -514,13 +596,15 @@ func redisRecord(cursor streamCursor, v map[string]any, topics []string) (stream
 func redisError(err error) error {
 	code, _, _ := strings.Cut(err.Error(), " ")
 	sentinel, ok := map[string]error{
-		"INVALID_ARGUMENT": errStreamInvalidArg,
-		"EXPIRED":          errStreamExpired,
-		"EPOCH_FENCED":     errStreamEpochFenced,
-		"SEQ_DIVERGENT":    errStreamSeqDivergent,
-		"SEQ_STALE":        errStreamSeqStale,
-		"SEQ_GAP":          errStreamSeqGap,
-		"CLOSED":           errStreamClosed,
+		"INVALID_ARGUMENT":  errStreamInvalidArg,
+		"EXPIRED":           errStreamExpired,
+		"EPOCH_FENCED":      errStreamEpochFenced,
+		"SEQ_DIVERGENT":     errStreamSeqDivergent,
+		"SEQ_STALE":         errStreamSeqStale,
+		"SEQ_GAP":           errStreamSeqGap,
+		"CLOSED":            errStreamClosed,
+		"NOT_FOUND":         errStreamNotFound,
+		"SETTINGS_MISMATCH": errStreamSettings,
 	}[code]
 	if !ok {
 		return err

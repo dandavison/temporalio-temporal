@@ -20,7 +20,7 @@ import (
 )
 
 // nativeStreamBackend calls the stream service's operations on the System Nexus Endpoint, as direct
-// Nexus calls. Moving a workflow's stream to the next run of its chain (continue-as-new, retry,
+// Nexus calls. deleteStream does not support standalone streams. Moving a workflow's stream to the next run of its chain (continue-as-new, retry,
 // cron) is not built, so a new run starts with no stream, and the continue-as-new tests fail
 // against this backend.
 type nativeStreamBackend struct {
@@ -38,6 +38,18 @@ func newNativeStreamBackend(env *testcore.TestEnv) streamBackendUnderTest {
 		deleteStream:  b.deleteStream,
 		offset:        b.offset,
 	}
+}
+
+func (b *nativeStreamBackend) Create(ctx context.Context, ref streamRef, req streamCreateRequest) (streamCreateResponse, error) {
+	in := &streamservicepb.CreateRequest{Stream: nativeRef(ref), RequestId: req.RequestID}
+	if req.IdleTimeout != 0 {
+		in.Settings = &streamservicepb.StreamSettings{IdleTimeout: durationpb.New(req.IdleTimeout)}
+	}
+	var out streamservicepb.CreateResponse
+	if err := b.call(ctx, "Create", in, &out); err != nil {
+		return streamCreateResponse{}, err
+	}
+	return streamCreateResponse{Created: out.Created}, nil
 }
 
 func (b *nativeStreamBackend) Append(ctx context.Context, ref streamRef, req streamAppendRequest) (streamAppendResponse, error) {
@@ -75,8 +87,9 @@ func (b *nativeStreamBackend) Close(ctx context.Context, ref streamRef, req stre
 		in.Owner = nativeWorkflowTaskProducer(req.Owner.WorkflowTask)
 	case req.Owner.ActivityTask != nil:
 		in.ActivityTaskToken = req.Owner.ActivityTask.TaskToken
-	default:
+	case ref.StreamID == "":
 		return errStreamNotOwner
+	default:
 	}
 	return b.call(ctx, "Close", in, &streamservicepb.CloseResponse{})
 }
@@ -96,7 +109,7 @@ func (b *nativeStreamBackend) Read(ctx context.Context, ref streamRef, req strea
 	if err := b.call(ctx, "Read", in, &out); err != nil {
 		return streamReadResponse{}, err
 	}
-	resp := streamReadResponse{Cursor: out.Cursor}
+	resp := streamReadResponse{Exists: out.Exists, Cursor: out.Cursor}
 	for _, r := range out.Records {
 		resp.Records = append(resp.Records, nativeRecord(r))
 	}
@@ -108,6 +121,9 @@ func (b *nativeStreamBackend) Read(ctx context.Context, ref streamRef, req strea
 
 // deleteStream deletes the stream's owner, as retention would.
 func (b *nativeStreamBackend) deleteStream(ctx context.Context, ref streamRef) error {
+	if ref.StreamID != "" {
+		return errors.New("deleting a standalone stream is not supported")
+	}
 	if ref.ActivityID != "" {
 		return b.deleteActivity(ctx, ref)
 	}
@@ -208,6 +224,8 @@ func nativeRef(ref streamRef) *streamservicepb.StreamRef {
 		FirstRunId:    ref.FirstRunID,
 		ActivityId:    ref.ActivityID,
 		ActivityRunId: ref.ActivityRunID,
+		Name:          ref.Name,
+		StreamId:      ref.StreamID,
 	}
 }
 
@@ -294,6 +312,7 @@ var nativeErrors = map[streamservicepb.StreamFailureType]error{
 	streamservicepb.STREAM_FAILURE_TYPE_SEQ_GAP:                       errStreamSeqGap,
 	streamservicepb.STREAM_FAILURE_TYPE_TOO_LARGE:                     errStreamTooLarge,
 	streamservicepb.STREAM_FAILURE_TYPE_WORKFLOW_APPEND_MODE_MISMATCH: errStreamAppendMode,
+	streamservicepb.STREAM_FAILURE_TYPE_SETTINGS_MISMATCH:             errStreamSettings,
 }
 
 // nativeError maps an operation failure to the stream error given by the ApplicationFailureInfo

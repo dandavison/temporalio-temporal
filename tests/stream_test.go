@@ -59,13 +59,18 @@ type streamFixture struct {
 	owner streamOwnerKind
 }
 
-// streamOwnerKind is the kind of execution that owns the test's stream.
+// streamOwnerKind is the kind of execution that owns the test's stream, or standaloneOwner for a
+// standalone stream, which has no owner execution.
 type streamOwnerKind int
 
 const (
 	workflowOwner streamOwnerKind = iota
 	activityOwner
+	standaloneOwner
 )
+
+// streamTestName is the name of the owner's stream that tests use when one stream is enough.
+const streamTestName = "main"
 
 // streamBackends lists the backends. The native backend is first.
 var streamBackends = []struct {
@@ -104,17 +109,42 @@ func (s *streamTestSuite) runOnBackend(i int, test func(f *streamFixture), opts 
 	s.runOnBackendWithOwner(i, workflowOwner, test, opts...)
 }
 
-// forEachBackendAndOwner runs test once per backend and owner kind: a workflow and a Standalone
-// Activity.
+// forEachBackendAndOwner runs test once per backend and owner kind: a workflow, a Standalone
+// Activity, and none (a standalone stream).
 func (s *streamTestSuite) forEachBackendAndOwner(test func(f *streamFixture), opts ...testcore.TestOption) {
+	for i := range streamBackends {
+		for _, owner := range []streamOwnerKind{workflowOwner, activityOwner, standaloneOwner} {
+			s.runOnBackendWithOwner(i, owner, test, opts...)
+		}
+	}
+}
+
+// forEachBackendAndExecutionOwner runs test once per backend and kind of owner execution: a
+// workflow and a Standalone Activity.
+func (s *streamTestSuite) forEachBackendAndExecutionOwner(test func(f *streamFixture), opts ...testcore.TestOption) {
 	for i := range streamBackends {
 		s.runOnBackendWithOwner(i, workflowOwner, test, opts...)
 		s.runOnBackendWithOwner(i, activityOwner, test, opts...)
 	}
 }
 
+// forEachBackendStandalone runs test once per backend, with a standalone stream.
+func (s *streamTestSuite) forEachBackendStandalone(test func(f *streamFixture), opts ...testcore.TestOption) {
+	for i := range streamBackends {
+		s.runOnBackendWithOwner(i, standaloneOwner, test, opts...)
+	}
+}
+
 // nativeOnlyEachOwner runs test against the native backend alone, once per owner kind.
 func (s *streamTestSuite) nativeOnlyEachOwner(test func(f *streamFixture), opts ...testcore.TestOption) {
+	for _, owner := range []streamOwnerKind{workflowOwner, activityOwner, standaloneOwner} {
+		s.runOnBackendWithOwner(0, owner, test, opts...)
+	}
+}
+
+// nativeOnlyEachExecutionOwner runs test against the native backend alone, once per kind of owner
+// execution.
+func (s *streamTestSuite) nativeOnlyEachExecutionOwner(test func(f *streamFixture), opts ...testcore.TestOption) {
 	s.runOnBackendWithOwner(0, workflowOwner, test, opts...)
 	s.runOnBackendWithOwner(0, activityOwner, test, opts...)
 }
@@ -128,8 +158,12 @@ func (s *streamTestSuite) forEachBackendWithActivityOwner(test func(f *streamFix
 
 func (s *streamTestSuite) runOnBackendWithOwner(i int, owner streamOwnerKind, test func(f *streamFixture), opts ...testcore.TestOption) {
 	name := streamBackends[i].name
-	if owner == activityOwner {
+	switch owner {
+	case activityOwner:
 		name += "ActivityOwner"
+	case standaloneOwner:
+		name += "Standalone"
+	default:
 	}
 	s.Run(name, func(s *streamTestSuite) {
 		env := newStreamEnv(s.T(), opts...)
@@ -768,7 +802,7 @@ func (s *streamTestSuite) TestAppendAfterCloseIsRejectedButStoredRetrySucceeds()
 
 // Only the owner may close the stream. Every backend.
 func (s *streamTestSuite) TestNonOwnerCannotClose() {
-	s.forEachBackendAndOwner(func(f *streamFixture) {
+	s.forEachBackendAndExecutionOwner(func(f *streamFixture) {
 		ref := f.startOwner(f.tv)
 		f.append(ref, clientProducer("a", 1), 0, "", "x")
 		err := f.b.Close(f.ctx(), ref, streamCloseRequest{
@@ -837,7 +871,7 @@ func (s *streamTestSuite) TestReadFromBeginningWaitsForFirstAppend() {
 // is embedded in its owner, while on Redis and PostgreSQL the first append creates the stream.
 func (s *streamTestSuite) TestAppendWithoutOwnerFailsAsNotFound() {
 	s.nativeOnly(func(f *streamFixture) {
-		_, err := f.tryAppend(streamRef{WorkflowID: f.tv.WorkflowID()}, clientProducer("a", 1), 0, "", "x")
+		_, err := f.tryAppend(streamRef{WorkflowID: f.tv.WorkflowID(), Name: streamTestName}, clientProducer("a", 1), 0, "", "x")
 		require.ErrorIs(f.t, err, errStreamNotFound)
 	})
 }
@@ -845,7 +879,7 @@ func (s *streamTestSuite) TestAppendWithoutOwnerFailsAsNotFound() {
 // A read after a cursor of a stream that has been deleted fails as expired, rather than waiting.
 // Every backend.
 func (s *streamTestSuite) TestReadAfterCursorOfDeletedStreamFails() {
-	s.forEachBackendAndOwner(func(f *streamFixture) {
+	s.forEachBackendAndExecutionOwner(func(f *streamFixture) {
 		ref := f.startOwner(f.tv)
 		cursor := f.append(ref, clientProducer("a", 1), 0, "", "x").Cursors[0]
 		require.NoError(f.t, f.b.deleteStream(f.ctx(), ref))
@@ -879,7 +913,7 @@ func (s *streamTestSuite) TestStreamContinuesAcrossContinueAsNew() {
 		require.NotEqual(f.t, firstRun.WorkflowExecution.RunId, secondRun.WorkflowExecution.RunId)
 		f.append(ref, workflowProducer(secondRun), 0, "", "run2")
 
-		pinned := streamRef{WorkflowID: ref.WorkflowID, FirstRunID: firstRun.WorkflowExecution.RunId}
+		pinned := streamRef{WorkflowID: ref.WorkflowID, FirstRunID: firstRun.WorkflowExecution.RunId, Name: ref.Name}
 		for _, r := range []streamRef{ref, pinned} {
 			resp := f.read(r, streamReadRequest{From: streamBeginning()})
 			require.Equal(f.t, []string{"run1", "run2"}, f.dataOf(resp.Records))
@@ -1230,7 +1264,7 @@ func (s *streamTestSuite) TestTailReadReportsClose() {
 // and the like) is not an activity attempt, so it can neither append nor close as one. Native
 // only: Redis and PostgreSQL do not verify producers.
 func (s *streamTestSuite) TestByIDActivityTaskTokenIsRejected() {
-	s.nativeOnlyEachOwner(func(f *streamFixture) {
+	s.nativeOnlyEachExecutionOwner(func(f *streamFixture) {
 		ref := f.startOwner(f.tv)
 		if f.owner == workflowOwner {
 			f.scheduleRetriedActivity(f.tv)
@@ -1253,7 +1287,7 @@ func (s *streamTestSuite) TestByIDActivityTaskTokenIsRejected() {
 // creates no open stream. Native only: on Redis and PostgreSQL the owner's worker writes the close
 // when a workflow ends, whether or not it appended, and an activity must close its own stream.
 func (s *streamTestSuite) TestAppendAfterOwnerEndedWithoutStreamFailsAsClosed() {
-	s.nativeOnlyEachOwner(func(f *streamFixture) {
+	s.nativeOnlyEachExecutionOwner(func(f *streamFixture) {
 		ref := f.startOwner(f.tv)
 		if f.owner == activityOwner {
 			f.respondActivityCompleted(f.pollActivityTask(f.tv))
@@ -1271,7 +1305,7 @@ func (s *streamTestSuite) TestAppendAfterOwnerEndedWithoutStreamFailsAsClosed() 
 // A read pinned to one run of an owner, after a cursor of another run with the same owner ID,
 // fails as a cursor of another stream. Every backend.
 func (s *streamTestSuite) TestPinnedRunNotMatchingCursorIsRejected() {
-	s.forEachBackendAndOwner(func(f *streamFixture) {
+	s.forEachBackendAndExecutionOwner(func(f *streamFixture) {
 		first := f.startOwner(f.tv)
 		firstCursor := f.append(first, clientProducer("a", 1), 0, "", "x").Cursors[0]
 		f.endOwner(f.tv)
@@ -1299,7 +1333,7 @@ func (s *streamTestSuite) TestFailedCronRunDoesNotCloseStream() {
 			CronSchedule: "@every 1s",
 		})
 		require.NoError(f.t, err)
-		ref := streamRef{WorkflowID: f.tv.WorkflowID(), FirstRunID: resp.RunId}
+		ref := streamRef{WorkflowID: f.tv.WorkflowID(), FirstRunID: resp.RunId, Name: streamTestName}
 		task := f.pollWorkflowTask(f.tv)
 		f.append(ref, workflowProducer(task), 0, "", "x")
 		f.completeWorkflowTask(task, func(req *workflowservice.RespondWorkflowTaskCompletedRequest) {
@@ -1313,6 +1347,292 @@ func (s *streamTestSuite) TestFailedCronRunDoesNotCloseStream() {
 			})
 		})
 		require.Nil(f.t, f.streamStateOfRun(task.WorkflowExecution.RunId).GetClose())
+	})
+}
+
+// An owner's streams are independent: each has its own records, cursors, producer state and close.
+// Every backend.
+func (s *streamTestSuite) TestOwnerStreamsAreIndependent() {
+	s.forEachBackendAndExecutionOwner(func(f *streamFixture) {
+		a := f.startOwner(f.tv)
+		b := named(a, "other")
+		p := clientProducer("p", 1)
+		cursorA := f.append(a, p, 0, "", "a0").Cursors[0]
+		f.append(b, p, 0, "", "b0")
+		f.append(b, p, 1, "", "b1")
+		f.append(a, p, 1, "", "a1")
+
+		require.Equal(f.t, []string{"a0", "a1"}, f.dataOf(f.readAll(a, streamBeginning())))
+		require.Equal(f.t, []string{"b0", "b1"}, f.dataOf(f.readAll(b, streamBeginning())))
+		_, err := f.b.Read(f.ctx(), b, streamReadRequest{From: streamAfter(cursorA)})
+		require.ErrorIs(f.t, err, errStreamCursor)
+
+		f.closeAsOwner(b, streamClose{Status: streamClosedCompleted})
+		require.NotNil(f.t, f.read(b, streamReadRequest{From: streamBeginning()}).Close)
+		require.Nil(f.t, f.read(a, streamReadRequest{From: streamBeginning()}).Close)
+		f.append(a, p, 2, "", "a2")
+	})
+}
+
+// A stream of an owner needs a name of 1 to 255 bytes, and a standalone stream has none. Every
+// backend.
+func (s *streamTestSuite) TestStreamNamesAreValidated() {
+	s.forEachBackend(func(f *streamFixture) {
+		ref := f.startOwner(f.tv)
+		for _, bad := range []streamRef{
+			named(ref, ""),
+			named(ref, strings.Repeat("n", streamMaxNameBytes+1)),
+			{StreamID: f.tv.WorkflowID(), Name: "n"},
+			{WorkflowID: ref.WorkflowID, StreamID: f.tv.WorkflowID()},
+		} {
+			_, err := f.tryAppend(bad, clientProducer("a", 1), 0, "", "x")
+			require.ErrorIs(f.t, err, errStreamInvalidArg, "%+v", bad)
+			_, err = f.b.Read(f.ctx(), bad, streamReadRequest{From: streamBeginning()})
+			require.ErrorIs(f.t, err, errStreamInvalidArg, "%+v", bad)
+		}
+		f.append(named(ref, strings.Repeat("n", streamMaxNameBytes)), clientProducer("a", 1), 0, "", "x")
+	})
+}
+
+// Every stream of a workflow run gets a commit record for each completed workflow task. Native only.
+func (s *streamTestSuite) TestEveryStreamOfRunHasCommitRecords() {
+	s.nativeOnly(func(f *streamFixture) {
+		a := f.startOwner(f.tv)
+		b := named(a, "other")
+		task := f.pollWorkflowTask(f.tv)
+		f.append(a, workflowProducer(task), 0, "", "a")
+		f.append(b, workflowProducer(task), 0, "", "b")
+		f.completeWorkflowTask(task, f.forceNewWorkflowTask)
+		for _, ref := range []streamRef{a, b} {
+			records := f.readAllWithMarkers(ref, streamBeginning())
+			require.NotNil(f.t, f.commitOf(records, task.WorkflowExecution.RunId, task.PreviousStartedEventId), "stream %s", ref.Name)
+		}
+	})
+}
+
+// Every stream of an owner closes when the owner ends. Native only: on Redis and PostgreSQL the
+// owner's worker writes the close.
+func (s *streamTestSuite) TestEveryStreamClosesWhenOwnerEnds() {
+	s.nativeOnlyEachExecutionOwner(func(f *streamFixture) {
+		a := f.startOwner(f.tv)
+		b := named(a, "other")
+		f.append(a, clientProducer("p", 1), 0, "", "a")
+		f.append(b, clientProducer("p", 1), 0, "", "b")
+		if f.owner == activityOwner {
+			f.respondActivityCompleted(f.pollActivityTask(f.tv))
+		} else {
+			f.completeWorkflowTask(f.pollWorkflowTask(f.tv), f.completeWorkflow)
+		}
+		for _, ref := range []streamRef{a, b} {
+			resp := f.read(ref, streamReadRequest{From: streamBeginning()})
+			require.NotNil(f.t, resp.Close, "stream %s", ref.Name)
+			require.Equal(f.t, streamClosedCompleted, resp.Close.Status)
+		}
+	})
+}
+
+// A commit-mode append goes to the stream of the workflow that it names. Native only.
+func (s *streamTestSuite) TestCommitModeAppendGoesToNamedStream() {
+	s.nativeOnly(func(f *streamFixture) {
+		ref := f.startOwner(f.tv)
+		task := f.pollWorkflowTask(f.tv)
+		f.completeWorkflowTask(task, f.commitModeAppend("main"), func(req *workflowservice.RespondWorkflowTaskCompletedRequest) {
+			body, err := anypb.New(&streamservicepb.CommitModeAppend{
+				Records: []*streamservicepb.AppendRecord{{Payload: payload.EncodeString("other")}},
+				Name:    "other",
+			})
+			require.NoError(f.t, err)
+			req.Messages = append(req.Messages, &protocolpb.Message{Id: f.tv.Any().String(), ProtocolInstanceId: "stream", Body: body})
+		})
+		require.Equal(f.t, []string{"main"}, f.dataOf(f.readAll(ref, streamBeginning())))
+		require.Equal(f.t, []string{"other"}, f.dataOf(f.readAll(named(ref, "other"), streamBeginning())))
+	})
+}
+
+// A stream created before any append exists, and is empty, while one not created yet does not
+// exist; an append creates it too. Every backend.
+func (s *streamTestSuite) TestCreatedStreamExistsBeforeFirstAppend() {
+	s.forEachBackendAndOwner(func(f *streamFixture) {
+		ref := f.startOwner(f.tv)
+		lazy := named(ref, "lazy")
+		if f.owner == standaloneOwner {
+			lazy = f.startOwner(f.tv.WithWorkflowIDNumber(2))
+		}
+		require.False(f.t, f.read(ref, streamReadRequest{From: streamBeginning()}).Exists)
+		resp, err := f.b.Create(f.ctx(), ref, streamCreateRequest{RequestID: "r1"})
+		require.NoError(f.t, err)
+		require.True(f.t, resp.Created)
+		read := f.read(ref, streamReadRequest{From: streamBeginning()})
+		require.True(f.t, read.Exists)
+		require.Empty(f.t, withoutMarkers(read.Records))
+		require.Nil(f.t, read.Close)
+		f.append(ref, clientProducer("a", 1), 0, "", "x")
+		require.Equal(f.t, []string{"x"}, f.dataOf(f.readAll(ref, streamBeginning())))
+
+		require.False(f.t, f.read(lazy, streamReadRequest{From: streamBeginning()}).Exists)
+		f.append(lazy, clientProducer("a", 1), 0, "", "y")
+		require.True(f.t, f.read(lazy, streamReadRequest{From: streamBeginning()}).Exists)
+	})
+}
+
+// A retry of the create that created a stream reports it as created; any other create of an
+// existing stream with the same settings succeeds and reports that it did not create it. Every
+// backend.
+func (s *streamTestSuite) TestCreateIsIdempotentByRequestID() {
+	s.forEachBackendAndOwner(func(f *streamFixture) {
+		ref := f.startOwner(f.tv)
+		for _, c := range []struct {
+			requestID string
+			created   bool
+		}{{"r1", true}, {"r1", true}, {"r2", false}, {"", false}} {
+			resp, err := f.b.Create(f.ctx(), ref, streamCreateRequest{RequestID: c.requestID})
+			require.NoError(f.t, err)
+			require.Equal(f.t, c.created, resp.Created, "request ID %q", c.requestID)
+		}
+		lazy := f.startOwner(f.tv.WithWorkflowIDNumber(2))
+		f.append(lazy, clientProducer("a", 1), 0, "", "x")
+		resp, err := f.b.Create(f.ctx(), lazy, streamCreateRequest{RequestID: "r1"})
+		require.NoError(f.t, err)
+		require.False(f.t, resp.Created)
+	})
+}
+
+// A create of a stream that exists with other settings fails, a zero idle timeout meaning the
+// default. Every backend.
+func (s *streamTestSuite) TestCreateWithOtherSettingsFails() {
+	s.forEachBackendStandalone(func(f *streamFixture) {
+		ref := f.startOwner(f.tv)
+		_, err := f.b.Create(f.ctx(), ref, streamCreateRequest{RequestID: "r1", IdleTimeout: time.Hour})
+		require.NoError(f.t, err)
+		for _, idle := range []time.Duration{2 * time.Hour, 0} {
+			_, err = f.b.Create(f.ctx(), ref, streamCreateRequest{RequestID: "r2", IdleTimeout: idle})
+			require.ErrorIs(f.t, err, errStreamSettings, "idle timeout %v", idle)
+		}
+		_, err = f.b.Create(f.ctx(), ref, streamCreateRequest{RequestID: "r2", IdleTimeout: time.Hour})
+		require.NoError(f.t, err)
+
+		lazy := f.startOwner(f.tv.WithWorkflowIDNumber(2))
+		f.append(lazy, clientProducer("a", 1), 0, "", "x")
+		_, err = f.b.Create(f.ctx(), lazy, streamCreateRequest{IdleTimeout: streamDefaultIdleTimeout})
+		require.NoError(f.t, err)
+		_, err = f.b.Create(f.ctx(), lazy, streamCreateRequest{IdleTimeout: time.Hour})
+		require.ErrorIs(f.t, err, errStreamSettings)
+	})
+}
+
+// A stream of a workflow or activity closes with its owner, so it does not accept an idle timeout.
+// Every backend.
+func (s *streamTestSuite) TestOwnerStreamRejectsIdleTimeout() {
+	s.forEachBackendAndExecutionOwner(func(f *streamFixture) {
+		ref := f.startOwner(f.tv)
+		_, err := f.b.Create(f.ctx(), ref, streamCreateRequest{IdleTimeout: time.Hour})
+		require.ErrorIs(f.t, err, errStreamInvalidArg)
+		require.False(f.t, f.read(ref, streamReadRequest{From: streamBeginning()}).Exists)
+	})
+}
+
+// A create of a closed stream fails as closed, except a retry of the create that created it. Every
+// backend.
+func (s *streamTestSuite) TestCreateOfClosedStreamFails() {
+	s.forEachBackendAndOwner(func(f *streamFixture) {
+		ref := f.startOwner(f.tv)
+		_, err := f.b.Create(f.ctx(), ref, streamCreateRequest{RequestID: "r1"})
+		require.NoError(f.t, err)
+		f.closeAsOwner(ref, streamClose{Status: streamClosedCompleted})
+		_, err = f.b.Create(f.ctx(), ref, streamCreateRequest{RequestID: "r2"})
+		require.ErrorIs(f.t, err, errStreamClosed)
+		resp, err := f.b.Create(f.ctx(), ref, streamCreateRequest{RequestID: "r1"})
+		require.NoError(f.t, err)
+		require.True(f.t, resp.Created)
+	})
+}
+
+// A create of a stream whose owner does not exist fails as not found, and one whose owner has ended
+// fails as closed. Native only: on Redis and PostgreSQL a create needs no owner.
+func (s *streamTestSuite) TestCreateNeedsRunningOwner() {
+	s.nativeOnlyEachExecutionOwner(func(f *streamFixture) {
+		_, err := f.b.Create(f.ctx(), f.unstartedRef(f.tv), streamCreateRequest{})
+		require.ErrorIs(f.t, err, errStreamNotFound)
+		ref := f.startOwner(f.tv)
+		if f.owner == activityOwner {
+			f.respondActivityCompleted(f.pollActivityTask(f.tv))
+		} else {
+			f.completeWorkflowTask(f.pollWorkflowTask(f.tv), f.completeWorkflow)
+		}
+		_, err = f.b.Create(f.ctx(), ref, streamCreateRequest{})
+		require.ErrorIs(f.t, err, errStreamClosed)
+	})
+}
+
+// Any caller may close a standalone stream. A close of a closed stream succeeds if it is the same
+// close and fails as closed otherwise, and appends after the close fail. Every backend.
+func (s *streamTestSuite) TestAnyCallerClosesStandaloneStream() {
+	s.forEachBackendStandalone(func(f *streamFixture) {
+		ref := f.startOwner(f.tv)
+		f.append(ref, clientProducer("a", 1), 0, "", "x")
+		c := streamClose{Status: streamClosedFailed, Failure: &failurepb.Failure{Message: "boom"}, Reason: "done"}
+		require.NoError(f.t, f.b.Close(f.ctx(), ref, streamCloseRequest{Close: c}))
+		require.NoError(f.t, f.b.Close(f.ctx(), ref, streamCloseRequest{Close: c}))
+		err := f.b.Close(f.ctx(), ref, streamCloseRequest{Close: streamClose{Status: streamClosedCompleted}})
+		require.ErrorIs(f.t, err, errStreamClosed)
+		_, err = f.tryAppend(ref, clientProducer("a", 1), 1, "", "y")
+		require.ErrorIs(f.t, err, errStreamClosed)
+
+		resp := f.read(ref, streamReadRequest{From: streamBeginning()})
+		require.Equal(f.t, []string{"x"}, f.dataOf(resp.Records))
+		require.NotNil(f.t, resp.Close)
+		require.Equal(f.t, streamClosedFailed, resp.Close.Status)
+		require.Equal(f.t, "boom", resp.Close.Failure.GetMessage())
+		require.Equal(f.t, "done", resp.Close.Reason)
+	})
+}
+
+// A close of a standalone stream that does not exist fails as not found. Every backend.
+func (s *streamTestSuite) TestCloseOfMissingStandaloneStreamFails() {
+	s.forEachBackendStandalone(func(f *streamFixture) {
+		err := f.b.Close(f.ctx(), f.startOwner(f.tv), streamCloseRequest{Close: streamClose{Status: streamClosedCompleted}})
+		require.ErrorIs(f.t, err, errStreamNotFound)
+	})
+}
+
+// A standalone stream closes as timed out once its idle timeout passes with no create or append,
+// and then takes no appends. Every backend. Redis and PostgreSQL apply the timeout at the next call
+// rather than when it passes.
+func (s *streamTestSuite) TestStandaloneStreamClosesWhenIdle() {
+	s.forEachBackendStandalone(func(f *streamFixture) {
+		ref := f.startOwner(f.tv)
+		const idle = 2 * time.Second
+		_, err := f.b.Create(f.ctx(), ref, streamCreateRequest{IdleTimeout: idle})
+		require.NoError(f.t, err)
+		f.append(ref, clientProducer("a", 1), 0, "", "x")
+		require.Nil(f.t, f.read(ref, streamReadRequest{From: streamBeginning()}).Close)
+		await.Require(f.ctx(), f.t, func(t *await.T) {
+			require.NotNil(t, f.read(ref, streamReadRequest{From: streamBeginning()}).Close)
+		}, 10*idle, 200*time.Millisecond)
+
+		resp := f.read(ref, streamReadRequest{From: streamBeginning()})
+		require.Equal(f.t, []string{"x"}, f.dataOf(resp.Records))
+		require.Equal(f.t, streamClosedTimedOut, resp.Close.Status)
+		require.Equal(f.t, streamIdleCloseReason, resp.Close.Reason)
+		_, err = f.tryAppend(ref, clientProducer("a", 1), 1, "", "y")
+		require.ErrorIs(f.t, err, errStreamClosed)
+	})
+}
+
+// A standalone stream takes appends from producers of every kind, unverified, since it has no owner
+// to check them against. Every backend.
+func (s *streamTestSuite) TestStandaloneStreamTakesUnverifiedProducers() {
+	s.forEachBackendStandalone(func(f *streamFixture) {
+		ref := f.startOwner(f.tv)
+		f.startActivityOwner(f.tv)
+		activityTask := f.pollActivityTask(f.tv)
+		f.startWorkflowOwner(f.tv)
+		workflowTask := f.pollWorkflowTask(f.tv)
+		f.append(ref, activityProducer(activityTask), 0, "", "activity")
+		f.append(ref, workflowProducer(workflowTask), 0, "", "workflow")
+		f.append(ref, localActivityProducer(workflowTask, "la", 1), 0, "", "local activity")
+		f.append(ref, clientProducer("c", 1), 0, "", "client")
+		require.Equal(f.t, []string{"activity", "workflow", "local activity", "client"}, f.dataOf(f.readAll(ref, streamBeginning())))
 	})
 }
 
@@ -1341,7 +1661,7 @@ func (f *streamFixture) streamStateOfRun(runID string) *streampb.StreamState {
 		Archetype: chasm.WorkflowArchetype,
 	})
 	require.NoError(f.t, err)
-	node, ok := desc.GetDatabaseMutableState().GetChasmNodes()["Stream"]
+	node, ok := desc.GetDatabaseMutableState().GetChasmNodes()["Streams#"+streamTestName]
 	require.True(f.t, ok, "run %s has no stream", runID)
 	state := &streampb.StreamState{}
 	require.NoError(f.t, proto.Unmarshal(node.GetData().GetData(), state))
@@ -1349,13 +1669,15 @@ func (f *streamFixture) streamStateOfRun(runID string) *streampb.StreamState {
 }
 
 // closeAsOwner closes the stream as its owner: the owning workflow's first workflow task, or the
-// owning activity's first attempt.
+// owning activity's first attempt. A standalone stream has no owner.
 func (f *streamFixture) closeAsOwner(ref streamRef, c streamClose) {
 	var owner streamProducer
-	if f.owner == activityOwner {
+	switch f.owner {
+	case activityOwner:
 		owner = activityProducer(f.pollActivityTask(f.tv))
-	} else {
+	case workflowOwner:
 		owner = workflowProducer(f.pollWorkflowTask(f.tv))
+	default:
 	}
 	require.NoError(f.t, f.b.Close(f.ctx(), ref, streamCloseRequest{Owner: owner, Close: c}))
 }
@@ -1389,11 +1711,22 @@ func (f *streamFixture) ctx() context.Context {
 	return testcontext.For(f.t)
 }
 
-// startOwner starts the execution that owns the stream, of the fixture's owner kind.
+// startOwner starts the execution that owns the stream, of the fixture's owner kind, and returns
+// the reference to its stream named streamTestName. A standalone stream has no owner, and is created
+// by its first append.
 func (f *streamFixture) startOwner(tv *testvars.TestVars) streamRef {
-	if f.owner == activityOwner {
+	switch f.owner {
+	case activityOwner:
 		return f.startActivityOwner(tv)
+	case standaloneOwner:
+		return streamRef{StreamID: tv.WorkflowID()}
+	default:
+		return f.startWorkflowOwner(tv)
 	}
+}
+
+// startWorkflowOwner starts a workflow to own the stream.
+func (f *streamFixture) startWorkflowOwner(tv *testvars.TestVars) streamRef {
 	resp, err := f.env.FrontendClient().StartWorkflowExecution(f.ctx(), &workflowservice.StartWorkflowExecutionRequest{
 		Namespace:    f.env.Namespace().String(),
 		RequestId:    tv.Any().String(),
@@ -1403,7 +1736,7 @@ func (f *streamFixture) startOwner(tv *testvars.TestVars) streamRef {
 		Identity:     tv.WorkerIdentity(),
 	})
 	require.NoError(f.t, err)
-	return streamRef{WorkflowID: tv.WorkflowID(), FirstRunID: resp.RunId}
+	return streamRef{WorkflowID: tv.WorkflowID(), FirstRunID: resp.RunId, Name: streamTestName}
 }
 
 // startActivityOwner starts a Standalone Activity, whose ID is the test's workflow ID so that it is
@@ -1424,21 +1757,31 @@ func (f *streamFixture) startActivityOwner(tv *testvars.TestVars) streamRef {
 		},
 	})
 	require.NoError(f.t, err)
-	return streamRef{ActivityID: tv.WorkflowID(), ActivityRunID: resp.RunId}
+	return streamRef{ActivityID: tv.WorkflowID(), ActivityRunID: resp.RunId, Name: streamTestName}
 }
 
 // unstartedRef refers to the stream of the owner that startOwner(tv) will start, without its run
 // ID.
 func (f *streamFixture) unstartedRef(tv *testvars.TestVars) streamRef {
-	if f.owner == activityOwner {
-		return streamRef{ActivityID: tv.WorkflowID()}
+	switch f.owner {
+	case activityOwner:
+		return streamRef{ActivityID: tv.WorkflowID(), Name: streamTestName}
+	case standaloneOwner:
+		return streamRef{StreamID: tv.WorkflowID()}
+	default:
+		return streamRef{WorkflowID: tv.WorkflowID(), Name: streamTestName}
 	}
-	return streamRef{WorkflowID: tv.WorkflowID()}
 }
 
 // unpinned is ref without its run ID: a read of the owner ID's current chain or execution.
 func unpinned(ref streamRef) streamRef {
-	return streamRef{WorkflowID: ref.WorkflowID, ActivityID: ref.ActivityID}
+	return streamRef{WorkflowID: ref.WorkflowID, ActivityID: ref.ActivityID, Name: ref.Name, StreamID: ref.StreamID}
+}
+
+// named is the stream of ref's owner with another name.
+func named(ref streamRef, name string) streamRef {
+	ref.Name = name
+	return ref
 }
 
 func (f *streamFixture) respondActivityCompleted(task *workflowservice.PollActivityTaskQueueResponse) {
@@ -1628,7 +1971,7 @@ func (f *streamFixture) commitModeAppend(data ...string) func(*workflowservice.R
 		for i, d := range data {
 			records[i] = &streamservicepb.AppendRecord{Payload: payload.EncodeString(d)}
 		}
-		body, err := anypb.New(&streamservicepb.CommitModeAppend{Records: records})
+		body, err := anypb.New(&streamservicepb.CommitModeAppend{Records: records, Name: streamTestName})
 		require.NoError(f.t, err)
 		req.Messages = append(req.Messages, &protocolpb.Message{
 			Id:                 f.tv.Any().String(),

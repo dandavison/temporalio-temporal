@@ -4,10 +4,12 @@ package tests
 // server never talks to PostgreSQL. It is a check that the stream interface is not shaped by Redis,
 // not a product feature.
 //
-// A stream is keyed by its owner, as on Redis: a workflow run chain or a Standalone Activity
-// execution. It is a row in streams, holding its next position and its close, with its records in
-// records and each producer's dedupe and fencing state in producers. chains holds each owner ID's
-// latest run. Positions are dense: each append takes the next ones under the stream row's lock. An
+// A stream is keyed by its owner and name, as on Redis: a workflow run chain or a Standalone Activity
+// execution, or a standalone stream, by its stream ID, with no run or name. It is a row in streams,
+// holding its next position, settings and close, with its records in records and each producer's
+// dedupe and fencing state in producers. chains holds each owner ID's latest run: the run whose first
+// stream was created most recently. A standalone stream's idle timeout is applied by the next create,
+// append or close after it, and by readers before they read, as on Redis. Positions are dense: each append takes the next ones under the stream row's lock. An
 // append is one transaction, which notifies the channel streamChannel. PostgreSQL has no blocking
 // read, so a waiting read listens on that channel, then reads, then waits for a notification or its
 // deadline. Every stream notifies the same channel, so a waiting read also wakes, and reads again,
@@ -25,6 +27,8 @@ package tests
 // records, and a filtered wait returns only on a matching record.
 
 import (
+	"bytes"
+	"cmp"
 	"context"
 	"errors"
 	"fmt"
@@ -55,13 +59,17 @@ const postgresStreamSchema = `
 CREATE TABLE streams (
   owner_id text NOT NULL,
   owner_run_id text NOT NULL,
+  name text NOT NULL,
   next_pos bigint NOT NULL DEFAULT 1,
   closed boolean NOT NULL DEFAULT false,
   close_status int NOT NULL DEFAULT 0,
   close_failure bytea,
   close_reason text NOT NULL DEFAULT '',
   deleted boolean NOT NULL DEFAULT false,
-  PRIMARY KEY (owner_id, owner_run_id)
+  request_id text NOT NULL DEFAULT '',
+  idle_timeout_ms bigint NOT NULL DEFAULT 0,
+  last_write timestamptz NOT NULL DEFAULT clock_timestamp(),
+  PRIMARY KEY (owner_id, owner_run_id, name)
 );
 CREATE TABLE chains (
   owner_id text PRIMARY KEY,
@@ -70,6 +78,7 @@ CREATE TABLE chains (
 CREATE TABLE records (
   owner_id text NOT NULL,
   owner_run_id text NOT NULL,
+  name text NOT NULL,
   pos bigint NOT NULL,
   kind text NOT NULL,
   topic text NOT NULL,
@@ -80,11 +89,12 @@ CREATE TABLE records (
   workflow_task_attempt int NOT NULL,
   epoch bigint NOT NULL,
   seq bigint NOT NULL,
-  PRIMARY KEY (owner_id, owner_run_id, pos)
+  PRIMARY KEY (owner_id, owner_run_id, name, pos)
 );
 CREATE TABLE producers (
   owner_id text NOT NULL,
   owner_run_id text NOT NULL,
+  name text NOT NULL,
   producer text NOT NULL,
   workflow_task bigint NOT NULL,
   workflow_task_attempt int NOT NULL,
@@ -93,7 +103,7 @@ CREATE TABLE producers (
   digest text NOT NULL,
   first_pos bigint NOT NULL,
   data_count int NOT NULL,
-  PRIMARY KEY (owner_id, owner_run_id, producer)
+  PRIMARY KEY (owner_id, owner_run_id, name, producer)
 );
 `
 
@@ -114,8 +124,90 @@ func newPostgresStreamBackend(t *testing.T, _ *testcore.TestEnv) streamBackendUn
 	}
 }
 
+// postgresChain is one stream: its owner, the owner's run, and its name.
 type postgresChain struct {
-	owner, run string
+	owner, run, name string
+	standalone       bool
+}
+
+// postgresStreamKey is the condition that selects a chain's rows.
+const postgresStreamKey = `owner_id = $1 AND owner_run_id = $2 AND name = $3`
+
+func (b *postgresStreamBackend) Create(ctx context.Context, ref streamRef, req streamCreateRequest) (streamCreateResponse, error) {
+	chain, err := postgresWriteChain(ref)
+	if err != nil {
+		return streamCreateResponse{}, err
+	}
+	idle, err := streamIdleTimeout(ref, req)
+	if err != nil {
+		return streamCreateResponse{}, err
+	}
+	var created bool
+	err = pgx.BeginFunc(ctx, b.pool, func(tx pgx.Tx) error {
+		inserted, err := createPostgresStream(ctx, tx, chain, req.RequestID, idle)
+		if err != nil || inserted {
+			created = inserted
+			return err
+		}
+		var requestID string
+		var idleMS int64
+		var deleted bool
+		if err := tx.QueryRow(ctx, `SELECT request_id, idle_timeout_ms, deleted FROM streams WHERE `+postgresStreamKey+` FOR UPDATE`,
+			chain.owner, chain.run, chain.name).Scan(&requestID, &idleMS, &deleted); err != nil {
+			return err
+		}
+		switch closed, err := closePostgresIfIdle(ctx, tx, chain); {
+		case deleted:
+			return errStreamExpired
+		case req.RequestID != "" && requestID == req.RequestID:
+			created = true
+		case err != nil:
+			return err
+		case closed:
+			return errStreamClosed
+		case idleMS != idle.Milliseconds():
+			return errStreamSettings
+		default:
+		}
+		_, err = tx.Exec(ctx, `UPDATE streams SET last_write = clock_timestamp() WHERE `+postgresStreamKey, chain.owner, chain.run, chain.name)
+		return err
+	})
+	return streamCreateResponse{Created: created}, err
+}
+
+// createPostgresStream inserts the stream's row unless it exists, and returns whether it did. When
+// the row is the first of its owner run, the run becomes the owner ID's latest.
+func createPostgresStream(ctx context.Context, tx pgx.Tx, c postgresChain, requestID string, idle time.Duration) (bool, error) {
+	tag, err := tx.Exec(ctx, `INSERT INTO streams (owner_id, owner_run_id, name, request_id, idle_timeout_ms) VALUES ($1, $2, $3, $4, $5) ON CONFLICT DO NOTHING`,
+		c.owner, c.run, c.name, requestID, idle.Milliseconds())
+	if err != nil || tag.RowsAffected() == 0 {
+		return false, err
+	}
+	var streams int
+	if err := tx.QueryRow(ctx, `SELECT count(*) FROM streams WHERE owner_id = $1 AND owner_run_id = $2`, c.owner, c.run).Scan(&streams); err != nil {
+		return false, err
+	}
+	if streams == 1 && !c.standalone {
+		if _, err := tx.Exec(ctx, `INSERT INTO chains VALUES ($1, $2) ON CONFLICT (owner_id) DO UPDATE SET owner_run_id = $2`, c.owner, c.run); err != nil {
+			return false, err
+		}
+	}
+	return true, nil
+}
+
+// closePostgresIfIdle closes a standalone stream that has reached its idle timeout, and returns
+// whether the stream is closed.
+func closePostgresIfIdle(ctx context.Context, tx pgx.Tx, c postgresChain) (bool, error) {
+	if _, err := tx.Exec(ctx, `
+UPDATE streams SET closed = true, close_status = $4, close_reason = $5
+WHERE `+postgresStreamKey+` AND NOT closed AND idle_timeout_ms > 0
+  AND clock_timestamp() - last_write >= idle_timeout_ms * interval '1 millisecond'`,
+		c.owner, c.run, c.name, int(streamClosedTimedOut), streamIdleCloseReason); err != nil {
+		return false, err
+	}
+	var closed bool
+	err := tx.QueryRow(ctx, `SELECT closed FROM streams WHERE `+postgresStreamKey, c.owner, c.run, c.name).Scan(&closed)
+	return closed, err
 }
 
 func (b *postgresStreamBackend) Append(ctx context.Context, ref streamRef, req streamAppendRequest) (streamAppendResponse, error) {
@@ -153,6 +245,13 @@ func (b *postgresStreamBackend) Append(ctx context.Context, ref streamRef, req s
 }
 
 func (b *postgresStreamBackend) Close(ctx context.Context, ref streamRef, req streamCloseRequest) error {
+	chain, err := postgresWriteChain(ref)
+	if err != nil {
+		return err
+	}
+	if chain.standalone {
+		return b.closeStandalone(ctx, chain, req.Close)
+	}
 	id, err := externalProducer(req.Owner)
 	if err != nil {
 		return err
@@ -160,12 +259,49 @@ func (b *postgresStreamBackend) Close(ctx context.Context, ref streamRef, req st
 	if !isExternalOwner(ref, req.Owner) {
 		return errStreamNotOwner
 	}
-	chain, err := postgresWriteChain(ref)
+	_, err = b.runAppend(ctx, chain, id, req.Seq, nil, &req.Close)
+	return err
+}
+
+// closeStandalone closes a standalone stream, which any caller may close. A close of a closed stream
+// succeeds if it is the same close.
+func (b *postgresStreamBackend) closeStandalone(ctx context.Context, c postgresChain, sc streamClose) error {
+	failure, err := proto.Marshal(sc.Failure)
 	if err != nil {
 		return err
 	}
-	_, err = b.runAppend(ctx, chain, id, req.Seq, nil, &req.Close)
-	return err
+	return pgx.BeginFunc(ctx, b.pool, func(tx pgx.Tx) error {
+		var deleted bool
+		err := tx.QueryRow(ctx, `SELECT deleted FROM streams WHERE `+postgresStreamKey+` FOR UPDATE`, c.owner, c.run, c.name).Scan(&deleted)
+		switch {
+		case errors.Is(err, pgx.ErrNoRows):
+			return errStreamNotFound
+		case err != nil:
+			return err
+		case deleted:
+			return errStreamExpired
+		}
+		closed, err := closePostgresIfIdle(ctx, tx, c)
+		if err != nil {
+			return err
+		}
+		if closed {
+			var status int
+			var storedFailure []byte
+			var reason string
+			if err := tx.QueryRow(ctx, `SELECT close_status, close_failure, close_reason FROM streams WHERE `+postgresStreamKey,
+				c.owner, c.run, c.name).Scan(&status, &storedFailure, &reason); err != nil {
+				return err
+			}
+			if status != int(sc.Status) || !bytes.Equal(storedFailure, failure) || reason != sc.Reason {
+				return errStreamClosed
+			}
+			return nil
+		}
+		_, err = tx.Exec(ctx, `UPDATE streams SET closed = true, close_status = $4, close_failure = $5, close_reason = $6 WHERE `+postgresStreamKey,
+			c.owner, c.run, c.name, int(sc.Status), failure, sc.Reason)
+		return err
+	})
 }
 
 type postgresEntry struct {
@@ -184,18 +320,16 @@ func (b *postgresStreamBackend) runAppend(ctx context.Context, c postgresChain, 
 	}
 	var first int64
 	err := pgx.BeginFunc(ctx, b.pool, func(tx pgx.Tx) error {
-		tag, err := tx.Exec(ctx, `INSERT INTO streams (owner_id, owner_run_id) VALUES ($1, $2) ON CONFLICT DO NOTHING`, c.owner, c.run)
-		if err != nil {
+		idle := time.Duration(0)
+		if c.standalone {
+			idle = streamDefaultIdleTimeout
+		}
+		if _, err := createPostgresStream(ctx, tx, c, "", idle); err != nil {
 			return err
 		}
-		if tag.RowsAffected() == 1 {
-			if _, err := tx.Exec(ctx, `INSERT INTO chains VALUES ($1, $2) ON CONFLICT (owner_id) DO UPDATE SET owner_run_id = $2`, c.owner, c.run); err != nil {
-				return err
-			}
-		}
 		var nextPos int64
-		var closed, deleted bool
-		if err := tx.QueryRow(ctx, `SELECT next_pos, closed, deleted FROM streams WHERE owner_id = $1 AND owner_run_id = $2 FOR UPDATE`, c.owner, c.run).Scan(&nextPos, &closed, &deleted); err != nil {
+		var deleted bool
+		if err := tx.QueryRow(ctx, `SELECT next_pos, deleted FROM streams WHERE `+postgresStreamKey+` FOR UPDATE`, c.owner, c.run, c.name).Scan(&nextPos, &deleted); err != nil {
 			return err
 		}
 		if deleted {
@@ -207,22 +341,22 @@ func (b *postgresStreamBackend) runAppend(ctx context.Context, c postgresChain, 
 			first = dedupedFirst
 			return err
 		}
-		if closed {
-			return errStreamClosed
+		if closed, err := closePostgresIfIdle(ctx, tx, c); err != nil || closed {
+			return cmp.Or(err, errStreamClosed)
 		}
 		first = nextPos
 		for i, e := range entries {
-			if _, err := tx.Exec(ctx, `INSERT INTO records VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)`,
-				c.owner, c.run, nextPos+int64(i), e.kind, e.topic, e.payload,
+			if _, err := tx.Exec(ctx, `INSERT INTO records VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)`,
+				c.owner, c.run, c.name, nextPos+int64(i), e.kind, e.topic, e.payload,
 				id.producer, id.runID, id.workflowTask, id.workflowTaskAttempt, id.epoch, seq); err != nil {
 				return err
 			}
 		}
 		if _, err := tx.Exec(ctx, `
-INSERT INTO producers VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
-ON CONFLICT (owner_id, owner_run_id, producer) DO UPDATE SET
-  workflow_task = $4, workflow_task_attempt = $5, epoch = $6, seq = $7, digest = $8, first_pos = $9, data_count = $10`,
-			c.owner, c.run, id.producer, id.workflowTask, id.workflowTaskAttempt, id.epoch, seq, digest, nextPos, len(entries)); err != nil {
+INSERT INTO producers VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+ON CONFLICT (owner_id, owner_run_id, name, producer) DO UPDATE SET
+  workflow_task = $5, workflow_task_attempt = $6, epoch = $7, seq = $8, digest = $9, first_pos = $10, data_count = $11`,
+			c.owner, c.run, c.name, id.producer, id.workflowTask, id.workflowTaskAttempt, id.epoch, seq, digest, nextPos, len(entries)); err != nil {
 			return err
 		}
 		if closing != nil {
@@ -232,12 +366,12 @@ ON CONFLICT (owner_id, owner_run_id, producer) DO UPDATE SET
 					return err
 				}
 			}
-			if _, err := tx.Exec(ctx, `UPDATE streams SET closed = true, close_status = $3, close_failure = $4, close_reason = $5 WHERE owner_id = $1 AND owner_run_id = $2`,
-				c.owner, c.run, int(closing.Status), failure, closing.Reason); err != nil {
+			if _, err := tx.Exec(ctx, `UPDATE streams SET closed = true, close_status = $4, close_failure = $5, close_reason = $6 WHERE `+postgresStreamKey,
+				c.owner, c.run, c.name, int(closing.Status), failure, closing.Reason); err != nil {
 				return err
 			}
 		}
-		if _, err := tx.Exec(ctx, `UPDATE streams SET next_pos = $3 WHERE owner_id = $1 AND owner_run_id = $2`, c.owner, c.run, nextPos+int64(len(entries))); err != nil {
+		if _, err := tx.Exec(ctx, `UPDATE streams SET next_pos = $4, last_write = clock_timestamp() WHERE `+postgresStreamKey, c.owner, c.run, c.name, nextPos+int64(len(entries))); err != nil {
 			return err
 		}
 		_, err = tx.Exec(ctx, `SELECT pg_notify($1, $2)`, streamChannel, c.owner)
@@ -252,8 +386,8 @@ func checkPostgresProducer(ctx context.Context, tx pgx.Tx, c postgresChain, id e
 	var st externalProducerIdentity
 	var stSeq, stFirst int64
 	var stDigest string
-	err = tx.QueryRow(ctx, `SELECT workflow_task, workflow_task_attempt, epoch, seq, digest, first_pos FROM producers WHERE owner_id = $1 AND owner_run_id = $2 AND producer = $3`,
-		c.owner, c.run, id.producer).Scan(&st.workflowTask, &st.workflowTaskAttempt, &st.epoch, &stSeq, &stDigest, &stFirst)
+	err = tx.QueryRow(ctx, `SELECT workflow_task, workflow_task_attempt, epoch, seq, digest, first_pos FROM producers WHERE `+postgresStreamKey+` AND producer = $4`,
+		c.owner, c.run, c.name, id.producer).Scan(&st.workflowTask, &st.workflowTaskAttempt, &st.epoch, &stSeq, &stDigest, &stFirst)
 	nextSeq := int64(0)
 	switch {
 	case errors.Is(err, pgx.ErrNoRows):
@@ -297,6 +431,9 @@ func cmpEpoch(a, b externalProducerIdentity) int {
 }
 
 func (b *postgresStreamBackend) Read(ctx context.Context, ref streamRef, req streamReadRequest) (streamReadResponse, error) {
+	if err := checkStreamRef(ref); err != nil {
+		return streamReadResponse{}, err
+	}
 	deadline := time.Now().Add(req.Wait)
 	conn, err := b.pool.Acquire(ctx)
 	if err != nil {
@@ -316,7 +453,7 @@ func (b *postgresStreamBackend) Read(ctx context.Context, ref streamRef, req str
 			return streamReadResponse{}, err
 		}
 	} else {
-		if chain, after, err = parsePostgresCursor(externalOwner(ref), req.From.after); err != nil {
+		if chain, after, err = parsePostgresCursor(ref, req.From.after); err != nil {
 			return streamReadResponse{}, err
 		}
 		if run := externalRun(ref); run != "" && run != chain.run {
@@ -324,6 +461,17 @@ func (b *postgresStreamBackend) Read(ctx context.Context, ref streamRef, req str
 		}
 	}
 	for {
+		if chain.standalone {
+			if err := pgx.BeginFunc(ctx, conn, func(tx pgx.Tx) error {
+				_, err := closePostgresIfIdle(ctx, tx, chain)
+				if errors.Is(err, pgx.ErrNoRows) {
+					return nil
+				}
+				return err
+			}); err != nil {
+				return streamReadResponse{}, err
+			}
+		}
 		resp, found, err := b.readOnce(ctx, conn.Conn(), chain, req, after)
 		if err != nil {
 			return streamReadResponse{}, err
@@ -331,11 +479,12 @@ func (b *postgresStreamBackend) Read(ctx context.Context, ref streamRef, req str
 		if !found && req.From.after != nil {
 			return streamReadResponse{}, errStreamNotFound
 		}
+		resp.Exists = found
 		if len(resp.Records) > 0 || resp.Close != nil || req.Last > 0 || time.Until(deadline) <= 0 {
 			return resp, nil
 		}
 		if resp.Cursor != nil {
-			_, after, _ = parsePostgresCursor(externalOwner(ref), resp.Cursor)
+			_, after, _ = parsePostgresCursor(ref, resp.Cursor)
 			req.From.after = resp.Cursor
 		}
 		if err := waitForNotification(ctx, conn.Conn(), deadline); err != nil {
@@ -347,14 +496,14 @@ func (b *postgresStreamBackend) Read(ctx context.Context, ref streamRef, req str
 // resolveChain returns the chain a read from the beginning reads: the pinned one, or the owner ID's
 // latest, waiting until the deadline for one to exist.
 func (b *postgresStreamBackend) resolveChain(ctx context.Context, conn *pgxpool.Conn, ref streamRef, deadline time.Time) (postgresChain, bool, error) {
-	if run := externalRun(ref); run != "" {
-		return postgresChain{externalOwner(ref), run}, true, nil
+	if run := externalRun(ref); run != "" || ref.StreamID != "" {
+		return newPostgresChain(ref, run), true, nil
 	}
 	for {
 		var firstRun string
 		err := conn.QueryRow(ctx, `SELECT owner_run_id FROM chains WHERE owner_id = $1`, externalOwner(ref)).Scan(&firstRun)
 		if err == nil {
-			return postgresChain{externalOwner(ref), firstRun}, true, nil
+			return newPostgresChain(ref, firstRun), true, nil
 		}
 		if !errors.Is(err, pgx.ErrNoRows) {
 			return postgresChain{}, false, err
@@ -378,8 +527,8 @@ func (b *postgresStreamBackend) readOnce(ctx context.Context, conn *pgx.Conn, c 
 		var closeStatus int
 		var closeFailure []byte
 		var closeReason string
-		err := tx.QueryRow(ctx, `SELECT next_pos, closed, deleted, close_status, close_failure, close_reason FROM streams WHERE owner_id = $1 AND owner_run_id = $2`,
-			c.owner, c.run).Scan(&nextPos, &closed, &deleted, &closeStatus, &closeFailure, &closeReason)
+		err := tx.QueryRow(ctx, `SELECT next_pos, closed, deleted, close_status, close_failure, close_reason FROM streams WHERE `+postgresStreamKey,
+			c.owner, c.run, c.name).Scan(&nextPos, &closed, &deleted, &closeStatus, &closeFailure, &closeReason)
 		if errors.Is(err, pgx.ErrNoRows) {
 			return nil
 		}
@@ -396,13 +545,13 @@ func (b *postgresStreamBackend) readOnce(ctx context.Context, conn *pgx.Conn, c 
 			limit = req.MaxRecords
 		}
 		query := `SELECT pos, kind, topic, payload, producer, run_id, workflow_task, workflow_task_attempt, epoch, seq FROM records
-WHERE owner_id = $1 AND owner_run_id = $2 AND pos > $3 AND (coalesce(cardinality($4::text[]), 0) = 0 OR topic = ANY($4)) ORDER BY pos LIMIT $5`
+WHERE ` + postgresStreamKey + ` AND pos > $4 AND (coalesce(cardinality($5::text[]), 0) = 0 OR topic = ANY($5)) ORDER BY pos LIMIT $6`
 		if req.Last > 0 {
 			query = `SELECT pos, kind, topic, payload, producer, run_id, workflow_task, workflow_task_attempt, epoch, seq FROM records
-WHERE owner_id = $1 AND owner_run_id = $2 AND pos > $3 AND (coalesce(cardinality($4::text[]), 0) = 0 OR topic = ANY($4)) ORDER BY pos DESC LIMIT $5`
+WHERE ` + postgresStreamKey + ` AND pos > $4 AND (coalesce(cardinality($5::text[]), 0) = 0 OR topic = ANY($5)) ORDER BY pos DESC LIMIT $6`
 			limit = req.Last
 		}
-		rows, err := tx.Query(ctx, query, c.owner, c.run, after, req.Topics, limit)
+		rows, err := tx.Query(ctx, query, c.owner, c.run, c.name, after, req.Topics, limit)
 		if err != nil {
 			return err
 		}
@@ -477,45 +626,57 @@ func (b *postgresStreamBackend) deleteStream(ctx context.Context, ref streamRef)
 	}
 	return pgx.BeginFunc(ctx, b.pool, func(tx pgx.Tx) error {
 		for _, table := range []string{"records", "producers"} {
-			if _, err := tx.Exec(ctx, "DELETE FROM "+table+" WHERE owner_id = $1 AND owner_run_id = $2", chain.owner, chain.run); err != nil {
+			if _, err := tx.Exec(ctx, "DELETE FROM "+table+" WHERE "+postgresStreamKey, chain.owner, chain.run, chain.name); err != nil {
 				return err
 			}
 		}
-		_, err := tx.Exec(ctx, `UPDATE streams SET deleted = true WHERE owner_id = $1 AND owner_run_id = $2`, chain.owner, chain.run)
+		_, err := tx.Exec(ctx, `UPDATE streams SET deleted = true WHERE `+postgresStreamKey, chain.owner, chain.run, chain.name)
 		return err
 	})
 }
 
 func postgresWriteChain(ref streamRef) (postgresChain, error) {
-	if externalRun(ref) == "" {
+	if err := checkStreamRef(ref); err != nil {
+		return postgresChain{}, err
+	}
+	if ref.StreamID == "" && externalRun(ref) == "" {
 		return postgresChain{}, errors.New("appends to a PostgreSQL stream need the run ID of its owner: a workflow's first run ID, or the activity's run ID")
 	}
-	return postgresChain{externalOwner(ref), externalRun(ref)}, nil
+	return newPostgresChain(ref, externalRun(ref)), nil
 }
 
-// A cursor is the owner, its run and a position: `<owner>:<run ID>#<position>`.
+func newPostgresChain(ref streamRef, run string) postgresChain {
+	return postgresChain{owner: externalOwner(ref), run: run, name: ref.Name, standalone: ref.StreamID != ""}
+}
+
+// A cursor is the owner, its run, the stream's name and a position:
+// `<owner>:<run ID>:<name>#<position>`. Run IDs contain no ':', and positions no '#'.
 func (c postgresChain) cursor(pos int64) streamCursor {
-	return streamCursor(fmt.Sprintf("%s:%s#%d", c.owner, c.run, pos))
+	return streamCursor(fmt.Sprintf("%s:%s:%s#%d", c.owner, c.run, c.name, pos))
 }
 
-func parsePostgresCursor(owner string, cur streamCursor) (postgresChain, int64, error) {
-	chain, posStr, ok := strings.Cut(string(cur), "#")
+func parsePostgresCursor(ref streamRef, cur streamCursor) (postgresChain, int64, error) {
+	i := strings.LastIndex(string(cur), "#")
+	if i < 0 {
+		return postgresChain{}, 0, errStreamCursor
+	}
+	runAndName, ok := strings.CutPrefix(string(cur)[:i], externalOwner(ref)+":")
 	if !ok {
 		return postgresChain{}, 0, errStreamCursor
 	}
-	firstRun, ok := strings.CutPrefix(chain, owner+":")
-	if !ok {
+	firstRun, name, ok := strings.Cut(runAndName, ":")
+	if !ok || name != ref.Name {
 		return postgresChain{}, 0, errStreamCursor
 	}
-	pos, err := strconv.ParseInt(posStr, 10, 64)
+	pos, err := strconv.ParseInt(string(cur)[i+1:], 10, 64)
 	if err != nil {
 		return postgresChain{}, 0, errStreamCursor
 	}
-	return postgresChain{owner, firstRun}, pos, nil
+	return newPostgresChain(ref, firstRun), pos, nil
 }
 
 func postgresPos(cur streamCursor) int64 {
-	_, posStr, _ := strings.Cut(string(cur), "#")
+	posStr := string(cur)[strings.LastIndex(string(cur), "#")+1:]
 	pos, _ := strconv.ParseInt(posStr, 10, 64)
 	return pos
 }
